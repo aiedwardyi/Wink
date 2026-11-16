@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { loopStallsDuring } from "./loop-stalls.ts";
 import { startupTiming } from "./startup-timing.ts";
 
 export const COLD_OPEN_FILE = join("diag", "cold-open.jsonl");
@@ -146,7 +147,10 @@ export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: strin
   const { openId: id, ...record } = parsed.data;
   const joined = id ? opens.get(id) : undefined;
   if (id) opens.delete(id);
-  const timings = { ...joined, uptimeS: Math.round(process.uptime()) };
+  // The page sends its record after its last mark, so the open reaches back that far from its arrival.
+  const span = Math.max(0, ...[record.mount, record.sseOpen, record.hello, record.chatPaint, record.bots?.end, record.sse?.open].filter((mark) => mark !== undefined));
+  const stalls = loopStallsDuring(now - span, now).map((stall) => ({ at: new Date(stall.start).toISOString(), ms: stall.ms }));
+  const timings = { ...joined, uptimeS: Math.round(process.uptime()), ...(stalls.length ? { stalls } : {}) };
   lines.push(JSON.stringify({ receivedAt: new Date(now).toISOString(), ...record, server: timings, serverStart: SERVER_START }));
   writeFileAtomic(path, `${lines.slice(-COLD_OPEN_KEEP).join("\n")}\n`);
   return { status: 200 };

@@ -20,6 +20,9 @@ import { canServeTurn, warmFingerprint, warmToolsKey, type WarmEligibilityInput 
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmPool, type WarmSession } from "../warm-pool.ts";
 
 import { applyCredentialAllowlist } from "../../config.ts";
+import { accountLaunch } from "../../account-policy.ts";
+import { shareUserSetup } from "../../account-shared-setup.ts";
+import { baseAccount } from "../../worker-resume.ts";
 import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
@@ -223,6 +226,8 @@ export interface AcpSupport {
    *  merged config). May be async for harnesses that have to ask the CLI. */
   isAuthenticated(env: Record<string, string | undefined>, config: AcpConfig): boolean | Promise<boolean>;
   account?(env: Record<string, string | undefined>): string | undefined;
+  /** Stable hash of who is signed in, so an added account can tell people apart. */
+  accountIdentity?(env: Record<string, string | undefined>): string | undefined;
   /** Refuse a first-party cloud turn before spawning when snapshot auth is
    * false. Local injected models deliberately bypass this subscription gate. */
   requireAuthenticationBeforeSpawn?: boolean;
@@ -377,11 +382,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             resolve(err ? null : stdout.trim()),
           );
         });
-      const childEnv = (extraAllowed: readonly string[] = []) => acpChildEnv(support, config, {
-        ...process.env,
-        ...input.environment,
-        PATH: augmentedPath(),
-      }, extraAllowed);
+      const childEnv = (extraAllowed: readonly string[] = []) => {
+        const source = { ...process.env, ...input.environment, PATH: augmentedPath() };
+        return acpChildEnv(support, config, input.account ? accountLaunch(input.account, DRIVER_KIND, [], source).env : source, extraAllowed);
+      };
+      let admitted = !input.account;
+      let accountBlocked = false;
       let models = support.models;
       const refreshModels = async () => {
         if (!support.resolveModels) return;
@@ -434,7 +440,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         asks: Map<string, (behavior: string, source?: "user" | "timeout" | "system") => string | null>;
       }
       const active = new Map<string, Turn>();
-      const systemHeld = systemLedger();
+      const systemHeld = systemLedger(false, instanceId);
       const billingStops = new Set<() => void>();
       const pool = support.warmPool ?? sharedWarmPool;
       const incarnation = input.incarnation ?? newId();
@@ -589,6 +595,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       };
       const spawnEntry = (turn: SendTurnInput, env: NodeJS.ProcessEnv, cwd: string, lease?: Lease): WarmEntry => {
         let entry!: WarmEntry;
+        if (input.account) shareUserSetup(DRIVER_KIND, input.account, baseAccount(input.account.of, DRIVER_KIND, { ...process.env, ...input.environment }).home);
         const connection = acpConnection(spawnCli(effectiveCli(), support.spawnArgs(config, turn), {
           cwd, env, stdio: ["pipe", "pipe", "pipe"],
         }), (dir, msg: any) => {
@@ -738,6 +745,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         if (controlsHost && config.fullAuto) {
           throw new Error("local computer control requires interactive provider approvals");
         }
+        if (!admitted || accountBlocked) throw new Error(`Sign in to this ${support.displayName} account before starting a turn`);
         const turnId = newId();
         const captured = capture();
         const epoch = pool.generation(keyFor(threadId));
@@ -1003,6 +1011,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (quietEnd && ok) stopReason = null;
           if (sessionId && compacted) systemHeld.forget(sessionId);
           else if (sessionId && systemSent && state.promptAccepted) systemHeld.record(sessionId, systemSent);
+          else if (sessionId) systemHeld.keep(sessionId);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const finish of [...asks.values()]) finish("cancel", "system");
           for (const finish of interjectionWaiters.values()) finish(false);
@@ -1370,7 +1379,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             if (system) {
               systemHeld.forget(activeSessionId);
               systemSent = system;
-            }
+            } else systemHeld.begin(activeSessionId);
             const promptTurn = { ...fallbackTurn, system };
             const text = support.buildPromptText
               ? support.buildPromptText(promptTurn)
@@ -1470,7 +1479,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
           const authenticated = await support.isAuthenticated(env, config);
           lastCapture = authenticated ? capture() : null;
-          const ready: ProviderSnapshot = { state: "available", version: probed.version, authenticated, account: authenticated ? support.account?.(env) : undefined };
+          if (input.account) admitted = authenticated;
+          const ready: ProviderSnapshot = { state: "available", version: probed.version, authenticated, account: authenticated ? support.account?.(env) : undefined,
+            ...(input.account ? { accountIdentity: authenticated ? support.accountIdentity?.(env) : undefined, accountAuthenticated: authenticated } : {}) };
           if (!gated) lastSnapshot = ready;
           return ready;
         });
@@ -1486,6 +1497,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         refreshModels: support.resolveModels ? refreshModels : undefined,
         snapshot,
         loginConfig: () => ({ cli: effectiveCli(), env: childEnv() }),
+        ...(input.account ? { account: input.account, invalidateAccount: () => { admitted = false; listeners.clear(); }, accountBusy: () => active.size > 0 } : {}),
+        setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; },
         adapter: {
           provider: DRIVER_KIND,
           capabilities: {

@@ -568,6 +568,13 @@ describe("trusted worker accounts", () => {
     expect(f.available).toHaveBeenCalledWith("claude", 0);
   });
 
+  it("leaves Code Mode to the pane", async () => {
+    const f = await fixture();
+    const launch = await f.prepare({ ...f.input, command: "claude --model fixture 'task'" });
+    if (launch?.kind !== "managed") throw new Error("expected managed launch");
+    expect(launch.environment).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE");
+  });
+
   it("routes an other-engine Codex worker to that engine's ready Main and reports its usage", async () => {
     const f = await fixture();
     const m = mainRouting(f);

@@ -460,13 +460,20 @@ async function assertRefused(hosts) {
 test("openDeviceWindow opens a team relay host in the default browser with no tailnet", async () => {
   const device = openDevice();
   assert.equal(await device.open(RELAY_PC, "Home"), true);
-  assert.deepEqual(device.external, [`https://${RELAY_PC}/`]);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
+  assert.deepEqual(device.windows, []);
+});
+
+test("one open of a relay PC is one browser tab, straight to its Google sign-in, and no PC window", async () => {
+  const device = openDevice({ tailnet: "tail1234.ts.net" });
+  assert.equal(await device.open(RELAY_PC, "Home"), true);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
   assert.deepEqual(device.windows, []);
 });
 
 test("reads the team base from a baked base or relay origin", () => {
   for (const baked of ["wink.test", "relay.wink.test", "https://relay.wink.test", "https://relay.wink.test/"]) {
-    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/`, baked);
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/pair?g=1`, baked);
   }
   for (const baked of [undefined, "", "http://relay.wink.test", "relay.", "wink test", 42]) {
     assert.equal(relayDeviceUrl(RELAY_PC, baked), "", String(baked));

@@ -25,7 +25,7 @@ describe("channel avatar renderer", () => {
   for (const file of Object.keys(botAvatarFloors) as Array<keyof typeof botAvatarFloors>) {
     it(`${file} uses BotAvatar and never mounts MausAvatar directly`, () => {
       const source = sources[file];
-      const renders = source.match(/<BotAvatar/g)?.length ?? 0;
+      const renders = source.match(/<(?:Room)?BotAvatar\b/g)?.length ?? 0;
       expect(renders).toBeGreaterThanOrEqual(botAvatarFloors[file]);
       expect(source).not.toContain("<MausAvatar");
     });

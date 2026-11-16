@@ -730,6 +730,7 @@ describe("Google reader kind recovery", () => {
     const dataDir = await healthyScale();
     const sync = boot(dataDir, () => true);
     sync.resume();
+    await sync.idle();
     await settle(sync);
     window();
     await vi.advanceTimersByTimeAsync(30_000);

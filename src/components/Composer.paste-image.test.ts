@@ -52,7 +52,7 @@ async function mountComposer({ hold = false } = {}) {
     bodies,
     release,
     notice: () => host.querySelector(".bg-warning\\/10 > span")?.textContent ?? null,
-    chips: () => host.querySelectorAll('[aria-label="Remove file"]').length,
+    chips: () => host.querySelectorAll('[aria-label="Remove image"]').length,
   };
 }
 
@@ -101,6 +101,18 @@ describe("0-byte image paste", () => {
     await vi.waitFor(() => expect(composer.notice()).toBe(t("composer.pasteImageFailed")));
     expect(composer.bodies).toEqual([]);
     expect(composer.chips()).toBe(0);
+  });
+});
+
+describe("many files", () => {
+  it("attaches every picked file past five", async () => {
+    const composer = await mountComposer();
+    const input = composer.host.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const files = Array.from({ length: 7 }, (_, index) => new File([new Uint8Array([index])], `data-${index}.bin`, { type: "application/octet-stream" }));
+    Object.defineProperty(input, "files", { value: files, configurable: true });
+    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    await vi.waitFor(() => expect(composer.host.querySelectorAll('[aria-label="Cancel upload"]')).toHaveLength(7));
+    expect(composer.notice() ?? "").not.toContain("Up to 5 files");
   });
 });
 

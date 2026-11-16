@@ -13,8 +13,8 @@ type Dependencies = {
   origin: string;
   label: (scope: Scope) => Promise<string | null>;
   auto: (scope: Scope, text: string, identity?: MailboxIdentity) => Promise<boolean>;
-  attention: (scope: Scope, kind: Kind) => Promise<void>;
-  reported: (scope: Scope, text: string) => void;
+  attention: (scope: Scope, kind: Kind, text?: string) => Promise<void>;
+  reported: (scope: Scope, text: string, source: BotRecord) => void;
   refresh: (text: string) => void;
   notify: (source: BotRecord, text: string) => void;
   arrived: (scope: Scope, source: BotRecord) => void;
@@ -58,7 +58,7 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
   });
   if ("error" in result) return { status: 400, body: result };
   if (accepted) {
-    if (kind === "report") { await deps.attention(scope, kind); deps.reported(scope, input.text); }
+    if (kind === "report") { await deps.attention(scope, kind, input.text); deps.reported(scope, input.text, source); }
     if (source.notifications !== false) deps.notify(source, input.text);
     if (kind !== "report") void deps.attention(scope, kind);
     deps.arrived(scope, source);

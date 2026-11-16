@@ -100,7 +100,6 @@ describe("delegated ask-back", () => {
         store.markPaneNotesDelivered(botId, threadId, pending.newestId);
       },
       admit: prod.admit,
-      warn: () => {},
     });
     const queued = queueDelegation(bus, sender, { toBotId: peer.id, message: "Check this", depth: 0, root }, 1);
     drainDelegations(bus, bus, sender.threadId, (toBotId, _text, _depth, sourceThreadId, channel, taskId, sourceBotId) => {

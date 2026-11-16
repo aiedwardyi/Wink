@@ -52,6 +52,7 @@ import {
   withToastCapability,
 } from "./desktop-notify.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
+import { createServerRevival } from "./server-revival.mjs";
 import { brandForRenderer, brandWindowOptions, holdBrandTitle, readBrandOverride } from "./brand-override.mjs";
 import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
 import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
@@ -939,6 +940,8 @@ async function gatherDiagnostics() {
 // Set by startServerPackaged: true only when every failing candidate port was
 // taken by another process — decides which error-page message renders.
 let serverStartConflictOnly = false;
+let serverKeptStopping = false;
+let quitting = false;
 
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "packaged-boot.js");
@@ -996,6 +999,8 @@ async function startServerOn(port) {
       serverToken = null;
       appAuthorization.bind(`http://127.0.0.1:${port}`, null);
       updateCompanionHarness(port, null);
+      serverProc = null;
+      reviveServer();
     }
     slog(`exited code=${code}`);
   });
@@ -1067,6 +1072,26 @@ async function startServerPackaged() {
   return false;
 }
 
+const reviveServer = createServerRevival({
+  quitting: () => quitting,
+  start: () => {
+    // Keys saved since boot live in the dead child's memory; rebuild its env from the current document.
+    childEnvCredentials = absorbPackagedPlaintextSecrets(secureCredentials);
+    return startServerPackaged();
+  },
+  show: (state) => {
+    slog(`server revival: ${state}`);
+    serverReady = state === "ready";
+    serverKeptStopping = state === "stopped";
+    packagedBootPhase = state === "restarting" ? BOOT_CONNECTING : serverReady ? BOOT_READY : BOOT_FAILED;
+    // A fresh child holds no Google session until this push.
+    if (serverReady) void pushGoogleSession(secureCredentials.googleAccount ?? null);
+    livePackagedWindow()
+      ?.loadURL(state === "restarting" ? connectingPageHref(undefined, "packaged.restarting") : packagedWindowHref())
+      .catch(() => {});
+  },
+});
+
 async function syncDevTerminalBridge() {
   if (app.isPackaged || !terminalBridgeAccess || !serverToken) return;
   const port = Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
@@ -1119,11 +1144,13 @@ function nativeText(key, vars) {
   return translateNative(uiLocale(), key, vars);
 }
 
-function buildErrorPage({ allPortsOccupied }) {
+function buildErrorPage({ allPortsOccupied, keptStopping }) {
   const serverLogPath = path.join(LOG_DIR, "server.log");
-  const reason = allPortsOccupied
-    ? nativeText("packaged.bootPorts")
-    : nativeText("packaged.bootTimeout");
+  const reason = keptStopping
+    ? nativeText("packaged.bootStopped")
+    : allPortsOccupied
+      ? nativeText("packaged.bootPorts")
+      : nativeText("packaged.bootTimeout");
   const chrome = skinChrome(readPersistedSkin(app.getPath("userData")));
   const caption = process.platform === "win32" ? WINDOWS_CAPTION_HEIGHT : 0;
   const drag = caption
@@ -1552,7 +1579,7 @@ function connectingPageHref(backgroundColor, key = "packaged.connecting") {
 
 function packagedWindowHref(backgroundColor) {
   if (packagedBootPhase === BOOT_READY) return `http://127.0.0.1:${SERVER_PORT}`;
-  if (packagedBootPhase === BOOT_FAILED) return buildErrorPage({ allPortsOccupied: serverStartConflictOnly });
+  if (packagedBootPhase === BOOT_FAILED) return buildErrorPage({ allPortsOccupied: serverStartConflictOnly, keptStopping: serverKeptStopping });
   const persistedSkin = readPersistedSkin(app.getPath("userData"));
   return connectingPageHref(backgroundColor ?? skinChrome(persistedSkin).color);
 }
@@ -2243,6 +2270,7 @@ process.once("SIGTERM", requestSignalQuit);
 app.on("before-quit", () => closeGuard.leave());
 
 app.on("before-quit", (e) => {
+  quitting = true;
   if (cuaCleanedUp) return;
   errorReports.stop();
   e.preventDefault();

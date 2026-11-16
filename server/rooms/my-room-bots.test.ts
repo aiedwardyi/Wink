@@ -206,6 +206,58 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.startTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("answers the host's and a teammate's @ or reply like its owner's", async () => {
+    deps.hasTask = (_botId, threadId) => threadId === "task-1";
+    const turns = new MyRoomBotTurns(deps);
+    const host = line({ kind: "host", id: "host", name: "Edward" }, "@Pete-Coder chart Q3", { at: Date.now() });
+    turns.heard(ROOM, host);
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([host.text]);
+    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: @Pete-Coder chart Q3');
+    thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's up." });
+    deps.client.botSend.mockResolvedValueOnce({ ok: true, value: { seq: seq + 1 } });
+    await turns.settled("task-1", true);
+    const answer = line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "Chart's up.", { at: Date.now() });
+    const mina = line({ kind: "person", id: "p2", name: "Mina" }, "now the totals", { at: Date.now(), replyToId: answer.id });
+    turns.heard(ROOM, mina);
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([host.text, mina.text]);
+    expect(deps.startTurn.mock.calls[1]![2]).toContain('"Mina" asked you: now the totals');
+  });
+
+  it("stays quiet when a reply to its line @'s another PC's bot", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    const answer = line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "Chart's up.", { at: Date.now() });
+    turns.heard(ROOM, line({ kind: "host", id: "host", name: "Edward" }, "@Mini please take over", { at: Date.now(), replyToId: answer.id }));
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("drops a teammate's waiting ask once they leave the room", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder hi", { at: Date.now() }));
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ waiting: true });
+    setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME], bots: [{ id: "b1", name: "EdBot", color: "blue" }], teamBots: [PETE] });
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+  });
+
+  it("never tells its bot only its owner can ask it", async () => {
+    setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [], teamBots: [PETE] });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder hi", { at: Date.now() }));
+    await settle();
+    const prompt = deps.startTurn.mock.calls[0]![2] as string;
+    expect(prompt).not.toMatch(/only .*can ask you/i);
+    expect(prompt).toContain("never refuse because they aren't your owner");
+  });
+
   it("keeps a busy rejection waiting on this PC without posting a failure", async () => {
     deps.startTurn.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "BOT_BUSY" }));
     const turns = new MyRoomBotTurns(deps);
@@ -261,7 +313,7 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.startTurn).toHaveBeenCalledTimes(1);
     const [, , prompt, typed] = deps.startTurn.mock.calls[0]!;
     expect(typed).toBe(ask.text);
-    expect(prompt).toContain('"Peter", who runs you, and this room\'s bots can ask you. Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
+    expect(prompt).toContain('"Peter" runs you. Any member\'s request here is collab work for this team: help them as you would your owner, and never refuse because they aren\'t your owner. Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
     expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @Pete-Coder what works for Peter on Saturday?');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "@EdBot Peter is free after 7." });
     await turns.settled("task-1", true);
@@ -463,6 +515,6 @@ describe("a room bot's @ to this PC's bot", () => {
     const turns = new MyRoomBotTurns(deps);
     turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
     await settle();
-    expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. Only "Peter", who runs you, can ask you.)\n"Peter" asked you: @Pete-Coder hi');
+    expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you. Any member\'s request here is collab work for this team: help them as you would your owner, and never refuse because they aren\'t your owner.)\n"Peter" asked you: @Pete-Coder hi');
   });
 });

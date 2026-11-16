@@ -104,8 +104,9 @@ export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
 function priority(path: string, chatFirst = false, openThread?: string | null): number {
   if (path === "workspace.json") return 0;
   if (path.startsWith("assets/")) return 1;
-  const thread = /^threads-v2(?: \([1-9]\d*\))?\/[^/]+\/([^/]+)\/[^/]+\/(seg-[1-9]\d*-[1-9]\d*\.json\.gz|head\.json)$/.exec(path);
-  if (chatFirst && thread) return (thread[1] === openThread ? 2 : 4) + Number(thread[2] === "head.json");
+  const chat = chatPart(path);
+  // Other chats share one tier so each shows once its own files land; each() holds a head until its segments do.
+  if (chatFirst && chat) return chat.thread === openThread ? 2 + Number(chat.head) : 4;
   const offset = chatFirst ? 4 : 0;
   if (path.startsWith("pictures/")) return 2 + offset;
   if (/\/seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(path)) return 3 + offset;
@@ -114,6 +115,11 @@ function priority(path: string, chatFirst = false, openThread?: string | null): 
   if (path.endsWith("/head.json")) return 7 + offset;
   if (path.startsWith("devices/")) return 8 + offset;
   return 5 + offset;
+}
+
+function chatPart(path: string): { thread: string; head: boolean } | null {
+  const match = /^threads-v2(?: \([1-9]\d*\))?\/[^/]+\/([^/]+)\/[^/]+\/(seg-[1-9]\d*-[1-9]\d*\.json\.gz|head\.json)$/.exec(path);
+  return match && { thread: match[1], head: match[2] === "head.json" };
 }
 
 function canonicalPath(path: string): string {
@@ -702,20 +708,57 @@ export function createDriveMirror(options: Options) {
     }
     // One priority tier at a time; a throw still waits for the rest in flight so no save lands after the pass.
     async function each(items: Iterable<string>): Promise<void> {
+      const rank = (path: string) => priority(path, options.chatFirst, options.openThread);
+      const list = [...items];
+      const active = new Map<string, number>();
+      for (const path of list) {
+        const chat = chatPart(path);
+        if (chat?.head) for (const copy of remote.get(path) ?? []) active.set(chat.thread, Math.max(active.get(chat.thread) ?? 0, Date.parse(copy.modifiedTime)));
+      }
+      // On a chat-first pass, most recently active chat first, its segments before its head.
+      const byChat = (a: string, b: string) => {
+        if (!options.chatFirst) return 0;
+        const [x, y] = [chatPart(a), chatPart(b)];
+        if (!x || !y) return 0;
+        return (active.get(y.thread) ?? 0) - (active.get(x.thread) ?? 0) || x.thread.localeCompare(y.thread) || Number(x.head) - Number(y.head);
+      };
       const tiers = new Map<number, string[]>();
-      for (const path of [...items].sort((a, b) => priority(a, options.chatFirst, options.openThread) - priority(b, options.chatFirst, options.openThread) || a.localeCompare(b))) {
-        const tier = tiers.get(priority(path, options.chatFirst, options.openThread));
+      for (const path of list.sort((a, b) => rank(a) - rank(b) || byChat(a, b) || a.localeCompare(b))) {
+        const tier = tiers.get(rank(path));
         if (tier) tier.push(path);
-        else tiers.set(priority(path, options.chatFirst, options.openThread), [path]);
+        else tiers.set(rank(path), [path]);
       }
       const thrown: unknown[] = [];
       for (const tier of tiers.values()) {
+        const segments = new Map<string, number>();
+        for (const path of tier) {
+          const chat = chatPart(path);
+          if (chat && !chat.head) segments.set(chat.thread, (segments.get(chat.thread) ?? 0) + 1);
+        }
+        const waiting: (() => void)[] = [];
+        const ready = (path: string) => {
+          const chat = chatPart(path);
+          return !chat?.head || !segments.get(chat.thread);
+        };
         const worker = async () => {
           while (tier.length > 0 && !stopped && thrown.length === 0) {
+            const index = tier.findIndex(ready);
+            if (index < 0) {
+              // Only heads are left and their segments are in flight; the next segment to land wakes this worker.
+              await new Promise<void>((resolve) => waiting.push(resolve));
+              continue;
+            }
+            const [path] = tier.splice(index, 1);
             try {
-              await one(tier.shift()!);
+              await one(path);
             } catch (error) {
               thrown.push(error);
+            } finally {
+              const chat = chatPart(path);
+              if (chat && !chat.head) {
+                segments.set(chat.thread, segments.get(chat.thread)! - 1);
+                for (const wake of waiting.splice(0)) wake();
+              }
             }
           }
         };

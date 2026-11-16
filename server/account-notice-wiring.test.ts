@@ -50,7 +50,7 @@ async function changedMain() {
 function turnScope(accountNotices: ReturnType<typeof createAccountNotices>, dispatch: (text: string) => Promise<{ turnId: string }>, summaryRebuild = false) {
   const store = { markPaneNotesDelivered: vi.fn(), activePath: () => [] };
   return {
-    accountNotices, dispatch, summaryRebuild, store, bot: { id: "atlas" }, instance: { driverKind: "claudeAgent" }, threadId: "t1", threadSyncV2: null,
+    accountNotices, dispatch, summaryRebuild, store, bot: { id: "atlas" }, instance: { driverKind: "claudeAgent" }, model: "opus", threadId: "t1", threadSyncV2: null,
     paneNotes: ["Pane note: ATLAS-1 finished."], paneNoteIds: [], paneTokens: 0, modelContextWindow: 200_000, newestPaneNoteId: "n1",
     mailForTurn: () => [], routineCards: [], recallNotes: [], currentPrompt: "hello", messages: [], skipTranscript: new Set(), task: {},
     routineCardsSinceLastUserTurn: () => [], quickAnswers: [], callLines: [], closedAsk: [], quickAnswersSinceLastUserTurn: () => [], roomEchoes: [], roomEchoesSinceLastUserTurn: () => [], turnOpts: {}, replaysTranscript: false, recycleDeferred: false, seed: {}, systemSeed: null,

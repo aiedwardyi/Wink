@@ -16,7 +16,7 @@ import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store, type Message } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
-import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { GuestClient } from "./guest-client.ts";
@@ -176,7 +176,7 @@ function teamRoom(name = "Team"): HostedGroup {
 }
 
 const codeFor = (group: HostedGroup, name: string) => {
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward"]);
   return `wkr1:${HOST}:${invite.id}.${secret}`;
 };
 
@@ -339,6 +339,14 @@ describe("teammate and the real door", () => {
     expect(reply).toMatchObject({ ok: true, value: { replyToId: sent.ok ? sent.value.id : "" } });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(seqs(roomId)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("hands a teammate the host's 20,000-character line whole, in a shape older builds parse", async () => {
+    const { group, roomId } = await joinedTeam();
+    const long = "x".repeat(20_000);
+    hostSays(group, long);
+    await until(() => texts(roomId).includes(long));
+    expect(olderEntry.safeParse(recentRoomEntries(roomId, 1)[0]).success).toBe(true);
   });
 
   it("keeps sends in order", async () => {
@@ -590,7 +598,7 @@ describe("a shared bot group", () => {
       ["@Wink what's left?", "person", "Mina"],
       ["Two cards left.", "bot", "Wink"],
     ]);
-    expect(joinedRoom(roomId)!.state!.bots).toEqual([{ id: wink.id, name: "Wink", color: wink.color }]);
+    expect(joinedRoom(roomId)!.state!.bots).toEqual([{ id: wink.id, name: "Wink", color: wink.color, mascotStyle: wink.mascotStyle }]);
     const answer = older.frames.filter((frame) => frame.kind === "entry").at(-1)!.entry;
     expect(olderEntry.safeParse(answer).success).toBe(true);
     expect(answer).toMatchObject({ text: "Two cards left.", author: { kind: "person", id: `bot-${wink.id}`, name: "Wink" } });
@@ -715,7 +723,7 @@ describe("bots in two homes hand work to each other", () => {
       bases: () => [null, BASE],
       joiner: () => ({ name: "JJ", device: "pc-jj-0123456789abcdef" }),
       https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
-      onBotLine: (id, entry) => setImmediate(() => turns.heard(id, entry)),
+      onLine: (id, entry) => setImmediate(() => turns.heard(id, entry)),
       onStop: (id) => turns.stop(id),
       timing: { retryMs: 50, maxRetryMs: 200 },
     }));
@@ -747,6 +755,23 @@ describe("bots in two homes hand work to each other", () => {
     ]);
     expect(joinedLog()).toEqual(log());
     expect(prompts[0]).toContain('"Rando" ("Edward"\'s bot) asked you: @스타줌 Edward is free Sat after 6');
+  });
+
+  it("answers the host's @ on the teammate's PC, and runs a teammate's two asks in a row", async () => {
+    const { roomId, log, joinedLog } = await homes((ask) => `done: ${roomEntry(ask.roomId, ask.entryId)!.text}`, () => "Chart's up.");
+    hostSays(store.groups.find((group) => group.name === "Dinner") as HostedGroup, "@스타줌 chart Q3");
+    await until(() => log().length === 2);
+    expect((await client!.send(roomId, "@Rando book Mapo")).ok).toBe(true);
+    expect((await client!.send(roomId, "@Rando and a cab")).ok).toBe(true);
+    await until(() => log().length === 6 && joinedLog().length === 6);
+    expect(log()).toEqual([
+      "Edward: @스타줌 chart Q3",
+      "스타줌: Chart's up.",
+      "JJ: @Rando book Mapo",
+      "JJ: @Rando and a cab",
+      "Rando: done: @Rando book Mapo",
+      "Rando: done: @Rando and a cab",
+    ]);
   });
 
   it("goes on with no line limit until the room's Stop ends it on both PCs", async () => {

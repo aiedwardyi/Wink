@@ -60,7 +60,7 @@ beforeAll(async () => {
     const bot = store.createBot({ name, modelSelection: { instanceId: driver!, model: model! } }, { seedMessages: false });
     store.patchBot(bot.id, { notifications: false, composio: false, shareTerminalWithChat: false });
     const room = createRoom(`Images ${name}`);
-    const { invite, secret } = createInvite(room.id, "JJ", "chat", [name!]);
+    const { invite, secret } = createInvite(room.id, "JJ", [name!]);
     cases.push({ driver: driver!, name: name!, roomId: room.id, code: `wkr1:abcdefghijklmnop.wink.test:${invite.id}.${secret}`, dump });
   }
   for (const item of cases) store.createGroup(`Images ${item.name}`, store.bots.map((bot) => bot.id), false, undefined, { completed: true }, { roomId: item.roomId });

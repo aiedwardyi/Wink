@@ -6,7 +6,6 @@ import { z } from "zod";
 
 import { estimateContextTokens } from "./context-compaction.ts";
 import {
-  inBenchWindow,
   KEEP_GOING_DAILY_CAP,
   KEEP_GOING_INTERVAL_MS,
   KEEP_GOING_RULES,
@@ -89,7 +88,6 @@ describe("KeepGoing gate", () => {
     ["task-changed", (h) => { h.state.threadId = "t2"; }],
     ["busy", (h) => { h.state.busy = true; }],
     ["queued", (h) => { h.state.queued = true; }],
-    ["bench", (h) => { h.state.now = Date.parse("2026-10-20T19:00:00Z"); }],
     ["no-task-record", (h) => { h.state.packet = null; }],
     ["blockers", (h) => { h.state.packet = packetWith(h.state.packet!.plan, [{ kind: "input", note: "which repo?" }]); }],
     ["no-approved-step", (h) => setPlan(h, [{ step: "Write tests", status: "done" }, { step: "Build UI", status: "done" }])],
@@ -359,20 +357,13 @@ describe("KeepGoing off latch", () => {
   });
 });
 
-describe("KeepGoing bench window", () => {
-  const zone = process.env.TZ;
-  afterEach(() => {
-    if (zone === undefined) delete process.env.TZ;
-    else process.env.TZ = zone;
-  });
-
-  it.each(["America/Los_Angeles", "UTC", "Asia/Seoul"])("uses Seoul time when this PC is in %s", (tz) => {
-    process.env.TZ = tz;
-    expect(inBenchWindow(Date.parse("2026-10-20T18:44:00Z"))).toBe(false);
-    expect(inBenchWindow(Date.parse("2026-10-20T18:45:00Z"))).toBe(true);
-    expect(inBenchWindow(Date.parse("2026-10-20T19:59:00Z"))).toBe(true);
-    expect(inBenchWindow(Date.parse("2026-10-20T20:00:00Z"))).toBe(false);
-    expect(inBenchWindow(Date.parse("2026-10-20T03:50:00Z"))).toBe(false);
+describe("KeepGoing overnight", () => {
+  it("wakes at 04:00 in Seoul", async () => {
+    const h = harness();
+    h.keepGoing.enable("b1", "t1", h.state.packet);
+    h.state.now = Date.parse("2026-10-21T04:00:00+09:00");
+    h.state.usage!.observedAt = new Date(h.state.now).toISOString();
+    await expect(h.keepGoing.check("b1")).resolves.toEqual({ dispatched: "Write tests" });
   });
 });
 
@@ -523,15 +514,13 @@ describe("KeepGoing start_after", () => {
     expect(h.keepGoing.fromTool("b1", "t2", true, h.state.packet, startAfter)).toHaveProperty("error");
   });
 
-  it("keeps the bench gate after a delay expires", async () => {
+  it("wakes as soon as an overnight delay expires", async () => {
     const h = harness();
     h.keepGoing.enable("b1", "t1", h.state.packet);
     h.keepGoing.turnStarted("b1", "t1", true);
     const after = "2026-10-21T04:00:00+09:00";
     expect(h.keepGoing.fromTool("b1", "t1", true, h.state.packet, after)).toEqual({ ok: true });
     h.state.now = Date.parse(after);
-    await expect(h.keepGoing.check("b1")).resolves.toEqual({ skipped: "bench" });
-    h.state.now = Date.parse("2026-10-21T05:00:00+09:00");
     h.state.usage!.observedAt = new Date(h.state.now).toISOString();
     await expect(h.keepGoing.check("b1")).resolves.toEqual({ dispatched: "Write tests" });
   });

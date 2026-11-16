@@ -2,7 +2,8 @@
 // snapshot the client already holds (GET /api/instances). Mirrors the
 // server's resolveAutomaticSelection for the no-requirements case: first
 // available engine with a default model that is not rate-limited out,
-// falling back to the first eligible one. Sending this explicitly lets
+// falling back to the first eligible one; a signed-out engine only when
+// no other is eligible. Sending this explicitly lets
 // POST /api/bots skip full provider discovery (checkedModelSelection does
 // no catalog/health I/O); when nothing is usable the caller omits
 // modelSelection and the server path is unchanged.
@@ -26,7 +27,9 @@ export function defaultModelSelection(
         window.usedPercent >= 100 &&
         !(window.resetsAt !== null && Number.isFinite(window.resetsAt) && window.resetsAt <= now),
     ) === true;
-  const pick = eligible.find((instance) => !exhausted(instance)) ?? eligible[0];
+  const signedIn = eligible.filter((instance) => instance.snapshot.authenticated !== false);
+  const pool = signedIn.length ? signedIn : eligible;
+  const pick = pool.find((instance) => !exhausted(instance)) ?? pool[0];
   if (!pick) return null;
   return { mode: "automatic", instanceId: pick.instanceId, model: pick.models.default };
 }

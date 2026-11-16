@@ -178,16 +178,63 @@ describe("pinned ask_user question", () => {
     expect([...choices.querySelectorAll("button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
   });
 
-  it("lets the cap give way when the choices alone outgrow it, so they never leave the card", async () => {
+  it("lets the cap give way for the choices under three lines of the question, or two when it has two", async () => {
     let resized = () => {};
     vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
     let tall = 262;
+    let text = 88;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
+    // a box is never shorter than its own min-height
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? Math.max(text, parseFloat(this.style.minHeight) || 0) : 0; });
     await mount({ bot: bot([question]) });
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 346px)");
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 390px)");
+    expect(body.style.minHeight).toBe("66px");
     tall = 54;
+    text = 44;
     resized();
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 138px)");
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 160px)");
+    expect(body.style.minHeight).toBe("44px");
+  });
+
+  it("stops the card at the composer's room: the question gives lines back first, then the choices scroll", async () => {
+    let resized = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
+    const computed = globalThis.getComputedStyle;
+    const isPane = (el: Element) => el.classList.contains("overflow-y-auto") && !!el.querySelector("[data-pending-question]");
+    vi.spyOn(globalThis, "getComputedStyle").mockImplementation((el, pseudo) => (isPane(el) ? { overflowY: "auto" } as CSSStyleDeclaration : computed(el, pseudo)));
+    let tall = 252;
+    let over = 84;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? tall + 128 : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? 304 + over : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? 304 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["168px", "auto"]);
+    tall = 200;
+    over = 32;
+    resized();
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    over = 900;
+    resized();
+    expect(card()!.style.maxHeight).toBe("106px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("fades a cut question at its foot until it is scrolled to its end", async () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).toContain("data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]");
+    expect(body.hasAttribute("data-cut")).toBe(true);
+    vi.spyOn(body, "scrollTop", "get").mockReturnValue(88);
+    await act(async () => body.dispatchEvent(new Event("scroll")));
+    expect(body.hasAttribute("data-cut")).toBe(false);
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
@@ -269,7 +316,7 @@ describe("pinned ask_user question", () => {
     expect(row()!.textContent).not.toContain("Staging has last week's data.");
     expect([...row()!.querySelectorAll(".truncate")].at(-1)?.textContent).toBe("Ship to prod or staging?");
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
-    expect([...row()!.querySelectorAll("[data-row-choices] button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
+    expect([...row()!.querySelectorAll("[data-row-choices] button:not([hidden])")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
     expect(rowButton("Prod").className).toContain("whitespace-nowrap");
     expect(pinButton("Hide question")).toBeTruthy();
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
@@ -280,7 +327,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     await act(async () => rowButton("Staging").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id }]);
   });
 
   it("glows once when it arrives, then never again", async () => {
@@ -365,8 +412,8 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     const dismiss = pinButton("Dismiss question").className;
     expect(dismiss).toContain("p-1 ");
-    expect(dismiss).toContain("pointer-coarse:-my-3");
-    expect(dismiss).toContain("pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4");
+    expect(dismiss).toContain("pointer-coarse:after:-inset-y-[11px]");
+    expect(dismiss).not.toMatch(/pointer-coarse:-?(p|m)[xytb]?-/);
   });
 
   it("asks to type the answer while an open question is pinned", async () => {
@@ -383,7 +430,7 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id }]);
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
@@ -448,11 +495,11 @@ describe("pinned ask_user question", () => {
     expect(dot()).toBeNull();
   });
 
-  it("waits behind a pending approval, which keeps its composer takeover", async () => {
+  it("waits behind a pending approval and leaves the box typeable", async () => {
     await mount({ bot: bot([question, approval]) });
     expect(pin()).toBeNull();
     expect(host!.querySelector('[role="region"][aria-label="Pending approval"]')).not.toBeNull();
-    expect(textarea()?.disabled).toBe(true);
+    expect(textarea()?.disabled).toBe(false);
   });
 
   it("names the room member who asked and answers in the room", async () => {

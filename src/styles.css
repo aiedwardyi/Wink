@@ -129,17 +129,24 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Symbols Nerd Font Mono", monospace;
 }
 
-/* The terminal opens and closes instantly, with no motion. */
 .orbit-terminal-overlay {
   transform: translateX(100%);
   visibility: hidden;
+  transition: transform 120ms ease-out, visibility 0s 120ms;
   pointer-events: none;
 }
 
 .orbit-terminal-overlay[data-open="true"] {
   transform: translateX(0);
   visibility: visible;
+  transition-delay: 0s;
+  animation: terminal-enter 120ms ease-out;
   pointer-events: auto;
+}
+
+@keyframes terminal-enter {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 :root[data-shape="soft"][data-skin^="tui"] {
@@ -595,6 +602,230 @@ html:lang(ko) {
     "Malgun Gothic", "Apple SD Gothic Neo", Roboto, sans-serif;
   --radius-lg: 8px;
   --radius-xl: 14px;
+}
+
+/* Neon Grid: an 80s night drive, indigo sky over a pink and cyan grid; the scene draws the sunset. */
+[data-skin="neon-grid"] {
+  color-scheme: dark;
+  --color-app: #100c25;
+  --color-panel: #08061a;
+  --color-raised: #1b1538;
+  --color-raised-hover: #241c47;
+  --color-card: #161233;
+  --color-inset: #060414;
+  --color-control: #2c2357;
+  --color-hairline: #352a6b;
+  --color-ink: #f2edff;
+  --color-ink-secondary: #b6abdc;
+  --color-accent: #ff4fd8;
+  --color-accent-border: #ff7ae2;
+  --color-accent-text: #ff8ce8;
+  --color-focus: #5ce1f5;
+  --color-accent-ink: #1a0420;
+  --color-bubble-user: #1d3fa8;
+  --color-success: #5ef0a8;
+  --color-danger: #ff8a9a;
+  --color-danger-ink: #100c25;
+  --color-warning: #ffd36b;
+  --color-scrollbar: #352a6b;
+  --color-maus-line: #b6abdc;
+  --font-sans: var(--font-geist) system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", "Apple SD Gothic Neo", Roboto, sans-serif;
+  --radius-lg: 8px;
+  --radius-xl: 14px;
+}
+
+/* Samurai Ink: sumi ink on black, a swordsman against the moon; the scene paints him. */
+[data-skin="samurai-ink"] {
+  color-scheme: dark;
+  --color-app: #0c0c0d;
+  --color-panel: #070707;
+  --color-raised: #1a1a1b;
+  --color-raised-hover: #232324;
+  --color-card: #151516;
+  --color-inset: #050505;
+  --color-control: #2a2a2c;
+  --color-hairline: #333335;
+  --color-ink: #f1efea;
+  --color-ink-secondary: #b3b0a8;
+  --color-accent: #e8e4dc;
+  --color-accent-border: #fffaf0;
+  --color-accent-text: #f4efe4;
+  --color-focus: #ffffff;
+  --color-accent-ink: #0c0c0d;
+  --color-bubble-user: #2e2e31;
+  --color-success: #9bd8a8;
+  --color-danger: #ff8f86;
+  --color-danger-ink: #0c0c0d;
+  --color-warning: #f0d48a;
+  --color-scrollbar: #333335;
+  --color-maus-line: #b3b0a8;
+  --font-sans: var(--font-geist) system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", "Apple SD Gothic Neo", Roboto, sans-serif;
+  --radius-lg: 8px;
+  --radius-xl: 14px;
+}
+
+/* Night Rain: a neon drinking alley in the rain, pink and cyan signs on wet indigo. */
+[data-skin="night-rain"] {
+  color-scheme: dark;
+  --color-app: #0a0b1a;
+  --color-panel: #06060f;
+  --color-raised: #171833;
+  --color-raised-hover: #20214a;
+  --color-card: #131429;
+  --color-inset: #04040c;
+  --color-control: #26284f;
+  --color-hairline: #2c2f5c;
+  --color-ink: #eef0ff;
+  --color-ink-secondary: #aeb3dd;
+  --color-accent: #ff5277;
+  --color-accent-border: #ff7d97;
+  --color-accent-text: #ff8fa6;
+  --color-focus: #4fe3ff;
+  --color-accent-ink: #1a0208;
+  --color-bubble-user: #0f4f66;
+  --color-success: #5ef0b8;
+  --color-danger: #ff8a9a;
+  --color-danger-ink: #0a0b1a;
+  --color-warning: #ffcf6b;
+  --color-scrollbar: #2c2f5c;
+  --color-maus-line: #aeb3dd;
+  --font-sans: var(--font-geist) system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", "Apple SD Gothic Neo", Roboto, sans-serif;
+  --radius-lg: 8px;
+  --radius-xl: 14px;
+}
+
+/* Warp: deep space, stars streaking past; the scene draws the starfield. */
+[data-skin="warp"] {
+  color-scheme: dark;
+  --color-app: #080a18;
+  --color-panel: #030308;
+  --color-raised: #121630;
+  --color-raised-hover: #1a1f42;
+  --color-card: #0e1126;
+  --color-inset: #020206;
+  --color-control: #222852;
+  --color-hairline: #2a3160;
+  --color-ink: #edf2ff;
+  --color-ink-secondary: #a9b4dc;
+  --color-accent: #7aa8ff;
+  --color-accent-border: #9dbfff;
+  --color-accent-text: #a8c4ff;
+  --color-focus: #9ad7ff;
+  --color-accent-ink: #030716;
+  --color-bubble-user: #2b3a8f;
+  --color-success: #6ff0c0;
+  --color-danger: #ff8a9a;
+  --color-danger-ink: #080a18;
+  --color-warning: #ffd36b;
+  --color-scrollbar: #2a3160;
+  --color-maus-line: #a9b4dc;
+  --font-sans: var(--font-geist) system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", "Apple SD Gothic Neo", Roboto, sans-serif;
+  --radius-lg: 8px;
+  --radius-xl: 14px;
+}
+
+/* The bot list carries the nebula's glow to the chat's edge, so the sky meets it without a hard seam. */
+[data-skin="warp"] aside[data-phone-drawer] {
+  background-image:
+    radial-gradient(120% 45% at 100% 100%, rgb(112 72 230 / 0.12), transparent 70%),
+    linear-gradient(90deg, transparent 55%, rgb(84 96 220 / 0.07));
+}
+
+/* Circuit: a dark board whose panel borders are lit blue traces. */
+[data-skin="circuit"] {
+  color-scheme: dark;
+  --color-app: #08111f;
+  --color-panel: #030710;
+  --color-raised: #0d1a2e;
+  --color-raised-hover: #12233d;
+  --color-card: #0b1628;
+  --color-inset: #02050c;
+  --color-control: #142a48;
+  --color-hairline: #1b4f8f;
+  --color-ink: #eaf4ff;
+  --color-ink-secondary: #a3bedf;
+  --color-accent: #2e9bff;
+  --color-accent-border: #5cb4ff;
+  --color-accent-text: #6cbcff;
+  --color-focus: #44e0ff;
+  --color-accent-ink: #020a18;
+  --color-bubble-user: #0f3a73;
+  --color-success: #4ff0b0;
+  --color-danger: #ff8a9a;
+  --color-danger-ink: #08111f;
+  --color-warning: #ffd36b;
+  --color-scrollbar: #1b4f8f;
+  --color-maus-line: #a3bedf;
+  --font-sans: var(--font-geist) system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", "Apple SD Gothic Neo", Roboto, sans-serif;
+  --radius-lg: 8px;
+  --radius-xl: 14px;
+}
+
+/* The bot list's edge is a lit trace bus, meeting the lit wall the scene draws on the chat's side. */
+[data-skin="circuit"] aside[data-phone-drawer] {
+  --radius-xl: 8px;
+  border-right-color: #2f9bff;
+  box-shadow: 1px 0 10px -2px rgb(47 155 255 / 0.35);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='660' fill='none'%3E%3Cpath d='M24.5 0V660' stroke='%232f9bff' stroke-opacity='.5'/%3E%3Cpath d='M19.5 0V118L11.5 126V262L19.5 270V448L11.5 456V530L19.5 538V660' stroke='%232f9bff' stroke-opacity='.4'/%3E%3C/svg%3E"),
+    linear-gradient(90deg, transparent 55%, rgb(47 155 255 / 0.04));
+  background-position: right top, 0 0;
+  background-size: 28px 660px, 100% 100%;
+  background-repeat: repeat-y, no-repeat;
+}
+
+/* Corners are cut like board outlines. The scene's ring around the composer follows this cut (circuit.ts uCut). */
+[data-skin="circuit"] [data-orbit-composer-frame] {
+  corner-shape: bevel;
+  box-shadow: 0 0 0 1px rgb(68 224 255 / 0.4), 0 0 18px -5px rgb(47 155 255 / 0.45);
+}
+
+[data-skin="circuit"] :is([data-orbit-message="user"], [data-orbit-message="bot"]) [data-orbit-message-content] {
+  position: relative;
+  border-radius: 10px;
+  corner-shape: bevel;
+  box-shadow: 0 0 0 1px rgb(68 190 255 / 0.5), 0 0 18px -6px rgb(47 155 255 / 0.6);
+}
+
+[data-skin="circuit"] :is([data-orbit-message="user"], [data-orbit-message="bot"]) [data-orbit-message-content]::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 100%;
+  width: 30px;
+  height: 20px;
+  pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='20' fill='none'%3E%3Cpath d='M30 13.5H18L11.5 7' stroke='%232f9bff' stroke-opacity='.6'/%3E%3Ccircle cx='9.5' cy='5' r='2.2' stroke='%235cb4ff' stroke-opacity='.8' stroke-width='1.2' fill='%2308111f'/%3E%3C/svg%3E") no-repeat;
+}
+
+[data-skin="circuit"] [data-orbit-message="user"] [data-orbit-message-content]::after {
+  right: auto;
+  left: 100%;
+  scale: -1 1;
+}
+
+[data-skin="circuit"] [data-sidebar-row] > [role="button"] {
+  corner-shape: bevel;
+  border-color: rgb(47 155 255 / 0.16);
+}
+
+[data-skin="circuit"] [data-sidebar-row] > .bg-raised {
+  border-color: rgb(68 200 255 / 0.65);
+  box-shadow: inset 2px 0 0 #44e0ff, 0 0 14px -4px rgb(47 155 255 / 0.7);
+}
+
+/* Inner panels and the search field take the same cut corners; inside a lit message the message's own trace is the only frame. */
+[data-skin="circuit"] :is([data-orbit-message-content] .rounded-lg, [data-sidebar-search]) {
+  corner-shape: bevel;
+}
+
+[data-skin="circuit"] [data-orbit-message-content] .rounded-lg {
+  border-color: transparent;
 }
 
 /* ── Ledger ────────────────────────────────────────────────────────────────
@@ -4304,7 +4535,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   [data-hold-menu][data-select-mode] {
     -webkit-touch-callout: default;
   }
-  [data-hold-menu][data-select-mode] :is([data-orbit-message-content], [data-team-room-content]) {
+  [data-hold-menu][data-select-mode] :is([data-orbit-message-content], [data-team-room-content], [data-peer-text]) {
     -webkit-user-select: text;
     user-select: text;
   }

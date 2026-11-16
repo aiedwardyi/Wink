@@ -20,10 +20,10 @@ it("requires both child markers and catches child import failures", () => {
   fs.writeFileSync(path.join(root, "verify-child.mjs"), 'process.stdout.write("child");');
   const nonce = "a".repeat(48);
   for (const [args, marker, expected] of [[[], "", "main"], [["--orbit-verify-child"], "", "main"], [[], nonce, "main"], [["--orbit-verify-child"], "bad", "main"], [["--orbit-verify-child"], nonce, "child"]]) {
-    const run = spawnSync(process.execPath, [entry, ...args], { env: { ...process.env, ORBIT_VERIFY_CHILD: marker }, encoding: "utf8" });
+    const run = spawnSync(process.execPath, [entry, ...args], { env: { ...process.env, ORBIT_VERIFY_CHILD: marker }, encoding: "utf8", windowsHide: true });
     expect(run.status).toBe(0);
     expect(run.stdout).toBe(expected);
   }
   fs.writeFileSync(path.join(root, "verify-child.mjs"), 'throw new Error("fixture");');
-  expect(spawnSync(process.execPath, [entry, "--orbit-verify-child"], { env: { ...process.env, ORBIT_VERIFY_CHILD: nonce } }).status).toBe(70);
+  expect(spawnSync(process.execPath, [entry, "--orbit-verify-child"], { env: { ...process.env, ORBIT_VERIFY_CHILD: nonce }, windowsHide: true }).status).toBe(70);
 });

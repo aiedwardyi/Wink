@@ -9,22 +9,25 @@ export interface ReplayMessage {
   speaker?: { botId: string; name: string };
 }
 
+// Voice-call provenance is not a chat engine switch.
 const REPLAY_ENGINE_NAMES = new Map([
   ["claudeAgent", "Claude"],
   ["codex", "Codex"],
   ["antigravityAgent", "Gemini"],
-  ["geminiAgent", "Gemini"],
   ["grokAgent", "Grok"],
   ["museAgent", "Muse"],
 ]);
 
-export function replayEngineTag(engine?: string, driverKind?: string): string {
-  return engine && driverKind && engine !== driverKind ? ` (on ${REPLAY_ENGINE_NAMES.get(engine) ?? engine})` : "";
+export function replayEngineTag(engine?: string, driverKind?: string, model?: string): string {
+  const name = engine && REPLAY_ENGINE_NAMES.get(engine);
+  // Box selects its engine by model; its driver kind only names the runner.
+  const currentEngine = driverKind === "boxAgent" ? (model?.startsWith("gpt") ? "codex" : "claudeAgent") : driverKind;
+  return name && currentEngine && engine !== currentEngine ? ` (on ${name})` : "";
 }
 
-export function replayMessageText(message: ReplayMessage, driverKind: string, botId?: string): string {
+export function replayMessageText(message: ReplayMessage, driverKind: string, botId?: string, model?: string): string {
   if (message.role !== "assistant" || (botId && message.speaker?.botId !== botId)) return message.text;
-  const tag = replayEngineTag(message.engine, driverKind);
+  const tag = replayEngineTag(message.engine, driverKind, model);
   if (!tag) return message.text;
   const speaker = message.speaker?.name;
   const prefix = speaker ? `${speaker}: ` : "";
@@ -33,8 +36,8 @@ export function replayMessageText(message: ReplayMessage, driverKind: string, bo
     : `${tag.trimStart()} ${message.text}`;
 }
 
-function replayLine(message: ReplayMessage, driverKind?: string): string {
-  return `${message.role === "user" ? "User" : `Assistant${replayEngineTag(message.engine, driverKind)}`}: ${message.text}`;
+function replayLine(message: ReplayMessage, driverKind?: string, model?: string): string {
+  return `${message.role === "user" ? "User" : `Assistant${replayEngineTag(message.engine, driverKind, model)}`}: ${message.text}`;
 }
 
 // Building the text a driver actually receives. Three situations force an
@@ -52,6 +55,7 @@ export interface TurnContextInput {
   /** settled text turns on the active branch, oldest first, capped upstream */
   transcript: ReplayMessage[];
   driverKind?: string;
+  model?: string;
   /** the visible branch changed (edit / version switch) */
   rewound: boolean;
   /** this driver instance has no session cursor for this thread */
@@ -429,6 +433,19 @@ function systemLines(text: string): string[] {
     .filter((line) => line.trim());
 }
 
+function retainedLinesReordered(before: string[], after: string[]): boolean {
+  const oldLines = new Set(before);
+  const newLines = new Set(after);
+  const retainedBefore = before.filter((line) => newLines.has(line));
+  const retainedAfter = after.filter((line) => oldLines.has(line));
+  return retainedBefore.length !== retainedAfter.length
+    || retainedBefore.some((line, index) => line !== retainedAfter[index]);
+}
+
+export function systemLinesReordered(delivered: string, system: string): boolean {
+  return retainedLinesReordered(systemLines(delivered), systemLines(system));
+}
+
 /** Lines of `from` that `other` does not also hold, in `from`'s order. */
 function linesOnlyIn(from: string[], other: string[]): string[] {
   const left = new Map<string, number>();
@@ -452,8 +469,9 @@ export function withSystemChanges(
   if (delivered === undefined || delivered === system) return text;
   const before = systemLines(delivered);
   const after = systemLines(system);
-  const removed = linesOnlyIn(before, after);
-  const added = linesOnlyIn(after, before);
+  const reordered = retainedLinesReordered(before, after);
+  const removed = reordered ? before : linesOnlyIn(before, after);
+  const added = reordered ? after : linesOnlyIn(after, before);
   if (!removed.length && !added.length) return text;
   if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
   // Untagged, Haiku kept the stale system prompt in about half of real-CLI
@@ -615,6 +633,7 @@ export function buildResumeFallback(input: {
   text: string;
   transcript: ReplayMessage[];
   driverKind?: string;
+  model?: string;
   taskRecord?: TaskRecordContext;
   taskRecordText?: string;
 }): string {
@@ -624,7 +643,7 @@ export function buildResumeFallback(input: {
     record ? "" : null,
     RESUME_FALLBACK_PREAMBLE,
     "",
-    ...input.transcript.map((message) => replayLine(message, input.driverKind)),
+    ...input.transcript.map((message) => replayLine(message, input.driverKind, input.model)),
     "",
     REPLY_MARKER,
     "",
@@ -669,7 +688,7 @@ export function buildTurnContext(input: TurnContextInput): {
       record ? "" : null,
       replayPreamble(input),
       "",
-      ...transcript.map((message) => replayLine(message, input.driverKind)),
+      ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
       "",
       REPLY_MARKER,
       "",

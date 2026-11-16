@@ -34,8 +34,10 @@ import {
   takeQueuedSteers,
   _queuedCount,
   _resetSteerQueue,
+  waitingSends,
   type SteerStore,
 } from "./steer-queue.ts";
+import { foldPeerQueuedSends } from "./peer-user-reply.ts";
 import type { BotRecord, Message } from "./store.ts";
 import { startQueuedTurn } from "./chat-error.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
@@ -116,6 +118,20 @@ describe("steer-queue module", () => {
     expect(start).toHaveBeenLastCalledWith("new message");
     cancelQueuedSends(bot.id);
     expect(isSendCancelled("send_abcdefghijklmnop")).toBe(false);
+  });
+
+  it("lists each thread's waiting sends for a window that did not send them", () => {
+    const first = queueSteeredMessage("bot-w", "thread-w", "first", { sendId: "send_1234567890123456" });
+    const second = queueSteeredMessage("bot-w", "thread-w", "second", { replyToId: "reply-1", syncUntil: 1 });
+    queueSteeredMessage("bot-w", "thread-w", "stopped", { sendId: "send_abcdefghijklmnop" });
+    markSendCancelled("send_abcdefghijklmnop");
+    queueRoomParticipation("bot-w", "thread-room", { groupId: "group-w" });
+    expect(waitingSends()).toEqual({
+      "thread-w": [
+        { queueId: first.id, text: "first", sendId: "send_1234567890123456" },
+        { queueId: second.id, text: "second", replyToId: "reply-1", reason: "sync" },
+      ],
+    });
   });
 
   it("does not append a queued user message until drain", () => {
@@ -218,7 +234,7 @@ describe("steer-queue module", () => {
     const store = fakeStore([bot]);
     const first = queueSteeredMessage(bot.id, bot.threadId, "keep me");
     const second = queueSteeredMessage(bot.id, bot.threadId, "drop me");
-    expect(cancelSteeredMessage(bot.id, second.id)).toEqual({ cancelled: true });
+    expect(cancelSteeredMessage(bot.id, second.id)).toMatchObject({ cancelled: true });
     expect(cancelSteeredMessage(bot.id, "missing")).toEqual({ cancelled: false, running: false });
     expect(_queuedCount("thread-cancel")).toBe(1);
 
@@ -252,7 +268,7 @@ describe("steer-queue module", () => {
     bot.threadId = "thread-new-cancel";
     expect(cancelSteeredMessage("some-other-bot", queued.id)).toEqual({ cancelled: false, running: false });
     expect(_queuedCount("thread-original-cancel")).toBe(1);
-    expect(cancelSteeredMessage(bot.id, queued.id)).toEqual({ cancelled: true });
+    expect(cancelSteeredMessage(bot.id, queued.id)).toMatchObject({ cancelled: true });
     expect(_queuedCount("thread-original-cancel")).toBe(0);
   });
 
@@ -305,6 +321,25 @@ describe("steer-queue module", () => {
     const run = vi.fn();
     drainSteeredMessages(store, run);
     expect(run.mock.calls[0][5]).toEqual({ groupId: "room-instr", hop: 0, instructionId: "msg-1" });
+  });
+
+  it("carries a room recheck and answered set through drain, unless a plain participation folds in", async () => {
+    const skye = fakeBot("skye-ready", "skye-ready-1to1", true);
+    const nova = fakeBot("nova-ready", "nova-ready-1to1", true);
+    const store = fakeStore([skye, nova]);
+    const ready = async () => false;
+    const spoken = new Set(["kai"]);
+    queueRoomParticipation(skye.id, "room-ready", { groupId: "room-ready", ready, spoken });
+    queueRoomParticipation(skye.id, "room-ready", { groupId: "room-ready", ready: async () => true, spoken });
+    queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain", ready, spoken });
+    queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain" });
+    skye.busy = false;
+    nova.busy = false;
+    const run = vi.fn();
+    drainSteeredMessages(store, run);
+    const [owed, plain] = run.mock.calls.map((call) => call[5]);
+    expect([owed.groupId, await owed.ready(), owed.spoken]).toEqual(["room-ready", true, spoken]);
+    expect([plain.groupId, plain.ready, plain.spoken]).toEqual(["room-plain", undefined, undefined]);
   });
 
   it("passes a room dispatch-error hook through drain without appending", () => {
@@ -399,7 +434,7 @@ describe("steer-queue module", () => {
   it("cancels a waiting send by client sendId as well as queue messageId", () => {
     const bot = fakeBot("bot-sendid-cancel", "thread-sendid-cancel", true);
     const queued = queueSteeredMessage(bot.id, bot.threadId, "hold", { sendId: "send_cancelbyid0001" });
-    expect(cancelSteeredMessage(bot.id, "send_cancelbyid0001")).toEqual({ cancelled: true });
+    expect(cancelSteeredMessage(bot.id, "send_cancelbyid0001")).toMatchObject({ cancelled: true });
     expect(_queuedCount("thread-sendid-cancel")).toBe(0);
     expect(queuedSteeredMessage(bot.id, bot.threadId, "send_cancelbyid0001")).toBeNull();
     expect(queued.id).toEqual(expect.any(String));
@@ -571,6 +606,36 @@ describe("steer-queue module", () => {
     expect(folds).toEqual([[], []]);
     expect(store.messages.map((m) => m.text)).toEqual(["one"]);
     expect(_queuedCount(bot.threadId)).toBe(3);
+  });
+
+  it("a steering engine's drain-started turn takes the sends waiting behind its first", () => {
+    const bot = fakeBot("bot-fold-steer", "thread-fold-steer", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "Yes, build it", { answersCard: "card-1" });
+    queueSteeredMessage(bot.id, bot.threadId, "typed after the tap", { sendId: "send_typedafterthetap1" });
+    queueSteeredMessage(bot.id, bot.threadId, "and one more", { sendId: "send_andonemoreline12" });
+
+    const folds: string[][] = [];
+    drainSteeredMessages(store, (botId, threadId) => {
+      folds.push(foldPeerQueuedSends(store as never, botId, threadId, queueMark(), true));
+    });
+
+    expect(folds).toEqual([["typed after the tap", "and one more"]]);
+    expect(store.messages).toMatchObject([
+      { text: "Yes, build it", answersCard: "card-1" },
+      { text: "typed after the tap", sendId: "send_typedafterthetap1", queueId: expect.any(String), steered: true },
+      { text: "and one more", sendId: "send_andonemoreline12", queueId: expect.any(String), steered: true },
+    ]);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it.each([{ after: true }, { syncUntil: Date.now() + 60_000 }])("a steering engine's turn leaves sends behind a held one waiting: %o", (hold) => {
+    const bot = fakeBot("bot-fold-held", "thread-fold-held", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "held", hold);
+    queueSteeredMessage(bot.id, bot.threadId, "plain");
+    expect(foldPeerQueuedSends(store as never, bot.id, bot.threadId, queueMark(), true)).toEqual([]);
+    expect(_queuedCount(bot.threadId)).toBe(2);
   });
 
   it("drains only one queue per bot per settle so a 1:1 and a room wait cannot double-fire", () => {

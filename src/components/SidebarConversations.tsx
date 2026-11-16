@@ -22,7 +22,9 @@ import { chatNeedsYou } from "@/lib/open-question";
 import { routineRinging } from "@/lib/routine-ring";
 import { formatCollapsedUnreadBadge, unreadReplyCount } from "@/lib/unread";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { useLoadedJoinedRooms } from "@/lib/joined-rooms";
 import { sidebarWorkerStatus } from "@/lib/worker-status";
+import { turnElsewhere } from "@/lib/turn-stage";
 import { terminalAttentionCopy } from "@/lib/notify";
 
 export function compactSidebarModelLabel(label: string): string {
@@ -326,6 +328,11 @@ function BotListItem({
   const terminalCopy = terminalAttention ? terminalAttentionCopy(terminalAttention.reason, locale) : null;
   const paneLabels = state.terminalPanes[bot.id];
   const workerStatus = useMemo(() => sidebarWorkerStatus(visible, paneLabels ?? [], t), [visible, paneLabels, t]);
+  const joinedRooms = useLoadedJoinedRooms();
+  const elsewhere = useMemo(
+    () => turnElsewhere(bot, state.groups, state.routineRuns, joinedRooms),
+    [bot, state.groups, state.routineRuns, joinedRooms],
+  );
   const question = chatNeedsYou(bot.messages);
   const asking = question || routineRinging(state.routineRuns, bot.threadId, bot.tasks);
   const unreadCount = useMemo(() => unreadReplyCount(bot.unread, bot.readAt, visible), [bot.unread, bot.readAt, visible]);
@@ -466,7 +473,9 @@ function BotListItem({
                 )}
               >
                 {expandedModelLabel && <span data-sidebar-model-label className="min-w-0 flex-1 truncate">{expandedModelLabel}</span>}
-                {bot.busy && <span className="shrink-0 truncate">{t("chrome.working")}</span>}
+                {bot.busy && (elsewhere
+                  ? <span data-sidebar-working-where className={cn("min-w-0 truncate", expandedModelLabel && "max-w-[70%]")}>{t(elsewhere.kind === "routine" ? "chrome.workingOn" : "chrome.workingIn", { name: elsewhere.name })}</span>
+                  : <span className="shrink-0 truncate">{t("chrome.working")}</span>)}
               </div>
             )}
           </div>
