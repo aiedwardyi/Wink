@@ -81,6 +81,16 @@ describe("team room shape", () => {
     expect(lines.map((line) => line.color)).toEqual(["blue", undefined, undefined]);
   });
 
+  it("gives a room bot line its owner's pick, joined or hosted", () => {
+    const joined = joinedLines([{ seq: 1, id: "e1", at: 1, author: { kind: "bot", id: "tb-1", name: "포키", owner: "jj" }, text: "hi" }], [{ id: "tb-1", name: "포키", color: "", mascotStyle: "icon-11" }]);
+    expect(joined[0]).toMatchObject({ mascotStyle: "icon-11" });
+    const messages: Message[] = [{ id: "c", role: "bot", kind: "text", text: "hi", at: 3, from: { botId: "tb-1", name: "포키", color: "teal" }, roomEntryId: "e3" }];
+    expect(hostLines(messages, [{ id: "tb-1", name: "포키", color: "", owner: "jj", mascotStyle: "icon-11" }])[0]).toMatchObject({ mascotStyle: "icon-11" });
+    expect(hostLines(messages)[0]).not.toHaveProperty("mascotStyle");
+    const mirrored: Message[] = [{ ...messages[0]!, author: { kind: "bot", id: "tb-1", name: "포키", owner: "jj" } }];
+    expect(hostLines(mirrored, [{ id: "tb-1", name: "포키", color: "", owner: "jj", mascotStyle: "icon-11" }])[0]).toMatchObject({ mascotStyle: "icon-11" });
+  });
+
   it("shows the host's full pinned line when the room has it, else the pin's preview", () => {
     const notice = { entryId: "e1", by: "host", at: 1, text: "preview…" };
     expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [], noticeText: "the whole line" } }))).toBe("the whole line");

@@ -18,6 +18,7 @@ export interface RoomLine {
   reactions?: ReactionMark[];
   message?: Message;
   color?: string;
+  mascotStyle?: string;
 }
 
 export type ReactionMark = NonNullable<Message["reactions"]>[number];
@@ -45,13 +46,14 @@ const NO_JOINS: RoomJoin[] = [];
 // One empty list, so a memoized transcript keeps its props.
 export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
-export const hostLines = (messages: readonly Message[]): RoomLine[] =>
+export const hostLines = (messages: readonly Message[], bots: readonly TeamBot[] = []): RoomLine[] =>
   messages.flatMap((message) => {
     // A bot's answer row carries `from`, not `author`; it stays once the room is back to no bots.
     const bot = !message.author && message.from;
     const author = bot ? { kind: "bot" as const, id: bot.botId, name: bot.name } : message.author;
+    const mascotStyle = author?.kind === "bot" ? bots.find((candidate) => candidate.id === author.id)?.mascotStyle : undefined;
     return author && message.roomEntryId
-      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), message }]
+      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), ...(mascotStyle ? { mascotStyle } : {}), message }]
       : [];
   });
 
@@ -84,6 +86,7 @@ export interface JoinedBot {
   id: string;
   name: string;
   color: string;
+  mascotStyle?: string;
 }
 
 export interface JoinedEntry {
@@ -105,9 +108,9 @@ export const joinedPhase = (view: JoinedView): JoinedPhase =>
 /** Own marks read as "user", like the bot chat's. */
 export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = [], meId?: string): RoomLine[] =>
   entries.map((entry) => {
-    const color = entry.author.kind === "bot" ? bots.find((bot) => bot.id === entry.author.id)?.color : undefined;
+    const bot = entry.author.kind === "bot" ? bots.find((candidate) => candidate.id === entry.author.id) : undefined;
     const reactions = entry.reactions?.map((mark) => (mark.by === `person:${meId}` ? { ...mark, by: "user" } : mark));
-    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(reactions?.length ? { reactions } : {}), ...(color ? { color } : {}) };
+    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(reactions?.length ? { reactions } : {}), ...(bot?.color ? { color: bot.color } : {}), ...(bot?.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) };
   });
 
 /** Reactor names by mark `by`, for chip hovers. */

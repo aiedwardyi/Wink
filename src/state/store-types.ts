@@ -205,6 +205,7 @@ export interface TeamBot {
   name: string;
   color: string;
   owner: string;
+  mascotStyle?: string;
 }
 
 /** A person's first join to a shared group, once per seat. */
