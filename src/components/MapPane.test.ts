@@ -764,10 +764,10 @@ it("says how many new files a capped worker left out", async () => {
 const posts: string[][] = [];
 class Tokenizer {
   onmessage?: (event: { data: object }) => void;
-  postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[] }) {
+  postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[]; removed: boolean[] }) {
     if (data.stop) return;
     posts.push(data.code);
-    void tokenize(data.path, data.theme, data.code, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => this.onmessage?.({ data: { id: data.id, done } }));
+    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => this.onmessage?.({ data: { id: data.id, done } }));
   }
   terminate() {}
 }
@@ -782,8 +782,8 @@ const source = [
   { kind: "context", text: "export type Total = number;", line: 3 },
 ];
 const colors = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>(".map-code-row code span")].map(span => [span.textContent, span.style.color.toUpperCase()]));
-const openSource = async (path: string) => {
-  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: source }));
+const openSource = async (path: string, lines: object[] = source) => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines }));
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[0], path, files: [{ path, added: 1, removed: 1 }] }]);
 };
@@ -825,4 +825,11 @@ it("draws an already colored file at once from the cache without tokenizing it a
   await openSource("src/again.ts");
   expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
   expect(posts.length).toBe(sent);
+});
+
+it("colors a removed line inside an unchanged comment as a comment", async () => {
+  await openSource("src/inside.ts", [{ kind: "context", text: "/* notes", line: 1 }, { kind: "remove", text: "old note", line: 2 }, { kind: "add", text: "new note", line: 2 }, { kind: "context", text: "*/", line: 3 }]);
+  await until(() => !!host.querySelector('.map-code-row[data-kind="remove"] code span'));
+  const color = (kind: string) => host.querySelector<HTMLElement>(`.map-code-row[data-kind="${kind}"] code span`)?.style.color.toUpperCase();
+  expect([color("remove"), color("add")]).toEqual(["#6A9955", "#6A9955"]);
 });

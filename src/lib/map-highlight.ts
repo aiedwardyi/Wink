@@ -20,9 +20,8 @@ const hash = (s: string) => {
   return (h >>> 0).toString(36);
 };
 
-// Removed lines are their own stream, so an old line can't open a comment or string over the new file.
-const streams = (diff: MapDiff) => [diff.lines.filter(line => line.kind === "context" || line.kind === "add"), diff.lines.filter(line => line.kind === "remove")].filter(lines => lines.length);
-const keyOf = (file: string, lines: MapDiffLine[]) => `${file}\0${hash(lines.map(line => line.text).join("\n"))}`;
+const rows = (diff: MapDiff) => diff.lines.filter(line => line.kind !== "fold");
+const keyOf = (file: string, lines: MapDiffLine[]) => `${file}\0${hash(lines.map(line => (line.kind === "remove" ? "-" : " ") + line.text).join("\n"))}`;
 const tooBig = (diff: MapDiff) => diff.lines.length > MAX_LINES || diff.lines.reduce((sum, line) => sum + line.text.length, 0) > MAX_CHARS;
 
 function highlighter(): Worker | undefined {
@@ -42,7 +41,8 @@ function highlighter(): Worker | undefined {
 function cachedLines(file: string, diff: MapDiff | undefined) {
   const lines: Lines = new Map();
   if (!diff || diff.binary || tooBig(diff)) return lines;
-  for (const stream of streams(diff)) done.get(keyOf(file, stream))?.forEach((tokens, i) => lines.set(stream[i], tokens));
+  const order = rows(diff);
+  done.get(keyOf(file, order))?.forEach((tokens, i) => lines.set(order[i], tokens));
   return lines;
 }
 
@@ -54,33 +54,38 @@ export function useMapTokens(path: string | null | undefined, diff: MapDiff | un
 
   useEffect(() => {
     if (!path || !diff || diff.binary || tooBig(diff)) return;
-    const todo = streams(diff).filter(stream => !done.has(keyOf(file, stream)));
-    const thread = todo.length ? highlighter() : undefined;
+    const order = rows(diff);
+    const key = keyOf(file, order);
+    const thread = order.length && !done.has(key) ? highlighter() : undefined;
     if (!thread) return;
-    setLive(last => ({ file, diff, lines: new Map(), text: last.file === file ? last.text : new Map() }));
-    const ids = todo.map(stream => {
-      const id = ++asked;
-      const got: MapToken[][] = [];
-      replies.set(id, ({ from = 0, tokens, done: whole }) => {
-        if (!tokens) {
-          replies.delete(id);
-          if (!whole) return;
-          if (done.size >= CACHE_MAX) done.delete(done.keys().next().value!);
-          return void done.set(keyOf(file, stream), got);
-        }
-        got.push(...tokens);
-        setLive(last => {
-          if (last.diff !== diff) return last;
-          tokens.forEach((line, i) => { last.lines.set(stream[from + i], line); last.text.set(stream[from + i].text, line); });
-          return { ...last };
-        });
-      });
-      thread.postMessage({ id, path, theme, code: stream.map(line => line.text) });
-      return id;
+    // Only this revision's texts carry over, so the fallback never outgrows the file on screen.
+    setLive(last => {
+      const seen = last.file === file ? new Map([...last.text, ...[...last.lines].map(([line, tokens]) => [line.text, tokens] as const)]) : new Map<string, MapToken[]>();
+      const text = new Map<string, MapToken[]>();
+      for (const line of order) { const tokens = seen.get(line.text); if (tokens) text.set(line.text, tokens); }
+      return { file, diff, lines: new Map(), text };
     });
-    return () => { for (const id of ids) if (replies.delete(id)) worker?.postMessage({ id, stop: true }); };
+    const id = ++asked;
+    const got: MapToken[][] = [];
+    replies.set(id, ({ from = 0, tokens, done: whole }) => {
+      if (!tokens) {
+        replies.delete(id);
+        if (!whole) return;
+        if (done.size >= CACHE_MAX) done.delete(done.keys().next().value!);
+        return void done.set(key, got);
+      }
+      got.push(...tokens);
+      setLive(last => {
+        if (last.diff !== diff) return last;
+        const lines = new Map(last.lines);
+        tokens.forEach((line, i) => lines.set(order[from + i], line));
+        return { ...last, lines };
+      });
+    });
+    thread.postMessage({ id, path, theme, code: order.map(line => line.text), removed: order.map(line => line.kind === "remove") });
+    return () => { if (replies.delete(id)) worker?.postMessage({ id, stop: true }); };
   }, [path, diff, file, theme]);
 
   // Until a line's own tokens land, the same text keeps its last colors, so a live edit doesn't flash plain.
-  return useCallback((line: MapDiffLine) => cached.get(line) ?? (live.file === file ? live.diff === diff && live.lines.get(line) || live.text.get(line.text) : undefined), [cached, live, file, diff]);
+  return useCallback((line: MapDiffLine) => cached.get(line) ?? (live.file === file ? (live.diff === diff ? live.lines.get(line) : undefined) ?? live.text.get(line.text) : undefined), [cached, live, file, diff]);
 }
