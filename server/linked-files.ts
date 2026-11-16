@@ -1,6 +1,6 @@
-// Linked media may leave the bot's output roots, excluding private and system folders.
+// Linked media and pages may leave the bot's output roots, excluding private and system folders.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { createReadStream, existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { basename, dirname, isAbsolute, join, parse, relative } from "node:path";
 import { pipeline } from "node:stream";
@@ -227,7 +227,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
 }
 
 function outsideMedia(real: string): boolean {
-  if (!(mediaType(real) || cardFile(real)) || /^[\\/]{2}/.test(real)) return false;
+  if (!(mediaType(real) || cardFile(real) || /\.html?$/i.test(real)) || /^[\\/]{2}/.test(real)) return false;
   const normalized = real.replaceAll("\\", "/").toLowerCase();
   if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
   return !systemFolder(real);
@@ -382,7 +382,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
       key = parts.shift() ?? "";
       asset = parts.map(decodeURIComponent).join("/");
       if (!/\.html?$/i.test(requested) || !grantValid(options.threadId, requested, key) || asset.split(/[\\/]/).some((part) => part.startsWith(".")) ||
-          /[\\:\0]/.test(asset) || asset.startsWith("/") || (asset !== "" && !(mediaType(asset) ?? assetType(asset)))) {
+          /[\\:\0]/.test(asset) || asset.startsWith("/") || (asset !== "" && !asset.endsWith("/") && !(mediaType(asset) ?? assetType(asset)))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
@@ -441,16 +441,17 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
       sendJson(res, 404, { error: "not found" });
       return;
     }
+    const { base, at } = pageBase(real);
+    if (asset === at) asset = "";
     if (asset) {
-      const folder = dirname(real);
       try {
-        real = realpathSync.native(join(folder, asset));
+        real = realpathSync.native(join(base, asset));
       } catch {
         sendJson(res, 404, { error: "not found" });
         return;
       }
-      if (!insideRoot(real, [folder]) || !insideRoot(real, roots) ||
-          relative(folder, real).split(/[\\/]/).some((part) => part.startsWith(".") && part !== ".pnpm")) {
+      if (!insideRoot(real, [base]) || (inRoot && !insideRoot(real, roots)) ||
+          relative(base, real).split(/[\\/]/).some((part) => (part.startsWith(".") && part !== ".pnpm") || (!inRoot && part.toLowerCase() === "appdata")) || (!inRoot && systemFolder(real))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
@@ -469,7 +470,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   if (html && !scoped) {
-    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested)}/`, "cache-control": "private, no-store" });
+    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested)}/${pageBase(real).at.split("/").map(encodeURIComponent).join("/")}`, "cache-control": "private, no-store" });
     res.end();
     return;
   }
@@ -506,6 +507,19 @@ export function serveLinkedFolder(req: IncomingMessage, res: ServerResponse, opt
   }
   files.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name));
   sendJson(res, 200, { files: files.slice(0, FOLDER_FILES), more: Math.max(0, files.length - FOLDER_FILES) });
+}
+
+/** A page sits at its path under its nearest repo root, so `../shared/logo.svg` reaches up to that root and no further. */
+function pageBase(page: string): { base: string; at: string } {
+  const folder = dirname(page);
+  for (let dir = folder; dirname(dir) !== dir; dir = dirname(dir)) {
+    if (!existsSync(join(dir, ".git"))) continue;
+    const parts = relative(dir, folder).split(/[\\/]/).filter(Boolean);
+    // A page under a dot folder or AppData keeps to its own folder.
+    if (parts.some((part) => part.startsWith(".") || part.toLowerCase() === "appdata")) break;
+    return { base: dir, at: parts.map((part) => `${part}/`).join("") };
+  }
+  return { base: folder, at: "" };
 }
 
 function htmlPolicy(req: IncomingMessage, scope: string): string {

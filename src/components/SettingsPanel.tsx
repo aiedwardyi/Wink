@@ -27,6 +27,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
+import { BotAlarms } from "./BotAlarms";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { currentTask, MemoryEditButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
@@ -824,6 +825,8 @@ export function SettingsPanel({
                   />
                 )}
               </div>
+
+              <BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />
 
               <VoiceChatSettings bot={bot} />
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
