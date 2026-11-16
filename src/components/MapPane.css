@@ -61,7 +61,8 @@
 .map-empty button { text-decoration: underline; }
 .map-example { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; padding: 0 16px 16px; color: var(--color-ink-secondary); font: 13px/1.5 var(--font-sans, sans-serif); }
 .map-example > div { position: relative; flex-shrink: 0; max-width: 420px; overflow: hidden; padding: 28px 10px 0; border: 1px dashed var(--color-hairline); border-radius: 8px; }
-.map-example small { position: absolute; top: 8px; left: 10px; font: 600 10px/12px var(--font-sans, sans-serif); letter-spacing: .06em; text-transform: uppercase; }
+/* the chip's look is the menu unread badge's utilities on the tag; a font or color here would beat them */
+.map-example small { position: absolute; top: 6px; right: 10px; }
 .map-example .map-code { margin: 8px -10px 0; padding: 6px 0 8px; font-size: 11px; }
 @container map-pane (max-width: 380px) { .map-head, .map-top, .map-crumbs, .map-step { padding-left: 10px; padding-right: 10px; } }
 /* a long worker name gives way before the two-sided switch does */
