@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { isVoiceLine } from "../shared/live-call.ts";
-import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
+import { isOpenRequest, scanQuestion, typedReply } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
@@ -38,6 +38,7 @@ export interface QuickGate {
   deliverAfter: boolean;
   replyTo?: Message;
   queueId?: string;
+  answersCard?: string;
   room: boolean;
   accountReady: boolean;
 }
@@ -46,11 +47,12 @@ export interface QuickGate {
 export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
   if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
-  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
+  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  // typing answers the pinned card
-  if (scanQuestion(gate.messages)) return false;
+  // typing answers the pinned card, unless it only types past its choices
+  const question = scanQuestion(gate.messages);
+  if (question && typedReply(question, gate.text) !== null) return false;
   if (gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
