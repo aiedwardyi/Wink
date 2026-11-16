@@ -37,6 +37,7 @@ import {
   waitingSends,
   type SteerStore,
 } from "./steer-queue.ts";
+import { foldPeerQueuedSends } from "./peer-user-reply.ts";
 import type { BotRecord, Message } from "./store.ts";
 import { startQueuedTurn } from "./chat-error.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
@@ -605,6 +606,36 @@ describe("steer-queue module", () => {
     expect(folds).toEqual([[], []]);
     expect(store.messages.map((m) => m.text)).toEqual(["one"]);
     expect(_queuedCount(bot.threadId)).toBe(3);
+  });
+
+  it("a steering engine's drain-started turn takes the sends waiting behind its first", () => {
+    const bot = fakeBot("bot-fold-steer", "thread-fold-steer", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "Yes, build it", { answersCard: "card-1" });
+    queueSteeredMessage(bot.id, bot.threadId, "typed after the tap", { sendId: "send_typedafterthetap1" });
+    queueSteeredMessage(bot.id, bot.threadId, "and one more", { sendId: "send_andonemoreline12" });
+
+    const folds: string[][] = [];
+    drainSteeredMessages(store, (botId, threadId) => {
+      folds.push(foldPeerQueuedSends(store as never, botId, threadId, queueMark(), true));
+    });
+
+    expect(folds).toEqual([["typed after the tap", "and one more"]]);
+    expect(store.messages).toMatchObject([
+      { text: "Yes, build it", answersCard: "card-1" },
+      { text: "typed after the tap", sendId: "send_typedafterthetap1", queueId: expect.any(String), steered: true },
+      { text: "and one more", sendId: "send_andonemoreline12", queueId: expect.any(String), steered: true },
+    ]);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it("a steering engine's turn leaves sends behind a held one waiting", () => {
+    const bot = fakeBot("bot-fold-held", "thread-fold-held", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "after this turn", { after: true });
+    queueSteeredMessage(bot.id, bot.threadId, "plain");
+    expect(foldPeerQueuedSends(store as never, bot.id, bot.threadId, queueMark(), true)).toEqual([]);
+    expect(_queuedCount(bot.threadId)).toBe(2);
   });
 
   it("drains only one queue per bot per settle so a 1:1 and a room wait cannot double-fire", () => {

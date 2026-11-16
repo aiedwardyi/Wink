@@ -723,6 +723,16 @@ describe("typing while a question is open", () => {
     expect(patches(fetch)).toEqual([]);
   });
 
+  it("a tap after a typed reply to a busy bot sends no second answer", async () => {
+    const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: busy.threadId }));
+    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Sure" }));
+    await act(async () => {});
+    const posts = fetch.mock.calls.filter(([url, init]) => url === "/api/bots/b1/messages" && (init as RequestInit | undefined)?.method === "POST");
+    expect(posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).text)).toEqual(["maybe at 8"]);
+  });
+
   it("a queued typed answer saves its question, since its line is not in the transcript yet", async () => {
     const busy = { ...bot, busy: true, activity: "working", messages: [ask([])] } as Bot;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);

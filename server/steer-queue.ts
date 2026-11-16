@@ -437,18 +437,20 @@ export function hasQueuedSendBefore(botId: string, order: number): boolean {
   return false;
 }
 
-/** Take post-claim steers for preparation; older and after-turn sends stay queued. */
+/** Take post-claim steers for preparation; a steering engine's turn also takes older
+ * ones, which only waited out its busy bot. After-turn and sync-held sends stay queued. */
 export function takeQueuedSteers(
   botId: string,
   threadId: string,
   since: number,
+  steering = false,
 ): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string; call?: CallTag; answersCard?: string }> {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   if (!entry || entry.botId !== botId) return [];
   const steerItems = entry.items.filter((item): item is SteerItem => !isRoomItem(item));
   if (!steerItems.length) return [];
-  if (steerItems.some((item) => item.seq <= since && !isSendCancelled(item.sendId))) return [];
+  if (steerItems.some((item) => item.seq <= since && !isSendCancelled(item.sendId) && (!steering || item.after || item.syncUntil !== undefined))) return [];
   const held = entry.items.filter((item) => isRoomItem(item) || promoting.has(item.messageId) || (item.after && !isSendCancelled(item.sendId)));
   if (held.length) queues.set(key, { botId, threadId, items: held });
   else queues.delete(key);
@@ -465,12 +467,13 @@ export function foldQueuedSends(
   threadId: string,
   since: number,
   rows?: Message[],
+  steering = false,
 ): string[] {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   const appended = new Set<string>();
   try {
-    const prompts = takeQueuedSteers(botId, threadId, since).map((item) => {
+    const prompts = takeQueuedSteers(botId, threadId, since, steering).map((item) => {
       const ask = store.messagesFor(threadId).find((message) => showsQueued(message, item.id));
       const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
