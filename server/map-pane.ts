@@ -3,13 +3,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
-import { latestMapFile, mapFileDiff, mapFiles, mapFork, mapGit, mapHead, mapRepoFiles, mapWalkFiles } from "./map-git.ts";
+import { latestMapFile, mapFileDiff, mapFiles, mapFork, mapGit, mapHead, mapRepoFiles, mapTrunkFork, mapWalkFiles } from "./map-git.ts";
 import type { Store } from "./store.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { parsePaneNote } from "../shared/pane-note.ts";
 import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
+import { mapBotSelf } from "./map-bot-self.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -21,6 +22,8 @@ export interface MapPaneRecord {
   host?: string | null;
   main?: boolean;
   exited?: boolean;
+  /** The bot itself: the files its own turns wrote here, relative to cwd. */
+  self?: string[];
 }
 
 interface WatchedPane {
@@ -42,6 +45,13 @@ export interface MapPaneDeps {
   subscribe(botId: string, listener: () => void, disconnected?: () => void): () => void;
   gh?: MapGh;
 }
+
+// The bot's own row lasts while a file it wrote is still unshipped there: uncommitted, unpushed or on an unmerged branch.
+const shown = ({ pane, worker }: WatchedPane) => {
+  if (!pane.self) return true;
+  const own = new Set(pane.self.map(path => path.toLowerCase()));
+  return !worker.error && worker.files.some(file => own.has(file.path.toLowerCase()));
+};
 
 export function createMapPane(deps: MapPaneDeps) {
   const fallback = new Map<string, string | null>();
@@ -65,7 +75,7 @@ export function createMapPane(deps: MapPaneDeps) {
     const send = (error = false) => {
       if (closed) return;
       resend = error;
-      const snapshot: MapSnapshot = { workers: [...panes.values()].map(value => value.worker) };
+      const snapshot: MapSnapshot = { workers: [...panes.values()].filter(shown).map(value => value.worker) };
       if (error) snapshot.error = true;
       else {
         known.set(botId, panes);
@@ -93,7 +103,7 @@ export function createMapPane(deps: MapPaneDeps) {
           fallback.set(`${botId}:${record.pane.sessionId}`, base);
           record.worker = { ...record.worker, git: true };
         }
-        const fork = await mapFork(record.root, record.base);
+        const fork = record.pane.self ? await mapTrunkFork(record.root) ?? record.base : await mapFork(record.root, record.base);
         const { files, more } = await mapFiles(record.root, fork, [...panes.values()].find(value => value.base)?.base ?? undefined);
         if (closed || !record.watcher) return;
         const latest = record.path && files.some(file => file.path === record.path)
@@ -137,12 +147,13 @@ export function createMapPane(deps: MapPaneDeps) {
         for (const pane of live) {
           const existing = panes.get(pane.sessionId);
           if (!existing) { fresh.push(pane); continue; }
-          // Only the watcher re-reads git: a chat event can change no more than the reason line.
+          // Only the watcher re-reads git: a chat event can change no more than the reason line and the bot's own files.
+          if (pane.self?.join("\0") !== existing.pane.self?.join("\0")) { existing.pane = pane; changed = true; }
           const reason = deps.reason?.(botId, existing.pane, existing.worker.editedAt);
           if (reason !== existing.worker.reason) { existing.worker = { ...existing.worker, reason }; changed = true; }
         }
         const last = known.get(botId);
-        if (!panes.size && fresh.length && last && fresh.every(pane => last.has(pane.sessionId))) write({ workers: fresh.map(pane => last.get(pane.sessionId)!.worker) });
+        if (!panes.size && fresh.length && last && fresh.every(pane => last.has(pane.sessionId))) write({ workers: fresh.map(pane => last.get(pane.sessionId)!).filter(shown).map(record => record.worker) });
         // New workers are read together and sent once: sent one by one, Map rebuilt its tree per worker as it opened.
         const records = await Promise.all(fresh.map(async (pane): Promise<WatchedPane> => {
           const key = `${botId}:${pane.sessionId}`;
@@ -166,6 +177,8 @@ export function createMapPane(deps: MapPaneDeps) {
               if (event === "rename" && !existsSync(record.root)) { fail(record); return send(); }
               if (!name) return schedule(record);
               const path = name.toString().replaceAll("\\", "/");
+              // The bot's row is measured against the trunk, so its commits, pushes and checkouts change it with no file edit.
+              if (record.pane.self && /^\.git\/(HEAD|packed-refs|refs\/)/.test(path)) return schedule(record);
               // A folder without git yet still hears its .git: that is how it becomes a repo.
               if (path.split("/").some(part => (part === ".git" && record.base) || part === "node_modules")) return;
               schedule(record, path);
@@ -229,13 +242,14 @@ export function createMapPane(deps: MapPaneDeps) {
 export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess | null) {
   return createMapPane({
     panes: async botId => {
+      const bot = store.bot(botId);
+      const self = bot ? mapBotSelf(store.messagesFor(bot.threadId), bot) : [];
       const bridge = access();
-      if (!bridge) return [];
+      if (!bridge) return self;
       const snapshot = await terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true });
-      if (snapshot.status === 404) return [];
+      if (snapshot.status === 404) return self;
       if (snapshot.status !== 200) throw new Error("Worker panes unavailable");
-      const panes = snapshot.body.panes;
-      return paneSchema.array().parse(panes ?? []);
+      return [...paneSchema.array().parse(snapshot.body.panes ?? []), ...self];
     },
     reason: (botId, pane, editedAt) => {
       const messages = store.messagesFor(store.bot(botId)?.threadId ?? "");
