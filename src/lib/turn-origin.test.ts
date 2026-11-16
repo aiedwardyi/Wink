@@ -55,6 +55,13 @@ describe("turn origin", () => {
     expect(nextTurnOrigin(state, { type: "hydrated", turnKey: "tail", row, now: 102_000 })).toBe(state);
   });
 
+  it("anchors a rowless hydration to the row a later hydration brings", () => {
+    const observed = nextTurnOrigin(idle, { type: "hydrated", turnKey: "tail", now: 100_000 });
+    const anchored = nextTurnOrigin(observed, { type: "hydrated", turnKey: "room-tail", row: user, now: 100_000 });
+    expect(anchored.origin).toEqual({ turnKey: "tail", originMs: 90_000, source: "row" });
+    expect(nextTurnOrigin(anchored, { type: "hydrated", turnKey: "room-tail", row: user, now: 102_000 })).toBe(anchored);
+  });
+
   it("keeps a row-anchored origin when hydration has no row", () => {
     const state = nextTurnOrigin(idle, { type: "hydrated", turnKey: "tail", row: user, now: 100_000 });
     expect(nextTurnOrigin(state, { type: "hydrated", turnKey: "tail", now: 102_000 })).toBe(state);

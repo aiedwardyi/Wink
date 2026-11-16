@@ -65,9 +65,9 @@ const dispatch = async () => {
   await busy("b1");
 };
 
-async function mount() {
+async function mount(bots: Bot[] = [bot()], groups: Group[] = [room(null)]) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
-    ? Response.json({ bots: [bot()], groups: [room(null)], computerControl: {} })
+    ? Response.json({ bots, groups, computerControl: {} })
     : String(url).includes("/messages")
       ? new Promise<Response>(() => {})
       : Response.json({}, { status: 404 })));
@@ -110,5 +110,10 @@ describe("GroupView turn origin", () => {
     await frame({ kind: "message", threadId: "gt", message: line("u2", Date.now()) });
     await advance(1200);
     expect(elapsed()).toBe("(1s)");
+  });
+
+  it("a reload mid-turn counts from the room's prompt", async () => {
+    await mount([{ ...bot(true), workingThreadId: "gt" }], [room("b1", [line("u1", 90_000)])]);
+    expect(elapsed()).toBe("(10s)");
   });
 });

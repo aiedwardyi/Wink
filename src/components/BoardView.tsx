@@ -7,8 +7,8 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { cn } from "@/lib/cn";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
-import { useBackLayer } from "@/lib/use-back-layer";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
 import type { Bot } from "@/state/store-types";
 
