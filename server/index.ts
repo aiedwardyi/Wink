@@ -413,7 +413,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   chatSyncBotId,
@@ -2450,6 +2450,7 @@ const googleSync = createGoogleSync({
   kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
   picture: (name) => broadcast({ kind: "picture", name }),
+  memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
   openThread: () => threadRoutes.openThread(),
 });
 const uploadCloudRoots = cloudSyncRoots();
@@ -4491,7 +4492,10 @@ bus.subscribe((event: RuntimeEvent) => {
   setTimeout(() => void routines?.tick(), 0);
   followPendingSyncImports();
   const settledBot = store.botByThread(event.threadId);
-  if (settledBot) syncMemory(settledBot.id);
+  if (!settledBot) return;
+  syncMemory(settledBot.id);
+  // One Drive pass carries the reply and the memory it just wrote.
+  void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(event.threadId) : undefined).then(() => googleSync.kick());
 });
 
 function paneNotesPending(threadId: string): boolean {
