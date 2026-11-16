@@ -132,4 +132,39 @@ describe("turnSummaries", () => {
     expect(summaries.settle("t2", "b")).toEqual([]);
     expect(summaries.settle("t1", "a")).toEqual(["s1"]);
   });
+
+  const answer = "The build passed on all three PCs and the release notes are in the docs folder.";
+  const settled = (texts: Array<string | undefined>) => {
+    const hidden: string[] = [];
+    const summaries = turnSummaries((_threadId, ids, restated) => hidden.push(...ids.map((id) => (restated ? id : `commentary:${id}`))));
+    texts.forEach((text, i) => summaries.note("t1", "turn-1", `r${i}`, false, undefined, text));
+    summaries.settle("t1", "turn-1");
+    return hidden;
+  };
+
+  it("hides a text the turn later restates", () => {
+    expect(settled([answer, `Build passed on all three PCs, and the release notes are in the docs folder. ${"Your one question is in your box."}`])).toEqual(["r0"]);
+    expect(settled([answer, answer, answer])).toEqual(["r0", "r1"]);
+  });
+
+  it("keeps an answer followed by a short or different line", () => {
+    expect(settled([answer, "Saved."])).toEqual([]);
+    expect(settled([answer, "Next I'll check the phone build and the release on work tomorrow."])).toEqual([]);
+    expect(settled(["Checking the logs.", "Checking the logs."])).toEqual([]);
+  });
+
+  it("hides a restated commentary row once, as restated", () => {
+    const hidden: Array<[string[], true | undefined]> = [];
+    const summaries = turnSummaries((_threadId, ids, restated) => hidden.push([ids, restated]));
+    summaries.note("t1", "turn-1", "c0", false, "commentary", answer);
+    summaries.note("t1", "turn-1", "c1", false, "commentary", "Checking the logs.");
+    summaries.note("t1", "turn-1", "f0", false, "final_answer", answer);
+    summaries.settle("t1", "turn-1");
+    expect(hidden).toEqual([[["c1"], undefined], [["c0"], true]]);
+  });
+
+  it("keeps a row noted without text", () => {
+    expect(settled([undefined, answer])).toEqual([]);
+    expect(settled([answer, undefined])).toEqual([]);
+  });
 });

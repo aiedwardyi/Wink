@@ -2752,7 +2752,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
-const turnSummary = turnSummaries((threadId, ids) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true }); });
+const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true, restated }); });
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -3654,7 +3654,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
-        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text"))) : undefined;
+        const anchor = event.summarized ? undefined : store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
@@ -3668,7 +3668,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // kept so "finished" can say what it finished with, rather than
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply ? undefined : event.phase);
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);

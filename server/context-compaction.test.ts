@@ -183,6 +183,25 @@ describe("provider-neutral context compaction", () => {
     );
   });
 
+  it("leaves a restated row out of the replay", async () => {
+    const ready = await prepareModelContext({
+      messages: [
+        message("u1", "morning summary"),
+        message("b1", "Cleanup is live.", { role: "bot", summarized: true, restated: true }),
+        message("b2", "Cleanup is live. Your question is in your box.", { role: "bot" }),
+      ],
+      contextWindow: 8_192,
+      taskRecordText: "Goal: summary",
+    });
+    expect(ready).toMatchObject({
+      status: "ready",
+      transcript: [
+        { role: "user", text: "morning summary" },
+        { role: "assistant", text: "Cleanup is live. Your question is in your box." },
+      ],
+    });
+  });
+
   it("prefixes a summarized note in the room replay and compaction prompt", async () => {
     const scout = { botId: "scout", name: "Scout", color: "blue" };
     const ready = await prepareModelContext({

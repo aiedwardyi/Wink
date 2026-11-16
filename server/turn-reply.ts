@@ -42,26 +42,41 @@ export function ownTurnReply(stale: (threadId: string, turnId: string | undefine
   };
 }
 
+const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+
+/** Most of an answer's words come back in a later text of the same turn. */
+function restates(later: ReadonlySet<string>, earlier: ReadonlySet<string>): boolean {
+  if (earlier.size < 8) return false;
+  let kept = 0;
+  for (const word of earlier) if (later.has(word)) kept++;
+  return kept / earlier.size >= 0.7;
+}
+
 /** Per thread, the turn's engine summaries. A turn that wrote no other text
  * shows them at its end, or it would look empty; one with a final answer
- * hides its commentary. */
-export function turnSummaries(hide?: (threadId: string, ids: string[]) => void) {
-  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean }>();
+ * hides its commentary, and a text a later one restates. */
+export function turnSummaries(hide?: (threadId: string, ids: string[], restated?: true) => void) {
+  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean; said: Array<{ id: string; words: Set<string> }> }>();
   return {
-    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase) {
+    /** `text` only for a row a later restatement may hide. */
+    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase, text?: string) {
       let turn = turns.get(threadId);
-      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false }));
+      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false, said: [] }));
       turn.turnId ??= turnId;
       if (summarized) turn.ids.push(messageId);
       else turn.replied = true;
       if (phase === "commentary") turn.commentary.push(messageId);
       else if (phase === "final_answer") turn.final = true;
+      if (!summarized && text) turn.said.push({ id: messageId, words: words(text) });
     },
     settle(threadId: string, turnId: string | undefined, quiet = false): string[] {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
       turns.delete(threadId);
-      if (turn.final && turn.commentary.length) hide?.(threadId, turn.commentary);
+      const restated = turn.said.filter((row, i) => turn.said.slice(i + 1).some((later) => restates(later.words, row.words))).map((row) => row.id);
+      const commentary = turn.final ? turn.commentary.filter((id) => !restated.includes(id)) : [];
+      if (commentary.length) hide?.(threadId, commentary);
+      if (restated.length) hide?.(threadId, restated, true);
       return turn.replied || quiet ? [] : turn.ids;
     },
   };
