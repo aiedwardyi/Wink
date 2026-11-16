@@ -56,7 +56,7 @@ export function beginPeerUserReply(botId: string, threadId: string, prompt: stri
 export function foldPeerQueuedSends(store: Store, botId: string, threadId: string, since: number, steering: boolean): string[] {
   if (hasPeerWatch(threadId) && !steering) return [];
   const rows: Message[] = [];
-  const prompts = foldQueuedSends(store, botId, threadId, since, rows);
+  const prompts = foldQueuedSends(store, botId, threadId, since, rows, steering);
   return prompts.map((prompt, index) => {
     const input = beginPeerUserReply(botId, threadId, prompt);
     if (input) input.accept(rows[index]!);

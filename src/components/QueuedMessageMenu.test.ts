@@ -157,12 +157,21 @@ describe("queued message menu", () => {
       .toEqual(["지금 보내기", "취소"]);
   });
 
-  it("hides Send now while the turn still prepares, shows it once the reply runs", async () => {
+  it("offers Send now only once this chat has a turn to join, not while the bot works in a room", async () => {
     const ui = await mount();
     await ui.send("held");
     await ui.open("held");
     expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent))
+      .toEqual(["Cancel"]);
+    await ui.running();
+    await ui.open("held");
+    expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent))
       .toEqual(["Send now", "Cancel"]);
+  });
+
+  it("hides Send now while the turn still prepares, shows it once the reply runs", async () => {
+    const ui = await mount();
+    await ui.send("held");
     await ui.emit({ kind: "turn.dispatch", threadId: "thread-helper", createdAt: "2026-01-01T00:00:00.000Z" });
     await ui.open("held");
     expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent))
