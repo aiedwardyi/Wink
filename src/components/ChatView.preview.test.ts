@@ -84,11 +84,11 @@ afterEach(async () => {
 describe("cached chat preview", () => {
   it.each(["loaded", "loading"] as const)("measures the header once with %s fonts and repeats only for a pending font load", async (status) => {
     const descriptor = Object.getOwnPropertyDescriptor(document, "fonts");
-    const listeners = new Map<string, () => void>();
+    const loaded = new Set<() => void>();
     const fonts = {
       status,
-      addEventListener: (type: string, listener: () => void) => { listeners.set(type, listener); },
-      removeEventListener: (type: string) => { listeners.delete(type); },
+      addEventListener: (type: string, listener: () => void) => { if (type === "loadingdone") loaded.add(listener); },
+      removeEventListener: (type: string, listener: () => void) => { if (type === "loadingdone") loaded.delete(listener); },
     };
     Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
     const rangePrototype = Object.getPrototypeOf(document.createRange()) as Range;
@@ -102,7 +102,8 @@ describe("cached chat preview", () => {
       expect(copies()).toBe(0);
       if (status === "loading") {
         fonts.status = "loaded";
-        await act(async () => { listeners.get("loadingdone")?.(); });
+        expect(loaded.size).toBeGreaterThan(0);
+        await act(async () => { for (const listener of loaded) listener(); });
         expect(measure).toHaveBeenCalledTimes(2);
         expect(copies()).toBe(0);
       }
