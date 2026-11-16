@@ -254,7 +254,6 @@ test("an adopting app finds its pane again and replays the ring from a seq", { .
   const [{ seq }] = await before.panes();
   assert.equal(pane.detach(), true);
   before.close();
-  await wait(1_500);
   assert.equal(alive(pane.pid), true);
 
   const after = f.make({ adopt: true });
@@ -485,18 +484,20 @@ test("a caller without the secret gets nothing", { ...windows, timeout: 60_000 }
   }
 
   const began = Date.now();
-  const idle = [raw(f, record.pipe), raw(f, record.pipe), raw(f, record.pipe)];
   const reader = await fs.promises.open(record.pipe, "r");
   f.undo.push(() => reader.close().catch(() => {}));
   const read = reader.read(Buffer.alloc(64), 0, 64, null).then(({ bytesRead }) => bytesRead, () => 0);
-  await wait(500);
+  // A hello answered means the host has counted that caller, and the reader that connected before it.
+  const idle = [raw(f, record.pipe), raw(f, record.pipe), raw(f, record.pipe)];
+  for (const caller of idle) caller.socket.write(hello(nonce));
+  await until(() => idle.every((caller) => caller.frames.length));
   const fifth = raw(f, record.pipe);
   await fifth.closed;
   assert.equal(fifth.bytes, 0);
   assert.ok(Date.now() - began < 4_000, "a fifth unauthenticated caller is refused at once");
   await Promise.all(idle.map((caller) => caller.closed));
   assert.ok(Date.now() - began >= 4_500, "idle callers are held until the deadline");
-  assert.deepEqual(idle.map((caller) => caller.bytes), [0, 0, 0]);
+  assert.deepEqual(idle.map((caller) => caller.frames.length), [1, 1, 1]);
   assert.equal(await read, 0);
 
   real.socket.write(control({ id: 3, method: "list", args: [] }));
