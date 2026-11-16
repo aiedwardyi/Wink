@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, useStore, type Bot, type Message } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
+import { TRANSCRIPT_TAIL_SIZE, TRANSCRIPT_WINDOW_SIZE } from "@/lib/transcript-window";
 import * as workerRows from "@/lib/worker-runs";
 import { teamSnagNote, type ClaimedSnag } from "../../server/team-snags-owner";
 
@@ -287,7 +288,7 @@ describe("ChatView peer reply labels", () => {
   });
 
   it("does not relabel later bubbles when the first reply is outside the mounted window", async () => {
-    const messages = [inbound, ...Array.from({ length: 240 }, (_, i) => text(`reply ${i}`))];
+    const messages = [inbound, ...Array.from({ length: TRANSCRIPT_TAIL_SIZE + TRANSCRIPT_WINDOW_SIZE }, (_, i) => text(`reply ${i}`))];
     const { host } = await mount(bot(messages));
     expect(host.querySelector('[data-mid="reply 0"]')).toBeNull();
     expect(chips(host)).toHaveLength(0);

@@ -320,6 +320,15 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
   })();
 }
 
+/** A thread's note rows newest first, parsed only as far as the caller reads. */
+export function notesBack(threadId: string): Iterable<Message> {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'note' ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
+  return (function* () {
+    for (const row of rows) yield rowToMessage(row);
+  })();
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;

@@ -34,8 +34,8 @@ describe("turn setup", () => {
       { token: () => "fixture-token" }, { prompt: () => "" },
     );
     const integrations: Record<string, { env: Record<string, string> }> = {};
-    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", "searchable", "handoff", mounts[index]!.getText(source));
-    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration, false, null);
+    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", "searchable", "works", "readOnly", "handoff", mounts[index]!.getText(source));
+    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration, false, true, false, null);
     if (capable) expect(integrations.agents?.env).toMatchObject({
       OMB_BOT_ID: "peer", OMB_THREAD_ID: "peer-thread", OMB_COMMS_TOKEN: "fixture-token", OMB_TURN_DEPTH: String(depth),
     });
@@ -46,9 +46,10 @@ describe("turn setup", () => {
     const declarations = nodes(ts.isVariableDeclaration);
     const gate = declarations.filter((node) => node.name.getText(source) === "canMessage")[index];
     const coordination = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "chiefOfStaffSystemPrompt")[index]!;
-    const evaluate = new Function("integrations", "commsDepth", "hop", "MAX_COMMS_DEPTH", `const canMessage = ${gate?.initializer?.getText(source) ?? "Boolean(integrations.agents)"}; return ${coordination.arguments[2]!.getText(source)};`);
-    expect(evaluate({ agents: {} }, 0, 0, 1)).toBe(true);
-    expect(evaluate({ agents: {} }, 1, 1, 1)).toBe(false);
+    const evaluate = new Function("integrations", "commsDepth", "hop", "MAX_COMMS_DEPTH", "works", "readOnly", `const canMessage = ${gate?.initializer?.getText(source) ?? "Boolean(integrations.agents)"}; return ${coordination.arguments[2]!.getText(source)};`);
+    expect(evaluate({ agents: {} }, 0, 0, 1, true, false)).toBe(true);
+    expect(evaluate({ agents: {} }, 1, 1, 1, true, false)).toBe(false);
+    expect(evaluate({ agents: {} }, 0, 0, 1, false, true)).toBe(false);
   });
 
   it("dispatches without waiting for a workspace snapshot", async () => {

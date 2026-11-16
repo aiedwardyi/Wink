@@ -104,6 +104,38 @@ describe("ChatMarkdown streaming", () => {
   });
 });
 
+describe("ChatMarkdown code highlight on remount", () => {
+  // Static markup runs no effects, so it is exactly what a switch back paints first.
+  const firstPaint = (text: string) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text }));
+    return host;
+  };
+
+  it("paints a block highlighted on its first frame once it was highlighted, even if it went away first", async () => {
+    const kept = "```ts\nconst kept = 1;\n```";
+    const left = "```ts\nconst left = 2;\n```";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: kept })));
+      await vi.waitFor(() => expect(host.querySelector("pre.text-ink")).toBeNull());
+      act(() => root.render(createElement(ChatMarkdown, { text: left })));
+      act(() => root.render(createElement(ChatMarkdown, { text: kept })));
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+    for (const text of [kept, left]) {
+      const painted = firstPaint(text);
+      expect(painted.querySelector("pre.text-ink"), text).toBeNull();
+      expect(painted.querySelector("pre")?.textContent, text).toBe(text.split("\n")[1]);
+    }
+  });
+});
+
 describe("ChatMarkdown paragraphs", () => {
   it.each([
     ["English loose list", "1. First step\n\n   More detail.\n\n2. Second step"],
@@ -222,6 +254,7 @@ describe("streaming tail", () => {
     const styled = () => [...host.querySelectorAll(".chat-md :is(em, strong, code)")].map((el) => [el.tagName, el.textContent ?? ""] as const);
     try {
       await act(async () => root.render(createElement(ChatMarkdown, { text: reply, streaming: false })));
+      await vi.waitFor(() => expect(host.querySelector("pre.text-ink")).toBeNull());
       const settled = styled();
       for (let at = 1; at <= reply.length; at++) {
         await act(async () => root.render(createElement(ChatMarkdown, { text: reply.slice(0, at), streaming: true })));

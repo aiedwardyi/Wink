@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { z } from "zod";
 import type { Message } from "@/state/store";
-import { localLinks, showKind, type ShowKind } from "./chat-media";
+import { linkedFileSrc, localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
@@ -109,11 +109,12 @@ export function closeShow() {
 
 export const lastShown = (threadId: string) => last.get(threadId);
 
-/** The header button: shuts this chat's pane, or opens the tab last picked in it, else Map while a worker is live, else Media. */
-export function togglePane(threadId: string, live = false) {
+/** The header button: shuts this chat's pane, or opens the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map`; a room's runs on each person's own PC. */
+export function togglePane(threadId: string, map?: "idle" | "live") {
   if (showing?.threadId === threadId || media === threadId || mapping === threadId) return closeShow();
-  const tab = picked.get(threadId) ?? picks()[threadId] ?? (live ? "map" : "media");
-  if (tab === "map") openMap(threadId);
+  const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
+  if (tab === "map" && map) openMap(threadId);
+  else if (tab === "map") openMedia(threadId);
   else if (tab === "media") openMedia(threadId);
   else openItem(last.get(threadId) ?? tab);
 }
@@ -209,12 +210,22 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
   const onMap = useMapThread() !== null;
   const state = useRef<AutoShow>({ seen: null });
   const was = useRef(shown);
+  const probe = useRef<AbortController>(undefined);
+  // A probe still out when the user picks another tab or file, or a newer file arrives, is stale.
+  useEffect(() => () => probe.current?.abort(), [threadId, shown, free, onMedia, onMap]);
   useEffect(() => {
     const closed = Boolean(was.current && !shown && was.current.threadId === threadId);
     was.current = shown;
     if (!threadId) return;
     const step = autoShowStep(state.current, threadId, messages, closed);
     state.current = step.state;
-    if (step.item && free && !onMedia && !onMap) openItem(step.item);
+    const item = step.item;
+    // A file this PC can't serve would open a dead pane; its link still opens it in the browser.
+    if (item && free && !onMedia && !onMap) {
+      probe.current?.abort();
+      const { signal } = probe.current = new AbortController();
+      fetch(linkedFileSrc(item.threadId, item.path), { headers: { Range: "bytes=0-0" }, signal })
+        .then((res) => { if (!signal.aborted && (res.ok || res.status === 416)) openItem(item); }, () => {});
+    }
   }, [threadId, messages, shown, free, onMedia, onMap]);
 }

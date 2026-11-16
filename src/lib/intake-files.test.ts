@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { intakeFiles, uploadAttachmentFile } from "./composer-attachments";
+import { composeMessage, intakeFiles, roomCopyPath, uploadAttachmentFile } from "./composer-attachments";
 import { applyLocale, t } from "./i18n";
 
 type Fake = Pick<File, "name" | "size" | "type" | "text" | "arrayBuffer">;
@@ -123,5 +123,29 @@ describe("intakeFiles", () => {
     });
     expect(out.attachments).toEqual([expect.objectContaining({ kind: "upload", name: "shot.png", picture: "file" })]);
     expect(out.notice).toBeNull();
+  });
+});
+
+describe("a hosted room's copy of a desktop file", () => {
+  it("uploads a document or picture outside the attachments folder so teammates get it, keeping the path for the bot", async () => {
+    const uploader = vi.fn(async (picked: Pick<File, "name">, _document: boolean) => ({ path: `/host/attachments/${picked.name}`, mime: "application/pdf", bytes: 10 }));
+    const out = await intakeFiles([file("plan.pdf", "application/pdf"), file("tool.exe", "")], {
+      t, allowImages: true, getPath: onDisk, roomCopy: (picked) => roomCopyPath(picked, uploader),
+    });
+    expect(out.attachments).toEqual([
+      expect.objectContaining({ kind: "file", path: "/Users/me/plan.pdf", copy: "/host/attachments/plan.pdf" }),
+      expect.objectContaining({ kind: "file", path: "/Users/me/tool.exe" }),
+    ]);
+    expect(out.attachments[1]).not.toHaveProperty("copy");
+    expect(uploader.mock.calls.map(([picked, document]) => [picked.name, document])).toEqual([["plan.pdf", true]]);
+    expect(composeMessage("", out.attachments)).toBe('<attached-file path="/Users/me/plan.pdf" name="plan.pdf" size="10" type="application/pdf" copy="/host/attachments/plan.pdf" />\n\n<attached-file path="/Users/me/tool.exe" name="tool.exe" size="10" />');
+  });
+
+  it("keeps the path alone when the copy fails", async () => {
+    const out = await intakeFiles([file("plan.pdf", "application/pdf")], {
+      t, allowImages: true, getPath: onDisk, roomCopy: (picked) => roomCopyPath(picked, async () => { throw new Error("offline"); }),
+    });
+    expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", path: "/Users/me/plan.pdf" })]);
+    expect(out.attachments[0]).not.toHaveProperty("copy");
   });
 });

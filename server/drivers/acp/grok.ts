@@ -14,6 +14,7 @@ import { writeFileAtomic } from "../../atomic.ts";
 import { grokAgentsAllowState, saveGrokAgentsAllowState } from "../../grok-agents-allow-state.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
+import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
 import { accountLabel, storedAccount, storedSignIn } from "../auth-status.ts";
 import { createCliText, type CliTextRun } from "../cli-text.ts";
 
@@ -605,8 +606,8 @@ export const grokSupport: AcpSupport = {
   // accepted as a TUI option and then ignored, so ACP session/new keeps
   // [models].default (grok-4.6) and oMLX never sees a request.
   spawnArgs: (config, turn) => [
-    "--permission-mode",
-    config.fullAuto ? "bypassPermissions" : "default",
+    // Only a Wink setting overrides; otherwise the user's own grok config decides.
+    ...(config.fullAuto ? ["--permission-mode", "bypassPermissions"] : turn.approval === "ask" ? ["--permission-mode", "default"] : []),
     "agent",
     ...(turn.model ? ["-m", turn.model] : []),
     // long form on purpose: `--effort` is documented as an alias, and an
@@ -614,6 +615,13 @@ export const grokSupport: AcpSupport = {
     ...(turn.effort ? ["--reasoning-effort", turn.effort] : []),
     "stdio",
   ],
+
+  grants: (config, turn) => {
+    const args = grokSupport.spawnArgs(config, { threadId: "", text: "", ...turn });
+    const mode = args.includes("--permission-mode") ? args[args.indexOf("--permission-mode") + 1] : undefined;
+    if (mode === "bypassPermissions") return FREE_ACCESS;
+    return mode || turn.readOnly ? routedAccess(turn) : { edits: "own", commands: "own" };
+  },
 
   // argv -m pins the model on current grok; set_model is the fallback when session/new reports something else.
   async configureSession({ request, sessionId, turn, sessionResult }) {

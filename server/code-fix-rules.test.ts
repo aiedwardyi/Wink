@@ -1,6 +1,6 @@
 // Every engine gets the code-fix rules, on the 1:1 and the room route, with
 // the line that lets the user's own instructions override them, plus the
-// plain-words rule for talking to people. Boots the
+// plain-words rule for talking to people, the repeat-mistakes rule and the model picks. Boots the
 // real server on each engine's fake CLI and reads what the CLI received.
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -27,6 +27,8 @@ const RULES = [
   "A report is a claim, not proof.",
 ];
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
+const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
+const MODEL_PICKS = "Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.";
 
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok", "muse"] as const;
 type Engine = (typeof ENGINE_NAMES)[number];
@@ -75,6 +77,8 @@ describe("code-fix rules on every engine", () => {
     expect(prompt).toContain(OVERRIDE);
     for (const rule of RULES) expect(prompt).toContain(rule);
     expect(prompt).toContain(PLAIN_WORDS);
+    expect(prompt).toContain(REPEAT_MISTAKES);
+    expect(prompt).toContain(MODEL_PICKS);
   };
 
   beforeAll(async () => {

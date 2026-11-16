@@ -16,8 +16,8 @@ const section = (from: string, to: string) => {
 
 const row = (message: Partial<Message>): Message => ({ id: `m${Math.random()}`, at: 0, role: "user", kind: "text", ...message } as Message);
 const asked = [row({ text: "fix the header", id: "ask" })];
-const turn = { lane: true, hop: 0, autoApprove: false, rows: asked, botId: "pip", owner: "Edward" };
-const mina = { work: true, asker: "Mina", ask: "ship the footer" };
+const turn = { lane: true, hop: 0, works: true, autoApprove: false, rows: asked, botId: "pip", owner: "Edward" };
+const mina = { asker: "Mina", ask: "ship the footer" };
 
 describe("lane hand-off", () => {
   it("hands a person's room ask on the lane to a full turn, named by asker", () => {
@@ -31,11 +31,18 @@ describe("lane hand-off", () => {
     expect(laneHandoff({ ...turn, rows: [...asked, row({ role: "bot", text: "on it", from: { botId: "nova", name: "Nova", color: "blue" } })] })).toBeNull();
   });
 
-  it("hands a teammate's ask off only as its own work grant under the host's Auto setting", () => {
+  it("hands a teammate's ask off only when it may make bots work, under the host's Auto setting", () => {
     expect(laneHandoff({ ...turn, teammate: mina, autoApprove: true })).toEqual({ asker: "Mina", ask: "ship the footer" });
     expect(laneHandoff({ ...turn, teammate: mina, autoApprove: false })).toBeNull();
-    expect(laneHandoff({ ...turn, teammate: { ...mina, work: false }, autoApprove: true })).toBeNull();
+    expect(laneHandoff({ ...turn, teammate: mina, autoApprove: true, works: false })).toBeNull();
     expect(laneHandoff({ ...turn, teammate: null, autoApprove: true })).toBeNull();
+  });
+
+  it("decides the hand-off on the turn's Can make bots work switch, not the ask's grant", () => {
+    const decide = section("  const handoff = instance.adapter.capabilities.agentsMcp === true", "  if (instance.adapter.capabilities.agentsMcp === true) {");
+    expect(decide).toContain("laneHandoff({ lane, hop, works,");
+    expect(section("  const works = ", ";\n")).toContain("asksWork([lead, ...riders])");
+    expect(source.indexOf("  const works = ")).toBeLessThan(source.indexOf(decide));
   });
 
   it("queues work only when the lane turn itself called hand_off", () => {
@@ -70,7 +77,9 @@ describe("lane hand-off", () => {
       handoff, LANE_HANDOFF_LINE, system: "SYS", cwd: "", workspace: undefined, cfg: {}, bot: { id: "pip" }, lane: Boolean(handoff), text: "", integrations: {}, selectedSkills: [],
       projectFolderPrompt: () => "", detailedRepliesEnabled: () => false, DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "",
       memorySystemPrompt: () => "", memoryNotesEnabled: () => true, renderSkillInstructions: () => "", installedPlaybookInstructions: () => "", harnessPlaybookPrompt: () => "",
+      accessRules: () => " ACCESS", instance: { adapter: {} }, access: {}, selection: {}, memberTurnSelection: () => ({}),
     }) as string;
+    expect(prompt(null)).toBe("SYS ACCESS");
     expect(prompt({ asker: "Edward", ask: "fix it" })).toBe(`${prompt(null)}\n\n${LANE_HANDOFF_LINE}`);
     expect(prompt(null)).not.toContain(LANE_HANDOFF_LINE);
     expect(LANE_HANDOFF_LINE).toContain("hand_off");

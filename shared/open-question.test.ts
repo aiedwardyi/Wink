@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerText, isSentByPerson, scanQuestion } from "./open-question.ts";
+import { answerText, isSentByPerson, scanQuestion, typedReply } from "./open-question.ts";
 
 const ask = { role: "bot", kind: "options", card: { askUser: true as const } };
 
@@ -58,3 +58,13 @@ describe("an answer to an older question", () => {
   });
 });
 
+
+describe("a typed line on an open question", () => {
+  const card = (options: string[]) => ({ role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship it?", staysOpen: true as const, options } });
+
+  it("answers a card without choices or with a choice's text, and never one it only types past", () => {
+    expect(typedReply(card([]), "after lunch\nthanks")).toBe("after lunch");
+    expect(typedReply(card(["Yes", "No"]), " Yes ")).toBe("Yes");
+    expect(typedReply(card(["Yes", "No"]), "is this the review thing?")).toBeNull();
+  });
+});

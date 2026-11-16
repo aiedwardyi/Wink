@@ -1,8 +1,10 @@
 /** Long computer-use threads carry hundreds of rows (inline screenshots
  * included); mounting all of them makes the DOM heavy even though the memoized
- * list bails out of re-renders. Only the last `TRANSCRIPT_WINDOW_SIZE`
- * messages mount by default; a pill expands by the same step. */
+ * list bails out of re-renders. Only the last `TRANSCRIPT_TAIL_SIZE`
+ * messages mount by default; a pill expands by `TRANSCRIPT_WINDOW_SIZE`. */
 export const TRANSCRIPT_WINDOW_SIZE = 120;
+/** A fresh tail (open, switch, Jump to latest): about two tall screens, since every mounted row is paid for on each switch. */
+export const TRANSCRIPT_TAIL_SIZE = 40;
 
 export interface TranscriptWindow<T> {
   visible: T[];

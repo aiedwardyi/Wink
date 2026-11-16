@@ -3,13 +3,14 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { Store } from "./store.ts";
 import { createUnlandedWork, reportedPrs, UNLANDED_REFRESH_MS, unlandedHeader, type UnlandedPr } from "./unlanded.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 15, 9).getTime();
 const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
 const report = (at: number, body: string, branch = "fix/x") =>
-  ({ kind: "note", at, text: `[pane 1234abcd] [CARD] from Mentor (bot-1): DONE CARD branch=${branch} sha=abc1234 dirty=no\n${body}` });
+  ({ kind: "note" as const, at, text: `[pane 1234abcd] [CARD] from Mentor (bot-1): DONE CARD branch=${branch} sha=abc1234 dirty=no\n${body}` });
 
 type StartOpts = { threadId?: string; cardContinuation?: boolean; paneNoteWake?: boolean; unattended?: boolean; keepGoingWake?: boolean; automationSource?: string; commsDepth?: number };
 type View = { number: number; title: string; state: "OPEN" | "MERGED" | "CLOSED"; isDraft?: boolean; mergeCommit?: { oid: string } | null; repo?: string };
@@ -43,7 +44,7 @@ describe("reportedPrs", () => {
       report(4, "in place", "main"),
       { kind: "note", at: 5, text: "[pane 1234abcd] from Mentor (bot-1): PR 99 is up" },
       { kind: "text", at: 6, text: "PR 98" },
-    ])).toEqual([
+    ].toReversed())).toEqual([
       { at: 3, branch: "fix/branch-only" },
       { at: 2, repo: "other/repo", number: 7 },
       { at: 2, number: 8 },
@@ -109,7 +110,7 @@ describe("createUnlandedWork", () => {
 
   it("lists what is open or not in the installed build and drops merged+installed and closed", async () => {
     const { gh } = fakeGh(views(), compare());
-    const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: () => messages.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toBe(
       "[Wink unlanded - 3 PRs not in the user's build: aiedwardyi/wink#1642 feat: merged after the installed tag (20h, merged, not in your build); aiedwardyi/wink#1640 fix: tell bots what has not landed (18h); me/site#7 fix: other repo (5h, merged, not released). Before saying fixed or asking them to test, check it is merged and released.]",
@@ -118,7 +119,7 @@ describe("createUnlandedWork", () => {
 
   it("keeps merged PRs listed when the installed version is unknown", async () => {
     const { gh } = fakeGh(views(), compare());
-    const work = createUnlandedWork({ reports: () => messages.slice(0, 1), repoDir: () => "D:/repo", version: "", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: () => messages.slice(0, 1).toReversed(), repoDir: () => "D:/repo", version: "", gh, now: () => NOW });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
   });
@@ -126,7 +127,7 @@ describe("createUnlandedWork", () => {
   it("asks gh at most every 10 minutes and never again for a settled PR", async () => {
     let at = NOW;
     const { gh, calls } = fakeGh(views(), compare());
-    const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    const work = createUnlandedWork({ reportsBack: () => messages.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
     await work.refresh("bot-1", "t-a");
     const first = calls.length;
     at += UNLANDED_REFRESH_MS - 1;
@@ -141,7 +142,7 @@ describe("createUnlandedWork", () => {
     let at = NOW;
     const live = views();
     const { gh } = fakeGh(live, compare());
-    const work = createUnlandedWork({ reports: () => messages.slice(3, 4), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    const work = createUnlandedWork({ reportsBack: () => messages.slice(3, 4).toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toBe("");
     live.set("1643", { ...allViews["1643"], state: "OPEN" });
@@ -155,7 +156,7 @@ describe("createUnlandedWork", () => {
     const checks = compare();
     checks.set(COMPARE_AAA, "!error connecting to api.github.com");
     const { gh } = fakeGh(views(), checks);
-    const work = createUnlandedWork({ reports: () => messages.slice(0, 1), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    const work = createUnlandedWork({ reportsBack: () => messages.slice(0, 1).toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
     checks.set(COMPARE_AAA, "behind");
@@ -168,7 +169,7 @@ describe("createUnlandedWork", () => {
     let at = NOW;
     const { gh, calls } = fakeGh(views(), compare());
     const reports = [report(NOW - 3 * HOUR, "PR 1641"), report(NOW - 2 * HOUR, "PR 9999"), report(NOW - HOUR, "pushed", "fix/no-pr-yet")];
-    const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.269-dev.1", gh, now: () => at });
+    const work = createUnlandedWork({ reportsBack: () => reports.toReversed(), repoDir: () => "D:/repo", version: "1.0.269-dev.1", gh, now: () => at });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toContain("#1641 feat: merged and installed (3h, merged, not released)");
     const first = calls.length;
@@ -182,7 +183,7 @@ describe("createUnlandedWork", () => {
     const gate = new Promise<void>((done) => { release = done; });
     const { gh: fast } = fakeGh(views(), compare());
     const gh = async (cwd: string, args: string[]) => { await gate; return fast(cwd, args); };
-    const work = createUnlandedWork({ reports: () => messages.slice(2, 3), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: () => messages.slice(2, 3).toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     const pending = work.refresh("bot-1", "t-a");
     const started = performance.now();
     expect(work.take("t-a")).toBe("");
@@ -196,7 +197,7 @@ describe("createUnlandedWork", () => {
     const threads = new Map([["t-a", [report(NOW - 18 * HOUR, "PR 1640")]], ["t-b", [report(NOW - 2 * HOUR, "PR 1642")]]]);
     const dirs = new Map([["t-a", "D:/repo-a"], ["t-b", "D:/repo-b"]]);
     const { gh, calls, cwds } = fakeGh(views(), compare());
-    const work = createUnlandedWork({ reports: (threadId) => threads.get(threadId) ?? [], repoDir: (_botId, threadId) => dirs.get(threadId), version: "1.0.268", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: (threadId) => (threads.get(threadId) ?? []).toReversed(), repoDir: (_botId, threadId) => dirs.get(threadId), version: "1.0.268", gh, now: () => NOW });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toContain("#1640 fix: tell bots what has not landed (18h)");
     // the user switched to task B before any B turn settled
@@ -214,7 +215,7 @@ describe("createUnlandedWork", () => {
     live.set("fix/reused", allViews["1641"]);
     const { gh } = fakeGh(live, compare());
     const reports = [report(NOW - 2 * HOUR, "pushed", "fix/reused")];
-    const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    const work = createUnlandedWork({ reportsBack: () => reports.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toBe("");
     live.set("fix/reused", allViews["1640"]);
@@ -225,7 +226,7 @@ describe("createUnlandedWork", () => {
 
   it("keeps the repo of a PR reported from outside the task's folder", async () => {
     const { gh } = fakeGh(views(), compare());
-    const work = createUnlandedWork({ reports: () => messages.slice(4), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: () => messages.slice(4).toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toContain("1 PR in me/site not in the user's build: #7 fix: other repo");
   });
@@ -236,7 +237,7 @@ describe("createUnlandedWork", () => {
     const { gh: fast, calls } = fakeGh(views(), compare());
     const gh = async (cwd: string, args: string[]) => { if (args[2] === "1640") await gate; return fast(cwd, args); };
     const reports = [report(NOW - 18 * HOUR, "PR 1640")];
-    const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: () => reports.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     const first = work.refresh("bot-1", "t-a");
     reports.push(report(NOW - HOUR, "PR 1642"));
     const second = work.refresh("bot-1", "t-a");
@@ -250,7 +251,7 @@ describe("createUnlandedWork", () => {
 
   it("reads only the cache on take, so a send starts no gh", async () => {
     const { gh, calls } = fakeGh(views(), compare());
-    const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const work = createUnlandedWork({ reportsBack: () => messages.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     expect(work.take("t-a")).toBe("");
     await new Promise((done) => setImmediate(done));
     expect(calls).toEqual([]);
@@ -258,11 +259,11 @@ describe("createUnlandedWork", () => {
 
   it("adds no line and no error without gh or a repo", async () => {
     const missing = async () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); };
-    const noGh = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh: missing, now: () => NOW });
+    const noGh = createUnlandedWork({ reportsBack: () => messages.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh: missing, now: () => NOW });
     await noGh.refresh("bot-1", "t-a");
     expect(noGh.take("t-a")).toBe("");
     const { gh, calls } = fakeGh(views(), compare());
-    const noRepo = createUnlandedWork({ reports: () => messages.slice(0, 4), repoDir: () => undefined, version: "1.0.268", gh, now: () => NOW });
+    const noRepo = createUnlandedWork({ reportsBack: () => messages.slice(0, 4).toReversed(), repoDir: () => undefined, version: "1.0.268", gh, now: () => NOW });
     await noRepo.refresh("bot-1", "t-a");
     expect(noRepo.take("t-a")).toBe("");
     expect(calls).toEqual([]);
@@ -271,6 +272,23 @@ describe("createUnlandedWork", () => {
 
 describe("unlanded wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+
+  it("finds a long thread's newest reports at boot without loading the thread", async () => {
+    const fresh = () => new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = fresh().createBot({}, { seedMessages: false });
+    const writer = fresh();
+    writer.appendMessage(bot.threadId, { role: "bot", ...report(NOW - 30 * HOUR, "PR 1641") });
+    for (let i = 0; i < 50; i++) writer.appendMessage(bot.threadId, { role: "bot", kind: "activity", at: NOW - 20 * HOUR, tool: { name: "Bash", ok: true, detail: { input: `step ${i}`, output: ["ok"] } } });
+    writer.appendMessage(bot.threadId, { role: "bot", ...report(NOW - 18 * HOUR, "PR 1640") });
+    const store = fresh();
+    const { gh, calls } = fakeGh(new Map([["1640", { number: 1640, title: "fix: tell bots what has not landed", state: "OPEN" }]]));
+    expect(source).toContain("  reportsBack: (threadId) => store.notesBack(threadId),");
+    const work = createUnlandedWork({ reportsBack: (threadId) => store.notesBack(threadId), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    await work.refresh(bot.id, bot.threadId);
+    expect(work.take(bot.threadId)).toContain("#1640 fix: tell bots what has not landed (18h)");
+    expect(calls.map((args) => args[2])).toEqual(["1640", "1641"]);
+    expect(store.loaded(bot.threadId)).toBe(false);
+  });
 
   it("rides only turns the user typed, beside the other turn notices", () => {
     const start = source.indexOf("function turnStartedByUser");
@@ -287,7 +305,7 @@ describe("unlanded wiring", () => {
     expect(source).toContain('const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";');
     expect(source).toContain("...(unlandedNotice ? [unlandedNotice] : [])");
     expect(source).toContain("void unlandedWork.refresh(bot.id, event.threadId);");
-    expect(source).toContain("await unlandedWork.refresh(bot.id, bot.threadId);");
+    expect(source).toContain('startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });');
     expect(source).toContain("const pinned = store.taskByThread(botId, threadId)?.cwd;");
     expect(source).not.toContain("store.bot(botId)?.lastProjectCwd");
   });

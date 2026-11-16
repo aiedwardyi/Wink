@@ -33,7 +33,7 @@ const bot = (id: string, name: string): Bot => ({
   modelSelection: { instanceId: "codex-1", model: "codex-default" }, messages: [],
 });
 const group: Group = { id: "group-1", threadId: "thread-1", name: "Channel", memberIds: [], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 0, messages: [] };
-const shared = (people: Array<{ id: string; name: string }>, memberIds = ["b1"]): Group => ({ ...group, memberIds, hosted: { roomId: "r1" }, room: { name: "Channel", people, joins: [] } });
+const shared = (people: Array<{ id: string; name: string; works?: boolean }>, memberIds = ["b1"]): Group => ({ ...group, memberIds, hosted: { roomId: "r1" }, room: { name: "Channel", people, joins: [] } });
 
 let host: HTMLDivElement;
 let root: Root;
@@ -329,15 +329,38 @@ describe("People", () => {
     expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, removed: [] } } });
   });
 
-  it.each([false, true])("moves a removed teammate to the removed rows, or says the code changed (retired %s)", async (codeChanged) => {
+  it.each([false, true])("says the code changed on Remove, and lists only a barred PC under Let back in (barred %s)", async (barred) => {
     const room = shared([{ id: "mina", name: "Mina" }], []);
-    await open({ group: room }, (_path, method) => json(method === "DELETE" ? { ok: true, ...(codeChanged && { codeChanged }) } : { code: "old-code" }));
+    await open({ group: room }, (_path, method) => json(method === "DELETE" ? { ok: true, codeChanged: true, ...(barred && { barred }) } : { code: "old-code" }));
     expect(section("people").querySelector('[role="status"]')).toBeNull();
     await act(async () => button("Remove Mina").click());
     await confirm("Remove");
     await settle();
-    expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [], removed: codeChanged ? [] : [{ id: "mina", name: "Mina" }] } } });
-    expect(section("people").querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "The group code changed. Send the new one to your team." : undefined);
+    expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [], removed: barred ? [{ id: "mina", name: "Mina" }] : [] } } });
+    expect(section("people").querySelector('[role="status"]')?.textContent).toBe("The group code changed. Send the new one to your team.");
+  });
+
+  it.each(["en", "ko"] as const)("gives the host one Can make bots work switch per person, off for a new joiner (%s)", async (locale) => {
+    const joon = { id: "joon", name: "Joon", works: true };
+    const room = shared([{ id: "mina", name: "Mina" }, joon], []);
+    await open({ group: room }, (path) => json(path.endsWith("/works") ? { ok: true } : { code: "old-code" }), locale);
+    const switches = [...section("people").querySelectorAll<HTMLButtonElement>('[role="switch"]')];
+    const named = locale === "en" ? ["Mina can make bots work", "Joon can make bots work"] : ["Mina 님이 봇에게 일 시키기", "Joon 님이 봇에게 일 시키기"];
+    expect(switches.map((each) => [each.getAttribute("aria-label"), each.getAttribute("aria-checked")])).toEqual([[named[0], "false"], [named[1], "true"]]);
+    expect(section("people").textContent).toContain(locale === "en" ? "Can make bots work" : "봇에게 일 시키기");
+    await act(async () => switches[0]!.click());
+    await settle();
+    expect(calls).toContainEqual({ method: "POST", path: "/api/rooms/r1/people/mina/works" });
+    expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [{ id: "mina", name: "Mina", works: true }, joon] } } });
+  });
+
+  it("turns a switch back off when the server refuses it", async () => {
+    const room = shared([{ id: "mina", name: "Mina" }], []);
+    await open({ group: room }, (path) => (path.endsWith("/works") ? json({ error: "nope" }, 500) : json({ code: "old-code" })));
+    await act(async () => section("people").querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+    await settle();
+    expect(mock.dispatched.at(-1)).toEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [{ id: "mina", name: "Mina", works: false }] } } });
+    expect(section("people").querySelector('[role="alert"]')).not.toBeNull();
   });
 
   it("says Phone Access is off only after a tap on Invite, never on open", async () => {
@@ -499,7 +522,7 @@ describe("a joined room", () => {
     expect(section("room").querySelector("input, textarea, [data-room-picture-button]")).toBeNull();
     expect(section("people").textContent).toContain("EdwardHost");
     expect(section("people").textContent).toContain("Seo-yeon Park");
-    expect(section("people").querySelector("[data-group-invite], [data-team-room-code]")).toBeNull();
+    expect(section("people").querySelector("[data-group-invite], [data-team-room-code], [role=\"switch\"]")).toBeNull();
     await act(async () => button("Leave").click());
     expect(calls).toEqual([]);
     await confirm("Leave");
@@ -528,5 +551,27 @@ describe("a joined room", () => {
     expect(picks.map((each) => each.textContent)).toEqual(["Ada"]);
     await act(async () => picks[0]!.click());
     expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/bots" });
+  });
+
+  it.each(["en", "ko"] as const)("gives the host and each teammate a Can make bots work switch for this PC's bots (%s)", async (locale) => {
+    mock.joined = [{ ...joined, state: { ...joined.state!, teamBots: [{ id: "tb-A", name: "Scout", color: "teal", owner: "me" }] }, myBots: [{ id: "tb-A", botId: "b1" }], works: ["host"] }];
+    await open({ joinedId: "j1" }, () => json({ works: true }), locale);
+    const switches = [...section("people").querySelectorAll<HTMLButtonElement>('[role="switch"]')];
+    const named = locale === "en" ? ["Edward can make bots work", "Seo-yeon Park can make bots work"] : ["Edward 님이 봇에게 일 시키기", "Seo-yeon Park 님이 봇에게 일 시키기"];
+    expect(switches.map((each) => [each.getAttribute("aria-label"), each.getAttribute("aria-checked")])).toEqual([[named[0], "true"], [named[1], "false"]]);
+    await act(async () => switches[1]!.click());
+    await settle();
+    expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/people/p2/works" });
+    expect(switches[1]!.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("turns a joined switch back off when this PC refuses it", async () => {
+    mock.joined = [{ ...joined, myBots: [{ id: "tb-A", botId: "b1" }], works: [] }];
+    await open({ joinedId: "j1" }, () => json({ error: "nope" }, 500));
+    const flip = section("people").querySelectorAll<HTMLButtonElement>('[role="switch"]')[1]!;
+    await act(async () => flip.click());
+    await settle();
+    expect(flip.getAttribute("aria-checked")).toBe("false");
+    expect(section("people").querySelector('[role="alert"]')).not.toBeNull();
   });
 });

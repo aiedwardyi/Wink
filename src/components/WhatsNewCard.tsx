@@ -3,7 +3,8 @@ import { X } from "lucide-react";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, useSkin, type SkinId } from "@/lib/skins";
 import { reducedMotion } from "@/lib/phone-swipe";
-import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
+import { showMap } from "@/lib/show-pane";
+import { WHATS_NEW, releaseNotesUrl, type WhatsNewTarget, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
 import { SCENE_NAME, sceneOf, type SceneId } from "./ChatScene";
 import { Miniature } from "./SkinPicker";
@@ -83,7 +84,7 @@ function ThemeMiniature({ skin, visible }: { skin: SkinId; visible: boolean }) {
   return <Miniature skin={skin} still={preview !== "playing" || !visible} />;
 }
 
-function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; onShow: () => void }) {
+function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; onShow: (target: WhatsNewTarget) => void }) {
   const { t } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
   const seen = useSeen(frame);
@@ -96,8 +97,8 @@ function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; 
         {seen && (still ? <Still src={clip} /> : <img src={clip} alt="" draggable={false} />)}
       </div>
       <div className="whats-new-tile-title">{tile.title[locale]}</div>
-      <div key={String(how)} className="whats-new-line">{how && tile.show !== "memory" ? tile.show[locale] : tile.line[locale]}</div>
-      <button type="button" className="whats-new-show" aria-expanded={tile.show === "memory" ? undefined : how} onClick={() => (tile.show === "memory" ? onShow() : setHow((value) => !value))}>
+      <div key={String(how)} className="whats-new-line">{how && "how" in tile ? tile.how[locale] : tile.line[locale]}</div>
+      <button type="button" className="whats-new-show" aria-expanded={"how" in tile ? how : undefined} onClick={() => ("how" in tile ? setHow((value) => !value) : onShow(tile.show))}>
         {t("whatsNew.showMe")}
       </button>
     </div>
@@ -107,7 +108,7 @@ function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; 
 /** A release's notes, or the one-time row of an animated theme. */
 export default function WhatsNewCard({ release, theme, closing, onClose }: { release?: string; theme?: SceneId; closing: boolean; onClose: () => void }) {
   const { t, locale } = useI18n();
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const entry = release ? WHATS_NEW[release] : undefined;
   const title = theme ? t("whatsNew.themeMoves", { name: t(SCENE_NAME[theme]) }) : entry?.title[locale];
   const skin = useSkin();
@@ -145,7 +146,14 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
                   key={tile.title.en}
                   tile={tile}
                   locale={locale}
-                  onShow={() => dispatch({ type: "toggleSettings", open: true, memory: { line: "" } })}
+                  onShow={(target) => {
+                    const thread = state.bots.find((bot) => bot.id === state.selectedId)?.threadId;
+                    if (target === "memory") dispatch({ type: "toggleSettings", open: true, memory: { line: "" } });
+                    else if (target === "map") {
+                      if (thread) showMap(thread);
+                    } else if (target === "models") window.dispatchEvent(new Event("orbit:open-model-picker"));
+                    else dispatch({ type: "toggleAppSettings", open: true, section: "themes", skins: target.skins });
+                  }}
                 />
               ))}
             </div>

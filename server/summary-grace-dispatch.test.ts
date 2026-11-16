@@ -162,7 +162,7 @@ describe("summary grace dispatch", () => {
       const enqueue = () => queueSteeredMessage("bot", "thread", payload);
       if (fold === "preparation") enqueue();
       const sendTurn = vi.fn(async (_turn: { text: string; transcript: Array<{ text: string }>; resumeCursor?: unknown }) => ({ turnId: "turn" }));
-      const live = { adapter: { capabilities: { pinnedSystem }, sendTurn, hasBackgroundWork: () => event === "background" } };
+      const live = { adapter: { capabilities: { pinnedSystem }, sendTurn, access: () => ({}), hasBackgroundWork: () => event === "background" } };
       if (event === "background") {
         const recycleStart = source.indexOf("recycle: shouldRecycleProviderSession(") + "recycle: ".length;
         const recycle = source.slice(recycleStart, source.indexOf("\n    local:", recycleStart)).trim().replace(/,$/, "");
@@ -193,7 +193,7 @@ describe("summary grace dispatch", () => {
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
         commsDepth: 0, MAX_COMMS_DEPTH: 1,
         taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false, cfg: {},
-        ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", keepGoing: { rules: () => "" },
+        ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
         skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
         text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: false, replaysNatively: false,
         reactions: {}, rewound: false, fresh: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
@@ -206,7 +206,7 @@ describe("summary grace dispatch", () => {
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false, joinRunningTurn, runningTurnIdByThread: new Map(),
+        leanStartup: false, isUnattended: () => false, joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);

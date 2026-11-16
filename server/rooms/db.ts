@@ -30,6 +30,8 @@ export interface RoomPerson {
   id: string;
   name: string;
   joinedAt: number;
+  /** The host's "Can make bots work" switch: off, their requests run read-only. */
+  works: boolean;
 }
 
 /** A picture or file on a room entry; the bytes live in room-files. */
@@ -137,6 +139,10 @@ function open(): DatabaseSync {
   const columns = (db.prepare("PRAGMA table_info(log)").all() as Array<{ name: string }>).map((column) => column.name);
   if (!columns.includes("files")) db.exec("ALTER TABLE log ADD COLUMN files TEXT");
   if (!columns.includes("author_owner")) db.exec("ALTER TABLE log ADD COLUMN author_owner TEXT");
+  // DEFAULT 1 keeps everyone already in a room at full power; every join inserts 0.
+  if (!(db.prepare("PRAGMA table_info(people)").all() as Array<{ name: string }>).some((column) => column.name === "works")) {
+    db.exec("ALTER TABLE people ADD COLUMN works INTEGER NOT NULL DEFAULT 1");
+  }
   return db;
 }
 
@@ -175,9 +181,14 @@ export function roomById(id: string): RoomRecord | null {
 }
 
 export function roomPeople(roomId: string): RoomPerson[] {
-  const rows = db().prepare("SELECT id, name, joined_at FROM people WHERE room_id = ? ORDER BY joined_at, rowid").all(roomId) as
-    Array<{ id: string; name: string; joined_at: number }>;
-  return rows.map((row) => ({ id: row.id, name: row.name, joinedAt: row.joined_at }));
+  const rows = db().prepare("SELECT id, name, joined_at, works FROM people WHERE room_id = ? ORDER BY joined_at, rowid").all(roomId) as
+    Array<{ id: string; name: string; joined_at: number; works: number }>;
+  return rows.map((row) => ({ id: row.id, name: row.name, joinedAt: row.joined_at, works: row.works === 1 }));
+}
+
+/** Host only: whether this person's requests may make the room's bots work. */
+export function setPersonWorks(roomId: string, personId: string, on: boolean): boolean {
+  return db().prepare("UPDATE people SET works = ? WHERE room_id = ? AND id = ?").run(Number(on), roomId, personId).changes > 0;
 }
 
 export function renameRoomPerson(roomId: string, personId: string, value: string, taken: readonly string[]): string {
@@ -194,8 +205,8 @@ export function addPerson(roomId: string, name: unknown, taken: readonly string[
     if (!roomById(roomId)) throw new RoomError(404, "no such room");
     const checked = checkedRoomName(name, [...taken, ...roomPeople(roomId).map((person) => person.name)]);
     if (!checked.ok) throw new RoomError(400, checked.error);
-    const person = { id: newId(), name: checked.name, joinedAt: Date.now() };
-    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, 'member', ?)")
+    const person = { id: newId(), name: checked.name, joinedAt: Date.now(), works: false };
+    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at, works) VALUES (?, ?, ?, 'member', ?, 0)")
       .run(roomId, person.id, person.name, person.joinedAt);
     database.exec("COMMIT");
     return person;

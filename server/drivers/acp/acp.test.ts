@@ -1592,7 +1592,6 @@ describe("ACP turns (fake CLI)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv).toContain("agent");
     expect(seen.argv).toContain("stdio");
-    expect(seen.argv).toContain("--permission-mode");
     expect(seen.env.XAI_API_KEY).toBeUndefined();
     expect(seen.env.META_API_KEY).toBeUndefined();
     expect(seen.env.CURSOR_API_KEY).toBeUndefined();
@@ -2454,7 +2453,7 @@ describe("ACP turns (fake CLI)", () => {
     const dump = join(scratch, "grok-argv-order.json");
     await create(GrokAgentDriver);
     process.env.FAKE_ACP_DUMP = dump;
-    await instance.adapter.sendTurn({ threadId: "t-argv", text: "hi", model: "grok-4.5", effort: "high" });
+    await instance.adapter.sendTurn({ threadId: "t-argv", text: "hi", model: "grok-4.5", effort: "high", approval: "ask" });
     await recorder.until((e) => e.type === "turn.completed");
 
     const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
@@ -2466,7 +2465,23 @@ describe("ACP turns (fake CLI)", () => {
     expect(stdio).toBeGreaterThan(modelFlag);
     expect(argv[modelFlag + 1]).toBe("grok-4.5");
     expect(argv.indexOf("--reasoning-effort")).toBeGreaterThan(agent);
+    expect(argv.indexOf("--permission-mode")).toBeGreaterThan(-1);
     expect(argv.indexOf("--permission-mode")).toBeLessThan(agent);
+  });
+
+  it.each([
+    [false, "auto", undefined],
+    [false, undefined, undefined],
+    [false, "ask", "default"],
+    [true, "auto", "bypassPermissions"],
+  ] as const)("sends Grok a permission mode only when Wink picked one (fullAuto %s, %s)", async (fullAuto, approval, mode) => {
+    const dump = join(scratch, `grok-mode-${fullAuto}-${approval}.json`);
+    await create(GrokAgentDriver, undefined, fullAuto);
+    process.env.FAKE_ACP_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: `t-mode-${fullAuto}-${approval}`, text: "hi", approval });
+    await recorder.until((e) => e.type === "turn.completed");
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv.includes("--permission-mode") ? argv[argv.indexOf("--permission-mode") + 1] : undefined).toBe(mode);
   });
 
   it("offers the approval chip unless fullAuto means nothing ever asks", async () => {

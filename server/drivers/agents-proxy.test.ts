@@ -370,6 +370,8 @@ describe("agents-proxy MCP surface", () => {
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
+      "board_search",
+      "board_post",
       "list_bots",
       "update_task_state",
       "ask_bot",
@@ -1304,7 +1306,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(21);
+    expect(list.result.tools).toHaveLength(23);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1329,6 +1331,23 @@ describe("agents-proxy identity gate", () => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, name as string, args);
     expect(call.result.isError).toBeFalsy();
   });});
+
+describe("agents-proxy read-only room turn", () => {
+  const identity = { OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0", OMB_READ_ONLY_TURN: "1" };
+
+  it("lists no saved keys, connected apps, bot asks, Forum posts or Agentic Mode", async () => {
+    const { list } = await probeWithIdentity(identity);
+    expect(list.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
+      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "update_task_state", "usage_status", "wait_delegation",
+    ]);
+  });
+
+  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post"])("refuses %s before calling the harness", async (name) => {
+    const { call } = await probeWithIdentity(identity, name);
+    expect(call.result.isError).toBe(true);
+    expect(call.result.content[0].text).toBe(`${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`);
+  });
+});
 
 describe("agents-proxy catalog", () => {
   const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
@@ -1441,10 +1460,10 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 21, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 22, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 22, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 23, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 23, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 24, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 24, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 25, true],
     [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
     [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],

@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { z } from "zod";
 import type { MapDiff, MapDiffLine, MapFile } from "../shared/map-pane.ts";
 import { mapEmptyTree } from "../shared/map-empty-tree.mjs";
+import { scrubbedEnv } from "./config.ts";
 
 const LIMIT = 512 * 1024;
 export const MAP_LINE_LIMIT = 500;
@@ -15,11 +16,25 @@ const LIST_LIMIT = 32 * 1024 * 1024;
 const NEW_FILES = 200;
 const NEW_BYTES = 64 * 1024;
 
-export function mapGit(cwd: string, args: string[], limit = LIMIT): Promise<string> {
+// A cloned or unzipped repo's own config can name commands; Map only reads, so none may run.
+const NO_COMMANDS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`];
+
+export async function mapGit(cwd: string, args: string[], limit = LIMIT): Promise<string> {
+  const filters = args.includes("diff") ? await noFilters(cwd) : [];
+  return git(cwd, [...NO_COMMANDS, ...filters, ...args], limit);
+}
+
+async function noFilters(cwd: string): Promise<string[]> {
+  const keys = await git(cwd, ["config", "-z", "--name-only", "--get-regexp", "^filter\\."], LIMIT).catch(() => "");
+  const names = new Set(keys.split("\0").map((key) => /^filter\.(.+)\.[^.]+$/s.exec(key)?.[1]).filter((name) => name !== undefined));
+  return [...names].flatMap((name) => ["clean=", "smudge=", "process=", "required=false"].flatMap((value) => ["-c", `filter.${name}.${value}`]));
+}
+
+function git(cwd: string, args: string[], limit: number): Promise<string> {
   return new Promise((done, fail) => {
     execFile("git", ["--literal-pathspecs", "-C", cwd, ...args], {
       windowsHide: true, timeout: 5_000, maxBuffer: limit,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" },
+      env: scrubbedEnv({ ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" }),
     }, (error, stdout) => error ? fail(Object.assign(error, { stdout })) : done(stdout));
   });
 }
@@ -81,6 +96,20 @@ export async function mapFork(cwd: string, launch: string): Promise<string> {
     if (!/^[a-f0-9]{40,64}$/.test(fork) || fork === launch) return launch;
     return await mapGit(cwd, ["merge-base", "--is-ancestor", fork, launch]).then(() => launch, () => fork);
   } catch { return launch; }
+}
+
+// The bot has no launch commit: its work is what the trunk lacks, so a push to the trunk or a merge empties its list.
+export async function mapTrunkFork(cwd: string): Promise<string | null> {
+  const [head, own, refs] = await Promise.all([
+    mapGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"]).then(text => text.trim(), () => ""),
+    mapGit(cwd, ["symbolic-ref", "-q", "HEAD"]).then(text => text.trim(), () => ""),
+    mapGit(cwd, ["for-each-ref", "--format=%(refname)", "refs/heads/main", "refs/heads/master", "refs/remotes/*/HEAD", "refs/remotes/*/main", "refs/remotes/*/master"]),
+  ]);
+  if (!head) return mapHead(cwd);
+  // On the trunk itself this leaves its upstream: what is not pushed yet.
+  const trunk = refs.split("\n").filter(ref => ref && ref !== own);
+  const fork = trunk.length ? (await mapGit(cwd, ["merge-base", "HEAD", ...trunk]).catch(() => "")).trim() : "";
+  return /^[a-f0-9]{40,64}$/.test(fork) ? fork : head;
 }
 
 export async function mapFiles(cwd: string, base: string, common?: string): Promise<{ files: MapFile[]; more: number }> {

@@ -1,5 +1,6 @@
 // attachments.ts: save + read-back, the mime allowlist, size ceiling, and
 // the name-lock that keeps the serving route inside the attachments dir.
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
-    realpathSync: vi.fn(actual.realpathSync),
+    realpathSync: Object.assign(vi.fn(actual.realpathSync), { native: vi.fn(actual.realpathSync.native) }),
     statSync: vi.fn(actual.statSync),
     readFileSync: vi.fn(actual.readFileSync),
   };
@@ -25,7 +26,7 @@ vi.mock("node:fs", async (importOriginal) => {
 const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-attachments-"));
 process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
-const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, extensionForMime, importLocalImage, readAttachment, receiveAttachment, saveImage, sniffImageMime } = await import("./attachments.ts");
+const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, extensionForMime, importLocalImage, readAttachment, receiveAttachment, saveImage, sharableLocalFile, sniffImageMime } = await import("./attachments.ts");
 
 function uploadRequest(name: string | undefined, chunks: Buffer[], mime = "application/octet-stream") {
   const req = new IncomingMessage(new Socket());
@@ -226,7 +227,7 @@ describe("importLocalImage", () => {
   });
 
   it("rejects UNC and device paths before touching the filesystem", () => {
-    const calls = [fs.realpathSync, fs.statSync, fs.readFileSync].map((fn) => vi.mocked(fn));
+    const calls = [fs.realpathSync, fs.realpathSync.native, fs.statSync, fs.readFileSync].map((fn) => vi.mocked(fn));
     for (const path of ["\\\\server\\share\\a.png", "//server/share/a.png", "\\\\?\\C:\\a.png", "\\\\.\\C:\\a.png"]) {
       calls.forEach((fn) => fn.mockClear());
       expect(() => importLocalImage(path, roots)).toThrow(expect.objectContaining({ status: 403 }));
@@ -258,6 +259,28 @@ describe("importLocalImage", () => {
     expect(() => importLocalImage(join(src, "escape", "private.png"), roots)).toThrow(
       expect.objectContaining({ status: 403 }),
     );
+  });
+});
+
+describe("sharableLocalFile", () => {
+  const project = join(DATA_ROOT, "project");
+  beforeEach(() => mkdirSync(join(project, ".secretdir"), { recursive: true }));
+  afterEach(() => rmSync(project, { recursive: true, force: true }));
+  const shortName = (dir: string, name: string) => execFileSync("cmd.exe", ["/d", "/c", "dir", "/x", "/a"], { cwd: dir, encoding: "utf8", windowsHide: true })
+    .split(/\r?\n/).find((line) => line.trim().endsWith(` ${name}`))?.match(/\s(\S*~\d+\S*)\s+\S+$/)?.[1];
+
+  it.runIf(process.platform === "win32")("refuses dot files named by their Windows short names", (context) => {
+    writeFileSync(join(project, ".env"), "SECRET=1");
+    writeFileSync(join(project, ".secretdir", "credentials.json"), "{}");
+    writeFileSync(join(project, "notes.txt"), "ok");
+    const env = shortName(project, ".env");
+    const dir = shortName(project, ".secretdir");
+    const creds = shortName(join(project, ".secretdir"), "credentials.json");
+    if (!env || !dir || !creds) return context.skip();
+    expect(sharableLocalFile(join(project, "notes.txt"), [project]).size).toBe(2);
+    for (const path of [join(project, env), join(project, dir, creds)]) {
+      expect(() => sharableLocalFile(path, [project]), path).toThrow(expect.objectContaining({ status: 403 }));
+    }
   });
 });
 

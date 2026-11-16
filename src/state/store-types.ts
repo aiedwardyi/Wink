@@ -8,6 +8,7 @@ import type { LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
+import type { SkinId } from "@/lib/skins";
 import type { BotUpdatePatch } from "./bot-patch-queue";
 import type { AcceptedSends } from "@/lib/send-accept";
 import type { StreamBuffers, StreamRamp } from "@/lib/turn-stage";
@@ -196,7 +197,7 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string; works?: boolean }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
 }
 
 /** A teammate's own bot in a team room; it runs on its owner's PC. */
@@ -523,6 +524,8 @@ export interface AppState {
   appSettingsOpen: boolean;
   appSettingsSection: AppSettingsSection;
   appSettingsPage: boolean;
+  /** Themes scrolls to the first of these tiles, then forgets them on the next move in Settings. */
+  appSettingsSkins: SkinId[] | null;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
   /** a search hit to scroll to once its thread is on screen; nonce lets the
@@ -721,7 +724,7 @@ export type Action =
   | { type: "focusMessage"; threadId: string; messageId: string; query?: string }
   | { type: "focusMessageConsumed"; nonce: number }
   | { type: "mascotMotionDone"; nonce: number }
-  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
+  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection; skins?: SkinId[] }
   | {
       type: "updateBot";
       botId: string;

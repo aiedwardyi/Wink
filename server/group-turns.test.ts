@@ -112,6 +112,27 @@ describe("a reply to a member's line", () => {
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ kind: "activity", tool: { name: expect.stringContaining(archivedLine(ray.name)), ok: false } });
   });
 
+  it("wakes no lead or everyone for a reply to an archived member", async () => {
+    for (const defaultResponder of [{ kind: "everyone" }, { kind: "member", botId: kai.id }] as const) {
+      store.patchGroup(group.id, { defaultResponder });
+      store.patchBot(ray.id, { hidden: false });
+      const line = reply(ray, "Ray's take");
+      store.patchBot(ray.id, { hidden: true });
+      const { start, ran } = groupTurn();
+      expect(await ran(() => start(group.id, "why that one?", line))).toEqual([]);
+      expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ kind: "activity", tool: { name: expect.stringContaining(archivedLine(ray.name)) } });
+    }
+  });
+
+  it("wakes none of the host's bots for a reply to a teammate's bot", async () => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "everyone" } });
+    const line = store.appendMessage(group.threadId, { role: "bot", kind: "text", text: "Mina's bot here", from: { botId: "tb-1", name: "Bolt", color: "" }, author: { kind: "bot", id: "tb-1", name: "Bolt", owner: "p-mina" } });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([]);
+    const tagged = groupTurn();
+    expect(await tagged.ran(() => tagged.start(group.id, `@${kai.name} and you?`, line))).toEqual([kai.id]);
+  });
+
   it("names no archived member when an @mention takes the line", async () => {
     const line = reply(ray, "Ray's take");
     store.patchBot(ray.id, { hidden: true });
