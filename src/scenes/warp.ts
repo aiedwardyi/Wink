@@ -37,6 +37,11 @@ void main() {
   float r = length(d) + 0.001;
   // The camera pushes in along the flight and the nebula smears away from the star; at rest the plate sits exactly at its fit.
   vec2 pp = uF + d / (1.0 + 0.05 * f);
+  // While working the star breathes every 2.5 s: it draws light in (streak heads pulled toward it, the star dims), swells
+  // brighter and wider, then settles. Both terms ease and scale with the flow, so a still never moves.
+  float bp = fract(uT * 0.4);
+  float inh = smoothstep(0.0, 0.45, bp) * (1.0 - smoothstep(0.45, 0.6, bp)) * f;
+  float gro = smoothstep(0.45, 0.62, bp) * (1.0 - smoothstep(0.62, 1.0, bp)) * f;
   vec3 bg = sky(pp);
   if (f > 0.004) {
     // A short smear, gone toward the screen edges so the nebula there holds still.
@@ -49,12 +54,16 @@ void main() {
   float swell = 4.0 * f * (1.0 - f);
   bg *= mix(vec3(1.0), vec3(0.85, 0.95, 1.2), f);
   bg += bg * (1.0 - bg) * (0.15 * f + 0.25 * swell) * exp(-r / (0.12 * S));
+  bg *= 1.0 - 0.18 * inh * exp(-r / (0.04 * S));
+  bg += bg * (1.0 - bg) * 0.5 * gro * exp(-r / (0.05 * S));
 
   float th = atan(d.y, d.x) * 0.15915494 + 0.5;
   float K = 0.055 * S;
   float dx = abs(px.x - uLaneX);
   float lane = (1.0 - smoothstep(uLaneW - 55.0, uLaneW + 15.0, dx)) * smoothstep(40.0, 130.0, px.y) * (1.0 - 0.85 * exp(-r / 45.0));
   vec3 add = vec3(0.0), heads = vec3(0.0);
+  // Streaks are drawn at rs, past where they sit, so on the in-breath they slide back toward the star.
+  float rs = r + 0.054 * S * inh * (1.0 - exp(-r / (0.3 * S)));
   // Layers 7-9 start close so the far field always has long streaks; 10-11 are near stars: few, thick, seen only once big.
   for (int i = 2; i < 12; i++) {
     float fi = float(i);
@@ -75,18 +84,18 @@ void main() {
     float rho = mix(ml + nl > 0.5 ? 0.3 : 0.1, 1.7, hs.y);
     float rh = rho * K / z;
     float rt = rho * K / (z + 0.29 * v * f * (1.0 + near));
-    float u = clamp((r - rt) / max(rh - rt, 0.001), 0.0, 1.0);
+    float u = clamp((rs - rt) / max(rh - rt, 0.001), 0.0, 1.0);
     float da = (fract(ab) - 0.25 - 0.5 * fract(hs.x * 7.3)) / bins * 6.2831853 * r;
-    float dr = r < rt ? rt - r : max(r - rh, 0.0);
+    float dr = rs < rt ? rt - rs : max(rs - rh, 0.0);
     float w0 = min(clamp(0.3 + 0.11 / z, 0.3, 3.6) * (1.0 + 1.8 * near + 1.2 * nl) * mix(0.7, 1.4, fract(hs.y * 7.7)), 6.0);
     // Farther from the star a streak is nearer the ship, so it runs wider and brighter.
-    float far = mix(0.6, 1.6, smoothstep(0.0, 0.75 * S, r));
+    float far = mix(0.6, 1.6, smoothstep(0.0, 0.75 * S, rs));
     float wdt = w0 * (0.45 + 0.55 * u) * far;
     float cellPx = 6.2831853 * r / bins;
     float aa = max(wdt, 0.85);
     float e = (da * da + dr * dr) / (aa * aa);
     float hw = min(wdt * 4.5, 0.14 * cellPx);
-    float dh = r - rh;
+    float dh = rs - rh;
     // Every term below is under exp(-9) this far from the streak and its head's bloom, and most of a cell is this far.
     if ((abs(da) > 3.0 * max(hw, 3.0 * wdt + 1.0) || dr > max(3.0 * hw, max(9.0, 4.0 * aa)) + 1.5) && da * da + dh * dh > 9.0 * (30.0 + 8.0 * aa * aa)) continue;
     float lum = smoothstep(0.0, 0.3, 1.0 - z) * clamp(0.09 / z, 0.25, mix(1.6, 2.2, nl)) * mix(0.4, 1.0, hs.x * hs.x) * mix(0.6, 1.25, max(near, ml)) * far * (1.0 - 0.75 * lane * max(near, nl));
@@ -97,8 +106,8 @@ void main() {
     float k = wdt / aa * u * lum * (1.0 + 1.2 * smoothstep(0.85, 1.0, u)) * cf;
     vec3 core = vec3(exp(-e)) * k;
     if (nl + ml > 0.5) {
-      float dR = r < rt - 1.5 ? rt - 1.5 - r : max(r - rh + 1.5, 0.0);
-      float dB = r < rt + 1.5 ? rt + 1.5 - r : max(r - rh - 1.5, 0.0);
+      float dR = rs < rt - 1.5 ? rt - 1.5 - rs : max(rs - rh + 1.5, 0.0);
+      float dB = rs < rt + 1.5 ? rt + 1.5 - rs : max(rs - rh - 1.5, 0.0);
       core = vec3(exp(-(da * da + dR * dR) / (aa * aa)), exp(-e), exp(-(da * da + dB * dB) / (aa * aa))) * k;
     }
     // Violet tail, cyan-blue body, blue-white head; the glow round it stays coloured. A quarter run violet like the gas, a fifth paler.
@@ -118,9 +127,9 @@ void main() {
   heads *= fade * mix(0.3, 1.0, smoothstep(0.0, 0.25, f));
 
   vec2 ad = abs(d);
-  float br = 0.9 + 0.1 * sin(uT * 2.7);
-  vec3 flare = (vec3(0.65, 0.82, 1.0) * exp(-r / 14.0) * 0.8 + vec3(0.45, 0.45, 1.0) * exp(-r / 90.0) * 0.14) * f * br;
-  flare += vec3(0.3, 0.5, 1.0) * exp(-ad.y * ad.y / 8.0) * exp(-ad.x / (uSize.x * 0.22)) * 0.3 * f + vec3(0.35, 0.5, 1.0) * exp(-r / (0.07 * S)) * 0.45 * f;
+  float br = 1.0 - 0.3 * inh + 0.9 * gro;
+  vec3 flare = (vec3(0.65, 0.82, 1.0) * exp(-r / (14.0 + 10.0 * gro)) * 0.8 + vec3(0.45, 0.45, 1.0) * exp(-r / (90.0 + 45.0 * gro)) * 0.14) * f * br;
+  flare += vec3(0.3, 0.5, 1.0) * exp(-ad.y * ad.y / 8.0) * exp(-ad.x / (uSize.x * 0.22)) * 0.3 * f + vec3(0.35, 0.5, 1.0) * exp(-r / ((0.07 + 0.03 * gro) * S)) * 0.45 * f * (1.0 - 0.3 * inh + 0.6 * gro);
   // Over the column streaks keep their hue at lower strength: per-channel tone mapping would turn a bright one grey there.
   // A phone's column spans the screen and its text sits on opaque cards, so there the streaks dim less.
   float sl = lane * (uSize.x > 700.0 ? 1.0 : 0.6);

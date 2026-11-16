@@ -1,5 +1,5 @@
-// Circuit: a dark board seen up close, lit by a processor on the right. The
-// board is a still plate; each frame adds the chip's light, pulses racing along
+// Circuit: a dark board seen up close around a processor on the right. The
+// board is a still plate; each frame adds light on the board, pulses racing along
 // the plate's traces and lit traces round the walls and the composer, so a still
 // costs nothing and a frame stays cheap.
 import type { SceneApi, SceneModule } from "./scene-host";
@@ -9,19 +9,18 @@ import wideUrl from "./plates/circuit-wide.webp";
 const ROLL_CAP_MS = 30000;
 const PERIOD = 600;
 
-// Each plate's size, its chip (centre and half-size in plate px), where the chip lands (tr px from its right edge to the screen's,
-// its centre ty down) and a zoom
-// below cover (the board mirrors past any edge it falls short of).
+// Each plate's size, its chip (centre and package half-size in plate px), where the chip lands (tr px from its right edge to the screen's,
+// its centre ty down), a zoom below cover and the bands (left, bottom; in plate sizes) the board folds back over past those edges.
 export const PLATES = {
-  wide: { url: wideUrl, w: 1536, h: 1024, ax: 1080, ay: 490, cr: 140, tr: 8, ty: 0.42, z: 0.62 },
-  tall: { url: tallUrl, w: 1024, h: 1536, ax: 742, ay: 316, cr: 140, tr: 8, ty: 0.155, z: 0.5 },
+  wide: { url: wideUrl, w: 1536, h: 1024, ax: 1084, ay: 524, cr: 176, tr: 8, ty: 0.45, z: 0.5, fold: [0.5, 0.3] },
+  tall: { url: tallUrl, w: 1024, h: 1536, ax: 720, ay: 376, cr: 172, tr: 4, ty: 0.17, z: 0.46, fold: [0.45, 0.6] },
 };
 type Plate = (typeof PLATES)["wide"];
 
-// Put the chip where the plate says. On an axis the plate covers, pull back so its edge stays off-screen; where it falls short it mirrors anyway.
+// Put the chip where the plate says. On an axis the plate covers, pull back so its edge stays off-screen. Left and below, the board
+// folds back over bands clear of the chip; above, it mirrors, so the zoom keeps that mirrored chip off-screen.
 export function place(p: Plate, width: number, height: number) {
-  // Zoomed out, the board mirrors past its edges; at least this zoom keeps the mirrored chip off-screen.
-  const s = Math.max(Math.max(width / p.w, height / p.h) * p.z, (width - p.tr) / (2 * p.ax - p.cr));
+  const s = Math.max(Math.max(width / p.w, height / p.h) * p.z, (height * p.ty) / (2 * p.ay - p.cr));
   const fit = (size: number, plate: number, at: number) => (plate * s >= size ? Math.min(0, Math.max(size - plate * s, at)) : at);
   return { s, ox: fit(width, p.w, width - p.tr - (p.ax + p.cr) * s), oy: fit(height, p.h, height * p.ty - p.ay * s) };
 }
@@ -30,6 +29,11 @@ const VERT = "attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }
 const COMMON = `
 float h1(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 vec4 tex(vec2 u) { return texture2D(uPlate, 1.0 - abs(1.0 - mod(u, 2.0))); }
+// Past the left and bottom edges the board folds back over bands clear of the chip, so the chip never repeats.
+vec2 fold(vec2 u) {
+  vec2 b = vec2(uFold.x * (1.0 - abs(1.0 - mod(-u.x / uFold.x, 2.0))), 1.0 - uFold.y * (1.0 - abs(1.0 - mod((u.y - 1.0) / uFold.y, 2.0))));
+  return vec2(u.x < 0.0 ? b.x : u.x, u.y > 1.0 ? b.y : u.y);
+}
 // A far board behind the plate's dark areas, soft as if out of focus. Each cell edge carries a trace or not, and
 // neighbouring cells share that coin, so the traces join up; a dead end ends on a via. k widens the traces.
 float farBoard(vec2 q, float k) {
@@ -75,7 +79,7 @@ vec2 wallRoute(vec2 p) {
 
 const FRAG = `
 precision highp float;
-uniform vec2 uSize, uBuf, uChip;
+uniform vec2 uSize, uBuf, uChip, uFold;
 uniform float uT, uFlow, uLaneX, uLaneW, uChipR, uCut;
 uniform vec4 uBox, uMap;
 uniform sampler2D uPlate;
@@ -110,7 +114,7 @@ void main() {
   float R = uChipR;
   // The camera eases in on the chip while working; at rest the plate sits exactly at its fit.
   vec2 pp = uChip + (px - uChip) / (1.0 + 0.03 * f);
-  vec2 uv = pp * uMap.xy + uMap.zw;
+  vec2 uv = fold(pp * uMap.xy + uMap.zw);
   vec4 pl = tex(uv);
   vec3 base = pl.rgb;
   vec2 cq = px - uChip;
@@ -133,13 +137,9 @@ void main() {
   // A dark band under the header keeps its icons and title off the board's brightest dots.
   float hb = (1.0 - smoothstep(30.0, 90.0, px.y)) * smoothstep(R * 0.8, R * 1.6, dc);
   base *= 1.0 - 0.6 * hb;
-  float breathe = 0.88 + 0.12 * sin(uT * 2.2);
-  float beat = pow(1.0 - fract(uT * 1.1), 5.0) * f;
   float pool = exp(-dc / (R * 2.5)) + 0.5 * exp(-dc / (R * 8.0));
-  // The board keeps its brightness while working; only the die flares as each wave lands.
-  base *= 1.0 + 1.2 * beat * exp(-dc / (R * 1.1));
-  // The chip's light pools on the board round it, not only on its traces.
-  vec3 add = LASER * m * pool * 0.34 + vec3(0.1, 0.35, 0.9) * exp(-dc / (R * 2.2)) * 0.16 + vec3(0.2, 0.55, 1.0) * (exp(-dc / (R * 0.9)) * (0.22 + 0.12 * f * breathe) + exp(-dc / (R * (0.9 + 1.2 * beat))) * 0.9 * beat);
+  // Light pools on the board round the chip, not only on its traces.
+  vec3 add = LASER * m * pool * 0.34 + vec3(0.1, 0.35, 0.9) * exp(-dc / (R * 2.2)) * 0.16;
 
   // Packets run in along the chip's buses (rows to its sides, columns above and below), each trace on its own phase and speed.
   bool side = fo.x > fo.y;
@@ -153,7 +153,7 @@ void main() {
   float amp = step(0.72, h1(vec2(bus, 3.1))) * (0.9 + 0.9 * h1(vec2(bus, 9.1))) * near;
   float held = step(0.7, h1(vec2(bus, 5.3))) * exp(-max(along, 0.0) / (R * 3.0)) * pin;
   float mt = smoothstep(0.15, 0.55, m);
-  // Each beat a square wave of light closes in through the traces and lands on the die as it flares.
+  // Each beat a square wave of light closes in through the traces to the pins.
   float bt = fract(uT * 1.1);
   float wave = exp(-pow(along - R * 2.6 * (1.0 - bt), 2.0) / (R * R * 0.03)) * bt * f * pin;
   add += mt * (LASER * held * 0.7 + f * CYAN * amp * (exp(-cy * cy / 160.0) * 3.2 + exp(-c / 120.0) * 1.5) + LASER * wave * 1.4)
@@ -170,7 +170,8 @@ void main() {
   float bo = length(fract(bq) - 0.3 - 0.4 * vec2(h1(bc + 5.3), h1(bc + 8.1)));
   float brr = mix(0.05, 0.12, h1(bc + 2.9));
   add += CYAN * step(0.8, h1(bc + 4.4)) * (1.0 - smoothstep(brr * 0.75, brr, bo)) * (0.75 + 0.25 * smoothstep(brr * 0.5, brr * 0.95, bo)) * 0.12 * (0.7 + 0.3 * f);
-  add *= 1.0 - 0.6 * hb;
+  // The package is the plate's own: nothing is drawn over it, so its die only shows the light it reflects.
+  add *= (1.0 - 0.6 * hb) * smoothstep(R * 0.97, R * 1.04, max(fo.x, fo.y));
 
   float dx = abs(px.x - uLaneX);
   // The chip itself stays lit: bot text stops short of it, and user bubbles over it are opaque.
@@ -222,7 +223,7 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-const FRAME_UNIFORMS = ["uSize", "uBuf", "uChip", "uChipR", "uCut", "uT", "uFlow", "uLaneX", "uLaneW", "uBox", "uMap", "uPlate"] as const;
+const FRAME_UNIFORMS = ["uSize", "uBuf", "uChip", "uChipR", "uCut", "uFold", "uT", "uFlow", "uLaneX", "uLaneW", "uBox", "uMap", "uPlate"] as const;
 
 function create(api: SceneApi) {
   const canvas = document.createElement("canvas");
@@ -314,6 +315,7 @@ function create(api: SceneApi) {
     gl.uniform2f(U.uChip, ox + p.ax * s, oy + p.ay * s);
     gl.uniform1f(U.uChipR, p.cr * s);
     gl.uniform1f(U.uCut, cut);
+    gl.uniform2f(U.uFold, p.fold[0], p.fold[1]);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, plate);
     gl.uniform1i(U.uPlate, 0);
