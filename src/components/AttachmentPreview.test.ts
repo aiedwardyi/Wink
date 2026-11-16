@@ -118,6 +118,25 @@ describe("ShownImage", () => {
     }
   });
 
+  it("loads a picture that lands while the last timed retry is still loading", async () => {
+    vi.useFakeTimers();
+    const { host, root } = await renderShownImage("/a/b/abc-123.png");
+    try {
+      for (const wait of [5_000, 15_000, 45_000]) {
+        await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+        await act(async () => { await vi.advanceTimersByTimeAsync(wait); });
+      }
+      expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/abc-123.png?retry=3");
+      await act(async () => window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: "abc-123.png" })));
+      await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+      expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/abc-123.png?retry=4");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("caps the picture like a markdown image without stretching it", async () => {
     const { host, root } = await renderShownImage("/a/b/cap.png");
     try {

@@ -129,6 +129,9 @@ export async function terminalStartResponse(
   return { status: 200, body: snapshotBody(bridgeSnapshotSchema.parse(await res.json().catch(() => ({})))) };
 }
 
+// A line and its Enter are two writes, so a second send to the pane waits for both.
+const paneSends = new Map<string, Promise<unknown>>();
+
 /** Sends a line from a remote browser with a send-only grant; answers the post-send snapshot. */
 export async function terminalSendResponse(
   access: TerminalBridgeAccess | null,
@@ -156,6 +159,22 @@ export async function terminalSendResponse(
     writes = body && enter ? [body, enter] : [text];
   }
   if (!access) return { status: 503, body: { error: "terminal bridge unavailable" } };
+  const key = `${botId}:${sessionId}`;
+  const sent = (paneSends.get(key) ?? Promise.resolve()).then(() => writeTerminal(access, botId, sessionId, generation, writes, fetchImpl));
+  const settled = sent.catch(() => {});
+  paneSends.set(key, settled);
+  void settled.then(() => { if (paneSends.get(key) === settled) paneSends.delete(key); });
+  return sent;
+}
+
+async function writeTerminal(
+  access: TerminalBridgeAccess,
+  botId: string,
+  sessionId: string,
+  generation: number,
+  writes: string[],
+  fetchImpl: typeof fetch,
+) {
   let res: Response | undefined;
   for (const text of writes) {
     try {

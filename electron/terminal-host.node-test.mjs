@@ -1965,6 +1965,21 @@ test("Antigravity folder trust stops scanning once agy is working and re-arms on
   assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", AGY_TRUST_COMMAND + "\r", "\r"]);
 });
 
+test("a relaunch sent as its line then Enter re-arms folder trust", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  await f.advance(2_000);
+  child.data("\x1b[2J\x1b[H  ⣽  Reading file...\r\n");
+  child.data("\x1b[2J\x1b[HPS C:\\repo> ");
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: AGY_TRUST_COMMAND });
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "\r" });
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", AGY_TRUST_COMMAND, "\r", "\r"]);
+});
+
 test("keeps folder trust gated on bypass mode", async (t) => {
   const f = trustFixture(t, { commandEcho: false });
   t.after(() => f.host.dispose());

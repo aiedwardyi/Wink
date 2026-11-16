@@ -1307,6 +1307,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const commands = `${session.commandInput}${text}`.split("\r");
     if (submit && !text.includes("\r")) commands.push("");
     session.commandInput = commands.pop().slice(-INPUT_ECHO_LIMIT);
+    // An Enter sent apart from its line still launches what the line typed.
+    const submitted = commands.join("\r");
     for (const command of commands) {
       if (command.trim()) session.commandInputs.push({ hash: commandHash(command), reported: false });
     }
@@ -1320,7 +1322,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.stallArmedAt = now();
       session.stallChangedAt = session.stallArmedAt;
       session.idleCompacting = false;
-      const engineText = launch ?? text;
+      const engineText = launch ?? submitted;
       const launched = session.botPane ? WORKER_CLI_RE.exec(engineText) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
@@ -1332,7 +1334,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.claudeTrustAnswered = false;
         session.agentSeen = false;
         session.agentEchoed = false;
-        session.agentCommand = text.replace(/\s+/g, "");
+        session.agentCommand = (launch ? text : submitted).replace(/\s+/g, "");
         session.contextNote = null;
         session.contextCompactPending = false;
         watchStalls(session);

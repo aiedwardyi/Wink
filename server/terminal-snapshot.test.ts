@@ -313,6 +313,20 @@ describe("terminal send relay", () => {
     expect(calls).toBe(1);
   });
 
+  it("finishes one send's line and Enter before the next send to that pane writes", async () => {
+    const bodies: string[] = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)).text);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return Response.json({ screenText: "$" });
+    }) as typeof fetch;
+    await Promise.all([
+      terminalSendResponse(ACCESS, "bot-1", { ...input, text: "echo A\n" }, fetchImpl),
+      terminalSendResponse(ACCESS, "bot-1", { ...input, text: "echo B\n" }, fetchImpl),
+    ]);
+    expect(bodies).toEqual(["echo A", "\n", "echo B", "\n"]);
+  });
+
   it("frames a validated multi-line paste and still refuses a raw ESC in it", async () => {
     const bodies: unknown[] = [];
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {

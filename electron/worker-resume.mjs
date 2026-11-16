@@ -30,7 +30,7 @@ export async function recoverWorkers({ runs, host, mailbox, notePane, warn = () 
   let loadingMs = 0;
   const monitor = async (pane) => {
     let status = "pending";
-    for (let poll = 0; poll < polls; poll++) {
+    for (let poll = 0; poll <= polls; poll++) {
       status = host.workerResumeStatus(pane.sessionId);
       if (status === "resumed") {
         await wait(settleMs);
@@ -38,7 +38,7 @@ export async function recoverWorkers({ runs, host, mailbox, notePane, warn = () 
       }
       // The old chat redrawn before the start hook lands can read like a menu, so a menu only counts once the hook never confirms.
       if (status === "resume failed") return status;
-      await wait(500);
+      if (poll < polls) await wait(500);
     }
     return status === "unexpected menu" ? status : "resume failed";
   };

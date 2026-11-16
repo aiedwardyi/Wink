@@ -23,7 +23,9 @@ function usePictureRetry(src: string) {
   const [waiting, setWaiting] = useState(false);
   const [seen, setSeen] = useState(src);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const landed = useRef(false);
   if (seen !== src) {
+    landed.current = false;
     setSeen(src);
     setAttempt(0);
     setWaiting(false);
@@ -31,6 +33,12 @@ function usePictureRetry(src: string) {
   useLayoutEffect(() => () => clearTimeout(timer.current), [src]);
   const onError = () => {
     clearTimeout(timer.current);
+    // The file landed while this request was still out, so its failure is stale.
+    if (landed.current) {
+      landed.current = false;
+      setAttempt((current) => current + 1);
+      return;
+    }
     const delay = PICTURE_RETRY_MS[attempt];
     setWaiting(true);
     if (delay === undefined) return;
@@ -46,12 +54,13 @@ function usePictureRetry(src: string) {
   };
   // The other PC's picture can land long after its message: the server says when the file is here.
   useEffect(() => {
-    if (!waiting) return;
-    const landed = (event: Event) => {
-      if (event instanceof CustomEvent && src.split("?")[0]!.endsWith(`/${event.detail}`)) retryNow();
+    const onLanded = (event: Event) => {
+      if (!(event instanceof CustomEvent && src.split("?")[0]!.endsWith(`/${event.detail}`))) return;
+      if (waiting) retryNow();
+      else landed.current = true;
     };
-    window.addEventListener("orbit:picture-landed", landed);
-    return () => window.removeEventListener("orbit:picture-landed", landed);
+    window.addEventListener("orbit:picture-landed", onLanded);
+    return () => window.removeEventListener("orbit:picture-landed", onLanded);
   }, [src, waiting, retryNow]);
   return { src: pictureSrc(src, attempt), failed: waiting, onError, retryNow };
 }

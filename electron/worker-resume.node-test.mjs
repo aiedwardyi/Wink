@@ -235,6 +235,15 @@ test("old chat that reads like a menu does not close a worker the start hook the
   assert.match(f.notes[0].text, /^RESUMED: codex/);
 });
 
+test("a resume the start hook confirms during the last poll wait is kept", async (t) => {
+  const f = fixture(t);
+  const seen = ["pending", "pending", "resumed"];
+  f.host.workerResumeStatus = () => seen.shift() ?? "resumed";
+  await recovery.recoverWorkers(f.options);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.notes[0].text, /^RESUMED: codex/);
+});
+
 test("a failed replacement close never sends FRESH guidance", async (t) => {
   const f = fixture(t);
   f.host.workerResumeStatus = () => "pending";
