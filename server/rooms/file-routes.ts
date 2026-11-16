@@ -32,7 +32,7 @@ function reply(res: ServerResponse, status: number, body: unknown, unread?: Inco
   const timer = setTimeout(() => res.destroy(), LINGER_MS);
   const done = () => {
     clearTimeout(timer);
-    if (!res.destroyed) res.end();
+    if (!res.destroyed && !res.writableEnded) res.end();
   };
   unread.on("data", (chunk: Buffer) => {
     if ((left -= chunk.length) < 0) res.destroy();
