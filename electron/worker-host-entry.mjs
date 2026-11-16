@@ -157,7 +157,8 @@ const commands = {
     pane.pty.onExit(({ exitCode }) => {
       pane.exit = exitCode;
       persist();
-      if (!pane.doomed) notify("exit", { id, exitCode, error: pane.error });
+      // An attach that has not sent the ring yet tells the end after it.
+      if (!pane.doomed && pane.attached) notify("exit", { id, exitCode, error: pane.error });
     });
     void pane.pty.exited.then(() => {
       pane.gone = true;
@@ -166,7 +167,7 @@ const commands = {
         panes.delete(id);
         persist();
       }
-      if (!pane.doomed) notify("gone", { id });
+      if (!pane.doomed && pane.attached) notify("gone", { id });
       settle();
     });
     // The reply does not wait for ConPTY, so a slow shell start never looks like a silent host.
