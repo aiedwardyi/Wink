@@ -10,7 +10,6 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
-  ENROLL_PER_WEEK,
   NODE_SHA256,
   NODE_TARBALL,
   NODE_URL,
@@ -376,8 +375,7 @@ export function realLocal(relayDir: string, buildDir: string): Local {
         revokedLabelsFile: "/etc/wink-relay/revoked-labels",
         acme,
       };
-      const limits = { googleEnrollPerWeek: opts.enrollPerWeek ?? ENROLL_PER_WEEK };
-      const withGoogle = opts.google ? { ...config, google: opts.google, limits } : config;
+      const withGoogle = opts.google ? { ...config, google: opts.google } : config;
       const withTeam = opts.teamOwnerEmail ? { ...withGoogle, teamOwnerEmail: opts.teamOwnerEmail } : withGoogle;
       const file = opts.statsReadKeySha256 ? { ...withTeam, stats: { readKeySha256: opts.statsReadKeySha256 } } : withTeam;
       await writeFile(join(buildDir, "wink-relay.config.json"), `${JSON.stringify(file, null, 2)}\n`);

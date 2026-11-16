@@ -36,8 +36,6 @@ export interface DeployOptions {
   acceptAcmeTerms: boolean;
   /** Written into wink-relay.config.json. All three CLI flags, or none. */
   google?: { desktopClientId: string; webClientId: string; signinOrigin: string };
-  /** Written with the Google flags as limits.googleEnrollPerWeek: new PCs a week, sized to the CAs. 35 fits Let's Encrypt alone. */
-  enrollPerWeek?: number;
   /** Written into wink-relay.config.json. Needs the Google flags. */
   teamOwnerEmail?: string;
   /** Written into wink-relay.config.json as stats.readKeySha256. */
@@ -90,9 +88,6 @@ export class PlanError extends Error {
   }
 }
 
-/** Launch size: half of what Let's Encrypt (50 a week) plus Google Trust Services (60 EAB keys an hour) can issue in a week. */
-export const ENROLL_PER_WEEK = 5_000;
-
 const PROJECT_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const REGION_RE = /^[a-z]+-[a-z]+[0-9]{1,2}$/;
 const PREFIX_RE = /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/;
@@ -141,12 +136,6 @@ export function validate(opts: DeployOptions): void {
   }
   if (opts.acmeEmail && !/^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$/.test(opts.acmeEmail)) throw new PlanError("invalid --acme-email");
   if (opts.google) googleDeployConfig(opts.google.desktopClientId, opts.google.webClientId, opts.google.signinOrigin);
-  if (opts.enrollPerWeek !== undefined) {
-    if (!opts.google) throw new PlanError("--enroll-per-week needs the Google flags");
-    if (!Number.isInteger(opts.enrollPerWeek) || opts.enrollPerWeek < 1 || opts.enrollPerWeek > 100_000) {
-      throw new PlanError("--enroll-per-week is a whole number from 1 to 100000");
-    }
-  }
   if (opts.teamOwnerEmail !== undefined) {
     if (!opts.google) throw new PlanError("--team-owner-email needs the Google flags");
     if (!/^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/.test(opts.teamOwnerEmail)) {

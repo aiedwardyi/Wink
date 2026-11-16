@@ -6,8 +6,6 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import { verifyAccountTicket, verifyTicket } from "../../shared/relay-protocol.ts";
-import { parseOptions } from "../deploy/cli.ts";
-import { realLocal } from "../deploy/exec.ts";
 import { loadConfig } from "../src/config.ts";
 import type { RelayLimits } from "../src/limits.ts";
 import { makePc, openControl, startRelay, type Harness, type Pc } from "./fixtures.ts";
@@ -231,14 +229,13 @@ describe("POST /v1/enroll/google", () => {
     expect((await enroll(second, pc, token(s, "restart-sub"))).status).toBe(200);
   });
 
-  it("admits a launch week of new pcs on the config a default deploy writes, abuse caps kept", async () => {
-    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
-    const argv = ["provision", "--project", "wink-new-proj", "--base", "wink.example.com", "--dns-zone", "example.com"];
-    const google = ["--google-desktop-client-id", DESKTOP, "--google-web-client-id", WEB, "--google-signin-origin", ORIGIN];
-    await realLocal("/r", dir).writeConfig(parseOptions([...argv, ...google]).opts);
-    const config = await loadConfig(join(dir, "wink-relay.config.json"));
+  it("admits a launch week of new pcs at the cap a deploy with the second CA writes, abuse caps kept", async () => {
     const s = setup();
-    const h = await startRelay({ google: { ...config.google!, keys: s.issuer }, now: s.clock.now, limits: config.limits });
+    const h = await startRelay({
+      google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: ORIGIN, keys: s.issuer },
+      now: s.clock.now,
+      limits: { googleEnrollPerWeek: 5_065 },
+    });
     harnesses.push(h);
     for (let i = 0; i < 120; i++) {
       // Every request here comes from one address, so its cap of 5 an hour paces the loop.

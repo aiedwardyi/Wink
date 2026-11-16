@@ -468,25 +468,8 @@ describe("google deploy flags", () => {
       expect(await readFile(join(dir, "wink-relay.config.json"), "utf8")).toBe(`${JSON.stringify(plain, null, 2)}\n`);
       await local.writeConfig(opts({ google: { desktopClientId: DESKTOP_CLIENT, webClientId: WEB_CLIENT, signinOrigin: SIGNIN_ORIGIN } }));
       expect(await readFile(join(dir, "wink-relay.config.json"), "utf8")).toBe(
-        `${JSON.stringify({ ...plain, google: { desktopClientId: DESKTOP_CLIENT, webClientId: WEB_CLIENT, signinOrigin: SIGNIN_ORIGIN }, limits: { googleEnrollPerWeek: 5000 } }, null, 2)}\n`,
+        `${JSON.stringify({ ...plain, google: { desktopClientId: DESKTOP_CLIENT, webClientId: WEB_CLIENT, signinOrigin: SIGNIN_ORIGIN } }, null, 2)}\n`,
       );
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps --enroll-per-week through update, only with the Google flags", async () => {
-    const parsed = parseOptions(argv("update", [...flags, "--enroll-per-week", "35"]));
-    expect(parsed.opts.enrollPerWeek).toBe(35);
-    expect(() => validate(parsed.opts)).not.toThrow();
-    expect(() => validate(parseOptions(argv("update", ["--enroll-per-week", "35"])).opts)).toThrow(/needs the Google flags/);
-    for (const bad of ["0", "1.5", "many", "100001"]) {
-      expect(() => validate(parseOptions(argv("update", [...flags, "--enroll-per-week", bad])).opts)).toThrow(/--enroll-per-week is/);
-    }
-    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
-    try {
-      await realLocal("/r", dir).writeConfig(parsed.opts);
-      expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8")).limits).toEqual({ googleEnrollPerWeek: 35 });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
