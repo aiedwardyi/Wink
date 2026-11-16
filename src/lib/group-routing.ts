@@ -1,4 +1,4 @@
-import type { Bot, Group, GroupDefaultResponder } from "@/state/store";
+import type { Bot, Group, GroupDefaultResponder, Message } from "@/state/store";
 import { t, type Translate } from "./i18n";
 
 /** Be defensive around rooms loaded while an older server is still running,
@@ -38,18 +38,22 @@ export function groupComposerHint(group: Pick<Group, "name" | "dm" | "defaultRes
   return translate("composer.roomLead", { name: group.name, lead });
 }
 
-/** Same routing sendGroup uses: explicit @mentions win, otherwise the
- * room's default responder. Keep this aligned with server/store.ts
+/** Same routing sendGroup uses: explicit @mentions win, then the replied-to
+ * member, otherwise the room's default responder. Keep this aligned with server/store.ts
  * `roomResponders` / `mentionedBots`. */
 export function roomRespondersForComposer<T extends { id: string; name: string; hidden?: boolean }>(
   text: string,
   members: T[],
   group: Pick<Group, "defaultResponder">,
+  replyTo?: Pick<Message, "from" | "author"> | null,
 ): T[] {
   const available = members.filter((member) => !member.hidden);
   if (/(?:^|\s)@everyone\b/i.test(text)) return available;
   const mentioned = mentionedMembers(text, available);
   if (mentioned.length) return mentioned;
+  const replied = members.find((member) => member.id === replyTo?.from?.botId);
+  if (replied) return replied.hidden ? [] : [replied];
+  if (replyTo?.author?.owner) return [];
   const fallback = effectiveDefaultResponder(group, available);
   if (fallback.kind === "everyone") return available;
   if (fallback.kind === "member") {

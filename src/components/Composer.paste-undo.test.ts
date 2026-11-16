@@ -41,7 +41,7 @@ async function mountComposer() {
   };
   const box = host.querySelector("textarea")!;
   const card = () => host.querySelector('[aria-label="Display pasted text in chat box"]');
-  const fileChip = () => host.querySelector('[aria-label="Remove file"]');
+  const fileChip = () => host.querySelector('[aria-label="Remove image"]');
   return {
     box,
     card,

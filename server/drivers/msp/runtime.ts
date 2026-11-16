@@ -38,6 +38,7 @@ import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
+import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
@@ -1464,6 +1465,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             localComputerMcp: !config.fullAuto,
           },
           sendTurn,
+          // fullAuto answers every approval itself (openApproval); the rest reach Wink
+          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
           interruptTurn: async (threadId) => {
             active.get(threadId)?.interrupt();
           },

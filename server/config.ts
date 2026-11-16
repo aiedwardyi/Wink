@@ -26,7 +26,7 @@ import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schem
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 5;
+export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const MIN_ROOM_TURN_TIMEOUT_MINUTES = 1;
 export const MAX_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const DEFAULT_LOCAL_VM_MODE = "shared" as const;

@@ -50,6 +50,7 @@ import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCu
 import { systemLedger } from "./system-ledger.ts";
 import { antigravitySignIn } from "./antigravity-auth.ts";
 import { unrestated } from "../turn-reply.ts";
+import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
 const DRIVER_KIND = "antigravityAgent";
 const AGY_STOPPED_NOTE = "The bot stopped before finishing.";
@@ -448,6 +449,12 @@ export function quoteWin32ArgvToken(arg: string): string {
 /** Estimated CreateProcess command-line length for command + args on Windows. */
 export function estimateWin32CmdlineLength(command: string, args: string[]): number {
   return [command, ...args].map(quoteWin32ArgvToken).join(" ").length;
+}
+
+/** Print mode never asks: skip-permissions runs everything, accept-edits denies run_command, the default denies both. */
+export function antigravityAccess(argv: readonly string[]): TurnAccess {
+  if (argv.includes("--dangerously-skip-permissions")) return FREE_ACCESS;
+  return { edits: argv.includes("accept-edits") ? "free" : "off", commands: "off" };
 }
 
 export interface AntigravityTurnArgvInput {
@@ -1158,6 +1165,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           askApproval: false,
         },
         sendTurn,
+        access: () => antigravityAccess(buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd: "" })),
         interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
         respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
         hasSession: (threadId) => active.has(threadId),

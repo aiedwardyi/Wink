@@ -85,7 +85,7 @@ describe("update reload during an upload", () => {
     await vi.waitFor(() => expect(reloadHeld()).toBe(false));
     stop();
     expect(draftAtRelease).toContain("/tmp/shot.png");
-    expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Remove image"]')).not.toBeNull();
   });
 });
 
@@ -105,8 +105,8 @@ describe("picture still uploading", () => {
     await act(async () => box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
     expect(box.value).toBe("look at this");
     await act(async () => answer());
-    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
-    expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "image", path: "/tmp/shot.png" })]));
+    expect(host.querySelector('[aria-label="Remove image"]')).not.toBeNull();
   });
 
   it("keeps its chip when the chat is left mid-upload", async () => {
@@ -116,7 +116,7 @@ describe("picture still uploading", () => {
     await unmount?.();
     unmount = null;
     await act(async () => answer());
-    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "image", path: "/tmp/shot.png" })]));
   });
 
   it("stops its request and frees the upload line when its chip is removed", async () => {

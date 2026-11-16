@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
-import { flushSync } from "react-dom";
-import { ArrowUp, Clock, Mic, Paperclip, Phone, Square, TerminalSquare, User, Users, X } from "lucide-react";
+import { createPortal, flushSync } from "react-dom";
+import { ArrowUp, Mic, Paperclip, Phone, Square, TerminalSquare, User, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import {
@@ -39,6 +39,7 @@ import {
   isLongPaste,
   pasteAttachment,
   rereadEmptyImages,
+  roomCopyPath,
   shrinksImage,
   uploadAttachment,
   uploadAttachmentFile,
@@ -94,7 +95,8 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { useCatchingUp } from "@/lib/use-catching-up";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { MessageMenu, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { Bubble, versionProps } from "./ChatBubble";
+import { MessageMenu, type MessageMenuRequest } from "./MessageMenu";
 import { trackFeature } from "@/lib/usage-stats";
 
 /** The active @mention query at the caret: the text between an `@` that
@@ -151,6 +153,7 @@ interface ComposerDraftSnapshot extends ComposerSendSnapshot {
 interface QueuedGroupSend {
   text: string;
   replyToId?: string;
+  at: number;
   draft: ComposerDraftSnapshot;
 }
 
@@ -176,6 +179,7 @@ function roomHoldFromQueued(entry: QueuedGroupSend): PersistedRoomHold {
     revision: entry.draft.revision,
     replyToId: entry.replyToId,
     attachments: entry.draft.attachments,
+    at: entry.at,
   };
 }
 
@@ -183,6 +187,7 @@ function queuedFromRoomHold(hold: PersistedRoomHold, draftId: string): QueuedGro
   return {
     text: hold.requestText,
     replyToId: hold.replyToId,
+    at: hold.at ?? Date.now(),
     draft: {
       draftId,
       revision: hold.revision,
@@ -215,6 +220,7 @@ export function Composer({
   call,
   onCall,
   callButton,
+  heldSlot,
 }: {
   bot?: Bot;
   group?: Group;
@@ -236,6 +242,8 @@ export function Composer({
   /** Starts a call from the empty box's Send spot; absent where calls can't work. */
   onCall?: () => void;
   callButton?: ReactNode;
+  /** The room transcript's tail, where Ctrl+Enter holds show as 1:1 queued bubbles. */
+  heldSlot?: HTMLElement | null;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -255,12 +263,13 @@ export function Composer({
   const canSteer =
     Boolean(steerBot) && state.instances.find((i) => i.instanceId === steerBot!.modelSelection.instanceId)?.capabilities?.queueing === true;
   // only a line that member alone would answer joins its turn
-  const roomSteers = (message: string) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId));
+  const roomSteers = (message: string, reply: Message | null) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId, reply));
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
+  const repliedTo = (id?: string) => (id && threadMessages.find((message) => message.id === id)) || null;
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
@@ -522,30 +531,37 @@ export function Composer({
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
-  const imageTargetsSupport = (message: string, after = false) => {
+  const imageTargetsSupport = (message: string, after: boolean, reply: Message | null) => {
     if (room) return "supported";
     const responders = group
-      ? busy && !after && steerBot && roomSteers(message) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group)
+      ? busy && !after && steerBot && roomSteers(message, reply) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group, reply)
       : bot
         ? [{ modelSelection: modelForNextSend(bot, { busy, canSteer: canSteer && !after }) }]
         : [];
     return imageSupportForTargets(state.instances, responders);
   };
-  const imageSupport = imageTargetsSupport(text);
+  const imageSupport = imageTargetsSupport(text, false, replyTo ?? null);
   const engineSupportsImages = imageSupport !== "unsupported";
-  const [imageNotice, setImageNotice] = useState<ComposerThreadNotice | null>(null);
-  const shownImageNotice = visibleComposerNotice(imageNotice, threadId);
+  // `draft` marks a refusal of the box's own picture, sent with `after`
+  const [imageNotice, setImageNotice] = useState<(ComposerThreadNotice & { draft?: { after: boolean } }) | null>(null);
+  const refused = imageNotice?.draft;
+  const draftRefusalGone = refused !== undefined &&
+    (!attachments.some((attachment) => attachment.kind === "image") || imageTargetsSupport(text, refused.after, replyTo ?? null) === "supported");
+  const shownImageNotice = draftRefusalGone ? null : visibleComposerNotice(imageNotice, threadId);
   const catchingUp = useCatchingUp(bot && !group ? threadId : null);
-  const showImageSupportNotice = (support: ReturnType<typeof imageTargetsSupport>) => {
+  const showImageSupportNotice = (support: ReturnType<typeof imageTargetsSupport>, draft?: { after: boolean }) => {
     const text = imageSupportNotice(support, {
       unsupported: t("composer.imageUnsupported"),
       loading: t("composer.imageLoading"),
     });
-    if (text && threadId) setImageNotice({ threadId, text });
+    if (text && threadId) setImageNotice({ threadId, text, draft });
   };
   useEffect(() => {
     setImageNotice(null);
   }, [draftId]);
+  useLayoutEffect(() => {
+    if (draftRefusalGone) setImageNotice(null);
+  }, [draftRefusalGone]);
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
@@ -646,32 +662,23 @@ export function Composer({
     dispatch({ type: "interruptGroup", groupId });
   };
   const [queuedMenu, setQueuedMenu] = useState<MessageMenuRequest | null>(null);
-  const openQueuedMenu = (entry: QueuedGroupSend, x: number, y: number, opener: HTMLElement) => {
-    setQueuedMenu({
-      kind: "message", x, y, opener,
-      target: {
-        threadId, message: { id: entry.draft.sendId, role: "user", kind: "text", text: entry.text, at: 0 },
-        copyText: entry.text, user: true, pinned: false, canPin: false,
-        queued: {
-          cancel: () => dropQueued(entry.draft.sendId),
-          sendNow: group && roomSteers(entry.text) ? () => {
-            // the hold may have flushed while its menu was open
-            if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
-            dropQueued(entry.draft.sendId);
-            dispatch({
-              type: "sendGroup",
-              groupId: group.id,
-              text: entry.text,
-              sendId: entry.draft.sendId,
-              replyToId: entry.replyToId,
-              threadId: entry.draft.threadId,
-              onError: () => restoreDraft(entry.draft),
-            });
-          } : undefined,
-        },
-      },
-    });
-  };
+  const queuedActions = (entry: QueuedGroupSend) => ({
+    cancel: () => dropQueued(entry.draft.sendId),
+    sendNow: group && roomSteers(entry.text, repliedTo(entry.replyToId)) ? () => {
+      // the hold may have flushed while its menu was open
+      if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
+      dropQueued(entry.draft.sendId);
+      dispatch({
+        type: "sendGroup",
+        groupId: group.id,
+        text: entry.text,
+        sendId: entry.draft.sendId,
+        replyToId: entry.replyToId,
+        threadId: entry.draft.threadId,
+        onError: () => restoreDraft(entry.draft),
+      });
+    } : undefined,
+  });
   // a chip on its own is a message: the send control has to appear for it
   const fileInput = useRef<HTMLInputElement>(null);
   const showRoomProblem = (problem: RoomProblem | null) =>
@@ -690,6 +697,7 @@ export function Composer({
       allowImages: engineSupportsImages,
       getPath: pathForFile,
       shrunkPath: shrunkPicture,
+      roomCopy: group?.hosted ? roomCopyPath : undefined,
     });
     if (added.length) addAttachments(added, uploads, startedAt);
     // Keep file-specific failures beside the attachments. A successful
@@ -707,7 +715,7 @@ export function Composer({
     : group
     ? groupComposerHint(group, members ?? [], t)
     : t("composer.placeholder", { name: bot?.name ?? "" });
-  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
+  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text, replyTo ?? null) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const uploading = room
     ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
@@ -742,7 +750,7 @@ export function Composer({
   const retryFailedSend = (failed: FailedComposerSend) => {
     if (locked) return;
     if (failed.requestText.includes("<attached-image ")) {
-      const support = imageTargetsSupport(failed.requestText, failed.after);
+      const support = imageTargetsSupport(failed.requestText, Boolean(failed.after), repliedTo(failed.replyToId));
       if (support !== "supported") {
         showImageSupportNotice(support);
         return;
@@ -780,7 +788,6 @@ export function Composer({
       locked,
       isRoom: Boolean(group),
       busy,
-      canSteer: roomSteers(composerSendSourceText(inputRef.current?.value, text)),
       after,
       heldCount: queuedRef.current.length,
     });
@@ -791,9 +798,9 @@ export function Composer({
     }
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (attachments.some((attachment) => attachment.kind === "image")) {
-      const support = imageTargetsSupport(liveText, after);
+      const support = imageTargetsSupport(liveText, after, replyTo ?? null);
       if (support !== "supported") {
-        showImageSupportNotice(support);
+        showImageSupportNotice(support, { after });
         return;
       }
     }
@@ -819,7 +826,7 @@ export function Composer({
     if (inputRef.current) inputRef.current.value = "";
     setAttachmentNotice(null);
     if (action === "enqueue" && group) {
-      const pending = { text: t, replyToId: replyTo?.id, draft: sentDraft };
+      const pending = { text: t, replyToId: replyTo?.id, at: Date.now(), draft: sentDraft };
       commitQueued([...queuedRef.current, pending]);
       setText("");
       setAttachments([]);
@@ -921,9 +928,9 @@ export function Composer({
     const { next, rest } = peelNextBusyRoomSend(queued);
     if (!next) return;
     if (next.text.includes("<attached-image ")) {
-      const support = imageTargetsSupport(next.text);
+      const support = imageTargetsSupport(next.text, false, repliedTo(next.replyToId));
       if (support !== "supported") {
-        showImageSupportNotice(support);
+        showImageSupportNotice(support, { after: false });
         commitQueued(rest);
         restoreDraft(next.draft);
         return;
@@ -1159,40 +1166,33 @@ export function Composer({
             </button>
           </div>
         ))}
-        {queued.map((entry) => (
-          <div
-            key={entry.draft.sendId}
-            tabIndex={-1}
-            {...holdToOpen((x, y, opener) => openQueuedMenu(entry, x, y, opener))}
-            onContextMenu={(e) => {
-              if (isTouchPrimary() || !(e.target instanceof Element) || keepsNativeMenu(e.target)) return;
-              e.preventDefault();
-              e.stopPropagation();
-              openQueuedMenu(entry, e.clientX, e.clientY, e.currentTarget);
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
-              e.preventDefault();
-              const box = e.currentTarget.getBoundingClientRect();
-              openQueuedMenu(entry, box.left + box.width / 2, box.top + box.height / 2, e.currentTarget);
-            }}
-            className="mb-2 flex items-center gap-2 rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary"
-          >
-            <Clock size={13} className="shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {t("composer.queuedUntil", { text: entry.text })}
-            </span>
-            <button
-              type="button"
-              onClick={() => dropQueued(entry.draft.sendId)}
-              aria-label={t("composer.cancelQueued")}
-              title={t("composer.cancelQueued")}
-              className="ml-auto flex size-5 shrink-0 items-center justify-center rounded text-ink-secondary hover:bg-raised hover:text-ink"
-            >
-              <X size={13} strokeWidth={2.5} />
-            </button>
-          </div>
-        ))}
+        {heldSlot && createPortal(queued.map((entry, index) => {
+          const message: Message = { id: entry.draft.sendId, role: "user", kind: "text", text: entry.text, at: entry.at, placeholder: true };
+          return (
+            <div key={entry.draft.sendId} className="contents" data-mid={entry.draft.sendId}>
+              <Bubble
+                botId={steerBot?.id ?? ""}
+                threadId={threadId}
+                botName={steerBot?.name ?? ""}
+                botFolder={undefined}
+                busy
+                hasMore={false}
+                {...versionProps([message], message)}
+                pinned={false}
+                message={message}
+                editing={false}
+                isLastBotText={false}
+                sendsNext={busy && index === 0}
+                queuedActions={queuedActions(entry)}
+                onStartEdit={() => {}}
+                onCancelEdit={() => {}}
+                onSubmitEdit={() => {}}
+                onReply={() => {}}
+                onMessageMenu={setQueuedMenu}
+              />
+            </div>
+          );
+        }), heldSlot)}
         {/* An approval sits on the composer so a waiting bot is impossible to miss. */}
         {approval && (
           <div data-pending-approval className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
@@ -1261,6 +1261,7 @@ export function Composer({
           localFile={room ? roomPicture : undefined}
           onDropFiles={room ? (files) => void pickFiles(files) : undefined}
           dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
+          roomCopy={group?.hosted ? roomCopyPath : undefined}
         />
         </div>
         </div>

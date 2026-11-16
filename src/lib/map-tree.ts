@@ -37,6 +37,8 @@ export interface TreeItem {
   changed?: boolean;
   label?: string;
   sub?: string;
+  /** where its line to its kids leaves its bottom, from its left edge */
+  foot?: number;
   x: number;
   y: number;
   w: number;
@@ -250,9 +252,15 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
     for (const group of groups.toReversed()) { group.x = Math.max(0, Math.min(group.x, limit - group.w)); limit = group.x - GAP * 2; }
     for (let i = 1; i < groups.length; i++) if (groups[i].x < groups[i - 1].x + groups[i - 1].w) overlap = true;
     let h = 0;
+    const first = items.length;
     for (const group of groups) {
       let x = group.x;
       for (const it of group.items) { it.x = Math.round(x); it.y = y; x += it.w + GAP; h = Math.max(h, it.h); items.push(it); }
+    }
+    // A kid's line a few pixels off its parent's center would jag at the bus, so the parent's line leaves its box in the kid's column.
+    for (const it of items.slice(first)) {
+      const off = it.parent ? Math.round(topOf(it, it).x) - Math.round(centerX(it.parent, it.parent)) : 0;
+      if (off && Math.abs(off) <= 4) it.parent!.foot = it.parent!.bw / 2 + off;
     }
     y += h + VGAP;
   });
@@ -267,6 +275,7 @@ const centerX = (it: TreeItem, at: Point) => at.x + it.bw / 2;
 const stackTop = (it: TreeItem, at: Point) => it.kind === "col" ? at.y + BOX + SGAP : at.y;
 export const rowY = (it: TreeItem, at: Point, index: number) => stackTop(it, at) + 2 + (it.squaresHeight ?? 0) + (index + 0.5) * (it.line ?? LINE);
 const topOf = (it: TreeItem, at: Point) => it.kind === "stack" ? { x: at.x + 7, y: at.y } : { x: centerX(it, at), y: at.y };
+export const treeFoot = (it: TreeItem, at: Point) => ({ x: at.x + (it.foot ?? it.bw / 2), y: at.y + BOX });
 const half = (n: number) => Math.round(n) + 0.5;
 
 export function treeEdges(items: readonly TreeItem[], at: (it: TreeItem) => Point) {
@@ -275,7 +284,7 @@ export function treeEdges(items: readonly TreeItem[], at: (it: TreeItem) => Poin
     if (!parent.kids?.length) continue;
     const p = at(parent);
     const bus = half(at(parent.kids[0]).y - VGAP / 2);
-    const px = half(centerX(parent, p));
+    const px = half(treeFoot(parent, p).x);
     const xs = parent.kids.map(kid => half(topOf(kid, at(kid)).x));
     d += `M${px} ${p.y + BOX}V${bus}M${Math.min(px, ...xs)} ${bus}H${Math.max(px, ...xs)}`;
     for (const kid of parent.kids) { const t = topOf(kid, at(kid)); d += `M${half(t.x)} ${bus}V${t.y}`; }
@@ -308,8 +317,8 @@ export function treeClimb(items: readonly TreeItem[], path: string, at: (it: Tre
     const parent = node.parent;
     const pg = at(parent);
     const bus = at(parent.kids?.[0] ?? node).y - VGAP / 2;
-    points.push({ x: topOf(node, at(node)).x, y: bus, id: node.id, bus: parent.id }, { x: centerX(parent, pg), y: bus, id: parent.id, busOf: parent.id },
-      { x: centerX(parent, pg), y: pg.y + BOX, id: parent.id }, { x: centerX(parent, pg), y: pg.y, id: parent.id });
+    points.push({ x: topOf(node, at(node)).x, y: bus, id: node.id, bus: parent.id }, { x: treeFoot(parent, pg).x, y: bus, id: parent.id, busOf: parent.id },
+      { ...treeFoot(parent, pg), id: parent.id }, { x: centerX(parent, pg), y: pg.y, id: parent.id });
   }
   return points;
 }

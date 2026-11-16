@@ -83,6 +83,20 @@ export async function mapFork(cwd: string, launch: string): Promise<string> {
   } catch { return launch; }
 }
 
+// The bot has no launch commit: its work is what the trunk lacks, so a push to the trunk or a merge empties its list.
+export async function mapTrunkFork(cwd: string): Promise<string | null> {
+  const [head, own, refs] = await Promise.all([
+    mapGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"]).then(text => text.trim(), () => ""),
+    mapGit(cwd, ["symbolic-ref", "-q", "HEAD"]).then(text => text.trim(), () => ""),
+    mapGit(cwd, ["for-each-ref", "--format=%(refname)", "refs/heads/main", "refs/heads/master", "refs/remotes/*/HEAD", "refs/remotes/*/main", "refs/remotes/*/master"]),
+  ]);
+  if (!head) return mapHead(cwd);
+  // On the trunk itself this leaves its upstream: what is not pushed yet.
+  const trunk = refs.split("\n").filter(ref => ref && ref !== own);
+  const fork = trunk.length ? (await mapGit(cwd, ["merge-base", "HEAD", ...trunk]).catch(() => "")).trim() : "";
+  return /^[a-f0-9]{40,64}$/.test(fork) ? fork : head;
+}
+
 export async function mapFiles(cwd: string, base: string, common?: string): Promise<{ files: MapFile[]; more: number }> {
   const [numstat, untracked, { ranges }] = await Promise.all([
     mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),

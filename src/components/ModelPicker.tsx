@@ -223,6 +223,13 @@ export function ModelPickerControl({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, shortcutEnabled, selection]);
+  // What's New opens the picker Alt+M would open.
+  useEffect(() => {
+    if (!shortcutEnabled || open) return;
+    const onOpen = () => show();
+    window.addEventListener("orbit:open-model-picker", onOpen);
+    return () => window.removeEventListener("orbit:open-model-picker", onOpen);
+  }, [open, shortcutEnabled, selection]);
 
   useEffect(() => {
     if (!open) return;

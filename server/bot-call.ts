@@ -18,6 +18,8 @@ export type BotCallDeps = {
   /** A call is the bot's own voice on its own thread, so a room's blocker keeps its normal alert. */
   chat: (threadId: string) => string | undefined;
   skip: (threadId: string) => boolean;
+  /** The first ring of a call went out. */
+  called?: (botId: string, threadId: string, blocker: Blocker) => void;
 };
 
 const calls = (blocker: Blocker) => blocker.kind === "login" || blocker.kind === "engine";
@@ -44,6 +46,7 @@ export function createBotCalls(deps: BotCallDeps) {
     const payload = botCallPayload(bot, threadId, blocker.note, { id: ringing.id, ring: n });
     if (!payload) return;
     deps.send(payload);
+    if (n === 1) deps.called?.(bot.id, threadId, blocker);
     ringing.timer = n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, blocker, n + 1), CALL_RING_GAP_MS) : undefined;
   };
 
