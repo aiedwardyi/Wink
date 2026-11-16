@@ -192,6 +192,9 @@ describe("mailbox note text", () => {
     expect(mailboxNoteText(PANE, "worker", "w1", `${head}\npage live`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${head}\npage live\n${BUILT_REMINDER}`);
     const long = mailboxNoteText(PANE, "worker", "w1", `${head}\n${"x".repeat(MAILBOX_NOTE_MAX_CHARS)}`)!;
     expect(long.endsWith(`x\n${BUILT_REMINDER}\n[truncated]`)).toBe(true);
+    const plain = "DONE RESEARCH branch=none sha=none dirty=unknown";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${plain}\nmemo saved to Documents\\pricing.docx`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${plain}\nmemo saved to Documents\\pricing.docx\n${BUILT_REMINDER}`);
+    expect(mailboxNoteText(PANE, "worker", "w1", plain)).toBe(`[pane 0f3c9a1e] from worker (w1): ${plain}\n${BUILT_REMINDER}`);
     for (const text of ["FAIL SITE branch=HEAD sha=abc1234 dirty=no\nbroke", "DONE: lead work", "done"]) {
       expect(mailboxNoteText(PANE, "worker", "w1", text), text).not.toContain(BUILT_REMINDER);
     }

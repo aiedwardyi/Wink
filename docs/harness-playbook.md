@@ -21,10 +21,10 @@ in this conversation. A worker launch is held until you have read it.
 
 ## Built list
 
-Keep one line per user-facing feature in `built.md` (project notes, else repo
+Keep one line per feature, doc, deck or page in `built.md` (project notes, else repo
 `docs/`): `- Name | where: device, size, setting | files | PRs`.
 
-- No built.md yet: write it from the code before the first build card.
+- No built.md yet: write it from the code or files before the first build card.
 - Before you say a feature exists, works a certain way, or is missing, grep
   built.md, then read the code it names. No line: search the code.
 - On each DONE report or landed change, PR or not, add or edit its line.
@@ -88,10 +88,10 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
 
 ## Already built
 - Search built.md, the status board and earlier cards: lines it touches, or
-  `none found (searched: <terms>)`. Then live files to open first.
+  `none found (searched: <terms>)`. Then files to open first.
 
 ## Files
-- The files it should start from.
+- Files to start from.
 
 ## Progress
 Keep <card path minus .md>.progress.md current at each milestone:

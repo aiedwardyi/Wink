@@ -88,6 +88,24 @@ describe("harness playbook", () => {
     expect(gate.hold("s1", launch)).toBeUndefined();
   });
 
+  it("holds a non-code card in a plain folder the same way", () => {
+    const folder = String.raw`C:\Users\me\Documents\Q3 research`;
+    const cards = new Map([
+      [join(folder, "DECK.md"), "# DECK | sonnet | high | FRESH\n## Purpose\nBuild the Q3 board deck.\n## Already built\n\n## Files\n- notes.docx\n"],
+      [join(folder, "MEMO.md"), "# MEMO\n## Already built\n- none found (searched: project notes built.md, status board, cards for 'pricing memo')\n"],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    expect(gate.hold("s1", "claude --model x 'Read DECK.md and do it.'", folder)).toContain(`Held: ${join(folder, "DECK.md")} has no prior-work search.`);
+    expect(gate.hold("s1", "claude --model x 'Read MEMO.md and do it.'", folder)).toBeUndefined();
+  });
+
+  it("says the built list covers docs, decks and pages, written from the files when there is no code", () => {
+    const prompt = loadHarnessPlaybook().replace(/\s+/g, " ");
+    expect(prompt).toContain("Keep one line per feature, doc, deck or page in `built.md`");
+    expect(prompt).toContain("No built.md yet: write it from the code or files before the first build card.");
+  });
+
   it("is wired ahead of the usage check on the spawn route", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const route = source.slice(source.indexOf('path === "/api/internal/spawn-usage"'));
@@ -134,7 +152,7 @@ describe("harness playbook", () => {
 
   it("keeps a built list, checked before feature claims and updated on landing", () => {
     const prompt = loadHarnessPlaybook();
-    expect(prompt).toContain("Keep one line per user-facing feature in `built.md`");
+    expect(prompt).toContain("Keep one line per feature, doc, deck or page in `built.md`");
     expect(prompt).toContain("`- Name | where: device, size, setting | files | PRs`");
     expect(prompt).toContain("then read the code it names. No line: search the code.");
     expect(prompt).toContain("- On each DONE report or landed change, PR or not, add or edit its line.");
@@ -229,8 +247,8 @@ describe("harness playbook", () => {
 
   it("writes the built list before building and quotes it in cards", () => {
     const prompt = loadHarnessPlaybook().replace(/\s+/g, " ");
-    expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
-    expect(prompt).toContain("## Already built - Search built.md, the status board and earlier cards: lines it touches, or `none found (searched: <terms>)`. Then live files to open first.");
+    expect(prompt).toContain("No built.md yet: write it from the code or files before the first build card.");
+    expect(prompt).toContain("## Already built - Search built.md, the status board and earlier cards: lines it touches, or `none found (searched: <terms>)`. Then files to open first.");
   });
 
   it("logs every walk snag to one shared list", () => {
