@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { addedMemoryLines, MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
@@ -61,6 +61,7 @@ export interface MemoryPassDeps {
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
   dataDir: string;
+  onWrite?(botId: string): void;
   now?(): number;
 }
 
@@ -71,6 +72,7 @@ export interface MemoryPass {
   onConfigChanged(): void;
   /** Notes turned away because MEMORY.md was full, since the last save. */
   droppedNotes(botId: string): DroppedNotes | undefined;
+  hasPending(botId: string): boolean;
   /** Resolves once no pass is running. */
   idle(): Promise<void>;
   dispose(): void;
@@ -308,7 +310,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   return facts.flatMap((fact, index) => (picks.has(index) ? picks.get(index) : accept(fact)) ?? []);
 }
 
-function day(ms: number): string {
+export function day(ms: number): string {
   const date = new Date(ms);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -520,6 +522,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
       const last = dropped.get(botId);
       dropped.set(botId, { dropped: (last?.dropped ?? 0) + facts.length, since: last?.since ?? now() });
+      deps.onWrite?.(botId);
       return done(threadId, batch.ids);
     }
     // lines rolled from a stale MEMORY.md would outlive the user's edit, so a changed file retries first
@@ -546,13 +549,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     deps.store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(facts.map((note) => note.line)) },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(facts.map((note) => note.line)), lines: addedMemoryLines(raw.trim() ? raw : MEMORY_SEED, placed.text) },
     });
     log({
       botId, threadId, lines: batch.source.length, facts: facts.length, decisions: facts.filter((note) => note.kind).length,
       replaced: facts.filter((note) => note.replaces).length, rolled: placed.moved.length, ms, result: "saved",
     });
     dropped.delete(botId);
+    deps.onWrite?.(botId);
     done(threadId, batch.ids);
   };
 
@@ -686,6 +690,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (!disposed) stop();
     },
     droppedNotes: (botId) => dropped.get(botId),
+    hasPending: (botId) => [...pending.keys()].some((threadId) => deps.store.botByThread(threadId)?.id === botId),
     async idle() {
       while (running.size) await Promise.all([...running.values()].map((pass) => pass.done));
     },

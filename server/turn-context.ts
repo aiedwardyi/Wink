@@ -457,6 +457,12 @@ function linesOnlyIn(from: string[], other: string[]): string[] {
   });
 }
 
+export function systemChangeChars(delivered: string, system: string): number {
+  const before = systemLines(delivered);
+  const after = systemLines(system);
+  return [...linesOnlyIn(before, after), ...linesOnlyIn(after, before)].reduce((sum, line) => sum + line.length, 0);
+}
+
 /** A resumed session keeps the system text it started with. Prepends what
  * changed since `delivered` to this turn's text; null when the change is
  * too big for that and the session should recycle instead. */

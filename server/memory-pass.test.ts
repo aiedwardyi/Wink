@@ -149,7 +149,7 @@ describe("memory pass", () => {
       `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects", lines: ["- Prefers concise replies (noted 2026-10-15)", "- Uses pnpm for projects (noted 2026-10-15)"] });
     expect(stored()).toEqual({ threads: {} });
   });
 
@@ -165,7 +165,7 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe(
       `${MEMORY_SEED}\n## Decisions (settled, do not ask again)\n- Model picker look follows the app theme (noted 2026-10-15)\n\n## Notes\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Model picker look follows the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Model picker look follows the app theme, Uses pnpm for projects", lines: ["- Model picker look follows the app theme (noted 2026-10-15)", "- Uses pnpm for projects (noted 2026-10-15)"] });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -320,7 +320,7 @@ describe("memory pass", () => {
       "# Memory\n- Prefers pnpm\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Hates drama (noted 2026-10-15)\n",
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama", lines: ["- 38 years old (noted 2026-10-15)", "- Can't read Korean (noted 2026-10-15)", "- Hates drama (noted 2026-10-15)"] });
   });
 
   it("starts an empty file from the seed", async () => {

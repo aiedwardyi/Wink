@@ -72,6 +72,7 @@ import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
+import { claudeText } from "./text-usage.ts";
 import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
@@ -2175,13 +2176,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       lean = false,
       onUsage?: UsageObserver,
     ): Promise<string> =>
-      new Promise((resolve, reject) => {
+      new Promise<string>((resolve, reject) => {
         if (!admitted || accountBlocked) return reject(new Error("Sign in to this Claude account before using helpers"));
         if (lean) mkdirSync(HELPER_DIR, { recursive: true });
         const child = spawnCli(
           config.cli,
           [
-            "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+            "-p", "--model", "claude-haiku-5-5", "--output-format", onUsage ? "json" : "text",
             ...(lean ? ["--safe-mode", "--tools", "", "--strict-mcp-config"] : []),
             ...(effort ? ["--effort", effort] : []),
             ...(ephemeral ? ["--no-session-persistence"] : []),
@@ -2201,7 +2202,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           if (settled) return;
           settled = true;
           helpers -= 1;
-          try { onUsage?.(undefined); } catch {}
+          // a success reports its parsed usage once the JSON lands
+          if (error) try { onUsage?.(undefined); } catch {}
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
@@ -2238,7 +2240,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           signal?.addEventListener("abort", onAbort, { once: true });
           child.stdin.end(prompt);
         }
-      });
+      }).then((text) => onUsage ? claudeText(text, onUsage) : text);
 
     // a CLI before 2.1.169 has no --safe-mode: helpers then run as they did before lean
     let leanRejected = false;

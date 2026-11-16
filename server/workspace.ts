@@ -151,12 +151,15 @@ export function writeMemoryFile(botId: string, text: string): void {
 
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never
  * overwrites notes it has not seen. No base writes as before, for older clients. */
-export function saveMemoryFile(botId: string, text: string, baseRevision?: string) {
+export function saveMemoryFile(botId: string, text: string, baseRevision?: string, atomic = false) {
   const current = readMemoryFile(botId);
   if (baseRevision !== undefined && baseRevision !== current.revision) {
     return { conflict: true as const, text: current.text, revision: current.revision };
   }
-  writeMemoryFile(botId, text);
+  if (atomic) {
+    ensureWorkspace(botId);
+    writeFileAtomic(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
+  } else writeMemoryFile(botId, text);
   return { conflict: false as const, ...readMemoryFile(botId) };
 }
 
@@ -255,7 +258,7 @@ export function readMemoryTopic(botId: string, name: string): string | null {
 
 // direct file writes skip memory-pass's secret filter, so the rule names the exclusion itself
 const LESSON_RULE =
-  " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn" +
+  " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn under ## Lessons" +
   " without being asked, replacing any wrong line; never save passwords, keys, tokens or account numbers.";
 
 /** The memory block appended to a bot's system prompt. A short starter block
