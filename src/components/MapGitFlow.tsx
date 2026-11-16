@@ -39,7 +39,7 @@ const PRESS = 450;
 // The line takes the color of the last stage reached: white-gray before the PR, green from the PR on, purple once merged.
 const FILL = ["ink", "ink", "ink", "open", "open", "open", "merged"];
 type Stop = { key: keyof Copy["stops"]; state?: string; url?: string; tip: string[] };
-type Tip = { id: string; lines: string[]; top: number; left?: number; right?: number };
+type Tip = { id: string; lines: string[]; top: number; left?: number; right?: number; tapped?: HTMLElement };
 const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "closed";
 // Review bots by the names people call them.
 const BOTS: Record<string, string> = { "chatgpt-codex-connector": "codex", "copilot-pull-request-reviewer": "copilot" };
@@ -141,28 +141,38 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     return by;
   }, [workers]);
   const [tip, setTip] = useState<Tip | null>(null);
-  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; held: boolean }>({ held: false });
+  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; held: boolean; touch?: boolean }>({ held: false });
   useEffect(() => () => clearTimeout(press.current.timer), []);
+  useEffect(() => {
+    const tapped = tip?.tapped;
+    if (!tapped) return;
+    const away = (event: PointerEvent) => { if (!(event.target instanceof Node && tapped.contains(event.target))) setTip(null); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [tip]);
   if (!shown.length) return null;
 
   // The tip sits outside the scrolling list, under the row, so the list never clips it.
-  const show = (id: string, lines: string[], target: HTMLElement) => {
+  const show = (id: string, lines: string[], target: HTMLElement, tapped?: boolean) => {
     const box = target.closest(".map-flow-rows")?.getBoundingClientRect();
     const row = target.closest(".map-flow-row")?.getBoundingClientRect();
     if (!box || !row) return;
     const at = target.getBoundingClientRect();
     const top = row.bottom - box.top - 2;
-    setTip(at.left + at.width / 2 - box.left > box.width / 2 ? { id, lines, top, right: Math.max(0, box.right - at.right) } : { id, lines, top, left: at.left - box.left });
+    const tap = tapped ? target : undefined;
+    setTip(at.left + at.width / 2 - box.left > box.width / 2 ? { id, lines, top, tapped: tap, right: Math.max(0, box.right - at.right) } : { id, lines, top, tapped: tap, left: at.left - box.left });
   };
   const hide = (id: string) => setTip(current => current?.id === id ? null : current);
   const hover = (id: string, lines: string[]) => ({
     onPointerOver: (event: React.PointerEvent<HTMLElement>) => { if (event.pointerType !== "touch" && tip?.id !== id) show(id, lines, event.currentTarget); },
-    onPointerLeave: () => hide(id),
+    // A finger lifting fires pointerleave too, which would hide the tip it just opened.
+    onPointerLeave: (event: React.PointerEvent<HTMLElement>) => { if (event.pointerType !== "touch") hide(id); },
     onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
-      if (event.pointerType !== "touch") return;
+      press.current.touch = event.pointerType === "touch";
+      if (!press.current.touch) return;
       const target = event.currentTarget;
       clearTimeout(press.current.timer);
-      press.current = { held: false, timer: setTimeout(() => { press.current.held = true; show(id, lines, target); }, PRESS) };
+      press.current = { held: false, touch: true, timer: setTimeout(() => { press.current.held = true; show(id, lines, target); }, PRESS) };
     },
     onPointerUp: () => {
       clearTimeout(press.current.timer);
@@ -170,7 +180,14 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     },
     onPointerCancel: () => { clearTimeout(press.current.timer); hide(id); },
     onContextMenu: (event: React.MouseEvent) => { if (press.current.held) event.preventDefault(); },
-    onClick: (event: React.MouseEvent) => { if (press.current.held) { event.preventDefault(); press.current.held = false; } },
+    onClick: (event: React.MouseEvent<HTMLElement>) => {
+      if (press.current.held) { event.preventDefault(); press.current.held = false; }
+      else if (press.current.touch && !event.currentTarget.hasAttribute("href")) {
+        press.current.touch = false;
+        if (tip?.id === id) hide(id);
+        else show(id, lines, event.currentTarget, true);
+      }
+    },
   });
   const link = (url: string | undefined) => url ? { href: url, target: "_blank", rel: "noreferrer" } : { tabIndex: 0 };
 
