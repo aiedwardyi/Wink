@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { defer } from "./node-test-cleanup.mjs";
 import { spawnGate } from "./spawn-gate.mjs";
 import { terminalEnvironment } from "./terminal-host.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
@@ -29,7 +30,7 @@ async function until(check, timeoutMs = 60_000) {
 
 function scratch(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-host-"));
-  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+  defer(t, () => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   return root;
 }
 
@@ -113,11 +114,12 @@ test("a host started from the copied runtime runs a pane and keeps its layers", 
   const hosts = [];
   const connect = async () => {
     const client = createWorkerHostClient({ root: path.join(root, "data"), runtimeRoot, ptyModule: () => require.resolve("node-pty"), log: (line) => lines.push(line) });
+    defer(t, () => client.close());
     assert.equal(await client.prewarm(), true);
     hosts.push(client.state().host.pid);
     return client;
   };
-  t.after(() => until(() => hosts.every((pid) => !alive(pid)), 15_000));
+  defer(t, () => until(() => hosts.every((pid) => !alive(pid)), 15_000));
 
   const client = await connect();
   assert.match(lines[0], /^worker host ready pid=\d+ launch=\d+ms staged=bin\+js$/);
@@ -158,7 +160,7 @@ test("the host is not created while a terminal is inside its start", { ...window
   const hold = new Int32Array(new SharedArrayBuffer(8));
   const order = [];
   const pty = spawnTerminalPty(slow, "", [], { hold });
-  t.after(() => pty.terminate());
+  defer(t, () => pty.terminate());
   void pty.ready.then(() => order.push("terminal"));
   await until(() => Atomics.load(hold, 1));
   const launch = async (input) => {
@@ -167,6 +169,7 @@ test("the host is not created while a terminal is inside its start", { ...window
     return host;
   };
   const client = createWorkerHostClient({ root: path.join(root, "data"), runtimeRoot: await warmed(path.join(root, "runtime")), ptyModule: () => require.resolve("node-pty"), launch });
+  defer(t, () => client.close());
   const warm = client.prewarm();
   await until(() => fs.existsSync(path.join(root, "data", `v${WORKER_HOST_PROTOCOL}`, "launch.json")));
   // The launch has counted itself in at the gate and the held terminal keeps it there.
@@ -185,13 +188,14 @@ test("a terminal opened as the host starts ends when it is stopped", { ...window
   const root = scratch(t);
   const ptyModule = require.resolve("node-pty");
   const client = createWorkerHostClient({ root: path.join(root, "data"), runtimeRoot: await warmed(path.join(root, "runtime")), ptyModule: () => ptyModule });
+  defer(t, () => client.close());
   const warm = client.prewarm();
   const shell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe");
   const pty = spawnTerminalPty(ptyModule, shell, ["/d"], { name: "xterm-256color", cols: 80, rows: 24, cwd: os.tmpdir(), env: terminalEnvironment(process.env), useConptyDll: true });
   await pty.ready;
   assert.equal(await warm, true);
   const host = client.state().host.pid;
-  t.after(() => pty.terminate());
+  defer(t, () => pty.terminate());
   void pty.kill().catch(() => {});
   await pty.exited;
   client.close();
@@ -226,7 +230,7 @@ test("the host keeps none of the app's inheritable handles, so a closed port is 
   execFileSync(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(holder, "utf16le").toString("base64")], { windowsHide: true, stdio: "ignore" });
   const port = fs.readFileSync(path.join(root, "port.txt"), "utf8");
   const host = Number(fs.readFileSync(path.join(root, "host.pid"), "utf8"));
-  t.after(() => { try { process.kill(host); } catch {} });
+  defer(t, () => { try { process.kill(host); } catch {} });
   await until(() => fs.existsSync(path.join(slot, "host.json")));
   assert.deepEqual({ port, alive: alive(host) }, { port: "free", alive: true });
   process.kill(host);
