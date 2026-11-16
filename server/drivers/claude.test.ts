@@ -421,6 +421,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.CLAUDE_CODE_SILENT_TURN_REMINDER;
     delete process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
     delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE;
     delete process.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT;
     delete process.env.XAI_API_KEY;
     delete process.env.COMPOSIO_API_KEY;
@@ -961,6 +962,21 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+  });
+
+  it("keeps Code Mode off headless turns and helpers", async () => {
+    await create();
+    const dump = join(scratch, "code-mode.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const seen = () => JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE;
+
+    await instance.adapter.sendTurn({ threadId: "t-code-mode", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(seen()).toBeUndefined();
+    for (const opts of [{}, { lean: true, ephemeral: true }]) {
+      await instance.generateText?.("summarize", opts);
+      expect(seen()).toBeUndefined();
+    }
   });
 
   it.each(["claude-sonnet-5-5", "unsloth::local-model"])("defaults MCP tool idle timeout for %s", async (model) => {

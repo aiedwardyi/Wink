@@ -15,6 +15,7 @@ import { watchCodexPromo } from "./codex-promo.mjs";
 import { nudgeApiBlip } from "./pane-blip.mjs";
 import { mapBase } from "./map-base.mjs";
 import { createMapEvents } from "./map-events.mjs";
+import { withClaudePaneEnv } from "../shared/claude-launch-env.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -1214,7 +1215,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         Object.assign(paneEnv, { ORBIT_SCRATCH: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
       } catch {}
     }
-    if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
+    if (botPane) await withClaudePaneEnv(Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) }));
     const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
     });
