@@ -117,6 +117,7 @@ export const KEPT_LIMITS: Limits = {
   "src/lib/chat-options.ts": { MAX_OPTIONS: DISPLAY, MAX_OPTION_LEN: DISPLAY },
   "src/lib/companion-pairing.ts": { MAX_HOSTS: "Crash: the pairing QR code overflows." },
   "src/lib/live-call/controller.ts": { MAX_RECONNECTS: "Runaway loop: reconnecting a call that keeps dropping.", MAX_NUDGES: AUTO },
+  "src/lib/map-highlight.ts": { MAX_LINES: DISPLAY, MAX_CHARS: DISPLAY },
   "src/lib/room-turn-timeout.ts": { MAX_ROOM_TURN_TIMEOUT_MINUTES: "Crash: setTimeout overflows past 24.8 days and fires at once." },
   "src/lib/verify-replay.ts": { MAX_CHUNK: FILE },
   "src/state/store-transforms.ts": { MAX_CONSUMED_QUEUE_IDS: STATE, MAX_KEPT_SCREEN_FRAMES: "Crash: screenshots held in browser memory." },
