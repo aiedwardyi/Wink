@@ -721,6 +721,13 @@ html:lang(ko) {
   --radius-xl: 14px;
 }
 
+/* The bot list carries the nebula's glow to the chat's edge, so the sky meets it without a hard seam. */
+[data-skin="warp"] aside[data-phone-drawer] {
+  background-image:
+    radial-gradient(120% 45% at 100% 100%, rgb(112 72 230 / 0.12), transparent 70%),
+    linear-gradient(90deg, transparent 55%, rgb(84 96 220 / 0.07));
+}
+
 /* Circuit: a dark board whose panel borders are lit blue traces. */
 [data-skin="circuit"] {
   color-scheme: dark;
@@ -752,10 +759,66 @@ html:lang(ko) {
   --radius-xl: 14px;
 }
 
-/* The bot list's edge is a lit trace, meeting the chat's own edge that the scene lights. */
+/* The bot list's edge is a lit trace bus, meeting the lit wall the scene draws on the chat's side. */
 [data-skin="circuit"] aside[data-phone-drawer] {
+  --radius-xl: 8px;
   border-right-color: #2f9bff;
-  box-shadow: 1px 0 10px -2px rgb(47 155 255 / 0.55);
+  box-shadow: 1px 0 10px -2px rgb(47 155 255 / 0.35);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='660' fill='none'%3E%3Cpath d='M24.5 0V660' stroke='%232f9bff' stroke-opacity='.5'/%3E%3Cpath d='M19.5 0V118L11.5 126V262L19.5 270V448L11.5 456V530L19.5 538V660' stroke='%232f9bff' stroke-opacity='.4'/%3E%3C/svg%3E"),
+    linear-gradient(90deg, transparent 55%, rgb(47 155 255 / 0.04));
+  background-position: right top, 0 0;
+  background-size: 28px 660px, 100% 100%;
+  background-repeat: repeat-y, no-repeat;
+}
+
+/* Corners are cut like board outlines. The scene's ring around the composer follows this cut (circuit.ts uCut). */
+[data-skin="circuit"] [data-orbit-composer-frame] {
+  corner-shape: bevel;
+  box-shadow: 0 0 0 1px rgb(68 224 255 / 0.4), 0 0 18px -5px rgb(47 155 255 / 0.45);
+}
+
+[data-skin="circuit"] :is([data-orbit-message="user"], [data-orbit-message="bot"]) [data-orbit-message-content] {
+  position: relative;
+  border-radius: 10px;
+  corner-shape: bevel;
+  box-shadow: 0 0 0 1px rgb(68 190 255 / 0.5), 0 0 18px -6px rgb(47 155 255 / 0.6);
+}
+
+[data-skin="circuit"] :is([data-orbit-message="user"], [data-orbit-message="bot"]) [data-orbit-message-content]::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 100%;
+  width: 30px;
+  height: 20px;
+  pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='20' fill='none'%3E%3Cpath d='M30 13.5H18L11.5 7' stroke='%232f9bff' stroke-opacity='.6'/%3E%3Ccircle cx='9.5' cy='5' r='2.2' stroke='%235cb4ff' stroke-opacity='.8' stroke-width='1.2' fill='%2308111f'/%3E%3C/svg%3E") no-repeat;
+}
+
+[data-skin="circuit"] [data-orbit-message="user"] [data-orbit-message-content]::after {
+  right: auto;
+  left: 100%;
+  scale: -1 1;
+}
+
+[data-skin="circuit"] [data-sidebar-row] > [role="button"] {
+  corner-shape: bevel;
+  border-color: rgb(47 155 255 / 0.16);
+}
+
+[data-skin="circuit"] [data-sidebar-row] > .bg-raised {
+  border-color: rgb(68 200 255 / 0.65);
+  box-shadow: inset 2px 0 0 #44e0ff, 0 0 14px -4px rgb(47 155 255 / 0.7);
+}
+
+/* Inner panels and the search field take the same cut corners; inside a lit message the message's own trace is the only frame. */
+[data-skin="circuit"] :is([data-orbit-message-content] .rounded-lg, [data-sidebar-search]) {
+  corner-shape: bevel;
+}
+
+[data-skin="circuit"] [data-orbit-message-content] .rounded-lg {
+  border-color: transparent;
 }
 
 /* ── Ledger ────────────────────────────────────────────────────────────────
