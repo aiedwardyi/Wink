@@ -244,19 +244,21 @@ test("a pane that finished while Wink was closed (host exited after its last kep
   const [gone] = before.panes;
   await until(() => !alive(before.host));
   const second = app(before.root, runtimeRoot);
-  t.after(async () => {
+  const warned = [];
+  // An after hook would run behind left()'s, whose remove fails on the new host's lock and skips the rest, leaving this client open.
+  try {
+    // A host that still looks reachable would retry every 30 s; fail with what adoption saw instead.
+    await second.adopt({ warn: (line) => warned.push(String(line)), wait: async () => { throw new Error(`adoption retried: ${second.client.left()} ${warned.join(" | ")}`); } });
+    assert.deepEqual([second.notes.map((note) => `${note.bot}: ${note.text}`), second.spawned, record(before.root)], [
+      [`bot-0: FINISHED WHILE WINK WAS DOWN: KEEP-0 [pane ${gone.sessionId.slice(0, 8)}] exit 3, no report: its pane closed with the worker host.`],
+      [],
+      [],
+    ]);
+  } finally {
     await second.client.prewarm();
     await second.host.dispose();
     second.client.close();
-  });
-  const warned = [];
-  // A host that still looks reachable would retry every 30 s; fail with what adoption saw instead.
-  await second.adopt({ warn: (line) => warned.push(String(line)), wait: async () => { throw new Error(`adoption retried: ${second.client.left()} ${warned.join(" | ")}`); } });
-  assert.deepEqual([second.notes.map((note) => `${note.bot}: ${note.text}`), second.spawned, record(before.root)], [
-    [`bot-0: FINISHED WHILE WINK WAS DOWN: KEEP-0 [pane ${gone.sessionId.slice(0, 8)}] exit 3, no report: its pane closed with the worker host.`],
-    [],
-    [],
-  ]);
+  }
 });
 
 test("a kept pane with no record or an unknown owner never becomes a row and is stopped", { ...windows, timeout: 300_000 }, async (t) => {
