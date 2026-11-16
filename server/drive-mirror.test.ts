@@ -317,6 +317,9 @@ describe("Drive mirror", () => {
       const google = await boot(clock, () => "z-open", () => {});
       google.resume();
       await google.kick();
+      // The kick landed mid-pass, so its one queued pass runs on time before the clock jumps.
+      await vi.advanceTimersByTimeAsync(0);
+      await google.idle();
       const { head } = backlog("boundary");
       clock.now += 30_000 + 60_000;
       await vi.advanceTimersByTimeAsync(30_000);

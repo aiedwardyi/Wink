@@ -413,7 +413,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   chatSyncBotId,
@@ -2155,6 +2155,11 @@ function scheduleThreadUpload(threadId: string): void {
   threadSyncTimers.set(threadId, timer);
 }
 
+/** Kicks a Drive pass now for a settled reply and the memory its settle just wrote. */
+function publishSettledTurn(threadId: string): void {
+  void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(threadId) : undefined).then(() => googleSync.kick());
+}
+
 /** Runs before a route answers, so the user never types on a stale copy. */
 function pullSyncedThread(threadId: string): void | Promise<void> {
   if (threadSyncGate.enabled) return threadSyncV2?.pull(threadId).catch((error) => console.warn("chat sync v2: pull failed", error));
@@ -2450,6 +2455,7 @@ const googleSync = createGoogleSync({
   kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
   picture: (name) => broadcast({ kind: "picture", name }),
+  memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
   openThread: () => threadRoutes.openThread(),
 });
 const uploadCloudRoots = cloudSyncRoots();
@@ -4491,7 +4497,9 @@ bus.subscribe((event: RuntimeEvent) => {
   setTimeout(() => void routines?.tick(), 0);
   followPendingSyncImports();
   const settledBot = store.botByThread(event.threadId);
-  if (settledBot) syncMemory(settledBot.id);
+  if (!settledBot) return;
+  syncMemory(settledBot.id);
+  publishSettledTurn(event.threadId);
 });
 
 function paneNotesPending(threadId: string): boolean {

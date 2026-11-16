@@ -8,7 +8,7 @@ import { listDevices, writeDeviceRecord } from "./device-sync.ts";
 import { decodeDrivePath } from "./drive-mirror.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
 import { GOOGLE_BINDING_FILE, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
-import { ensureMemorySyncDevice, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, peerMemoryLanded, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
@@ -183,6 +183,27 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
       await settle(home);
       limited = true;
       await settle(home);
+      expect(schedule.mock.calls.at(-1)?.[1]).toBe(1_000);
+    } finally {
+      requests.mockRestore();
+      schedule.mockRestore();
+    }
+  });
+  it("keeps a rate-limit wait when a kick lands mid-pass", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return url.pathname === `/drive/v3/files/${drive.root().id}` ? Promise.resolve(new Response(null, { status: 429 })) : fetch(input, init);
+    });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const pass = home.sync.kick();
+      void home.sync.kick();
+      await pass;
       expect(schedule.mock.calls.at(-1)?.[1]).toBe(1_000);
     } finally {
       requests.mockRestore();
@@ -409,6 +430,79 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     await laptop.sync.idle();
     expect(laptop.sync.catchingUp("thread-open")).toBe(false);
     expect(laptop.sync.status().state).toBe("up-to-date");
+  });
+
+  it("runs one more pass for a reply that settles mid-pass, however many kicks land, then keeps the 30 s pace", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    home.sync.stop();
+    let passes = 0;
+    home.sync = boot(home, { prepare: () => { passes++; ensureMemorySyncDevice(home.ledger); } });
+    // A full listing reads the changes made meanwhile after its scan, so the reply below lands after this pass looked.
+    const { changeToken: _token, ...table } = JSON.parse(readFileSync(join(home.dataDir, GOOGLE_TABLE_FILE), "utf8"));
+    writeFileSync(join(home.dataDir, GOOGLE_TABLE_FILE), JSON.stringify(table));
+    const fetchDrive = driveA().fetch;
+    let reached!: () => void;
+    const reaching = new Promise<void>((done) => { reached = done; });
+    let release!: () => void;
+    const held = new Promise<void>((done) => { release = done; });
+    let first = true;
+    driveA().fetch = async (input, init) => {
+      if (first && new URL(new Request(input, init).url).pathname === "/drive/v3/changes") {
+        first = false;
+        reached();
+        await held;
+      }
+      return fetchDrive(input, init);
+    };
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const pass = home.sync.kick();
+      await reaching;
+      const head = `threads-v2/${home.bots[0].syncId}/thread-Counsel/${home.writerId}/head.json`;
+      const reply = JSON.stringify({ thread: "thread-Counsel", cut: 2 });
+      write(home.folder!, head, reply);
+      for (let kick = 0; kick < 10; kick++) void home.sync.kick();
+      release();
+      await pass;
+      await home.sync.idle();
+      expect(driveFiles(driveA()).find((file) => file.path === head)?.bytes).toBe(reply);
+      // Pass 1 is the held one, pass 2 runs once for all ten kicks and uploads the reply, pass 3 follows any pass that moved files.
+      expect(passes).toBe(3);
+      expect(timers.mock.calls.at(-1)?.[1]).toBe(30_000);
+    } finally {
+      driveA().fetch = fetchDrive;
+      timers.mockRestore();
+    }
+  });
+
+  it("applies a downloaded peer memory snapshot to an idle bot at once and leaves a bot mid-turn for its settle", async () => {
+    const home = makePC("home", { bots: [bot("Counsel"), bot("Clerk")] });
+    await startOn(home);
+    const work = makePC("work");
+    await startOn(work);
+    importPeers(work);
+    work.sync.stop();
+    const local = (name: string) => work.bots.find((item) => item.name === name)!;
+    const busy = new Set([local("Clerk").id]);
+    const botMap = Object.fromEntries(work.bots.map((item) => [item.id, item.syncId]));
+    const apply = (botId: string) => {
+      const item = work.bots.find((entry) => entry.id === botId)!;
+      syncBotMemory(work.folder!, item.syncId, workspace(work, item), work.ledger);
+    };
+    work.sync = boot(work, { memory: (botSyncId) => peerMemoryLanded(botSyncId, botMap, (botId) => busy.has(botId), apply) });
+    for (const item of home.bots) {
+      writeFileSync(join(workspace(home, item), "MEMORY.md"), `${item.name} learned the verdict.\n`);
+      syncBotMemory(home.folder!, item.syncId, workspace(home, item), home.ledger);
+    }
+    await settle(home);
+    await settle(work);
+    const memory = (name: string) => readFileSync(join(workspace(work, local(name)), "MEMORY.md"), "utf8");
+    expect(memory("Counsel")).toBe("Counsel learned the verdict.\n");
+    expect(memory("Clerk")).toBe("Clerk remembers the case.\n");
+    busy.clear();
+    apply(local("Clerk").id);
+    expect(memory("Clerk")).toBe("Clerk learned the verdict.\n");
   });
 
   it("says which picture a pass just downloaded", async () => {
