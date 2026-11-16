@@ -1336,7 +1336,7 @@ export class Store {
 
   /** Note rows newest first, read lazily from disk when the thread is not loaded. */
   notesBack(threadId: string): Iterable<Message> {
-    return this.threads.has(threadId) ? this.thread(threadId).messages.filter((m) => m.kind === "note").reverse() : mdb.notesBack(threadId);
+    return this.threads.has(threadId) ? this.thread(threadId).messages.filter((m) => m.kind === "note").toReversed() : mdb.notesBack(threadId);
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {

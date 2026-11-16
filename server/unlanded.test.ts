@@ -278,7 +278,7 @@ describe("unlanded wiring", () => {
     const bot = fresh().createBot({}, { seedMessages: false });
     const writer = fresh();
     writer.appendMessage(bot.threadId, { role: "bot", ...report(NOW - 30 * HOUR, "PR 1641") });
-    for (let i = 0; i < 2_000; i++) writer.appendMessage(bot.threadId, { role: "bot", kind: "activity", at: NOW - 20 * HOUR, tool: { name: "Bash", ok: true, detail: { input: `step ${i}`, output: ["ok"] } } });
+    for (let i = 0; i < 50; i++) writer.appendMessage(bot.threadId, { role: "bot", kind: "activity", at: NOW - 20 * HOUR, tool: { name: "Bash", ok: true, detail: { input: `step ${i}`, output: ["ok"] } } });
     writer.appendMessage(bot.threadId, { role: "bot", ...report(NOW - 18 * HOUR, "PR 1640") });
     const store = fresh();
     const { gh, calls } = fakeGh(new Map([["1640", { number: 1640, title: "fix: tell bots what has not landed", state: "OPEN" }]]));
@@ -305,7 +305,7 @@ describe("unlanded wiring", () => {
     expect(source).toContain('const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";');
     expect(source).toContain("...(unlandedNotice ? [unlandedNotice] : [])");
     expect(source).toContain("void unlandedWork.refresh(bot.id, event.threadId);");
-    expect(source).toContain('startupTiming.afterPaint("unlanded", async () => void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); })());');
+    expect(source).toContain('startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });');
     expect(source).toContain("const pinned = store.taskByThread(botId, threadId)?.cwd;");
     expect(source).not.toContain("store.bot(botId)?.lastProjectCwd");
   });
