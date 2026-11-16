@@ -1941,6 +1941,46 @@ describe("phone header name floor", () => {
     }
   });
 
+  it("never reads fonts.ready on a chat switch and refits when a font finishes loading", async () => {
+    let readyReads = 0;
+    let clones = 0;
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Chrome's fonts.ready getter forces style and layout, which a switch then pays for.
+    const fonts = Object.defineProperty(new EventTarget(), "ready", { get: () => { readyReads += 1; return Promise.resolve(); } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    installRects(false);
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.style.left === "-9999px") clones += 1;
+      return rect.call(this);
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(Harness))));
+      await act(async () => switchBot("b"));
+      await act(async () => switchBot("a"));
+      expect(readyReads).toBe(0);
+      const before = clones;
+      await act(async () => { fonts.dispatchEvent(new Event("loadingdone")); });
+      expect(clones).toBeGreaterThan(before);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = rect;
+      await act(async () => root.unmount());
+      host.remove();
+      Reflect.deleteProperty(document, "fonts");
+    }
+  });
+
   it("pads the phone header by the menu reserve when the menu is right", async () => {
     localStorage.setItem(SIDEBAR_SIDE_KEY, "right");
     const view = await mount(false);
