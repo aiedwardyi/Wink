@@ -253,7 +253,7 @@ const BEL = String.fromCharCode(7);
 const LINE = createHash("sha256").update("work").digest("base64");
 
 // A pane the worker host kept, taken back by a fresh terminal host; `replay` is its old output.
-async function adoptedPane({ replay = "", notes = [] } = {}) {
+async function adoptedPane({ replay = "", notes = [], during = () => {} } = {}) {
   const f = await fixture();
   const file = path.join(f.profile, "pane-runs.json");
   const worker = { kind: "managed", args: [], account: { id: "account", generation: 1 }, session: { engine: "codex", launchGeneration: randomUUID(), nativeId: null } };
@@ -268,8 +268,9 @@ async function adoptedPane({ replay = "", notes = [] } = {}) {
   let replayed;
   const outcome = host.adoptPane(runs.left()[0], { cols: 80, rows: 24, start: 1, mark: { kind: "C", value: `pane;${LINE}` } }, { pty, replayed: new Promise(resolve => { replayed = resolve; }) }, {});
   emit(replay);
+  const early = during(host, capture, f.profile);
   replayed();
-  return { host, capture, emit, notes, profile: f.profile, result: await outcome };
+  return { host, capture, emit, notes, early, profile: f.profile, result: await outcome };
 }
 
 it("a kept command that ended during its replay is not kept running", async () => {
@@ -295,6 +296,14 @@ it("a kept worker's late start hook authenticates with the launch it was given",
     expect(result.running).toBe(true);
     expect(host.captureWorkerSession("Bearer wrong", input)).toBe(false);
     expect(host.captureWorkerSession(`Bearer ${capture.auth}`, input)).toBe(true);
+  } finally { host.dispose(); }
+});
+
+it("a kept worker's start hook that lands during its replay is recorded", async () => {
+  const input = { pane: "pane", session_id: randomUUID(), transcript_path: null, source: "startup" };
+  const { host, early } = await adoptedPane({ during: (host, capture, cwd) => host.captureWorkerSession(`Bearer ${capture.auth}`, { ...input, launchGeneration: capture.run.launchGeneration, cwd }) });
+  try {
+    expect(early).toBe(true);
   } finally { host.dispose(); }
 });
 
