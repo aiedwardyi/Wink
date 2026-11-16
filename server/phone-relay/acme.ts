@@ -631,8 +631,10 @@ export class CertManager {
 }
 
 class FullError extends Error {
-  constructor(readonly until: number) {
+  readonly until: number;
+  constructor(until: number) {
     super("every CA is rate-limited");
+    this.until = until;
   }
 }
 

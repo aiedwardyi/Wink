@@ -23,8 +23,10 @@ const errorSchema = z.object({ error: z.string().regex(/^[a-z0-9-]{1,64}$/) });
 
 /** The relay has no keys left for now. */
 export class EabFullError extends Error {
-  constructor(readonly retryAt: number) {
+  readonly retryAt: number;
+  constructor(retryAt: number) {
     super("relay has no second-CA keys left for now");
+    this.retryAt = retryAt;
   }
 }
 
