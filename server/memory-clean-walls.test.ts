@@ -67,6 +67,20 @@ describe("memory cleanup latent walls", () => {
     expect(result.block).toContain(pair[0]);
   });
 
+  it("quizzes the line a replace keeps, never the older value it retires, grill heavy n1", async () => {
+    const pair = ["- Desk at the co-working space: 26 (noted 2026-11-05)", "- Desk at the co-working space: 80 (noted 2026-11-07)"];
+    const engines = sleepEngines((prompt) => prompt.includes(`151| ${pair[0]}`) ? [{ op: "replace", id: 151, newer: 152, reason: "Desk moved" }] : []);
+    let quiz = "";
+    const propose = async (prompt: string) => {
+      if (prompt.startsWith("[memory-clean:questions]")) quiz = prompt;
+      return engines.propose(prompt);
+    };
+    const result = await night(`${clauses(150)}${pair.join("\n")}\n`, { ...engines, propose });
+    expect(result).toMatchObject({ ok: true });
+    expect(/^Changed source lines: (.*)$/m.exec(quiz)?.[1]).toContain(JSON.stringify(pair[1]));
+    expect(quiz).not.toContain(pair[0]);
+  });
+
   it("writes a remember over 300 bytes as bullets of at most 300 bytes", async () => {
     const long = remember(1, ` Then ${word(7)} sails at dawn to the ${word(8)} reef for ${word(9)} nets.`.repeat(4));
     expect(Buffer.byteLength(long.text)).toBeGreaterThan(300);
