@@ -988,6 +988,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     });
   };
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const [heldSlot, setHeldSlot] = useState<HTMLDivElement | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   // Same instance can show another thread without a click outside the menu.
   const [menuThread, setMenuThread] = useState(group.threadId);
@@ -1528,6 +1529,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
               since={noReply ? undefined : lastUserAt}
             />
           )}
+          <div ref={setHeldSlot} className="contents" />
         </div>
         )}
       </div>
@@ -1571,6 +1573,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
             onClearReply={clearReply}
             onConsumeReply={consumeReply}
             onRestoreReply={restoreReply}
+            heldSlot={heldSlot}
           />
         </>
       )}

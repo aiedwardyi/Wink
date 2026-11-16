@@ -408,11 +408,12 @@ describe("Claude fork (fake CLI)", () => {
 
     const cursor = main!.argv[main!.argv.indexOf("--session-id") + 1]!;
     const valueOf = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1]!;
-    const same = (argv: string[]) => argv.map((arg, i) => (["--mcp-config", "--append-system-prompt-file", "--settings"].includes(argv[i - 1] ?? "") ? "<value>" : arg));
-    const mainArgs = main!.argv.filter((arg, i) => arg !== "--session-id" && main!.argv[i - 1] !== "--session-id");
+    const without = (argv: string[], flag: string) => argv.filter((arg, i) => arg !== flag && argv[i - 1] !== flag);
+    const same = (argv: string[]) => without(argv, "--settings").map((arg, i, kept) => (["--mcp-config", "--append-system-prompt-file"].includes(kept[i - 1] ?? "") ? "<value>" : arg));
+    const mainArgs = without(main!.argv, "--session-id");
     expect(same(fork!.argv)).toEqual([...same(mainArgs), "--resume", cursor, "--fork-session", "--no-session-persistence"]);
 
-    const mainSettings = JSON.parse(valueOf(main!.argv, "--settings"));
+    const mainSettings = main!.argv.includes("--settings") ? JSON.parse(valueOf(main!.argv, "--settings")) : {};
     const forkSettings = JSON.parse(valueOf(fork!.argv, "--settings"));
     expect(forkSettings).toMatchObject(mainSettings);
     expect(forkSettings.hooks.PreToolUse).toEqual([{ matcher: "*", hooks: [{ type: "command", command: expect.stringContaining("side-hook.cjs") }] }]);

@@ -176,6 +176,9 @@ const FOREIGN_SCRIPT = /[¿¡ñЀ-ۿऀ-๿぀-ヿ一-鿿]/iu;
 const NON_LATIN = /[Ѐ-ۿऀ-๿぀-ヿ一-鿿]/u;
 const FOREIGN_WORDS = /(?<![\p{L}\p{N}])(?:hola|aquí|estoy|gracias|qué|cómo|está|estás|bueno|claro|perdón|bonjour|merci|oui|danke|hallo|obrigado|olá|ciao|grazie)(?![\p{L}\p{N}])/giu;
 const HANGUL = /[가-힣]/;
+// Thai, Japanese and Chinese have no spaces between words: about two letters make one.
+const UNSPACED = /[฀-๿぀-ヿ一-鿿]/gu;
+const wordCount = (text: string) => (text.replace(UNSPACED, " ").match(/\p{L}[\p{L}\p{M}'’-]*/gu)?.length ?? 0) + Math.ceil((text.match(UNSPACED)?.length ?? 0) / 2);
 
 // What a spoken "reply in Thai" can switch the call to, and the letters each is written in; null is a Latin one.
 const TONGUES: Record<string, RegExp | null> = {
@@ -213,7 +216,7 @@ export function offLanguage(text: string, tongue?: string): boolean {
 export function misheard(text: string, tongue?: string): boolean {
   if (offLanguage(text, tongue)) return true;
   if (HANGUL.test(text) || bareYes(text) || ordersChange(text) || looksUp(text)) return false;
-  return !/[.!?…]["'”’)\]]*\s*$/.test(text) && (text.match(/\p{L}[\p{L}'’-]*/gu)?.length ?? 0) <= 2;
+  return !/[.!?…。！？؟।]["'”’)\]」』）]*\s*$/.test(text) && wordCount(text) <= 2;
 }
 
 const ASK_LEAD = /^(?:(?:so|and|sorry|okay|ok|just|but)[,\s]+)?(?:could|can|would|will|which|what|where|when|who|whose|how|do|does|did|are|is|was|should|shall)\b/i;

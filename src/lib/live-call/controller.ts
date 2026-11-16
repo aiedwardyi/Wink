@@ -335,6 +335,8 @@ export class LiveCall {
   // A spoken yes or no gets one ack: Google also speaks after its tool result, sometimes with no words to compare.
   private acked?: "armed" | "spent";
   private reack = false;
+  // This turn is dropped as that second ack, until his own words show it answers him.
+  private ackEcho = false;
   private closing = false;
   private closeTimer?: ReturnType<typeof setTimeout>;
 
@@ -508,7 +510,10 @@ export class LiveCall {
         }
         this.echoed = "";
         // His words can arrive after the voice starts answering them.
-        if (spokenText(this.heardBuf)) this.unhold(true);
+        if (spokenText(this.heardBuf)) {
+          this.unhold(true);
+          if (this.ackEcho) this.ackEcho = this.reack = this.dropping = false;
+        }
         this.caption("user", this.heardBuf);
         // Google only cuts a turn it is still sending, so audio it already sent stops here on his first words.
         if (echo === "no" && this.deps.audio.playing && !this.generating && !backchannel(spokenText(this.heardBuf))) {
@@ -541,6 +546,7 @@ export class LiveCall {
         this.generating = true;
         this.flushHeard();
         this.reack = this.acked === "spent" && !this.playing;
+        this.ackEcho = this.reack && !this.readNext;
         this.dropping = this.readNext || this.reack;
         this.readNext = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
@@ -592,7 +598,7 @@ export class LiveCall {
           }
         }
         this.replyTo = 0;
-        this.reack = false;
+        this.reack = this.ackEcho = false;
         if (this.playing) this.playing.ended = true;
         this.playedOut();
         this.release();

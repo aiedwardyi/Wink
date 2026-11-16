@@ -113,8 +113,7 @@ describe("Composer wiring", () => {
     expect(composer).not.toMatch(/group && queued\) return/);
     expect(composer).not.toContain("disabled={Boolean(group && queued)}");
     expect(composer).not.toMatch(/entry\.text\)\.join\(/);
-    expect(composer).toContain('t("composer.queuedUntil", { text: entry.text })');
-    expect(composer).not.toMatch(/composer\.queuedUntil", \{ name:/);
+    expect(composer).not.toContain("composer.queuedUntil");
   });
 
   it("demotes a pasted image to a file without the image-support notice", () => {
@@ -159,24 +158,23 @@ describe("busy Enter-spam", () => {
     expect(busyEnterBurst(spamLines, { isRoom: false, busy: true }, "ADV-QUEUE-0")).toEqual(spamLines);
   });
 
-  it("queues every room line while a member is speaking instead of dropping after the first", () => {
+  it("takes every room line while a member is speaking instead of dropping after the first", () => {
     expect(busyEnterBurst(spamLines, { isRoom: true, busy: true })).toEqual(spamLines);
   });
 
-  it("sends a busy room's plain Enter into a steering member's turn and holds Ctrl+Enter", () => {
+  it("sends a busy room's plain Enter at once, like a 1:1, and holds only Ctrl+Enter", () => {
     const busyRoom = { locked: false, isRoom: true, busy: true };
-    expect(composerBusySendAction({ ...busyRoom, canSteer: true })).toBe("dispatch");
-    expect(composerBusySendAction({ ...busyRoom, canSteer: true, after: true })).toBe("enqueue");
-    expect(composerBusySendAction({ ...busyRoom, canSteer: false })).toBe("enqueue");
+    expect(composerBusySendAction(busyRoom)).toBe("dispatch");
+    expect(composerBusySendAction({ ...busyRoom, after: true })).toBe("enqueue");
     expect(composerBusySendAction({ locked: false, isRoom: false, busy: true, after: true })).toBe("dispatch");
   });
 
   it("does not treat an already-held room send as a hard stop", () => {
     expect(
-      composerBusySendAction({ locked: false, isRoom: true, busy: true, heldCount: 1 }),
+      composerBusySendAction({ locked: false, isRoom: true, busy: true, after: true, heldCount: 1 }),
     ).toBe("enqueue");
     expect(
-      composerBusySendAction({ locked: false, isRoom: true, busy: true, heldCount: 7 }),
+      composerBusySendAction({ locked: false, isRoom: true, busy: true, after: true, heldCount: 7 }),
     ).toBe("enqueue");
   });
 
@@ -231,9 +229,6 @@ describe("roomLineSteers", () => {
 
 describe("queued follow-up copy", () => {
   it("softens the pending-chip lecture without dropping the queue", () => {
-    expect(en["composer.queuedUntil"]).toBe("Sends next: “{text}”");
-    expect(ko["composer.queuedUntil"]).toBe("다음에 보내집니다: “{text}”");
-    expect(en["composer.queuedUntil"]).not.toMatch(/working|turn finishes/i);
     expect(en["chat.queuedSendsNext"]).toBe("Sends next");
     expect(ko["chat.queuedSendsNext"]).toBe("다음에 보내집니다");
     expect(chatView).toContain('t("chat.queuedSendsNext")');

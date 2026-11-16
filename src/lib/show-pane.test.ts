@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, PANE_TAB_KEY, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -173,23 +173,35 @@ it("the header button opens the tab last picked in each chat", async () => {
   await act(async () => showMap("t7"));
   await act(async () => showMedia("t8"));
   await act(async () => closeShow());
-  await act(async () => togglePane("t7"));
+  await act(async () => togglePane("t7", "idle"));
   expect([shown, media, map]).toEqual([null, null, "t7"]);
-  await act(async () => togglePane("t7"));
-  await act(async () => togglePane("t8", true));
+  await act(async () => togglePane("t7", "idle"));
+  await act(async () => togglePane("t8", "live"));
   expect([shown, media, map]).toEqual([null, "t8", null]);
 });
 
 it("with no pick the header button opens Map while a worker is live, else Media, and neither counts as a pick", async () => {
   await render("t1", []);
-  await act(async () => togglePane("t10", true));
+  await act(async () => togglePane("t10", "live"));
   expect([media, map]).toEqual([null, "t10"]);
-  await act(async () => togglePane("t10", true));
-  await act(async () => togglePane("t10"));
+  await act(async () => togglePane("t10", "live"));
+  await act(async () => togglePane("t10", "idle"));
   expect([media, map]).toEqual(["t10", null]);
-  await act(async () => togglePane("t10"));
-  await act(async () => togglePane("t10", true));
+  await act(async () => togglePane("t10", "idle"));
+  await act(async () => togglePane("t10", "live"));
   expect([media, map]).toEqual([null, "t10"]);
+});
+
+it("a room opens Media where it remembered Map, and never Map on its own", async () => {
+  await render("t1", []);
+  localStorage.setItem(PANE_TAB_KEY, JSON.stringify({ r1: "map" }));
+  await act(async () => togglePane("r1"));
+  expect([media, map]).toEqual(["r1", null]);
+  await act(async () => closeShow());
+  await act(async () => showMap("r2"));
+  await act(async () => closeShow());
+  await act(async () => togglePane("r2"));
+  expect([media, map]).toEqual(["r2", null]);
 });
 
 it("a file that opens on its own is not a pick", async () => {
@@ -197,7 +209,7 @@ it("a file that opens on its own is not a pick", async () => {
   await render("t9", [user("u1"), deck]);
   expect(shown?.path).toBe(pdf.path);
   await act(async () => closeShow());
-  await act(async () => togglePane("t9", true));
+  await act(async () => togglePane("t9", "live"));
   expect([shown, map]).toEqual([null, "t9"]);
 });
 
@@ -211,9 +223,9 @@ it("keeps each chat's pick across a restart", async () => {
   let seen: unknown[] = [];
   const After = () => { seen = [restarted.useShowItem(), restarted.useMapThread()]; return null; };
   await act(async () => root.render(createElement(After)));
-  await act(async () => restarted.togglePane("t11"));
+  await act(async () => restarted.togglePane("t11", "idle"));
   expect(seen).toEqual([null, "t11"]);
-  await act(async () => restarted.togglePane("t12", true));
+  await act(async () => restarted.togglePane("t12", "live"));
   expect(seen).toEqual([{ ...pdf, threadId: "t12" }, null]);
 });
 
@@ -222,7 +234,7 @@ it("keeps the pick for the session when storage refuses it", async () => {
   await render("t1", []);
   await act(async () => showMap("t13"));
   await act(async () => closeShow());
-  await act(async () => togglePane("t13"));
+  await act(async () => togglePane("t13", "idle"));
   expect(map).toBe("t13");
   refuse.mockRestore();
 });

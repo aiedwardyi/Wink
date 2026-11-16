@@ -45,6 +45,17 @@ describe("memory settings target", () => {
   });
 });
 
+describe("themes to reveal", () => {
+  it("keeps them for the Themes tab it opened, until the next move in Settings", () => {
+    const skins = ["samurai-ink", "night-rain"] as const;
+    const opened = reducer(initialState, { type: "toggleAppSettings", open: true, section: "themes", skins: [...skins] });
+    expect(opened.appSettingsSection).toBe("themes");
+    expect(opened.appSettingsSkins).toEqual(skins);
+    expect(reducer(opened, { type: "toggleAppSettings", open: true, section: "themes" }).appSettingsSkins).toBeNull();
+    expect(reducer(opened, { type: "toggleAppSettings", open: false }).appSettingsSkins).toBeNull();
+  });
+});
+
 describe("deleting the open room", () => {
   it("closes Room details instead of opening the next bot's details", () => {
     const group = { id: "g1", threadId: "t1", name: "Room", memberIds: [], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 0, messages: [] } as const;
