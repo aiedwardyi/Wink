@@ -4,7 +4,7 @@ import { LIVE_VAD, type CallLine } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { asRequest, LiveCall, spokenText, told, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
-import { asksForQuiet, callsVoice } from "./guard";
+import { asksForQuiet, callsVoice, readsBack } from "./guard";
 import { GAP_MS } from "./manners";
 
 class FakeEngine implements LiveEngine {
@@ -2578,5 +2578,119 @@ describe("MIC-HINT", () => {
     mic.level = 0.0005;
     tick(10_000);
     expect(call.state().micSilent).toBeUndefined();
+  });
+});
+
+describe("VOICE-READBACK: what it said in the chat", () => {
+  const pcm = new Int16Array([500, -500]);
+  const MESSAGE = "**Eval round 3 is done.**\n\n| Question | Answer |\n| --- | --- |\n| Did it pass? | Yes, 41 of 42 |\n| What failed? | The Korean hush case |\n\nNext I rerun the hush case.";
+  const SPOKEN = ["Eval round 3 is done.", "Question, Answer.", "Did it pass?, Yes, 41 of 42. What failed?, The Korean hush case.", "Next I rerun the hush case."];
+  const TLDR = "Quick update: eval round 3 is done.";
+  const ASK = "Tell me what you just said. Earlier, like in the message.";
+  const readLines = (engine: FakeEngine) => engine.texts.filter((t) => t.includes("newest chat message"));
+  async function replied() {
+    vi.useFakeTimers();
+    const audio = { ...fakeAudio(), played: 0 };
+    audio.play = () => { audio.played += 1; };
+    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: SPOKEN } } }, audio);
+    const e = s.engine();
+    e.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Run eval round 3." } }]);
+    await s.call.answer(true);
+    e.events.answering();
+    e.events.said("On it.");
+    e.events.turnDone();
+    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", MESSAGE)] });
+    await gap();
+    e.events.answering();
+    e.events.said(TLDR);
+    e.events.turnDone();
+    await gap();
+    return { ...s, e, audio };
+  }
+
+  it("asked three times, reads the newest message whole each time and never says its short line again", async () => {
+    const { e, audio, posts } = await replied();
+    for (let i = 0; i < 3; i++) {
+      const played = audio.played;
+      e.events.heard(ASK);
+      e.events.answering();
+      e.events.audio(pcm);
+      e.events.said(TLDR);
+      e.events.turnDone();
+      await gap();
+      expect(audio.played).toBe(played);
+      expect(readLines(e)).toHaveLength(i + 1);
+      expect(readLines(e)[i]).toContain(SPOKEN.join(" "));
+      e.events.answering();
+      e.events.audio(pcm);
+      e.events.said(SPOKEN.join(" "));
+      e.events.turnDone();
+      await gap();
+      expect(audio.played).toBe(played + 1);
+    }
+    expect(linesOf(posts).filter((line) => line === TLDR)).toHaveLength(1);
+    expect(linesOf(posts).filter((line) => line === SPOKEN.join(" "))).toHaveLength(3);
+  });
+
+  it("an ask it calls for the read-back goes nowhere, and the next line is answered as usual", async () => {
+    const { e, audio, posts } = await replied();
+    const sent = messagesOf(posts).length;
+    e.events.heard("What did you write in the message?");
+    e.events.toolCall([{ id: "a1", name: "ask", args: { question: "What did Nova write in the message?" } }]);
+    await gap();
+    expect(messagesOf(posts)).toHaveLength(sent);
+    expect(e.results.at(-1)?.result).toMatch(/^not needed: they asked to hear the newest chat message/);
+    e.events.answering();
+    e.events.said(TLDR);
+    e.events.turnDone();
+    await gap();
+    expect(readLines(e)).toHaveLength(1);
+    e.events.answering();
+    e.events.said(SPOKEN.join(" "));
+    e.events.turnDone();
+    await gap();
+    const played = audio.played;
+    e.events.heard("Great, thanks.");
+    e.events.answering();
+    e.events.audio(pcm);
+    expect(audio.played).toBe(played + 1);
+  });
+
+  it("a read-back he talks past before it goes out is never sent", async () => {
+    vi.useFakeTimers();
+    let ready!: (posted: Posted) => void;
+    const { call, engine } = await started({ "/api/tts/prepare": () => new Promise<Posted>((resolve) => { ready = resolve; }) });
+    const e = engine();
+    call.observe({ busy: false, messages: [botRow("r", MESSAGE)] });
+    e.events.heard(ASK);
+    e.events.answering();
+    ready({ status: 200, data: { utterances: SPOKEN } });
+    await flush();
+    e.events.heard("Never mind, what time is it?");
+    e.events.turnDone();
+    await gap();
+    expect(readLines(e)).toEqual([]);
+  });
+
+  it("with no bot message in the chat, the voice answers as usual", async () => {
+    vi.useFakeTimers();
+    const audio = { ...fakeAudio(), played: 0 };
+    audio.play = () => { audio.played += 1; };
+    const { engine } = await started({}, audio);
+    engine().events.heard(ASK);
+    engine().events.answering();
+    engine().events.audio(pcm);
+    expect(audio.played).toBe(1);
+    expect(readLines(engine())).toEqual([]);
+  });
+
+  it.each([
+    [ASK, true], ["Tell me what you just said.", true], ["Earlier, like in the message.", true], ["Read me the last message.", true], ["Read it out.", true], ["What did the message say?", true],
+    ["아까 메시지 뭐라고 했어?", true], ["방금 뭐라고 했어?", true],
+    ["What did you find?", false], ["Read the logs.", false], ["Did it pass?", false], ["Send the message to Peter.", false], ["다시 말해 줘.", false],
+    ["Fix the bug described in the message.", false], ["Remove the API key from your last reply.", false], ["Is the error shown in the message?", false], ["Copy the code from the reply.", false],
+    ["Save the data in the reply we got.", false], ["Do what you said.", false], ["Did you do what you said?", false], ["피터한테 메시지 보내서 말해 줘.", false],
+  ])("readsBack(%s) is %s", (line, want) => {
+    expect(readsBack(line)).toBe(want);
   });
 });
