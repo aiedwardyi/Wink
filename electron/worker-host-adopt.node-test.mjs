@@ -239,16 +239,19 @@ test("a pane that finished while the app was closed is told to its bot once, and
   await closeAll(second, [quiet, gone]);
 });
 
-test("a pane that finished while Wink was closed (host exited after its last kept pane ended) reports as finished, not restarted", { ...windows, timeout: 300_000 }, async (t) => {
+test("a pane that finished while Wink was closed (host exited after its last kept pane ended) reports as finished, not restarted", { ...windows, timeout: 120_000 }, async (t) => {
   const before = await left(t, { count: 1, command: [GONE], typed: null });
   const [gone] = before.panes;
   await until(() => !alive(before.host));
   const second = app(before.root, runtimeRoot);
   t.after(async () => {
+    await second.client.prewarm();
     await second.host.dispose();
     second.client.close();
   });
-  await second.adopt();
+  const warned = [];
+  // A host that still looks reachable would retry every 30 s; fail with what adoption saw instead.
+  await second.adopt({ warn: (line) => warned.push(String(line)), wait: async () => { throw new Error(`adoption retried: ${second.client.left()} ${warned.join(" | ")}`); } });
   assert.deepEqual([second.notes.map((note) => `${note.bot}: ${note.text}`), second.spawned, record(before.root)], [
     [`bot-0: FINISHED WHILE WINK WAS DOWN: KEEP-0 [pane ${gone.sessionId.slice(0, 8)}] exit 3, no report: its pane closed with the worker host.`],
     [],
