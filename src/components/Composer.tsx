@@ -262,13 +262,13 @@ export function Composer({
   const canSteer =
     Boolean(steerBot) && state.instances.find((i) => i.instanceId === steerBot!.modelSelection.instanceId)?.capabilities?.queueing === true;
   // only a line that member alone would answer joins its turn
-  const roomSteers = (message: string, reply = replyTo) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId, reply));
+  const roomSteers = (message: string, reply: Message | null) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId, reply));
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
-  const repliedTo = (id?: string) => (id ? threadMessages.find((message) => message.id === id) : undefined);
+  const repliedTo = (id?: string) => (id && threadMessages.find((message) => message.id === id)) || null;
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
@@ -530,7 +530,7 @@ export function Composer({
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
-  const imageTargetsSupport = (message: string, after = false, reply = replyTo) => {
+  const imageTargetsSupport = (message: string, after: boolean, reply: Message | null) => {
     if (room) return "supported";
     const responders = group
       ? busy && !after && steerBot && roomSteers(message, reply) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group, reply)
@@ -539,13 +539,13 @@ export function Composer({
         : [];
     return imageSupportForTargets(state.instances, responders);
   };
-  const imageSupport = imageTargetsSupport(text);
+  const imageSupport = imageTargetsSupport(text, false, replyTo ?? null);
   const engineSupportsImages = imageSupport !== "unsupported";
   // `draft` marks a refusal of the box's own picture, sent with `after`
   const [imageNotice, setImageNotice] = useState<(ComposerThreadNotice & { draft?: { after: boolean } }) | null>(null);
   const refused = imageNotice?.draft;
   const draftRefusalGone = refused !== undefined &&
-    (!attachments.some((attachment) => attachment.kind === "image") || imageTargetsSupport(text, refused.after) === "supported");
+    (!attachments.some((attachment) => attachment.kind === "image") || imageTargetsSupport(text, refused.after, replyTo ?? null) === "supported");
   const shownImageNotice = draftRefusalGone ? null : visibleComposerNotice(imageNotice, threadId);
   const catchingUp = useCatchingUp(bot && !group ? threadId : null);
   const showImageSupportNotice = (support: ReturnType<typeof imageTargetsSupport>, draft?: { after: boolean }) => {
@@ -713,7 +713,7 @@ export function Composer({
     : group
     ? groupComposerHint(group, members ?? [], t)
     : t("composer.placeholder", { name: bot?.name ?? "" });
-  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
+  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text, replyTo ?? null) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const uploading = room
     ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
@@ -748,7 +748,7 @@ export function Composer({
   const retryFailedSend = (failed: FailedComposerSend) => {
     if (locked) return;
     if (failed.requestText.includes("<attached-image ")) {
-      const support = imageTargetsSupport(failed.requestText, failed.after, repliedTo(failed.replyToId));
+      const support = imageTargetsSupport(failed.requestText, Boolean(failed.after), repliedTo(failed.replyToId));
       if (support !== "supported") {
         showImageSupportNotice(support);
         return;
@@ -796,7 +796,7 @@ export function Composer({
     }
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (attachments.some((attachment) => attachment.kind === "image")) {
-      const support = imageTargetsSupport(liveText, after);
+      const support = imageTargetsSupport(liveText, after, replyTo ?? null);
       if (support !== "supported") {
         showImageSupportNotice(support, { after });
         return;

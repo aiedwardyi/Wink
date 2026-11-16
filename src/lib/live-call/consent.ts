@@ -40,7 +40,7 @@ const OTHER_WORDS = [...new Set([...YES_OTHER, ...NO_OTHER, ...SOFT_OTHER])].sor
 const UNSPACED = /[฀-๿぀-ヿ一-鿿]$/u;
 
 function otherConsent(said: string): "yes" | "no" | null {
-  let rest = said.normalize("NFC").toLowerCase().replace(/’/g, "'").replace(/[\s,.!~…。、，！।]+/gu, " ").trim();
+  let rest = said.normalize("NFC").toLowerCase().replace(/’/g, "'").replace(/[\s,.!~…。、，！।،؛]+/gu, " ").trim();
   const words: string[] = [];
   while (rest) {
     const word = OTHER_WORDS.find((known) => rest.startsWith(known) && (UNSPACED.test(known) || rest.length === known.length || rest[known.length] === " "));
