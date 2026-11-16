@@ -41,7 +41,7 @@ never sees the setup code, only the invite inside it.
 `--test`, with or without `--base`, signs a test mark into the invite: the PC it enrolls stays off the team page until it has been offline for 90 days.
 A `test <label> <ms>` line appended to `<dataDir>/team-sessions` marks a PC by hand.
 
-A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines, note times and the stuck pane's last 30 lines, scrubbed; never chats or attached files), and they follow each PC's error-report setting. They sit in `<dataDir>/team-snags` for at most 14 days.
+A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines and note times, scrubbed; never chats, files or terminal text), and they follow each PC's error-report setting. They sit in `<dataDir>/team-snags` for at most 14 days.
 
 With `stats` in config, the relay also takes anonymous usage stats at `POST /v1/stats`: no account, nothing logged per request, no IP or label stored. Batches land in `<dataDir>/stats/YYYY-MM-DD.ndjson` (gzipped after the day, deleted after `keepDays`, default 90). `GET /v1/stats/day/<date>` serves a day to the stats read key.
 
