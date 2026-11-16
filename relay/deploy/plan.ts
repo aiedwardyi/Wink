@@ -228,6 +228,10 @@ function checkOwned(opts: Pick<DeployOptions, "base" | "oldBase">, what: string,
   }
 }
 
+function oneBaseOnly(opts: Pick<DeployOptions, "oldBase">): void {
+  if (opts.oldBase !== undefined) throw new PlanError("--old-base is for provision and update; pause and move change DNS for --base only");
+}
+
 /** Steps that copy the build to the VM and (re)start the service. */
 function installSteps(opts: DeployOptions, withKey: boolean): Step[] {
   const vm = names(opts).vm;
@@ -403,6 +407,7 @@ export function planUpdate(opts: DeployOptions, state: ProjectState): Step[] {
  */
 export function planPause(opts: DeployOptions, state: ProjectState, protect?: IpRef): Step[] {
   validate(opts);
+  oneBaseOnly(opts);
   const n = names(opts);
   const steps: Step[] = [];
   const oldIp = state.address?.ip ?? state.instance?.ip;
@@ -444,6 +449,7 @@ export function planMove(
   oldState: ProjectState,
 ): Step[] {
   if (fromProject === opts.project) throw new PlanError("--from-project must differ from --project");
+  oneBaseOnly(opts);
   const oldOpts = { ...opts, project: fromProject };
   validate(oldOpts);
   const provision = planProvision(opts, newState);

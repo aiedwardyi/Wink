@@ -468,11 +468,13 @@ export class CertManager {
       if (cause instanceof CancelledError || this.stopped) return;
       const now = this.clock.now();
       if (cause instanceof FullError) {
+        const delay = Math.max(RETRY_SCHEDULE_MS[Math.min(this.failures, RETRY_SCHEDULE_MS.length - 1)], cause.until - now);
+        this.failures++;
         this.error = "full";
-        this.fullUntil = cause.until;
-        this.retryAt = cause.until;
+        this.fullUntil = now + delay;
+        this.retryAt = now + delay;
         this.saveState();
-        this.scheduleCheck(Math.max(0, cause.until - now));
+        this.scheduleCheck(delay);
         return;
       }
       this.fullUntil = null;

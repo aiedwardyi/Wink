@@ -165,7 +165,10 @@ export class EabIssuer {
     if (res.status === 401) this.token = null;
     const key = res.ok ? await read(res, keySchema) : null;
     if (!key) throw new GoogleError("mint");
-    return { kid: key.keyId, hmacKey: Buffer.from(key.b64MacKey, "base64").toString("base64url") };
+    // b64MacKey is a bytes field holding base64url text, so REST JSON base64-encodes that text again.
+    const hmacKey = Buffer.from(key.b64MacKey, "base64").toString("utf8");
+    if (!/^[A-Za-z0-9_-]{16,512}$/.test(hmacKey)) throw new GoogleError("mint");
+    return { kid: key.keyId, hmacKey };
   }
 
   private async accessToken(): Promise<string> {

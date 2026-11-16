@@ -92,7 +92,9 @@ function fakeGoogle(): FakeGoogle {
         // 0xfb 0xff bytes make standard base64 carry "+" and "/".
         const mac = Buffer.concat([Buffer.from([0xfb, 0xff, 0xfe]), randomBytes(29)]);
         google.macKeys.push(mac);
-        return Response.json({ name: `projects/${PROJECT}/locations/global/externalAccountKeys/k${google.mints}`, keyId: `kid${google.mints}`, b64MacKey: mac.toString("base64") });
+        // b64MacKey is a bytes field holding base64url text, so REST JSON base64-encodes that text again.
+        const b64MacKey = Buffer.from(mac.toString("base64url")).toString("base64");
+        return Response.json({ name: `projects/${PROJECT}/locations/global/externalAccountKeys/k${google.mints}`, keyId: `kid${google.mints}`, b64MacKey });
       }
       throw new Error(`unexpected fetch ${url}`);
     },

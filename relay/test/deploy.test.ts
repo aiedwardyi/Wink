@@ -538,6 +538,12 @@ describe("domain move flags", () => {
     expect(() => validate(parseOptions(argv("update", ["--old-base", "Not A Base"])).opts)).toThrow(/invalid --old-base/);
   });
 
+  it("refuses pause and move with --old-base, which would strand the old base's DNS", () => {
+    const o = { ...opts({ base: NEW }), oldBase: BASE };
+    expect(() => planPause(o, deployedState("wink-new-proj", "34.64.0.10"))).toThrow(/--old-base/);
+    expect(() => planMove(o, "wink-old-proj", EMPTY, deployedState("wink-old-proj", "34.64.0.20"))).toThrow(/--old-base/);
+  });
+
   it("writes oldBases and the gts project, and neither without the flags", async () => {
     const parsed = parseOptions(argv("update", ["--old-base", BASE, "--gts-project", "wink-gts-proj"]));
     expect(() => validate(parsed.opts)).not.toThrow();

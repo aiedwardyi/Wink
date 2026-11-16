@@ -563,6 +563,26 @@ describe("second CA on a rate limit", () => {
     expect(clock.nextAt).toBe(start + 1800_000);
   });
 
+  it("backs off 1 min, 10 min, 100 min while both CAs stay limited with no wait given", async () => {
+    const { le, gts, clock, certs, run, settled } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 0;
+    gts.mode = "limited";
+    gts.retryAfterSec = 0;
+    certs.start();
+    await run();
+    const gaps: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const next = clock.nextAt!;
+      gaps.push(next - clock.now());
+      expect(certs.snapshot()).toMatchObject({ error: "full", fullUntil: next });
+      const done = settled();
+      clock.advance(next - clock.now());
+      await done;
+    }
+    expect(gaps).toEqual([60_000, 600_000, 6_000_000]);
+  });
+
   it("is full when the relay has no second-CA keys left", async () => {
     const { le, gts, clock, certs, run } = await setup(async () => {
       throw new EabFullError(clock.now() + 600_000);
