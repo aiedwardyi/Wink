@@ -377,6 +377,17 @@ describe("ModelPicker cross navigation", () => {
     expect(document.querySelector('[role="dialog"]') !== null).toBe(enabled);
   });
 
+  it.each([
+    [false, "bot-1", true],
+    [true, "bot-1", false],
+    [false, "another-bot", false],
+  ] as const)("opens from What's New only where Alt+M would (contained=%s, selected=%s)", async (contained, selectedId, enabled) => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7"])];
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false, contained, selectedId);
+    await act(async () => window.dispatchEvent(new Event("orbit:open-model-picker")));
+    expect(document.querySelector('[role="dialog"]') !== null).toBe(enabled);
+  });
+
   it("round-trips an effort-only change through Enter", async () => {
     mock.instances = [engine("grok", "grokAgent", ["grok-4.7"], ["low", "medium", "high"])];
     const selection: ModelSelection = { instanceId: "grok", model: "grok-4.7", mode: "pinned", effort: "high" };
