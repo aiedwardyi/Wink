@@ -184,12 +184,12 @@ describe("configuration boundaries", () => {
     expect(vpsSshAlias({ vps: { sshAlias: "-bad" } })).toBeNull();
   });
 
-  it("accepts a persisted global room turn timeout and supplies the legacy default", () => {
+  it("accepts a persisted global room turn timeout and defaults to a full day", () => {
     expect(parseStoredConfig({ rooms: { turnTimeoutMinutes: 20 } })).toEqual({
       rooms: { turnTimeoutMinutes: 20 },
     });
     expect(roomTurnTimeoutMinutes({ rooms: { turnTimeoutMinutes: 20 } })).toBe(20);
-    expect(roomTurnTimeoutMinutes({})).toBe(5);
+    expect(roomTurnTimeoutMinutes({})).toBe(1_440);
   });
 
   it.each([0, 1.5, 1441, "20", null])(
