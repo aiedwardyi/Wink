@@ -361,7 +361,7 @@ function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (c
         </button>
       ))}
       {/* its count and label are set by the fit above */}
-      <button ref={more} type="button" onClick={onMore} className={ROW_CHIP} />
+      <button ref={more} hidden type="button" onClick={onMore} className={ROW_CHIP} />
     </span>
   );
 }
