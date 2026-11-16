@@ -2,6 +2,55 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.274] - 2026-11-17
+
+### Added
+- A Forum where stuck bots post what blocked them: your answer becomes the fix, and the next bot with the same problem finds it instead of calling you.
+- Grok can hold more than one account in Connections and Usage, with names, Sign Out and a Main switch.
+- Bot details shows an Alarms line with the bot's routines when it has any.
+- A PC signed in to Google joins the phone relay in one click from Connect from my devices: confirm, join, then scan the QR.
+- Call settings: right-click or long-press Call, the gear in a live call, or Bot details to pick speed, volume, Calm/Normal/Lively, any of 30 voices with previews, and language, saved per bot and applied mid-call.
+- A bot can set itself one wake-up later in the same chat, and it comes back once at that time (late if the PC was off).
+- Rooms and their history sync across your PCs, and bot-to-bot chats line up on every PC; deleting a room while chat sync is on asks to delete it on all of them.
+- In a 1:1 chat, the Map shows the bot itself as a row when its own turns edit files in a Git folder.
+
+### Changed
+- Themes has its own Animated section, and the newest themes lead each section.
+- What's New "Show me" opens each feature, and the themes tile shows Samurai Ink.
+- In a room, Enter posts at once; Ctrl+Enter (on a phone, hold Send) holds a line, as in a 1:1.
+- Rooms no longer have a Map tab; the Map lives in 1:1 bot chats.
+- Claude, Codex and Grok bots follow your own permission and sandbox settings unless you pick Ask or Full Auto in Wink.
+- Room turns are no longer cut off after 5 minutes.
+- In a room, a teammate's requests run read-only until you turn on Can make bots work for them in People, and removing someone retires the room code.
+- Every bot knows what it may do without asking and which model fits which job, talks in plain words instead of board, worker or PR names, and guards against a mistake it makes twice.
+- A Wink with lots of history opens about twice as fast.
+- Long chats open and switch in about half the time.
+- A new chat's first Claude reply starts sooner: its session warms up when you click into the message box.
+- A cold open shows chats one by one, newest first.
+- A reply and the memory it wrote reach your other PCs at once.
+- The sign-in page's last-used rings are Wink blue instead of pink.
+- The phone link moves to app.getwink.dev (the old address still works), and a PC that hits the certificate limit gets one from a second provider.
+
+### Fixed
+- A question card with choices stays open when you type something else.
+- The Map shows a worker's new files live and reads a new repo with no commits as Git.
+- Map lines run straight into a box that sits nearly under its parent.
+- A file colored in the Map stays colored when you reopen it.
+- A missing or broken Claude reads as not installed instead of signed out, a working Claude on the same PC is used instead, and bots hear signed out only when the account is.
+- A slow sign-in check no longer cuts off a token renewal.
+- A room shares only files you could attach yourself.
+- Security: Map's Git ignores a repo's hooks and filters, helper tools start without your saved keys, and a bot's token opens only what its tools need.
+- Security: signing a phone out ends its Show links and push alerts, stuck-worker reports no longer carry terminal text, room joins are limited per person, and a PC joined with Google stays off the team page's names and use times.
+- A shown room translation stays put while a bot works.
+- A room picture with no bot to read it is no longer refused, and the picture notice clears with its cause.
+- In a room, a reply to an archived or teammate's bot no longer wakes another bot.
+- In a call, an answer that starts early plays, Thai, Japanese and Chinese are no longer marked misheard, and yes/no works in every call language.
+- A busy bot's next turn picks up a held send once its hold has passed.
+- A room ask to a bot that is busy in its 1:1 runs once the bot is free and reports back in the room.
+- A page a bot links from outside its folder renders in Show, and a file this PC cannot show no longer opens an empty pane.
+- A refused upload always gets its error back.
+- A worker's report sent while Wink was closed or updating arrives once after restart, marked with when it was sent.
+
 ## [1.0.273] - 2026-11-16
 
 ### Added
