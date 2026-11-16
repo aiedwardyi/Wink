@@ -18,8 +18,12 @@ export function useChatPeekRows(): number {
   return part >= PEEK_SETTLED ? Infinity : Math.max(0, part - PEEK_PARTS.rows + 1);
 }
 
-export function peekRows<T>(rows: T[], count: number): T[] {
-  return count < rows.length ? rows.slice(0, count) : rows;
+/** The shortest prefix of rows holding `count` visible ones. */
+export function peekRows<T>(rows: T[], count: number, visible: (row: T) => boolean = () => true): T[] {
+  if (count <= 0) return [];
+  let seen = 0;
+  for (let i = 0; i < rows.length; i++) if (visible(rows[i]) && ++seen === count) return rows.slice(0, i + 1);
+  return rows;
 }
 
 export function ChatPeekPart({ part, children }: { part: "controls" | "composer"; children: ReactNode }) {

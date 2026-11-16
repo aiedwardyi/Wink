@@ -1237,7 +1237,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const streamTails = useRef<Record<string, string>>({});
   const liveTurns = useRef<Record<string, string>>({});
   const [origins, updateOrigin] = useReducer(nextTurnOrigins, {});
-  const turnOrigin = useCallback((threadId: string) => origins[threadId]?.origin?.originMs, [origins]);
+  // a finished turn's origin is not the next send's; that one counts from its own dispatch
+  const turnOrigin = useCallback((threadId: string) => origins[threadId]?.active ? origins[threadId].origin?.originMs : undefined, [origins]);
   const lastMessageIdFor = (threadId: string): string => {
     if (streamTails.current[threadId]) return streamTails.current[threadId];
     const bot = stateRef.current.bots.find((candidate) => candidate.threadId === threadId);

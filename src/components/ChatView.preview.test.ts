@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
 import { ChatPeekParts, ChatPreviewContext } from "@/lib/chat-preview";
+import { setRoomHolds, takeClosedRoomHold } from "@/lib/drafts";
 import { PHONE_QUERY, swipeBlocked } from "@/lib/phone-swipe";
 import { usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_TAIL_SIZE } from "@/lib/transcript-window";
@@ -219,6 +220,18 @@ describe("cached chat preview", () => {
     expect(requests.some((url) => url.includes("before="))).toBe(false);
   });
 
+  it.each(["bot", "room"] as const)("grows a %s tail that overflows by less than the follow threshold", async (kind) => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? 600 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? (this.querySelectorAll("[data-mid]").length < 8 ? 300 : 610) : 0;
+    });
+    if (kind === "bot") await render(true, heavyBot);
+    else await renderRoom(true, heavyRoom);
+    expect(host.querySelectorAll("[data-mid]").length).toBeGreaterThan(8);
+  });
+
   it.each(["bot", "room"] as const)("fills an underfilled %s preview from cached rows before paint", async (kind) => {
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
       return this.hasAttribute("data-orbit-transcript") ? 600 : 0;
@@ -348,6 +361,24 @@ describe("staged chat peek", () => {
     expect(host.querySelector('[data-mid="heavy-196"]')).toBe(head);
   });
 
+  it("stages one visible bot row per part past hidden messages between them", async () => {
+    const mixed: Message[] = Array.from({ length: 16 }, (_, i) => ({ id: `mix-${i}`, parentId: i ? `mix-${i - 1}` : undefined, at: i + 1, role: "user", kind: i % 2 ? "secret" : "text", text: `Line ${i}` }));
+    const bot = { ...heavyBot, id: "mixed", threadId: "thread-mixed", messages: mixed, activeLeafId: "mix-15" };
+    const show = (preview: boolean) => act(async () => root.render(createElement(StoreProvider, null,
+      createElement(ChatPeekParts, { id: "mixed", preview, children: createElement(ChatPreviewContext.Provider, { value: preview }, createElement(ChatView, { bot, focusComposerBlocked: preview })) }),
+    )));
+    await show(true);
+    await nextPart();
+    await nextPart();
+    const counts: number[] = [];
+    for (let part = 0; part < 4; part++) {
+      await nextPart();
+      counts.push(mids().length);
+    }
+    expect(counts).toEqual([1, 2, 3, 4]);
+    expect(mids()).toEqual(["mix-8", "mix-10", "mix-12", "mix-14"]);
+  });
+
   it("mounts the bot header before its controls", async () => {
     await stage("bot", true);
     expect(host.querySelector('[aria-label="Open Neighbor\'s profile"]')).not.toBeNull();
@@ -447,6 +478,18 @@ describe("cached room preview", () => {
     expect(requests.some((url) => url.includes("/api/rooms/peek"))).toBe(false);
     await transcript(false);
     expect(host.querySelector("[data-room-empty]")?.textContent).toContain("Room Neighbor");
+  });
+
+  it("leaves a previewed room's queued sends to the background drain until it is promoted", async () => {
+    const group = { ...room, id: "hold-room", threadId: "thread-hold-room", messages: [], hasMore: false, pinnedMessageId: undefined };
+    const id = `group:${group.id}:${group.threadId}`;
+    const hold = { text: "Queued", requestText: "Queued", sendId: "queued-send", threadId: group.threadId, revision: 0, attachments: [] };
+    await renderRoom(true, group);
+    setRoomHolds(localStorage, id, [hold]);
+    expect(takeClosedRoomHold(id)?.sendId).toBe("queued-send");
+    await renderRoom(false, group);
+    setRoomHolds(localStorage, id, [hold]);
+    expect(takeClosedRoomHold(id)).toBeUndefined();
   });
 
   it("renders the real room header and cached messages without paging or quote reads", async () => {

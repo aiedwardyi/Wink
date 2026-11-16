@@ -219,6 +219,23 @@ describe("ChatView turn origin", () => {
     expect(elapsed()).toBe("(12s)");
   });
 
+  it("a send after a finished turn shows no clock until it dispatches", async () => {
+    await mount();
+    await dispatch();
+    await row(user);
+    await runtime("turn.started");
+    await advance(4200);
+    await runtime("turn.completed");
+    await frame({ kind: "bot", bot: { ...bot([], false), messages: undefined } });
+    await advance(9000);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    await act(async () => store.dispatch({ type: "send", botId: "b1", text: "Again", sendId: "s2" }));
+    expect(host.querySelector("[data-turn-mascot]")).not.toBeNull();
+    expect(elapsed()).toBeUndefined();
+    await dispatch();
+    expect(elapsed()).toBe("(0s)");
+  });
+
   it("noReply shows no timer", async () => {
     await mount();
     await dispatch();
