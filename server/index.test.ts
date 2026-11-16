@@ -132,6 +132,12 @@ beforeAll(async () => {
           environment: { FAKE_CLAUDE_MODE: "late-after-stop" },
           config: { cli: FAKE_CLAUDE_CLI },
         },
+        claudePrewarm: {
+          driver: "claudeAgent",
+          displayName: "Fixture Claude Prewarm",
+          environment: { FAKE_CLAUDE_EAGER_INIT: join(home, "prewarm-spawned"), FAKE_CLAUDE_PROMPT_LOG: join(home, "prewarm-prompts.ndjson") },
+          config: { cli: FAKE_CLAUDE_CLI },
+        },
       },
     }),
   );
@@ -260,7 +266,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => boxStub.listen(0, "127.0.0.1", r));
   boxStubPort = (boxStub.address() as { port: number }).port;
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--require", join(SERVER_DIR, "testing", "roomy-host.cjs"), join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -2291,6 +2297,26 @@ describe("harness HTTP API", () => {
       const reported = (await findHappy()).rateLimits;
       expect(reported.windows[1]).toEqual({ id: "seven_day", usedPercent: 76, resetsAt: 1_790_172_800_000, windowMinutes: 10_080 });
       expect(typeof reported.observedAt).toBe("string");
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("starts a new chat's Claude session on composer focus and sends the first message on it", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const prewarm = (await api("GET", "/api/instances")).body.instances.find((instance: { instanceId: string }) => instance.instanceId === "claudePrewarm");
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "claudePrewarm", model: prewarm.models.default } })).status).toBe(200);
+      expect((await api("POST", `/api/bots/${bot.id}/prewarm`)).status).toBe(200);
+      await expect.poll(() => existsSync(join(home, "prewarm-spawned"))).toBe(true);
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "first word" })).status).toBe(202);
+      const prompts = join(home, "prewarm-prompts.ndjson");
+      await expect.poll(() => existsSync(prompts)).toBe(true);
+      const [sent, ...more] = readFileSync(prompts, "utf8").trim().split("\n").map((line): { argv: string[]; systemPrompt?: string; text: string } => JSON.parse(line));
+      expect(more).toEqual([]);
+      expect(sent!.text).toContain("first word");
+      expect(sent!.argv.some((arg) => arg.startsWith("--append-system-prompt"))).toBe(false);
+      expect(sent!.systemPrompt).toContain(bot.name);
     } finally {
       await api("DELETE", `/api/bots/${bot.id}`);
     }
