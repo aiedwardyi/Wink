@@ -1,12 +1,13 @@
 // A room report tied to the worker pane fixing it: "Fix started" when linked, "Fixed in <version>" once an offered update carries the merged work.
 import { mkdirSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 
 import { parsePaneNote } from "../shared/pane-note.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { linkRoomEntry } from "./rooms/mirror.ts";
 import type { BotRecord, GroupRecord, Message, Store } from "./store.ts";
+import { APP_REPO } from "./unlanded.ts";
 
 const FILE = "room-fixes.json";
 const KEEP = 200;
@@ -15,6 +16,7 @@ const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const BRANCH = /^(?!-)[\w./-]{1,200}$/;
 const OID = /^[0-9a-f]{40,64}$/;
+const APP_REMOTE = new RegExp(String.raw`github\.com[/:]${APP_REPO}(?:\.git)?\s`, "i");
 
 const fixSchema = z.object({
   botId: z.string(),
@@ -23,14 +25,15 @@ const fixSchema = z.object({
   title: z.string(),
   lang: z.enum(["en", "ko"]),
   at: z.number(),
-  gitDir: z.string().optional(),
+  // only a checkout of Wink's repo: the one whose releases the updater offers
+  repo: z.string().optional(),
   fixedIn: z.string().optional(),
 });
 type RoomFix = z.infer<typeof fixSchema>;
 
-const mergedSchema = z.array(z.object({ url: z.string(), mergedAt: z.string().nullish(), mergeCommit: z.object({ oid: z.string() }).nullish() }));
+const mergedSchema = z.array(z.object({ mergedAt: z.string().nullish(), mergeCommit: z.object({ oid: z.string() }).nullish() }));
 
-export type RoomFixStore = Pick<Store, "bot" | "group" | "groupByThread" | "appendMessage" | "patchMessage" | "patchGroup" | "activePath"> & { groups: readonly GroupRecord[] };
+export type RoomFixStore = Pick<Store, "bot" | "group" | "groupByThread" | "appendMessage" | "patchMessage" | "patchGroup" | "activePath" | "tasks"> & { groups: readonly GroupRecord[] };
 
 export type RoomFixDeps = {
   dataDir: string;
@@ -90,7 +93,8 @@ export function createRoomFixes(deps: RoomFixDeps) {
   const fixes = readFixes(deps.dataDir);
   let queue: Promise<void> = Promise.resolve();
   const save = () => {
-    if (fixes.length > KEEP) fixes.splice(0, fixes.length - KEEP);
+    // links with nothing left to post go first, so a full file keeps the ones waiting for a release
+    while (fixes.length > KEEP) fixes.splice(Math.max(0, fixes.findIndex((fix) => fix.fixedIn || !fix.repo)), 1);
     mkdirSync(deps.dataDir, { recursive: true });
     writeFileAtomic(join(deps.dataDir, FILE), JSON.stringify(fixes, null, 2));
   };
@@ -107,17 +111,20 @@ export function createRoomFixes(deps: RoomFixDeps) {
   };
   const shipped = async (fix: RoomFix, version: string): Promise<boolean> => {
     const bot = deps.store.bot(fix.botId);
-    const branch = bot && fix.gitDir ? reportedBranch(deps.store.activePath(bot.threadId), fix.sessionId) : null;
-    if (!branch || !fix.gitDir) return false;
-    const cwd = basename(fix.gitDir) === ".git" ? dirname(fix.gitDir) : fix.gitDir;
+    if (!bot || fix.repo !== APP_REPO) return false;
+    // a report lands in the task open when it came, which may not be the open one now
+    let branch: string | null = null;
+    for (const threadId of new Set([bot.threadId, ...deps.store.tasks(bot.id).map((task) => task.threadId)])) {
+      branch = reportedBranch(deps.store.activePath(threadId), fix.sessionId);
+      if (branch) break;
+    }
+    if (!branch) return false;
     try {
-      const merged = mergedSchema.parse(JSON.parse(await deps.gh(cwd, ["pr", "list", `--head=${branch}`, "--state=merged", "--json=url,mergedAt,mergeCommit", "--limit=10"])))
+      const merged = mergedSchema.parse(JSON.parse(await deps.gh(process.cwd(), ["pr", "list", `--repo=${APP_REPO}`, `--head=${branch}`, "--state=merged", "--json=mergedAt,mergeCommit", "--limit=10"])))
         .filter((pr) => Date.parse(pr.mergedAt ?? "") >= fix.at && OID.test(pr.mergeCommit?.oid ?? ""));
       for (const pr of merged) {
-        const repo = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+$/.exec(pr.url)?.[1];
-        if (!repo) continue;
         // ahead or identical: the release tag holds the merge commit
-        const status = (await deps.gh(cwd, ["api", `repos/${repo}/compare/${pr.mergeCommit!.oid}...v${version}`, "--jq=.status"]).catch(() => "")).trim();
+        const status = (await deps.gh(process.cwd(), ["api", `repos/${APP_REPO}/compare/${pr.mergeCommit!.oid}...v${version}`, "--jq=.status"]).catch(() => "")).trim();
         if (status === "ahead" || status === "identical") return true;
       }
     } catch {}
@@ -142,14 +149,15 @@ export function createRoomFixes(deps: RoomFixDeps) {
       const { group } = found;
       const pane = input.sessionId.trim() ? await deps.pane(bot.id, input.sessionId.trim()) : null;
       if (!pane) return { error: "Unknown pane. Pass the sessionId terminal_spawn returned." };
-      const gitDir = pane.cwd ? (await deps.git(pane.cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")).trim() : "";
+      const remotes = pane.cwd ? await deps.git(pane.cwd, ["remote", "-v"]).catch(() => "") : "";
       // after the last await, so two calls for one pane cannot both post
       if (fixes.some((fix) => fix.groupId === group.id && fix.sessionId === pane.sessionId)) return { text: `Already linked to "${group.name}".` };
       const fix: RoomFix = { botId: bot.id, groupId: group.id, sessionId: pane.sessionId, title, lang: HANGUL.test(title) ? "ko" : "en", at: now() };
-      if (gitDir) fix.gitDir = gitDir;
+      if (APP_REMOTE.test(remotes)) fix.repo = APP_REPO;
       fixes.push(fix);
       save();
       await post(fix, "room.fixStarted", { title });
+      if (!fix.repo) return { text: `Posted the fix start in "${group.name}". This pane is not in a checkout of Wink's repo, so no release line will follow.` };
       return { text: `Posted the fix start in "${group.name}". Wink posts the release there once an update offered to the user contains the merged work; never post either line yourself.` };
     },
     /** Updater offers and the running version; a merge alone never counts. */

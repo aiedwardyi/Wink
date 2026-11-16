@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import { Store, type BotRecord, type GroupRecord } from "./store.ts";
 
 const SESSION = "abcdef12-3456-7890-abcd-ef1234567890";
 const MERGE = "a".repeat(40);
+const WINK_REMOTES = "origin\thttps://github.com/aiedwardyi/Wink.git (fetch)\norigin\thttps://github.com/aiedwardyi/Wink.git (push)\n";
 
 let store: Store;
 let bot: BotRecord;
@@ -16,13 +17,13 @@ let room: GroupRecord & { hosted: { roomId: string } };
 let gh: ReturnType<typeof vi.fn<RoomFixDeps["gh"]>>;
 let linkedAt: number;
 
-const fixes = (now = () => linkedAt) => createRoomFixes({
+const fixes = (git: RoomFixDeps["git"] = async () => WINK_REMOTES) => createRoomFixes({
   dataDir: DATA_DIR,
   store,
   pane: async (_botId, sessionId) => (SESSION.startsWith(sessionId) ? { sessionId: SESSION, cwd: "D:/repo/wt/fix-export" } : null),
-  git: async () => "D:/repo/.git\n",
+  git,
   gh,
-  now,
+  now: () => linkedAt,
 });
 
 const roomLines = () => store.messagesFor(room.threadId).filter((message) => message.from?.botId === bot.id).map((message) => message.text);
@@ -42,9 +43,9 @@ beforeEach(() => {
   room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: createRoom("Team").id }) as typeof room;
   linkedAt = Date.parse("2026-11-16T05:00:00Z");
   gh = vi.fn<RoomFixDeps["gh"]>(async (_cwd, args) => {
-    if (args[0] === "pr") return JSON.stringify([{ url: "https://github.com/acme/app/pull/12", mergedAt: "2026-11-16T07:00:00Z", mergeCommit: { oid: MERGE } }]);
-    if (args[1] === `repos/acme/app/compare/${MERGE}...v1.0.273`) return "ahead\n";
-    if (args[1] === `repos/acme/app/compare/${MERGE}...v1.0.272`) return "diverged\n";
+    if (args[0] === "pr") return JSON.stringify([{ mergedAt: "2026-11-16T07:00:00Z", mergeCommit: { oid: MERGE } }]);
+    if (args[1] === `repos/aiedwardyi/wink/compare/${MERGE}...v1.0.273`) return "ahead\n";
+    if (args[1] === `repos/aiedwardyi/wink/compare/${MERGE}...v1.0.272`) return "diverged\n";
     throw new Error("HTTP 404: Not Found");
   });
 });
@@ -55,7 +56,7 @@ describe("room fixes", () => {
     const linked = await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: "abcdef12", title: "Export button does nothing" });
     expect(linked).toEqual({ text: expect.stringContaining('"Team"') });
     expect(JSON.parse(readFileSync(join(DATA_DIR, "room-fixes.json"), "utf8"))).toEqual([
-      { botId: bot.id, groupId: room.id, sessionId: SESSION, title: "Export button does nothing", lang: "en", at: linkedAt, gitDir: "D:/repo/.git" },
+      { botId: bot.id, groupId: room.id, sessionId: SESSION, title: "Export button does nothing", lang: "en", at: linkedAt, repo: "aiedwardyi/wink" },
     ]);
   });
 
@@ -80,7 +81,36 @@ describe("room fixes", () => {
     await fixes().released("1.0.274");
     expect(roomLines()).toEqual(["Fix started: Export button does nothing", "Fixed in 1.0.273: Export button does nothing"]);
     expect(committed()).toEqual(["Fix started: Export button does nothing", "Fixed in 1.0.273: Export button does nothing"]);
-    expect(gh).toHaveBeenCalledWith("D:/repo", ["pr", "list", "--head=fix/export", "--state=merged", "--json=url,mergedAt,mergeCommit", "--limit=10"]);
+    expect(gh).toHaveBeenCalledWith(expect.any(String), ["pr", "list", "--repo=aiedwardyi/wink", "--head=fix/export", "--state=merged", "--json=mergedAt,mergeCommit", "--limit=10"]);
+  });
+
+  it("finds the DONE report after the user moves to another task", async () => {
+    await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" });
+    reportDone();
+    store.createTask(bot.id);
+    await fixes().released("1.0.273");
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing", "Fixed in 1.0.273: Export button does nothing"]);
+  });
+
+  it("says no release line follows for a pane outside a checkout of Wink's repo", async () => {
+    const input = { botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" };
+    expect(await fixes(async () => "origin\thttps://github.com/acme/app.git (fetch)\n").link(input)).toEqual({ text: expect.stringContaining("no release line will follow") });
+    store.createGroup("Ops", [bot.id], false);
+    expect(await fixes(async () => { throw new Error("fatal: not a git repository"); }).link({ ...input, room: "ops" })).toEqual({ text: expect.stringContaining("no release line will follow") });
+    reportDone();
+    await fixes().released("1.0.273");
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing"]);
+    expect(gh).not.toHaveBeenCalled();
+  });
+
+  it("keeps links still waiting for a release when the file is full", async () => {
+    const waiting = { botId: bot.id, groupId: room.id, sessionId: "waiting", title: "Old fix", lang: "en", at: 1, repo: "aiedwardyi/wink" };
+    const shipped = Array.from({ length: 200 }, (_, index) => ({ ...waiting, sessionId: `shipped-${index}`, at: 2 + index, fixedIn: "1.0.1" }));
+    writeFileSync(join(DATA_DIR, "room-fixes.json"), JSON.stringify([waiting, ...shipped]));
+    await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" });
+    const saved: Array<{ sessionId: string }> = JSON.parse(readFileSync(join(DATA_DIR, "room-fixes.json"), "utf8"));
+    expect(saved).toHaveLength(200);
+    expect(saved.map((fix) => fix.sessionId)).toEqual(expect.arrayContaining(["waiting", SESSION]));
   });
 
   it("never posts Fixed in on a merge alone", async () => {

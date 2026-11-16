@@ -7950,13 +7950,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/ask-user") {
         return await internalRoutes.askUser(req, res);
       }
-      // link_room_fix: a room report tied to the pane fixing it.
-      if (method === "POST" && path === "/api/internal/room-fix") {
-        const body = roomFixBodySchema.safeParse(await readBody(req));
-        if (!body.success) return json(res, 400, { error: "bad request" });
-        const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
-        return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
-      }
       // terminal_spawn: a display-only row in the bot's chat. Never a pane note, so no model sees it.
       if (method === "POST" && path === "/api/internal/launch-note") {
         const body = await readBody(req);
@@ -7976,6 +7969,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         if ("skipped" in note) return json(res, 200, { skipped: true });
         return json(res, 201, { messageId: note.messageId });
+      }
+      // link_room_fix: a room report tied to the pane fixing it.
+      if (method === "POST" && path === "/api/internal/room-fix") {
+        const body = roomFixBodySchema.safeParse(await readBody(req));
+        if (!body.success) return json(res, 400, { error: "bad request" });
+        const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
+        return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
       }
       // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
