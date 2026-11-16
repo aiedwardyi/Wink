@@ -317,6 +317,24 @@ describe("staged chat peek", () => {
     expect(host.querySelector('[data-mid="heavy-196"]')).toBe(head);
   });
 
+  it("stages one visible bot row per part past hidden messages between them", async () => {
+    const mixed: Message[] = Array.from({ length: 16 }, (_, i) => ({ id: `mix-${i}`, parentId: i ? `mix-${i - 1}` : undefined, at: i + 1, role: "user", kind: i % 2 ? "secret" : "text", text: `Line ${i}` }));
+    const bot = { ...heavyBot, id: "mixed", threadId: "thread-mixed", messages: mixed, activeLeafId: "mix-15" };
+    const show = (preview: boolean) => act(async () => root.render(createElement(StoreProvider, null,
+      createElement(ChatPeekParts, { id: "mixed", preview, children: createElement(ChatPreviewContext.Provider, { value: preview }, createElement(ChatView, { bot, focusComposerBlocked: preview })) }),
+    )));
+    await show(true);
+    await nextPart();
+    await nextPart();
+    const counts: number[] = [];
+    for (let part = 0; part < 4; part++) {
+      await nextPart();
+      counts.push(mids().length);
+    }
+    expect(counts).toEqual([1, 2, 3, 4]);
+    expect(mids()).toEqual(["mix-8", "mix-10", "mix-12", "mix-14"]);
+  });
+
   it("mounts the bot header before its controls", async () => {
     await stage("bot", true);
     expect(host.querySelector('[aria-label="Open Neighbor\'s profile"]')).not.toBeNull();

@@ -596,7 +596,7 @@ export function stampedReplyComm(message: Message): Message["comm"] {
 
 const MessagesList = memo(function MessagesList({
   bot,
-  messages: listed,
+  messages,
   transcript,
   editingId,
   lastBotTextId,
@@ -648,12 +648,11 @@ const MessagesList = memo(function MessagesList({
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const shownRows = useChatPeekRows();
-  const messages = useMemo(() => peekRows(listed, shownRows), [listed, shownRows]);
   const streamingMessage = shownRows ? streamingRow : null;
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
   // Fold finished tool chips into runs, so a stretch of them cannot bury
   // what the bot actually said. Hidden unless Settings → Tool calls is on.
-  const items = useMemo(() => {
+  const listedItems = useMemo(() => {
     const options = { showToolCalls, showActivities, transcript };
     // a launch with no worker row, or a hidden worker, draws nothing
     const shown = (m: Message) => {
@@ -664,10 +663,14 @@ const MessagesList = memo(function MessagesList({
     };
     return groupActivityRuns(streamingMessage ? [...messages, streamingMessage] : messages, terminal, shown);
   }, [messages, streamingMessage, terminal, showToolCalls, showActivities, transcript, workerAt]);
-  const rows = useMemo(
-    () => chatTranscriptRows(items, { showToolCalls, showActivities, transcript }),
-    [items, showToolCalls, showActivities, transcript],
+  const listedRows = useMemo(
+    () => chatTranscriptRows(listedItems, { showToolCalls, showActivities, transcript }),
+    [listedItems, showToolCalls, showActivities, transcript],
   );
+  const { items, rows } = useMemo(() => {
+    const shown = peekRows(listedRows, shownRows, (row) => row.visible).length;
+    return { items: listedItems.slice(0, shown), rows: listedRows.slice(0, shown) };
+  }, [listedItems, listedRows, shownRows]);
   // by message order, so an anchor folded into a run or linked as a notice still places the card
   const whatsNewAnchor = useWhatsNewAnchor();
   const whatsNewAfter = useMemo(() => {
