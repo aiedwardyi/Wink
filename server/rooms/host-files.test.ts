@@ -228,4 +228,32 @@ describe("a host file tag that the composer did not attach", () => {
       rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  it("reaches guests through the composer's copy of a desktop file outside every project", async () => {
+    mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    const downloads = join(homedir(), "Downloads");
+    mkdirSync(downloads, { recursive: true });
+    const pdf = join(downloads, "plan.pdf");
+    writeFileSync(pdf, PDF);
+    const copy = join(ATTACHMENTS_DIR, "5f0c7a1e-plan.pdf");
+    writeFileSync(copy, PDF);
+    expect((await send(`plan ${file(pdf, "plan.pdf", ` copy="${copy}"`)}`)).status).toBe(202);
+    expect(lastEntry()).toMatchObject({ text: "plan" });
+    expect(lastEntry().files?.map((each) => [each.name, each.type])).toEqual([["plan.pdf", "application/pdf"]]);
+  });
+
+  it("ignores a copy of a private file, and a copy from outside the attachments folder", async () => {
+    mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    const copy = join(ATTACHMENTS_DIR, "5f0c7a1e-key.txt");
+    writeFileSync(copy, "key");
+    const key = secret(join(homedir(), ".ssh"), "id_ed25519");
+    const plan = secret(join(homedir(), "Downloads"), "plan.txt");
+    const other = secret(join(homedir(), "Documents"), "taxes.txt");
+    const share = "\\attacker.invalid\share\a.txt";
+    const text = [file(key, "id_ed25519", ` copy="${copy}"`), file(plan, "plan.txt", ` copy="${other}"`), file(share, "a.txt", ` copy="${copy}"`)].join(", ");
+    expect((await send(text)).status).toBe(202);
+    expect(lastEntry()).toMatchObject({ text: [words("id_ed25519"), words("plan.txt"), words("a.txt")].join(", ") });
+    expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+    expect(vi.mocked(open).mock.calls.map(([path]) => path)).toEqual([]);
+  });
 });

@@ -42,6 +42,7 @@ export function ComposerAttachments({
   localFile,
   onDropFiles,
   dropLabel,
+  roomCopy,
 }: {
   disabled?: boolean;
   items: Attachment[];
@@ -58,6 +59,8 @@ export function ComposerAttachments({
   localFile?: (id: string) => { file: File; picture: boolean } | undefined;
   onDropFiles?: (files: File[]) => void;
   dropLabel?: string;
+  /** A hosted room's copy of a desktop file, for teammates. */
+  roomCopy?: (file: File) => Promise<string | undefined>;
 }) {
   const { t } = useI18n();
   const [preview, setPreview] = useState<PreviewImage | null>(null);
@@ -70,12 +73,13 @@ export function ComposerAttachments({
       allowImages,
       getPath: pathForFile,
       shrunkPath: shrunkPicture,
+      roomCopy,
     });
     if (!isActive()) return;
     if (attachments.length) onAdd(attachments, uploads, startedAt);
     // A concurrent intake's notice must survive this drop.
     if (message) onNotice(message);
-  }, [onAdd, allowImages, onNotice, onDropFiles, t]), disabled);
+  }, [onAdd, allowImages, onNotice, onDropFiles, roomCopy, t]), disabled);
 
   return (
     <>
