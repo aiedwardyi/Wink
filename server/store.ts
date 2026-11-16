@@ -48,6 +48,7 @@ import {
 } from "../shared/bot-avatar.ts";
 import type { RoutineRequestCardData } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
+import type { CallPrefs } from "../shared/live-call.ts";
 import type { VerifyCardData } from "../shared/live-verify.ts";
 import { readContextCompaction, type ContextCompactionV1 } from "../shared/context-compaction.ts";
 
@@ -592,6 +593,7 @@ export interface BotRecord {
   /** This bot's own voice id, so a room of bots doesn't sound like one
    * person. Falls back to the app-wide voice in config. */
   voice?: string;
+  call?: CallPrefs;
   /** true after an edit/branch-switch rewound the visible conversation:
    * provider sessions still hold the abandoned branch, so the next turn
    * must start fresh (drop cursors) and replay the surviving path. */
@@ -1053,7 +1055,7 @@ export class Store {
     else write();
   }
 
-  private persistTask(task: TaskRecord): void {
+  private persistTask(task: TaskRecord | GroupTaskRecord): void {
     this.persistThread(task.threadId, [{ kind: "metadata", value: { title: task.title, createdAt: task.createdAt } }], () => {});
   }
 
@@ -1151,11 +1153,19 @@ export class Store {
     return group;
   }
 
+  /** Room thread imports write their rows outside the store. */
+  syncedGroupThread(groupId: string, threadId: string): void {
+    this.threads.delete(threadId);
+    this.saveGroups();
+    this.emit({ type: "group", groupId });
+  }
+
   /** The bot⇄bot channel for a pair, if it exists (order-insensitive). */
   dmGroup(a: string, b: string): GroupRecord | undefined {
-    return this.groups.find(
+    // the oldest, so PCs that each made one for the pair pick the same
+    return this.groups.filter(
       (g) => g.dm && g.memberIds.length === 2 && g.memberIds.includes(a) && g.memberIds.includes(b),
-    );
+    ).sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1))[0];
   }
 
   patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
@@ -1257,6 +1267,7 @@ export class Store {
     const task = this.groupTaskByThread(groupId, threadId);
     if (!task) return null;
     task.title = title.trim().slice(0, 80) || UNTITLED_TASK;
+    this.persistTask(task);
     this.saveGroups();
     this.emit({ type: "group", groupId });
     return task;
@@ -1266,6 +1277,7 @@ export class Store {
     const task = threadId ? this.groupTaskByThread(groupId, threadId) : this.activeGroupTask(groupId);
     if (!task || task.title !== UNTITLED_TASK) return;
     task.title = titleFromMessage(text);
+    this.persistTask(task);
     this.saveGroups();
     this.emit({ type: "group", groupId });
   }

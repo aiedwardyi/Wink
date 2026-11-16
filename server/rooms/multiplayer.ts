@@ -15,6 +15,13 @@ export function askNote(askId: string | undefined, botName: string, riders: read
   return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
+/** A teammate's ask as a lane may hand it off: who asked, in their own words. */
+export function laneAsk(askId: string): { asker: string; ask: string } | null {
+  const ask = askById(askId);
+  const entry = ask && roomEntry(ask.roomId, ask.entryId);
+  return entry ? { asker: entry.author.name, ask: entry.text } : null;
+}
+
 /** `refusal` is what the bot says when someone read-only asks it to do more than read. */
 export const collabLine = (refusal: string) =>
   `Any member's request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "${refusal}"`;

@@ -12,6 +12,7 @@ import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
+import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
 
@@ -273,10 +274,6 @@ const LINE = 22;
 const KEPT_LINES = 3;
 
 /** A cut question fades out at its foot, as a long user message does (USER_FOLD_CLASS), until it is scrolled to its end. */
-function markCut(body: HTMLElement) {
-  body.toggleAttribute("data-cut", body.scrollHeight - body.scrollTop - body.clientHeight > 1);
-}
-
 /** The card's cap gives way so its choices always show under three lines of the question; when the composer has no more room to give, the question goes down to one line, and past that the choices scroll. */
 function fitChoices(card: HTMLDivElement | null) {
   const body = card?.querySelector<HTMLElement>("[data-question-body]");

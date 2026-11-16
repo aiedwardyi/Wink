@@ -41,6 +41,8 @@ export const authMessageSchema = z.object({
   account: z.string().min(1).max(4096).nullable().optional(),
   name: z.string().max(PC_NAME_MAX).optional(),
   person: z.string().max(PERSON_NAME_MAX).optional(),
+  /** The PC takes `poked` frames. Older relays strip this field. */
+  pokes: z.literal(true).optional(),
 });
 /** Relay to PC: session accepted. `ticket` and `account` are refreshes past half life. */
 export const readyMessageSchema = z.object({
@@ -57,6 +59,8 @@ export const readyMessageSchema = z.object({
   reportOwner: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   /** The relay takes `roomcode` frames. Older PCs strip this field. */
   roomCodes: z.literal(true).optional(),
+  /** The relay takes `poke` frames. Older PCs strip this field. */
+  pokes: z.literal(true).optional(),
 });
 /** Relay to PC: a phone waits on an empty pool. */
 export const wantMessageSchema = z.object({ type: z.literal("want"), n: count });
@@ -74,6 +78,10 @@ export const snagMessageSchema = z.object({ type: z.literal("snag"), data: z.unk
 export const snaggedMessageSchema = z.object({ type: z.literal("snagged"), id: z.string() });
 /** PC to relay, only after a ready with `active`: its person used Wink just now. */
 export const activeMessageSchema = z.object({ type: z.literal("active") });
+/** PC to relay, only after a ready with `pokes`: this PC uploaded a change. Not `ping`, which is the keepalive. */
+export const pokeMessageSchema = z.object({ type: z.literal("poke") });
+/** Relay to PC, only after an auth with `pokes`: another PC of the same Google account uploaded a change. */
+export const pokedMessageSchema = z.object({ type: z.literal("poked") });
 
 /** A short room join code: 6 characters with no 0, O, 1 or I. */
 export const ROOM_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -99,6 +107,8 @@ export const relayMessageSchema = z.discriminatedUnion("type", [
   activeMessageSchema,
   roomCodeMessageSchema,
   roomCodedMessageSchema,
+  pokeMessageSchema,
+  pokedMessageSchema,
 ]);
 
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
@@ -116,6 +126,8 @@ export type SnaggedMessage = z.infer<typeof snaggedMessageSchema>;
 export type ActiveMessage = z.infer<typeof activeMessageSchema>;
 export type RoomCodeMessage = z.infer<typeof roomCodeMessageSchema>;
 export type RoomCodedMessage = z.infer<typeof roomCodedMessageSchema>;
+export type PokeMessage = z.infer<typeof pokeMessageSchema>;
+export type PokedMessage = z.infer<typeof pokedMessageSchema>;
 
 export type ControlMessage =
   | HelloMessage
@@ -129,7 +141,9 @@ export type ControlMessage =
   | SnaggedMessage
   | ActiveMessage
   | RoomCodeMessage
-  | RoomCodedMessage;
+  | RoomCodedMessage
+  | PokeMessage
+  | PokedMessage;
 export type DataMessage = JoinMessage | GoMessage;
 export type RelayMessage = ControlMessage | DataMessage;
 

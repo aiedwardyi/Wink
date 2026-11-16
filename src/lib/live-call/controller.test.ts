@@ -35,6 +35,8 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
     stopMic() {},
     async heal() { return true; },
     play() {},
+    endTurn() {},
+    tune() {},
     flush() { this.flushed += 1; },
     close() {},
     boop() { this.cues.push("boop"); },
@@ -2476,6 +2478,8 @@ describe("VOICE-HUSH: be quiet", () => {
     expect(["Hey", "That's an innovation", "Novas are bright", "Novak said", "Ask Nova now"].map((h) => callsVoice(h, "Nova"))).toEqual([false, false, false, false, false]);
     expect(callsVoice("R2.D2?", "R2.D2")).toBe(true);
     expect(callsVoice("R2xD2?", "R2.D2")).toBe(false);
+    const voiceNamed = [["Korean.", "Kore", false], ["Jennings.", "Jenn", false], ["Puckish.", "Puck", false], ["Kore?", "Kore", true], ["Jennifer.", "Jenn", true], ["Puck, you there?", "Puck", true]] as const;
+    for (const [line, alias, wakes] of voiceNamed) expect([line, callsVoice(line, "Nova", [alias])]).toEqual([line, wakes]);
   });
 
   it("hushes only when the quiet phrase is the whole line", () => {

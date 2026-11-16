@@ -16,6 +16,8 @@ export interface CertManagerOptions {
   host: string;
   /** Holds account.key, cert.key and cert.pem, all 0600. */
   dir: string;
+  /** Where a single-base relay kept its certificate; read when `dir` has none and it names this host. */
+  legacyDir?: string;
   directoryUrl: string;
   email?: string;
   termsOfServiceAgreed: boolean;
@@ -78,10 +80,12 @@ export class CertManager {
   /** Loads a stored certificate if it is valid for the host, then checks renewal. */
   async start(): Promise<void> {
     await mkdir(this.opts.dir, { recursive: true, mode: 0o700 });
-    const [key, cert] = await Promise.all([
-      readOptional(join(this.opts.dir, "cert.key")),
-      readOptional(join(this.opts.dir, "cert.pem")),
-    ]);
+    const read = (dir: string) => Promise.all([readOptional(join(dir, "cert.key")), readOptional(join(dir, "cert.pem"))]);
+    let [key, cert] = await read(this.opts.dir);
+    if (!key && !cert && this.opts.legacyDir) {
+      const [oldKey, oldCert] = await read(this.opts.legacyDir);
+      if (oldKey && oldCert && this.validate(oldKey, oldCert)) [key, cert] = [oldKey, oldCert];
+    }
     if (key && cert) {
       const stored = this.validate(key, cert);
       if (stored) this.install(stored);

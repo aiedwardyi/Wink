@@ -10,6 +10,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 Environment=NODE_ENV=production
 # The operator key reaches the service only as a credential under $CREDENTIALS_DIRECTORY.
 LoadCredential=operator.key:/etc/wink-relay/operator.key
+# gts.json (second CA) is loaded by a drop-in only where config has a gts block: a missing source stops the unit.
 DynamicUser=yes
 StateDirectory=wink-relay
 StateDirectoryMode=0700

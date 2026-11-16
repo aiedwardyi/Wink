@@ -30,3 +30,7 @@ it("lets a bot's own token reach every route its agents and terminal tools call 
   expect(index).toContain("return caller ? botRoute(path, caller.botId) : bootToken(header);");
   expect(index).toContain("authorizedComms(req.headers.authorization, path)");
 });
+
+it("lets a busy bot's own token hand a room ask off", () => {
+  expect(botRoute("/api/internal/hand-off", "b1")).toBe(true);
+});

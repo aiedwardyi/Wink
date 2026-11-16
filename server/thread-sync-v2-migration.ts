@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
 import { messageDatabase, withMessageTransaction } from "./message-db.ts";
+import { mapRow } from "./room-thread-sync.ts";
 import { redactBotAuthored, type Message } from "./store.ts";
 import { fileSchema, isConflictNotice, shared } from "./thread-sync.ts";
 import { createSyncEngine, syncContentHash } from "./thread-sync-v2-engine.ts";
@@ -275,7 +276,8 @@ export function createThreadMigration(options: SyncOptions, engine: ReturnType<t
     if (failure) throw failure;
   }
 
-  async function step(scope: SyncScope, crash?: MigrationCrash, deferUnreadable = false): Promise<MigrationProgress> {
+  /** `botIds` maps a room's local bot ids to sync ids in the rows it seeds. */
+  async function step(scope: SyncScope, crash?: MigrationCrash, deferUnreadable = false, botIds?: Record<string, string>): Promise<MigrationProgress> {
     const current = task(scope);
     try {
       if (current.phase === "snapshot") {
@@ -326,7 +328,8 @@ export function createThreadMigration(options: SyncOptions, engine: ReturnType<t
           withMessageTransaction(() => {
             const page = db.prepare("SELECT rowid AS cursor, json FROM sync_v2_snapshot WHERE thread = ? AND rowid > ? ORDER BY rowid LIMIT 126").all(scope.threadId, current.cursor);
             const legacy = { sourceHash: syncContentHash({ device: options.deviceId, thread: scope.threadId }) };
-            const mutations: SyncRecovery[] = page.flatMap((row) => project(scope, JSON.parse(String(row.json))).map((value) => localRecovery(scope, value)));
+            const local = (json: string): Message => botIds ? mapRow(JSON.parse(json), (botId) => botIds[botId]) : JSON.parse(json);
+            const mutations: SyncRecovery[] = page.flatMap((row) => project(scope, local(String(row.json))).map((value) => localRecovery(scope, value)));
             if (!current.cursor && page.length) mutations.unshift(
               { kind: "metadata", value: JSON.parse(current.metadata), legacy },
               { kind: "head", value: head(scope, JSON.parse(current.head)), legacy: { ...legacy, source: "main" } },

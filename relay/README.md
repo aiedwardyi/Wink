@@ -40,10 +40,20 @@ base is already set. A base that is not a domain name is refused. The relay
 never sees the setup code, only the invite inside it.
 `--test`, with or without `--base`, signs a test mark into the invite: the PC it enrolls stays off the team page until it has been offline for 90 days.
 A `test <label> <ms>` line appended to `<dataDir>/team-sessions` marks a PC by hand.
+Only PCs enrolled with a setup code are offered `active` and have their PC and Wink names kept for the team page; a PC enrolled through `/v1/enroll/google` (listed in `<dataDir>/google-enrolls`) gets neither.
 
-A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines, note times and the stuck pane's last 30 lines, scrubbed; never chats or attached files), and they follow each PC's error-report setting. They sit in `<dataDir>/team-snags` for at most 14 days.
+A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines and note times, scrubbed; never chats, files or terminal text), and they follow each PC's error-report setting. They sit in `<dataDir>/team-snags` for at most 14 days.
 
 With `stats` in config, the relay also takes anonymous usage stats at `POST /v1/stats`: no account, nothing logged per request, no IP or label stored. Batches land in `<dataDir>/stats/YYYY-MM-DD.ndjson` (gzipped after the day, deleted after `keepDays`, default 90). `GET /v1/stats/day/<date>` serves a day to the stats read key.
+
+With `gts` in config (`{ "project": "<gcp project id>" }`, optional `perHour` default 60, `perLabelPerDay` default 2), `POST /v1/acme/eab` mints one Google Trust Services EAB key for an enrolled PC that Let's Encrypt rate-limited; one EAB key registers exactly one ACME account. Body `{ticket, pk, iat, sig}`, `sig = Ed25519(pc key, UTF-8 JSON.stringify(["wink-relay-eab/1", ticket, pk, iat]))` (`signEabRequest()` in `src/eab.ts`). Caps answer 429 `{error: "full", retryAfter}`. The service account key (role `roles/publicca.externalAccountKeyCreator`) comes from systemd credential `gts.json`, or `gts.keyFile` outside systemd. The shipped unit has no `LoadCredential=gts.json` because a missing credential source stops the service; add it with a drop-in, `/etc/systemd/system/wink-relay.service.d/gts.conf`:
+
+```ini
+[Service]
+LoadCredential=gts.json:/etc/wink-relay/gts.json
+```
+
+`oldBases` (deploy `--old-base`) keeps earlier bases served beside `base`: `<label>.<old>` routes to the same PC, `relay.<old>` keeps its own certificate (under `<dataDir>/acme/<host>`, first read from the single-base `<dataDir>/acme`), and the status CORS check accepts either origin.
 
 ## Enrollment signature
 

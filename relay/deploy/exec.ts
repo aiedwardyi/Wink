@@ -13,6 +13,8 @@ import {
   NODE_SHA256,
   NODE_TARBALL,
   NODE_URL,
+  GTS_PER_HOUR,
+  certsPerWeek,
   OPERATOR_KEY_ARG,
   PUBLIC_RESOLVERS,
   PlanError,
@@ -377,7 +379,12 @@ export function realLocal(relayDir: string, buildDir: string): Local {
       };
       const withGoogle = opts.google ? { ...config, google: opts.google } : config;
       const withTeam = opts.teamOwnerEmail ? { ...withGoogle, teamOwnerEmail: opts.teamOwnerEmail } : withGoogle;
-      const file = opts.statsReadKeySha256 ? { ...withTeam, stats: { readKeySha256: opts.statsReadKeySha256 } } : withTeam;
+      const withStats = opts.statsReadKeySha256 ? { ...withTeam, stats: { readKeySha256: opts.statsReadKeySha256 } } : withTeam;
+      const withOld = opts.oldBase ? { ...withStats, oldBases: [opts.oldBase] } : withStats;
+      const withGts = opts.gtsProject ? { ...withOld, gts: { project: opts.gtsProject, perHour: opts.gtsPerHour ?? GTS_PER_HOUR } } : withOld;
+      // Half of what the CAs issue, so renewals and retries fit. Let's Encrypt alone leaves the relay's own default.
+      const perWeek = opts.enrollPerWeek ?? (opts.gtsProject ? Math.floor(certsPerWeek(opts) / 2) : undefined);
+      const file = opts.google && perWeek !== undefined ? { ...withGts, limits: { googleEnrollPerWeek: perWeek } } : withGts;
       await writeFile(join(buildDir, "wink-relay.config.json"), `${JSON.stringify(file, null, 2)}\n`);
     },
     async waitDns(fqdn, ip) {

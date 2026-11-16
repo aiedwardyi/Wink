@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { createSecureContext } from "node:tls";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CertManager, FALLBACK_AFTER_MS, RENEW_CHECK_MS, RETRY_BASE_MS, STEP_TIMEOUT_MS, type AcmeAccountConfig, type ChallengeTarget } from "./acme.ts";
-import { readCert, readKeyHistory, relayDir, spkiFingerprint, writeCert } from "./store.ts";
+import { CertManager, FALLBACK_AFTER_MS, RENEW_CHECK_MS, RETRY_BASE_MS, STEP_TIMEOUT_MS, type AcmeAccountConfig, type AcmeExternalAccount, type ChallengeTarget } from "./acme.ts";
+import { EabFullError } from "./eab.ts";
+import { readAcmeState, readCert, readKeyHistory, relayDir, spkiFingerprint, writeCert } from "./store.ts";
 import { FakeAcme } from "./testing/fake-acme.ts";
 import { FakeClock } from "./testing/fake-clock.ts";
 import { tempDataDir } from "./testing/harness.ts";
@@ -290,31 +291,19 @@ describe("ACME certificate manager", () => {
         onChange: () => events.emit("change"),
         allowInsecureDirectories: true,
       });
-      const settled = () =>
-        new Promise<void>((resolve) => {
-          let started = false;
-          const check = () => {
-            if (certs.snapshot().issuing) started = true;
-            if (!started || certs.snapshot().issuing) return;
-            events.off("change", check);
-            resolve();
-          };
-          events.on("change", check);
-        });
+      const idle = () => vi.waitFor(() => expect(certs.snapshot().issuing).toBe(false));
       certs.start();
-      let done = settled();
       certs.setConnected(true);
-      await done;
+      await idle();
       const dayEnd = start + day * DAY;
       for (let next = clock.nextAt; next !== null && next <= dayEnd && target.cert === null; next = clock.nextAt) {
-        done = settled();
         clock.advance(next - clock.now());
-        await done;
+        await idle();
       }
       certs.stop();
       clock.advance(dayEnd - clock.now());
     }
-    expect(first.log.filter((entry) => entry === "error:rejectedIdentifier").length).toBeGreaterThan(10);
+    expect(first.log.filter((entry) => entry === "error:rejectedIdentifier").length).toBeGreaterThanOrEqual(3);
     expect(second.log).toContain("issued");
   });
 
@@ -476,5 +465,363 @@ describe("ACME step deadline", () => {
       silent.close();
       cleanup();
     }
+  });
+});
+
+describe("second CA on a rate limit", () => {
+  const cleanups: Array<() => Promise<void> | void> = [];
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const EAB = { kid: "kid-gts", hmacKey: Buffer.alloc(32, 7).toString("base64url") };
+
+  async function setup(externalAccount: () => Promise<AcmeExternalAccount | null>) {
+    const { dir, cleanup } = tempDataDir();
+    cleanups.push(cleanup);
+    const ca = await TestCa.create();
+    const le = await FakeAcme.start({ ca });
+    const gts = await FakeAcme.start({ ca, eab: EAB });
+    cleanups.push(() => le.close(), () => gts.close());
+    const clock = new FakeClock();
+    const target = new Target();
+    le.validator = directValidator(target, []);
+    gts.validator = directValidator(target, []);
+    const events = new EventEmitter();
+    const asked = vi.fn(externalAccount);
+    const certs = new CertManager({
+      dataDir: dir,
+      host: HOST,
+      directories: [le.directoryUrl],
+      accounts: {},
+      fallback: { directory: gts.directoryUrl, externalAccount: asked },
+      clock,
+      target,
+      onChange: () => events.emit("change"),
+      allowInsecureDirectories: true,
+    });
+    cleanups.push(() => certs.stop());
+    const settled = () =>
+      new Promise<void>((resolve) => {
+        let started = false;
+        const check = () => {
+          if (certs.snapshot().issuing) started = true;
+          if (!started || certs.snapshot().issuing) return;
+          events.off("change", check);
+          resolve();
+        };
+        events.on("change", check);
+      });
+    const run = async () => {
+      const done = settled();
+      certs.setConnected(true);
+      await done;
+    };
+    return { dir, le, gts, clock, target, certs, asked, run, settled };
+  }
+
+  it("uses Let's Encrypt when it answers", async () => {
+    const { le, gts, target, certs, asked, run } = await setup(async () => EAB);
+    certs.start();
+    await run();
+    expect(target.cert).not.toBeNull();
+    expect(le.log).toContain("issued");
+    expect(gts.log).toEqual([]);
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it("turns to the second CA with a relay EAB key when Let's Encrypt is rate-limited, and renews there", async () => {
+    const { dir, le, gts, target, certs, asked, run } = await setup(async () => EAB);
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    le.mode = "limited";
+    certs.start();
+    await run();
+    expect(le.log).toContain("error:rateLimited");
+    expect(gts.log).toContain("issued");
+    expect(gts.eabSeen).toEqual(["kid-gts"]);
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(target.cert).not.toBeNull();
+    expect(certs.snapshot()).toMatchObject({ valid: true, error: null, fullUntil: null });
+    const line = logs.mock.calls.map((call) => String(call[0])).find((text) => text.includes("certificates issued"));
+    expect(line).toBe("phone relay: certificates issued, first CA 0, second CA 1");
+    expect(line).not.toContain(HOST);
+    expect(readAcmeState(dir)).toMatchObject({ kind: "ok", value: { onFallback: true, issued: [0, 1] } });
+  });
+
+  it("is full with a retry time when both CAs are rate-limited", async () => {
+    const { le, gts, clock, target, certs, run } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 7200;
+    gts.mode = "limited";
+    gts.retryAfterSec = 1800;
+    certs.start();
+    const start = clock.now();
+    await run();
+    expect(target.cert).toBeNull();
+    expect(certs.snapshot()).toMatchObject({ valid: false, error: "full", fullUntil: start + 1800_000 });
+    expect(clock.nextAt).toBe(start + 1800_000);
+  });
+
+  it("asks neither CA again before its own Retry-After when both are rate-limited", async () => {
+    const { le, gts, clock, target, certs, run, settled } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 7200;
+    gts.mode = "limited";
+    gts.retryAfterSec = 1800;
+    certs.start();
+    await run();
+    const asked = le.log.length;
+    gts.mode = "ok";
+    const done = settled();
+    clock.advance(1800_000);
+    await done;
+    expect(le.log).toHaveLength(asked);
+    expect(gts.log).toContain("issued");
+    expect(target.cert).not.toBeNull();
+  });
+
+  it("leaves a rate-limited Let's Encrypt alone while the second CA fails another way", async () => {
+    const { dir, le, gts, clock, certs, run, settled } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 7200;
+    gts.mode = "reject";
+    certs.start();
+    const start = clock.now();
+    await run();
+    const asked = le.log.length;
+    const second = gts.log.length;
+    expect(clock.nextAt).toBe(start + 60_000);
+    const done = settled();
+    clock.advance(60_000);
+    await done;
+    expect(le.log).toHaveLength(asked);
+    expect(gts.log.length).toBeGreaterThan(second);
+    expect(readAcmeState(dir)).toMatchObject({ kind: "ok", value: { limitedUntil: { [le.directoryUrl]: start + 7_200_000 } } });
+  });
+
+  it("backs off 1 min, 10 min, 100 min while both CAs stay limited with no wait given", async () => {
+    const { le, gts, clock, certs, run, settled } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 0;
+    gts.mode = "limited";
+    gts.retryAfterSec = 0;
+    certs.start();
+    await run();
+    const gaps: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const next = clock.nextAt!;
+      gaps.push(next - clock.now());
+      expect(certs.snapshot()).toMatchObject({ error: "full", fullUntil: next });
+      const done = settled();
+      clock.advance(next - clock.now());
+      await done;
+    }
+    expect(gaps).toEqual([60_000, 600_000, 6_000_000]);
+  });
+
+  it("is full when the relay has no second-CA keys left", async () => {
+    const { le, gts, clock, certs, run } = await setup(async () => {
+      throw new EabFullError(clock.now() + 600_000);
+    });
+    le.mode = "limited";
+    certs.start();
+    const start = clock.now();
+    await run();
+    expect(gts.log).toEqual([]);
+    expect(certs.snapshot()).toMatchObject({ error: "full", fullUntil: start + 600_000 });
+  });
+
+  it("stays Let's Encrypt only when the relay offers no EAB key", async () => {
+    const { le, gts, clock, certs, asked, run } = await setup(async () => null);
+    le.mode = "limited";
+    certs.start();
+    await run();
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(gts.log).toEqual([]);
+    expect(certs.snapshot()).toMatchObject({ valid: false, error: "certificate request failed: too many certificates", fullUntil: null });
+    expect(clock.nextAt).toBe(clock.now() + le.retryAfterSec * 1000);
+  });
+});
+
+describe("backoff after failures", () => {
+  const cleanups: Array<() => Promise<void> | void> = [];
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  });
+
+  async function manager(dir: string, acme: FakeAcme, clock: FakeClock, target = new Target()) {
+    const events = new EventEmitter();
+    const certs = new CertManager({
+      dataDir: dir,
+      host: HOST,
+      directories: [acme.directoryUrl],
+      accounts: {},
+      clock,
+      target,
+      onChange: () => events.emit("change"),
+      allowInsecureDirectories: true,
+    });
+    cleanups.push(() => certs.stop());
+    const settled = () =>
+      new Promise<void>((resolve) => {
+        let started = false;
+        const check = () => {
+          if (certs.snapshot().issuing) started = true;
+          if (!started || certs.snapshot().issuing) return;
+          events.off("change", check);
+          resolve();
+        };
+        events.on("change", check);
+      });
+    return { certs, settled };
+  }
+
+  async function failing(mode: FakeAcme["mode"]) {
+    const { dir, cleanup } = tempDataDir();
+    cleanups.push(cleanup);
+    const acme = await FakeAcme.start({ ca: await TestCa.create() });
+    cleanups.push(() => acme.close());
+    acme.mode = mode;
+    return { dir, acme, clock: new FakeClock() };
+  }
+
+  it("retries after 1 min, 10 min, 100 min, then once a day", async () => {
+    const { dir, acme, clock } = await failing("reject");
+    const { certs, settled } = await manager(dir, acme, clock);
+    certs.start();
+    let done = settled();
+    certs.setConnected(true);
+    await done;
+    const gaps: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const next = clock.nextAt!;
+      gaps.push(next - clock.now());
+      done = settled();
+      clock.advance(next - clock.now());
+      await done;
+    }
+    expect(gaps).toEqual([60_000, 600_000, 6_000_000, DAY, DAY]);
+    expect(acme.log.filter((entry) => entry === "new-order" || entry.startsWith("error:"))).toHaveLength(6);
+    expect(certs.snapshot().error).toBe("certificate request failed: test rejects orders");
+  });
+
+  it("keeps the retry time across a restart instead of ordering again at once", async () => {
+    const { dir, acme, clock } = await failing("reject");
+    const first = await manager(dir, acme, clock);
+    first.certs.start();
+    let done = first.settled();
+    first.certs.setConnected(true);
+    await done;
+    for (let i = 0; i < 3; i++) {
+      done = first.settled();
+      clock.advance(clock.nextAt! - clock.now());
+      await done;
+    }
+    first.certs.stop();
+    const asked = acme.log.length;
+    const retryAt = clock.now() + DAY;
+    const second = await manager(dir, acme, clock);
+    second.certs.start();
+    second.certs.setConnected(true);
+    for (let next = clock.nextAt; next !== null && next < retryAt; next = clock.nextAt) clock.advance(next - clock.now());
+    expect(second.certs.snapshot().issuing).toBe(false);
+    expect(acme.log).toHaveLength(asked);
+    clock.advance(retryAt - clock.now());
+    await vi.waitFor(() => expect(second.certs.snapshot().issuing).toBe(false));
+    expect(acme.log.length).toBeGreaterThan(asked);
+  });
+
+  it("checks again when a restored retry time comes due, not a full check interval later", async () => {
+    const { dir, acme, clock } = await failing("reject");
+    const first = await manager(dir, acme, clock);
+    first.certs.start();
+    let done = first.settled();
+    first.certs.setConnected(true);
+    await done;
+    for (let i = 0; i < 3; i++) {
+      done = first.settled();
+      clock.advance(clock.nextAt! - clock.now());
+      await done;
+    }
+    first.certs.stop();
+    const retryAt = clock.now() + DAY;
+    clock.advance(DAY - RENEW_CHECK_MS - 60 * 60_000);
+    const second = await manager(dir, acme, clock);
+    second.certs.start();
+    second.certs.setConnected(true);
+    clock.advance(RENEW_CHECK_MS);
+    expect(clock.nextAt).toBe(retryAt);
+  });
+
+  it("waits out a rate limit's Retry-After when it is longer than the backoff", async () => {
+    const { dir, acme, clock } = await failing("limited");
+    acme.retryAfterSec = 7200;
+    const { certs, settled } = await manager(dir, acme, clock);
+    certs.start();
+    const done = settled();
+    certs.setConnected(true);
+    await done;
+    expect(clock.nextAt).toBe(clock.now() + 7_200_000);
+  });
+
+  /** A PC whose first certificate came from the second CA, Let's Encrypt being rate-limited. */
+  async function onSecondCa() {
+    const { dir, cleanup } = tempDataDir();
+    cleanups.push(cleanup);
+    const ca = await TestCa.create();
+    const le = await FakeAcme.start({ ca });
+    const gts = await FakeAcme.start({ ca, eab: { kid: "kid-gts", hmacKey: Buffer.alloc(32, 7).toString("base64url") } });
+    cleanups.push(() => le.close(), () => gts.close());
+    const clock = new FakeClock();
+    const target = new Target();
+    le.validator = directValidator(target, []);
+    gts.validator = directValidator(target, []);
+    le.mode = "limited";
+    gts.validity = () => ({ notBefore: new Date(clock.now() - 60_000), notAfter: new Date(clock.now() + 3 * DAY) });
+    const events = new EventEmitter();
+    const certs = new CertManager({
+      dataDir: dir,
+      host: HOST,
+      directories: [le.directoryUrl],
+      accounts: {},
+      fallback: { directory: gts.directoryUrl, externalAccount: async () => ({ kid: "kid-gts", hmacKey: Buffer.alloc(32, 7).toString("base64url") }) },
+      clock,
+      target,
+      onChange: () => events.emit("change"),
+      allowInsecureDirectories: true,
+    });
+    cleanups.push(() => certs.stop());
+    certs.start();
+    certs.setConnected(true);
+    await vi.waitFor(() => expect(certs.snapshot()).toMatchObject({ issuing: false, valid: true }));
+    return { dir, le, gts, clock, target, certs };
+  }
+
+  it("renews at the second CA once Let's Encrypt has rate-limited this PC", async () => {
+    const { le, gts, clock, target, certs } = await onSecondCa();
+    le.mode = "ok";
+    for (let i = 0; i < 5 && target.installs.length < 2; i++) {
+      clock.advance(RENEW_CHECK_MS);
+      await vi.waitFor(() => expect(certs.snapshot().issuing).toBe(false));
+    }
+    expect(target.installs).toHaveLength(2);
+    expect(le.log.filter((entry) => entry === "new-order" || entry === "error:rateLimited")).toEqual(["error:rateLimited"]);
+    expect(gts.log.filter((entry) => entry === "issued")).toHaveLength(2);
+  });
+
+  it("renews at Let's Encrypt when the second CA is rate-limited, and stays there", async () => {
+    const { dir, le, gts, clock, target, certs } = await onSecondCa();
+    le.mode = "ok";
+    gts.mode = "limited";
+    for (let i = 0; i < 5 && target.installs.length < 2; i++) {
+      clock.advance(RENEW_CHECK_MS);
+      await vi.waitFor(() => expect(certs.snapshot().issuing).toBe(false));
+    }
+    expect(target.installs).toHaveLength(2);
+    expect(le.log).toContain("issued");
+    expect(gts.log.filter((entry) => entry === "issued")).toHaveLength(1);
+    expect(certs.snapshot()).toMatchObject({ valid: true, error: null, fullUntil: null });
+    expect(readAcmeState(dir)).toMatchObject({ kind: "ok", value: { onFallback: false, issued: [1, 1] } });
   });
 });

@@ -1,6 +1,6 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { callStatus, clip, OPTION_CHARS } from "../../../shared/call-status";
-import { isVoiceLine, LIVE_VAD, LIVE_VOICE_NAMES, ORDER_EXPIRY_MS, type CallLine, type LiveVoice } from "../../../shared/live-call";
+import { isVoiceLine, LIVE_VAD, liveVoiceNames, ORDER_EXPIRY_MS, STYLE_GAIN, type CallLine, type CallPrefs, type LiveVoice } from "../../../shared/live-call";
 import { answerPrefix, isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
 import { openQuestion } from "@/lib/open-question";
@@ -35,11 +35,14 @@ export type CallState = {
 };
 
 export type CallAudioPort = {
-  capture(onFrame: (pcm: ArrayBuffer) => void): Promise<void>;
+  /** False once the mic is open but the voice waits on a tap to play. */
+  capture(onFrame: (pcm: ArrayBuffer) => void): Promise<boolean | void>;
   /** Mic off with the audio kept, so capture can run again. */
   stopMic(): void;
   heal(): Promise<boolean>;
   play(pcm: Int16Array): void;
+  endTurn(): void;
+  tune(speed: number, level: number): void;
   flush(): void;
   close(): void;
   boop(): void;
@@ -62,6 +65,8 @@ type Deps = {
   now?: () => number;
   /** A call the bot rang for: the voice opens with this blocker, and a yes ends the call. */
   opener?: string;
+  /** The bot's call picks as the app shows them: its own save may still be in flight when the call starts. */
+  prefs?: CallPrefs;
 };
 
 type ToolRun = (call: LiveCall, args: Record<string, unknown>, id: string) => void;
@@ -313,6 +318,15 @@ export class LiveCall {
   private open = new OpenLines();
   private voiceAt = 0;
   private draining?: LiveEngine;
+  // A new voice, style or language: its session opens beside the live one and takes over in the next quiet.
+  private standby?: { engine: LiveEngine; ready: boolean; app: "en" | "ko"; picks: string; handle?: string };
+  // Voice, style and language: what the live session speaks with, and what was last asked for.
+  private live?: { voice: string; style: string; language: string };
+  private picks?: string;
+  private prefs?: CallPrefs;
+  // Lines posted after a swap's brief was taken; the new session gets them at takeover.
+  private since?: CallLine[];
+  private swaps = 0;
   private drained?: () => void;
   private holdTimer?: ReturnType<typeof setTimeout>;
   private lateFinish?: (engine: LiveEngine | null) => void;
@@ -343,6 +357,7 @@ export class LiveCall {
   constructor(deps: Deps) {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
+    this.prefs = deps.prefs;
     deps.audio.onStart = () => {
       if (!this.turnHadAudio && this.spokeAt) {
         this.turnTtfa = this.now() - this.spokeAt;
@@ -356,6 +371,7 @@ export class LiveCall {
     deps.audio.onIdle = () => {
       this.playedOut();
       this.pause();
+      this.takeOver();
       this.release();
       this.refresh();
       if (this.closing) this.closeIn(CLOSE_MS);
@@ -390,7 +406,11 @@ export class LiveCall {
     this.app = activeLocale() === "ko" ? "ko" : "en";
     this.set({ status: "starting", error: undefined });
     // The mic opens on the tap, beside the token, so words said while the call connects are kept.
-    const mic = (this.mic ??= this.deps.audio.capture((pcm) => this.frame(pcm)).then(() => null, (error) => error ?? new Error("mic failed")));
+    // A voice that will not play yet waits on a tap; only the mic's own refusal fails the call.
+    const mic = (this.mic ??= this.deps.audio.capture((pcm) => this.frame(pcm)).then((played) => {
+      if (played === false) this.stalled = true;
+      return null;
+    }, (error) => error ?? new Error("mic failed")));
     const session = await this.token(false);
     if (!session) {
       if (this.snapshot.status === "needsKey") {
@@ -428,10 +448,92 @@ export class LiveCall {
     else this.engine?.sendAudio(pcm);
   }
 
+  /** Picks from the call menu: speed and level reach the next words heard; a new voice, style or language swaps the session. */
+  retune(prefs: CallPrefs, volume = 1) {
+    this.deps.audio.tune(prefs.speed ?? 1, STYLE_GAIN[prefs.style ?? "normal"] * volume);
+    this.prefs = prefs;
+    this.restyle();
+  }
+
+  // Only a session that finished starting is replaced; one still connecting picks this up from its ready.
+  private restyle() {
+    if (!this.live || !this.prefs || !this.connected || this.ended) return;
+    const want = [this.prefs.voice ?? this.live.voice, this.prefs.style ?? "normal", this.prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")].join();
+    if (want === (this.picks ?? Object.values(this.live).join())) return;
+    this.picks = want;
+    void this.swap();
+  }
+
+  private async swap() {
+    const run = ++this.swaps;
+    this.standby?.engine.close();
+    this.standby = undefined;
+    if (!this.engine || !this.connected || this.ended) return this.dropStandby();
+    this.since = [];
+    const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), callId: this.callId, swap: true, call: this.prefs }).catch(() => null);
+    if (run !== this.swaps) return;
+    if (this.ended || posted?.status !== 200) return this.dropStandby();
+    const engine = this.deps.engine();
+    const standby: NonNullable<LiveCall["standby"]> = { engine, ready: false, app: posted.data.locale === "ko" ? "ko" : "en", picks: this.picks ?? "" };
+    this.standby = standby;
+    const mine = () => this.standby === standby;
+    const timer = setTimeout(() => { if (mine()) this.dropStandby(); }, READY_MS);
+    const session = { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice };
+    const events = this.events(engine, session);
+    engine.connect(session, {
+      ...events,
+      resumable: (handle) => {
+        if (mine()) standby.handle = handle;
+        else events.resumable(handle);
+      },
+      ready: () => {
+        if (!mine()) return;
+        clearTimeout(timer);
+        standby.ready = true;
+        // SAFETY: the token route only returns a voice from LIVE_VOICES.
+        this.aliases = liveVoiceNames(posted.data.voice as LiveVoice);
+        this.takeOver();
+      },
+      closed: (code, reason) => (mine() ? this.dropStandby() : events.closed(code, reason)),
+    });
+  }
+
+  private dropStandby() {
+    this.standby?.engine.close();
+    this.standby = undefined;
+    this.since = undefined;
+    this.picks = undefined;
+  }
+
+  // Never mid-word: what the old session is saying or hearing finishes there, then the next words go to the new one.
+  private takeOver() {
+    const next = this.standby;
+    // loudAt: they started talking and no words have come back yet. An open card is answered on the session that offered it.
+    if (!next?.ready || this.ended || this.playing || this.generating || this.deps.audio.playing || this.loudAt || spokenText(this.heardBuf) || this.pending) return;
+    const old = this.engine;
+    this.standby = undefined;
+    this.engine = next.engine;
+    this.connected = true;
+    this.handle = next.handle;
+    this.app = next.app;
+    const [voice = "", style = "", language = ""] = next.picks.split(",");
+    // A language picked in the menu replaces one they asked for by voice; otherwise the new session keeps speaking it.
+    if (language !== this.live?.language) this.tongue = undefined;
+    if (this.tongue) this.context.push(`[Wink] They asked you to speak ${this.tongue}. From now on in this call speak only ${this.tongue}, whatever language they use.`);
+    this.live = { voice, style, language };
+    this.picks = undefined;
+    this.context.unshift(...this.riding.splice(0));
+    const since = (this.since ?? []).filter((line) => line.who !== "notice").map((line) => `${line.who === "user" ? "Person" : "Voice"}: ${line.text}`);
+    this.since = undefined;
+    if (since.length) this.context.push(`[Wink] Said on this call while your voice changed. Context only, do not read it out.\n${since.join("\n")}`);
+    old?.close();
+    this.release();
+  }
+
   private async token(resume: boolean): Promise<LiveSession | null> {
     let posted: Posted;
     try {
-      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), ...(this.callId ? { callId: this.callId, resume } : {}) });
+      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), ...(this.callId ? { callId: this.callId, resume } : { call: this.prefs }) });
     } catch (error) {
       this.fail(error instanceof Error ? error.message : String(error));
       return null;
@@ -449,18 +551,24 @@ export class LiveCall {
       return null;
     }
     this.callId = posted.data.callId;
-    this.aliases = LIVE_VOICE_NAMES[posted.data.voice as LiveVoice] ?? [];
+    this.aliases = posted.data.voice ? liveVoiceNames(posted.data.voice as LiveVoice) : [];
+    if (posted.data.locale === "en" || posted.data.locale === "ko") this.app = posted.data.locale;
+    if (posted.data.voice) this.live = { voice: String(posted.data.voice), style: String(posted.data.style ?? "normal"), language: this.app };
     return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(resume && this.handle ? { handle: this.handle } : {}) };
   }
 
   private connect(session: LiveSession) {
     const engine = this.deps.engine();
     this.engine = engine;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => { if (this.engine === engine && !this.ended) void this.reconnect(); }, READY_MS);
+    engine.connect(session, this.events(engine, session));
+  }
+
+  private events(engine: LiveEngine, session: LiveSession): LiveEvents {
     const mine = () => this.engine === engine && !this.ended;
     const draining = () => this.draining === engine;
-    clearTimeout(this.readyTimer);
-    this.readyTimer = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
-    const events: LiveEvents = {
+    return {
       ready: () => {
         if (draining() && this.early && this.lateFinish) {
           for (const pcm of this.early.frames) engine.sendAudio(pcm);
@@ -475,8 +583,8 @@ export class LiveCall {
         this.wasLive = true;
         const resumed = Boolean(session.handle);
         this.reconnecting = 0;
-        this.refresh();
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
+        this.refresh();
         const early = this.early;
         this.early = undefined;
         for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
@@ -484,6 +592,7 @@ export class LiveCall {
         if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
         if (early?.talked) this.pause();
         this.release();
+        this.restyle();
       },
       audio: (pcm) => {
         if (!mine()) return;
@@ -510,7 +619,8 @@ export class LiveCall {
         }
         this.echoed = "";
         // His words can arrive after the voice starts answering them.
-        if (spokenText(this.heardBuf)) {
+        // A late bare yes is the answer already acked, so the second ack stays held.
+        if (spokenText(this.heardBuf) && !(this.ackEcho && bareYes(spokenText(this.heardBuf)))) {
           this.unhold(true);
           if (this.ackEcho) this.ackEcho = this.reack = this.dropping = false;
         }
@@ -527,6 +637,7 @@ export class LiveCall {
         this.stir();
         if (this.snapshot.hushed || this.dropping) return;
         this.saidBuf += text;
+        if (this.ackEcho) return;
         const words = spokenText(this.saidBuf);
         if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
         const ask = this.checkAsk && !offerFirst(words) ? reasks(words, this.closed) : "no";
@@ -547,10 +658,11 @@ export class LiveCall {
         this.flushHeard();
         this.reack = this.acked === "spent" && !this.playing;
         this.ackEcho = this.reack && !this.readNext;
-        this.dropping = this.readNext || this.reack;
+        // A second ack is held, not dropped: its audio can come before his words, and then it answers him.
+        this.dropping = this.readNext || (this.reack && !this.ackEcho);
         this.readNext = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
-        this.echo = this.lastLine || this.offTongue || this.checkAsk ? [] : undefined;
+        this.echo = this.ackEcho || this.lastLine || this.offTongue || this.checkAsk ? [] : undefined;
         this.replyTo = this.stats.userLines;
         if (this.cutHold === "heard") this.cutHold = "answering";
       },
@@ -560,10 +672,11 @@ export class LiveCall {
         if (this.echo && this.checkAsk && !offerFirst(spokenText(this.saidBuf)) && reasks(spokenText(this.saidBuf), this.closed, true) === "yes") this.drop(this.askedLine());
         if (this.echo) {
           const repeat = lineKey(spokenText(this.saidBuf)) === this.lastLine;
-          if (repeat) this.stats.repeats += 1;
-          this.unhold(!repeat);
-          if (!repeat) this.caption("voice", this.saidBuf);
+          if (repeat && !this.ackEcho) this.stats.repeats += 1;
+          this.unhold(!repeat && !this.ackEcho);
+          if (!repeat && !this.ackEcho) this.caption("voice", this.saidBuf);
         }
+        this.deps.audio.endTurn();
         this.dropping = this.offTongue = this.checkAsk = false;
         const said = spokenText(this.saidBuf);
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
@@ -601,6 +714,7 @@ export class LiveCall {
         this.reack = this.ackEcho = false;
         if (this.playing) this.playing.ended = true;
         this.playedOut();
+        this.takeOver();
         this.release();
       },
       interrupted: () => {
@@ -640,7 +754,7 @@ export class LiveCall {
         for (const id of ids) this.cancelled.add(id);
         if (this.pending?.toolIds.some((id) => ids.includes(id))) this.stats.orders.cancelled += 1;
       },
-      resumable: (handle) => { this.handle = handle; },
+      resumable: (handle) => { if (mine()) this.handle = handle; },
       goAway: () => { if (mine()) void this.reconnect(); },
       usage: (total) => { this.stats.usage += total; },
       closed: (code, reason) => {
@@ -652,10 +766,11 @@ export class LiveCall {
         void this.reconnect();
       },
     };
-    engine.connect(session, events);
   }
 
   private async reconnect() {
+    this.swaps += 1;
+    this.dropStandby();
     const old = this.engine;
     this.engine = null;
     this.connected = false;
@@ -778,7 +893,8 @@ export class LiveCall {
       if (this.ended) return;
       const line = spokenText(this.heardBuf.slice(this.wokeAt));
       const flips = this.snapshot.hushed ? callsVoice(line, this.deps.botName, this.aliases) : asksForQuiet(line, this.deps.botName, this.aliases);
-      if (flips || (this.pending && consentOf(spokenText(this.heardBuf)))) this.flushHeard();
+      // With a card open the model waits on its answer, so every line ends here: "Hold on" left in the buffer would hide the "Yes" after it.
+      if (flips || this.pending) this.flushHeard();
     }, LIVE_VAD.silenceDurationMs);
   }
 
@@ -799,7 +915,8 @@ export class LiveCall {
   async answer(yes: boolean, spoken = false) {
     const pending = this.pending;
     if (!pending) return;
-    if (spoken) this.acked = "armed";
+    // Tapped too: a yes said as it is tapped, heard late, must not get a second ack.
+    this.acked = "armed";
     const said = this.stats.voiceLines;
     if (!yes) {
       this.stats.orders.declined += 1;
@@ -1015,9 +1132,12 @@ export class LiveCall {
     if (quiet) this.hush();
     if (woke) this.wake(0);
     if (!text) return;
-    this.lastLine = "";
+    // A bare yes just after the card was answered is that answer heard late, not a new line to reply to.
+    if (!this.acked || this.pending || !bareYes(text)) {
+      this.lastLine = "";
+      this.acked = undefined;
+    }
     this.readNext = false;
-    this.acked = undefined;
     if (this.cutHold) this.cutHold = "heard";
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -1096,6 +1216,7 @@ export class LiveCall {
   /** Every call row goes through here. */
   private postLines(lines: CallLine[]) {
     if (!this.callId) return;
+    this.since?.push(...lines);
     const write = this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/lines`, { callId: this.callId, lines }).catch(() => {});
     this.writes.add(write);
     void write.finally(() => this.writes.delete(write));
@@ -1373,6 +1494,8 @@ export class LiveCall {
   }
 
   quietDown(id: string) {
+    // The line it hushed on was for the voice, never an order on hang-up.
+    this.open.settle(this.stats.userLines);
     this.hush();
     this.engine?.sendToolResult([id], "hush", "quiet: say nothing until they say your name");
   }
@@ -1509,6 +1632,7 @@ export class LiveCall {
     if (this.loudAt && now - this.loudAt > UNHEARD_MS) {
       this.stats.unheard += 1;
       this.loudAt = 0;
+      this.takeOver();
     }
     if (!this.snapshot.micSilent && now - this.soundAt >= MIC_SILENT_MS) this.set({ micSilent: true });
     if (now - this.frameAt < MIC_GAP_MS) return;
@@ -1544,6 +1668,8 @@ export class LiveCall {
   }
 
   private teardown(hangUp = false) {
+    this.swaps += 1;
+    this.dropStandby();
     const engine = this.engine;
     const live = this.connected;
     this.engine = null;

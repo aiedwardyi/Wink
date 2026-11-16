@@ -169,6 +169,74 @@ describe("CallAudio", () => {
     audio.close();
   });
 
+  it("remakes only the voice not yet heard at a new speed, and moves the level at once", async () => {
+    const { audio, ctx, sources } = setup();
+    await audio.capture(() => {});
+    audio.onIdle = vi.fn();
+    audio.play(new Int16Array(12_000).fill(1000));
+    audio.play(new Int16Array(24_000).fill(1000));
+    audio.play(new Int16Array(24_000).fill(1000));
+    ctx.currentTime = 1.2;
+    audio.tune(0.8, 0.6);
+    expect(sources[0]!.stop).not.toHaveBeenCalled();
+    expect(sources.slice(1, 3).every((source) => source.stop.mock.calls.length === 1 && source.onended === null)).toBe(true);
+    const remade = sources.slice(3);
+    expect(remade[0]!.start).toHaveBeenCalledWith(1.55);
+    audio.endTurn();
+    const seconds = sources.slice(3).reduce((sum, source) => sum + (source.buffer as { duration: number }).duration, 0);
+    expect(seconds).toBeCloseTo(2 / 0.8, 1);
+    expect(remade.length).toBeGreaterThan(0);
+    expect(audio.onIdle).not.toHaveBeenCalled();
+    const out = (audio as unknown as { out: { gain: { setTargetAtTime: ReturnType<typeof vi.fn> } } }).out;
+    expect(out.gain.setTargetAtTime).toHaveBeenLastCalledWith(0.7 * 0.6, 1.2, 0.03);
+    audio.close();
+  });
+
+  it("lets a second speed change remake what the first one queued", async () => {
+    const { audio, ctx, sources } = setup();
+    await audio.capture(() => {});
+    for (let i = 0; i < 4; i++) audio.play(new Int16Array(12_000).fill(1000));
+    ctx.currentTime = 1.2;
+    audio.tune(0.8, 1);
+    const remade = sources.length;
+    ctx.currentTime = 1.9;
+    audio.tune(1.2, 1);
+    const live = (source: (typeof sources)[number]) => source.stop.mock.calls.length === 0;
+    expect(sources.slice(1, remade).filter((source) => live(source) && source.start.mock.calls[0]![0] > 1.9)).toHaveLength(0);
+    audio.endTurn();
+    const seconds = sources.slice(1).filter(live).reduce((sum, source) => sum + (source.buffer as { duration: number }).duration, 0);
+    expect(seconds).toBeLessThan(1.5 / 0.8 - 0.3);
+    audio.close();
+  });
+
+  it("keeps an earlier reply still queued when the speed changes during the next one", async () => {
+    const { audio, ctx, sources } = setup();
+    await audio.capture(() => {});
+    audio.play(new Int16Array(24_000).fill(1000));
+    audio.play(new Int16Array(24_000).fill(1000));
+    audio.endTurn();
+    audio.play(new Int16Array(2_400).fill(1000));
+    ctx.currentTime = 1.5;
+    audio.tune(0.8, 1);
+    audio.endTurn();
+    expect(sources[1]!.stop).not.toHaveBeenCalled();
+    const seconds = sources.filter((source) => source.stop.mock.calls.length === 0).reduce((sum, source) => sum + (source.buffer as { duration: number }).duration, 0);
+    expect(seconds).toBeGreaterThan(2 + 0.1 / 0.8 - 0.02);
+    audio.close();
+  });
+
+  it("plays at speed 1 exactly as it arrives", async () => {
+    const { audio, buffers } = setup();
+    await audio.capture(() => {});
+    audio.tune(1, 1);
+    const pcm = Int16Array.from({ length: 30_000 }, (_, i) => Math.round(8000 * Math.sin(i / 7)));
+    audio.play(pcm);
+    audio.endTurn();
+    expect(buffers).toHaveLength(1);
+    expect(buffers[0]![20_000]).toBeCloseTo(pcm[20_000]! / 32768, 6);
+    audio.close();
+  });
+
   it("lets the boop finish before releasing the output", async () => {
     vi.useFakeTimers();
     try {
@@ -189,11 +257,25 @@ describe("CallAudio", () => {
     }
   });
 
-  it("reports a blocked output instead of silently connecting", async () => {
+  it("reports a blocked output instead of silently connecting, and never as a mic error", async () => {
     const { audio, output } = setup();
-    output.play.mockRejectedValueOnce(new Error("Playback blocked"));
-    await expect(audio.capture(() => {})).rejects.toThrow("Playback blocked");
+    output.play.mockRejectedValueOnce(Object.assign(new Error("Playback blocked"), { name: "NotAllowedError" }));
+    await expect(audio.capture(() => {})).resolves.toBe(false);
     audio.close();
+  });
+
+  it("reports a context that will not resume without a tap instead of hanging", async () => {
+    vi.useFakeTimers();
+    try {
+      const { audio, ctx } = setup();
+      ctx.resume.mockReturnValueOnce(new Promise<void>(() => {}));
+      const capture = audio.capture(() => {});
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(capture).resolves.toBe(false);
+      audio.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resumes the context and the output on return", async () => {

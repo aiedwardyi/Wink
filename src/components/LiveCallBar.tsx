@@ -9,6 +9,7 @@ import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/li
 import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
+import { useCallVolume } from "@/lib/live-call/volume";
 import { usePresence } from "@/lib/use-presence";
 import { firstNeed } from "../../shared/call-status";
 import { ORDER_EXPIRY_MS } from "../../shared/live-call";
@@ -174,6 +175,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       audio,
       post,
       opener: active.opener,
+      prefs: bot.call,
     });
     return { call, level: (mic) => audio.level(mic) };
   });
@@ -243,6 +245,10 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   }, [bot.busy, bot.threadId, call, messages]);
 
   useEffect(() => onQueueCancelled((sendIds) => call.dequeued(sendIds)), [call]);
+
+  const picks = bot.call;
+  const volume = useCallVolume();
+  useEffect(() => call.retune(picks ?? {}, volume), [call, picks?.voice, picks?.speed, picks?.style, picks?.language, volume]);
 
   return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
 }

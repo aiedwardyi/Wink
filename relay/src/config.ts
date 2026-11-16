@@ -4,6 +4,7 @@ import { createPrivateKey, type KeyObject } from "node:crypto";
 import { open } from "node:fs/promises";
 import { posix } from "node:path";
 import { z } from "zod";
+import { parseServiceAccount, type GtsOptions } from "./eab.ts";
 import type { RelayLimits } from "./limits.ts";
 
 export const BASE_RE = /^(?=.{4,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -20,6 +21,8 @@ const limitsSchema = z
 export const configSchema = z.strictObject({
   /** Base domain; PCs live at <label>.<base>, the relay at relay.<base>. */
   base: z.string().toLowerCase().regex(BASE_RE),
+  /** Earlier bases still served, so PCs and phones set up on them keep working. */
+  oldBases: z.array(z.string().toLowerCase().regex(BASE_RE)).max(4).optional(),
   listen: z
     .strictObject({ host: z.string().default("::"), port: z.int().min(1).max(65535).default(443) })
     .default({ host: "::", port: 443 }),
@@ -49,6 +52,16 @@ export const configSchema = z.strictObject({
       keepDays: z.int().min(1).max(3650).default(90),
       maxDayBytes: z.int().min(1).default(200 * 1024 * 1024),
       readKeySha256: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
+  /** Absent: /v1/acme/eab answers 404 and no service account key is read. GTS allows 100 new orders an hour per project. */
+  gts: z
+    .strictObject({
+      project: z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/),
+      /** Used only when systemd's CREDENTIALS_DIRECTORY is not set. */
+      keyFile: z.string().optional(),
+      perHour: z.int().min(1).max(100).default(60),
+      perLabelPerDay: z.int().min(1).max(10).default(2),
     })
     .optional(),
   limits: limitsSchema,
@@ -108,4 +121,21 @@ export function operatorKeyPath(config: RelayConfig, env: NodeJS.ProcessEnv = pr
   if (env.CREDENTIALS_DIRECTORY) return posix.join(env.CREDENTIALS_DIRECTORY, "operator.key");
   if (config.operatorKeyFile) return config.operatorKeyFile;
   throw new Error("no operator key: set CREDENTIALS_DIRECTORY or operatorKeyFile");
+}
+
+const MAX_GTS_KEY_BYTES = 16 * 1024;
+
+/** The `gts` block with its service account key, or undefined (and no file read) without one. */
+export async function loadGts(config: RelayConfig, env: NodeJS.ProcessEnv = process.env): Promise<GtsOptions | undefined> {
+  if (!config.gts) return undefined;
+  const { keyFile, ...gts } = config.gts;
+  const path = env.CREDENTIALS_DIRECTORY ? posix.join(env.CREDENTIALS_DIRECTORY, "gts.json") : keyFile;
+  if (!path) throw new Error("no gts key: set CREDENTIALS_DIRECTORY or gts.keyFile");
+  let text: string;
+  try {
+    text = await readSmall(path, MAX_GTS_KEY_BYTES, "gts key file", true);
+  } catch (error) {
+    throw new Error(`gts key file unreadable: ${error instanceof Error && "code" in error ? String(error.code) : "error"}`);
+  }
+  return { ...gts, account: parseServiceAccount(text) };
 }
