@@ -503,16 +503,16 @@ describe("CodexDriver turns (fake app-server)", () => {
     }
   });
 
-  it("routes approvals to Orbit even when the user's codex config sets an auto reviewer", async () => {
+  it.each([["ask", "user"], ["auto", undefined]] as const)("sends approvalsReviewer only for the Ask chip (%s)", async (approval, reviewer) => {
     await create();
-    const dump = join(scratch, "reviewer.json");
+    const dump = join(scratch, `reviewer-${approval}.json`);
     process.env.FAKE_CODEX_DUMP = dump;
-    await instance.adapter.sendTurn({ threadId: "t-reviewer", text: "hi", approval: "auto" });
+    await instance.adapter.sendTurn({ threadId: `t-reviewer-${approval}`, text: "hi", approval });
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const threadStart = seen.calls.find((c: { method: string }) => c.method === "thread/start");
-    expect(threadStart.params.approvalsReviewer).toBe("user");
+    expect(threadStart.params.approvalsReviewer).toBe(reviewer);
   });
 
   it("carries the chip's policy onto a resumed thread", async () => {

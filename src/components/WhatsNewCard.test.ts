@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
+import { closeShow, useMapThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
 import type { SceneModule } from "@/scenes/scene-host";
 
@@ -36,7 +37,8 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 
 const api = vi.fn((..._args: unknown[]) => Promise.resolve({ ok: true }));
 const dispatch = vi.fn();
-vi.mock("@/state/store", () => ({ api: (...args: unknown[]) => api(...args), useStore: () => ({ dispatch }) }));
+const state = { selectedId: "atlas", bots: [{ id: "juno", threadId: "t-juno" }, { id: "atlas", threadId: "t-atlas" }] };
+vi.mock("@/state/store", () => ({ api: (...args: unknown[]) => api(...args), useStore: () => ({ state, dispatch }) }));
 
 let observers: { see: IntersectionObserverCallback; node?: Element }[] = [];
 vi.stubGlobal(
@@ -118,16 +120,58 @@ describe("whats new card", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("opens Memory from its Show me and stays open, and explains the one that starts on its own", () => {
-    render(RELEASE);
-    const [memory, verify] = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
-    act(() => verify.click());
-    expect(verify.getAttribute("aria-expanded")).toBe("true");
-    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1]!.show as { en: string }).en);
+  const showMe = (release: string, title: string) => {
+    render(release);
+    const tile = [...host.querySelectorAll(".whats-new-tile")].find((tile) => tile.querySelector(".whats-new-tile-title")?.textContent === title)!;
+    const text = tile.textContent;
+    act(() => tile.querySelector<HTMLButtonElement>(".whats-new-show")!.click());
     expect(onClose).not.toHaveBeenCalled();
-    act(() => memory.click());
+    return { tile, text };
+  };
+
+  it("opens Memory from its Show me", () => {
+    const { tile, text } = showMe("1.0.246", "See what your bot remembers");
     expect(dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "" } });
-    expect(onClose).not.toHaveBeenCalled();
+    expect(tile.textContent).toBe(text);
+  });
+
+  it("explains Live Verify in place, since it starts on its own", () => {
+    const { tile } = showMe("1.0.246", "Live Verify checks your site");
+    expect(tile.querySelector(".whats-new-show")!.getAttribute("aria-expanded")).toBe("true");
+    expect(tile.textContent).toContain("Starts on its own when a bot builds a page.");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("opens this chat's Map from its Show me", () => {
+    const { tile, text } = showMe("1.0.263", "Watch every worker on the Map");
+    let mapped: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((mapped = useMapThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(mapped).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
+  });
+
+  it("opens the model picker from the Gemini tile's Show me", () => {
+    const opened = vi.fn();
+    window.addEventListener("orbit:open-model-picker", opened);
+    const { tile, text } = showMe("1.0.263", "Gemini 4 Carbon + Hydrogen are here");
+    window.removeEventListener("orbit:open-model-picker", opened);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("opens Settings > Themes at the four new themes from its Show me", () => {
+    const { tile, text } = showMe("1.0.273", "Four new themes that move");
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "toggleAppSettings", open: true, section: "themes", skins: ["samurai-ink", "night-rain", "warp", "circuit"] });
+    expect(tile.textContent).toBe(text);
+    expect(tile.querySelector(".whats-new-show")!.hasAttribute("aria-expanded")).toBe(false);
+  });
+
+  it("pictures the themes tile with Samurai Ink", () => {
+    expect(WHATS_NEW["1.0.273"].tiles[0].clip).toMatch(/1\.0\.273-samurai-ink\.webp/);
   });
 
   it("plays the light clip on a light skin", () => {
@@ -148,7 +192,7 @@ describe("whats new card", () => {
     expect(button("확인")).toBeTruthy();
     expect(host.textContent).toContain(WHATS_NEW[RELEASE].title.ko);
     for (const entry of Object.values(WHATS_NEW)) {
-      for (const copy of [entry.title, entry.more, ...entry.tiles.flatMap((tile) => [tile.title, tile.line, ...(tile.show === "memory" ? [] : [tile.show])])]) {
+      for (const copy of [entry.title, entry.more, ...entry.tiles.flatMap((tile) => [tile.title, tile.line, ...("how" in tile ? [tile.how] : [])])]) {
         expect(copy.ko.trim()).not.toBe("");
       }
     }
@@ -165,18 +209,10 @@ describe("whats new card", () => {
       const tiles = [...host.querySelectorAll(".whats-new-tile")];
       expect(tiles).toHaveLength(2);
       expect(tiles.map((tile) => tile.querySelector(".whats-new-tile-title")?.textContent)).toEqual(entry.tiles.map((tile) => tile.title[locale]));
-      for (const [i, tile] of entry.tiles.entries()) {
-        expect(tiles[i].textContent).toContain(tile.line[locale]);
-        act(() => tiles[i].querySelector<HTMLButtonElement>(".whats-new-show")!.click());
-        expect(tiles[i].textContent).toContain((tile.show as Record<typeof locale, string>)[locale]);
-      }
+      for (const [i, tile] of entry.tiles.entries()) expect(tiles[i].textContent).toContain(tile.line[locale]);
     }
     expect(entry.tiles[0].title.en).toContain("Map");
-    for (const locale of ["en", "ko"] as const) {
-      expect(entry.tiles[1]!.title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
-      expect((entry.tiles[1]!.show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
-    }
-    expect(dispatch).not.toHaveBeenCalled();
+    for (const locale of ["en", "ko"] as const) expect(entry.tiles[1]!.title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
   });
 
   it("shows the four new themes as one tile in 1.0.273, in English and Korean", () => {
@@ -191,12 +227,9 @@ describe("whats new card", () => {
       expect(tiles).toHaveLength(1);
       expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
       expect(tiles[0].textContent).toContain(entry.tiles[0].line[locale]);
-      act(() => tiles[0].querySelector<HTMLButtonElement>(".whats-new-show")!.click());
-      expect(tiles[0].textContent).toContain((entry.tiles[0].show as Record<typeof locale, string>)[locale]);
     }
     for (const name of ["Samurai Ink", "Night Rain", "Warp", "Circuit"]) expect(entry.tiles[0].line.en).toContain(name);
     for (const name of ["사무라이 잉크", "나이트 레인", "워프", "서킷"]) expect(entry.tiles[0].line.ko).toContain(name);
-    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -3284,7 +3284,7 @@ describe("harness HTTP API", () => {
   it("validates and persists the global room turn timeout", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 5 });
+    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 1_440 });
 
     for (const turnTimeoutMinutes of [0, 1.5, 1441, "20", null]) {
       const invalid = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes } });
@@ -3302,7 +3302,7 @@ describe("harness HTTP API", () => {
     const disk = JSON.parse(readFileSync(join(home, ".orbit", "config.json"), "utf8"));
     expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
 
-    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 1_440 } });
   });
 
   it("keeps shared Local VM mode by default and saves per-bot mode when enabled", async () => {
@@ -5345,7 +5345,7 @@ describe("approval chip on the claude CLI", () => {
       expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).status).toBe(200);
       const auto = await argvForTurn(bot.id, "create todo.txt");
       expect(auto[auto.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
-      expect(JSON.parse(auto[auto.indexOf("--settings") + 1]).permissions.ask).toEqual(["Bash", "PowerShell"]);
+      expect(auto).not.toContain("--settings");
     } finally {
       await api("DELETE", `/api/bots/${bot.id}`);
     }

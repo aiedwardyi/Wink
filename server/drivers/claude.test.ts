@@ -7,11 +7,11 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { spawn as spawnChild } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeMessage, fileAttachment } from "../../src/lib/composer-attachments.ts";
@@ -19,6 +19,7 @@ import { saveImage } from "../attachments.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, saveConfig, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
+import { resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ClaudeDriver, claudeToolSummary, claudeUserContent, permissionSocketPath, type ClaudeConfig } from "./claude.ts";
@@ -3404,26 +3405,51 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     });
   });
 
-  it("keeps Auto mode on acceptEdits: edits run unasked, commands reach the broker over the user's allow list", async () => {
+  it("lets the user's own allow list run commands unasked in Auto mode", async () => {
     process.env.FAKE_CLAUDE_USER_ALLOW = "Write,Edit,Bash";
     await create("edit");
     const dump = join(scratch, "auto-dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-auto-edits", text: "go", cwd: scratch, approval: "auto" });
 
-    const bash = await recorder.until((e) => e.type === "request.opened" && e.tool === "Bash");
+    const first = await recorder.until((e) => e.type === "turn.completed" || e.type === "request.opened");
+    expect(first.type).toBe("turn.completed");
     expect(existsSync(join(scratch, "made.txt"))).toBe(true);
-    await instance.adapter.respondToRequest("t-auto-edits", bash.requestId!, { behavior: "allow" });
-    await recorder.until((e) => e.type === "turn.completed");
     expect(existsSync(join(scratch, "ran.txt"))).toBe(true);
-    expect(recorder.events.some((e) => e.type === "request.opened" && e.tool === "Write")).toBe(false);
 
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
-    expect(JSON.parse(argv[argv.indexOf("--settings") + 1])).toEqual({
-      permissions: { ask: ["Bash", "PowerShell"] },
-      sandbox: { autoAllowBashIfSandboxed: false },
+    expect(argv).not.toContain("--settings");
+  });
+
+  it("leaves the permission mode to a defaultMode in the user's own settings", async () => {
+    const configDir = join(scratch, "own-claude-config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "settings.json"), JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }));
+    await create(undefined, { CLAUDE_CONFIG_DIR: configDir });
+    const dump = join(scratch, "own-mode-dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-own-mode", text: "go", cwd: scratch, approval: "auto" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).not.toContain("--permission-mode");
+
+    rmSync(dump);
+    const ask = await instance.adapter.sendTurn({ threadId: "t-own-mode-ask", text: "go", cwd: scratch, approval: "ask" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === ask.turnId);
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("default");
+
+    rmSync(dump);
+    const desktop = await instance.adapter.sendTurn({
+      threadId: "t-own-mode-desktop",
+      text: "go",
+      cwd: scratch,
+      approval: "auto",
+      integrations: { localComputer: { command: "/cua-driver", args: ["mcp"], env: {}, platform: "linux", scope: "local-computer" } },
     });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === desktop.turnId);
+    const desktopArgv = JSON.parse(readFileSync(dump, "utf8")).argv;
+    expect(desktopArgv[desktopArgv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
   });
 
   it("respawns a warm session under the new mode when the chip flips", async () => {
@@ -4033,6 +4059,90 @@ describe("ClaudeDriver snapshot auth (fake CLI)", () => {
     process.env.FAKE_CLAUDE_AUTH = "inherited-api-key";
     process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
     expect(await instance.snapshot({ rescan: true })).toMatchObject({ state: "available", authenticated: false });
+  });
+});
+
+// npm blocked Claude's postinstall, so %APPDATA%\npm\claude.cmd runs a placeholder claude.exe
+// that can't start, and it sits ahead of the native install in ~/.local/bin.
+describe.skipIf(process.platform !== "win32")("ClaudeDriver behind npm's placeholder claude.exe", () => {
+  const PLACEHOLDER = `echo "Error: claude native binary not installed." >&2
+echo "" >&2
+echo "Either postinstall did not run (--ignore-scripts, some pnpm configs)" >&2
+echo "or the platform-native optional dependency was not downloaded" >&2
+echo "(--omit=optional)." >&2
+exit 1
+`;
+  const NPM_SHIM = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*
+`;
+  const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA };
+  let root: string;
+  let instance: ProviderInstance | undefined;
+
+  const install = (native: boolean) => {
+    const npm = join(root, "AppData", "Roaming", "npm");
+    mkdirSync(join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin"), { recursive: true });
+    writeFileSync(join(npm, "claude.cmd"), NPM_SHIM);
+    writeFileSync(join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), PLACEHOLDER);
+    if (!native) return;
+    const bin = join(root, ".local", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "claude.cmd"), `@ECHO off\r\n"%~dp0claude.js" %*\r\n`);
+    writeFileSync(join(bin, "claude.js"), `import(${JSON.stringify(pathToFileURL(FAKE_CLI).href)});\n`);
+  };
+  const create = async () => {
+    instance = await ClaudeDriver.create({
+      instanceId: "claude-npm-placeholder",
+      displayName: undefined,
+      environment: { CLAUDE_CONFIG_DIR: join(root, "claude-config") },
+      enabled: true,
+      config: { cli: "claude", permissionMode: "acceptEdits" },
+    });
+    return instance;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "omb-claude-placeholder-"));
+    Object.assign(process.env, { PATH: join(process.env.SystemRoot ?? "C:\\Windows", "System32"), USERPROFILE: root,
+      APPDATA: join(root, "AppData", "Roaming"), LOCALAPPDATA: join(root, "AppData", "Local") });
+    resetPathCacheForTests();
+  });
+
+  afterEach(async () => {
+    await instance?.dispose();
+    instance = undefined;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetPathCacheForTests();
+    await removeTempDir(root);
+  });
+
+  it("runs the native install when the npm claude ahead of it can't start", async () => {
+    install(true);
+    expect(await (await create()).snapshot()).toMatchObject({ state: "available", version: "2.1.232 (Claude Code)", authenticated: true });
+    expect(procs.resolveCli("claude").args[0]).toBe(join(root, ".local", "bin", "claude.js"));
+  });
+
+  it("runs the native install when a broken npm claude also runs through node.exe", async () => {
+    install(true);
+    const npm = join(root, "AppData", "Roaming", "npm");
+    writeFileSync(join(npm, "claude.cmd"), `@ECHO off\r\n"%~dp0broken-claude.js" %*\r\n`);
+    writeFileSync(join(npm, "broken-claude.js"), "process.exit(1);\n");
+    expect(await (await create()).snapshot()).toMatchObject({ state: "available", version: "2.1.232 (Claude Code)" });
+  });
+
+  it("reads Not installed, not signed out, when the placeholder is the only claude", async () => {
+    install(false);
+    expect(await (await create()).snapshot()).toMatchObject({ state: "unavailable", cliMissing: true });
   });
 });
 

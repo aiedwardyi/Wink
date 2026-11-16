@@ -686,6 +686,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         ...appSettingsNavigation(state, action),
+        appSettingsSkins: open && action.skins ? action.skins : null,
         settingsOpen: open ? false : state.settingsOpen,
         inspectorOpen: open ? false : state.inspectorOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -1050,6 +1051,7 @@ export const initialState: AppState = {
   appSettingsOpen: false,
   appSettingsSection: "general",
   appSettingsPage: false,
+  appSettingsSkins: null,
   provisioning: {},
   focusMessage: null,
   connected: false,

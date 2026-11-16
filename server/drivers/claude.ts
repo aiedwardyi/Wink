@@ -26,7 +26,7 @@ import { ATTACHMENTS_DIR, sniffImageMime } from "../attachments.ts";
 import { BACKGROUND_DENY_NOTE } from "../auto-approve.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
-import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
+import { brokerSocketPath, cliVersion, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
@@ -75,6 +75,8 @@ import { baseAccount } from "../worker-resume.ts";
 import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
+// Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
+const authChecks = new Map<string, Promise<string>>();
 
 /** Whether `claude` is signed in, and as whom.
  *
@@ -88,9 +90,19 @@ export function claudeAuthStatus(
   env: NodeJS.ProcessEnv,
   run: typeof execCli = execCli,
   account?: AccountContext,
+  deadlineMs = 3000,
 ): Promise<{ signedIn?: boolean; account?: string; identity?: string; engineSignedIn?: boolean }> {
+  const key = `${cli}\n${account?.home ?? claudeConfigDir(env)}`;
+  const check = authChecks.get(key) ?? new Promise<string>((resolve) => {
+    run(cli, ["auth", "status", "--json"], { env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => resolve(stdout));
+  });
+  if (!authChecks.has(key)) {
+    authChecks.set(key, check);
+    void check.finally(() => authChecks.delete(key)).catch(() => {});
+  }
   return new Promise((resolve) => {
-    run(cli, ["auth", "status", "--json"], { timeout: 3000, env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => {
+    const deadline = setTimeout(() => resolve({}), deadlineMs);
+    check.finally(() => clearTimeout(deadline)).then((stdout) => {
       try {
         const parsed = claudeAuthSchema.safeParse(JSON.parse(stdout));
         if (!parsed.success) resolve({});
@@ -276,11 +288,18 @@ const ASK_SETTINGS = JSON.stringify({
   permissions: { ask: WRITE_TOOLS },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
-// Auto sends commands to the broker for approval; edits run under acceptEdits.
-const AUTO_SETTINGS = JSON.stringify({
-  permissions: { ask: ["Bash", "PowerShell"] },
-  sandbox: { autoAllowBashIfSandboxed: false },
-});
+
+const ownDefaultModeSchema = z.object({ permissions: z.object({ defaultMode: z.string() }) });
+
+function hasOwnDefaultMode(configDir: string, cwd: string): boolean {
+  return [join(configDir, "settings.json"), join(cwd, ".claude", "settings.json"), join(cwd, ".claude", "settings.local.json")].some((file) => {
+    try {
+      return ownDefaultModeSchema.safeParse(JSON.parse(readFileSync(file, "utf8"))).success;
+    } catch {
+      return false;
+    }
+  });
+}
 
 /** The grants of the launch flags in sendTurn; server/turn-access.test.ts checks them against the real argv. */
 export function claudeAccess(config: Pick<ClaudeConfig, "permissionMode" | "tools" | "disallowedTools">, turn: AccessTurn): TurnAccess {
@@ -1043,6 +1062,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const asks = turn.approval === "ask" && config.permissionMode !== "bypassPermissions";
       const auto = turn.approval === "auto";
       const autoAttended = auto && turn.attended === true;
+      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
+      turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
+      // Wink's acceptEdits default yields to a defaultMode the user set in their own settings;
+      // desktop control keeps it, since its guards live in the broker an inherited bypass would skip.
+      const ownMode =
+        !asks && !controlsHost && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+        hasOwnDefaultMode(input.account?.home ?? claudeConfigDir(turnEnvironment), turn.cwd ?? homedir());
+      const permissionMode = asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode;
 
       const args = [
         "-p",
@@ -1052,19 +1079,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // token-level streaming: content_block_delta events between the
         // whole-message frames, so the bubble grows as the model writes
         "--include-partial-messages",
-        "--permission-mode", asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode,
+        ...(ownMode ? [] : ["--permission-mode", permissionMode]),
       ];
       if (asks) args.push("--settings", ASK_SETTINGS);
-      else if (turn.approval === "auto" && config.permissionMode !== "bypassPermissions") {
-        args.push("--settings", AUTO_SETTINGS);
-      }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
       // `--tools ""` already removes it, so no deny entry there.
       const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
-      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
-      turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
       if (input.account && turnModel && !models.options.some((model) => model.id === turnModel)) throw new Error("Unsupported subscription model");
       if (restart?.turn.settled) return { turnId };
@@ -2131,11 +2153,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     );
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
       const env = claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account);
-      const version = await new Promise<string | null>((resolve) => {
-        execCli(config.cli, ["--version"], { timeout: 8000, env, ...launchPolicy }, (err, stdout) =>
-          resolve(err ? null : stdout.trim()),
-        );
-      });
+      const version = await new Promise<string | null>((resolve) => cliVersion(config.cli, { timeout: 8000, env, ...launchPolicy }, resolve));
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
       const { signedIn: authenticated, account, identity, engineSignedIn } = await authStatus(opts?.rescan || opts?.refresh);
       if (input.account) admitted = authenticated === true;

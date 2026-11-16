@@ -34,7 +34,7 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
-const featured = ["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
+const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon Night", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Lagoon", "Snow", "Dim Sand", "Wink Day", "Notebook"];
 const darkCount = 15;
 const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", "Samurai Ink": "사무라이 잉크", "Night Rain": "나이트 레인", Warp: "워프", Circuit: "서킷", Lagoon: "라군", Snow: "스노우" };
 const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Lagoon", "Snow"];
@@ -92,6 +92,14 @@ describe("featured themes", () => {
     expect(more.getAttribute("aria-expanded")).toBe("false");
     await folded();
     expect(names()).toEqual(shown);
+  });
+
+  it("opens with every new theme ahead of every older one in each section", async () => {
+    await mount("precision");
+    const sections = [...document.querySelectorAll(".grid")].map((grid) => [...grid.querySelectorAll("button[aria-pressed]")].map((button) => !!button.querySelector("[data-skin-new]")));
+    expect(sections).toHaveLength(2);
+    for (const isNew of sections) expect(isNew).toEqual([...isNew].sort((a, b) => Number(b) - Number(a)));
+    expect(names()[0]).toBe("Samurai Ink");
   });
 
   it("keeps an extra active theme up front, follows external changes and resets the fold on remount", async () => {
@@ -159,10 +167,24 @@ describe("featured themes", () => {
   });
 });
 
+describe("Reveal", () => {
+  it("scrolls to the first of the asked themes in the grid, once per request", async () => {
+    await mount();
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {});
+    const reveal = (skins: SkinId[] | null) => act(async () => root.render(createElement(I18nProvider, null, createElement(SkinPicker, { reveal: skins }))));
+    await reveal(["circuit", "warp", "samurai-ink"]);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(tiles().find((tile) => tile.dataset.skinTile === "samurai-ink"));
+    await reveal(null);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    scrolled.mockRestore();
+  });
+});
+
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
     await mount("precision", "en");
-    expect(tagged()).toEqual(["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow"]);
+    expect(tagged()).toEqual(["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon Night", "Snow Night", "Bronze", "Lagoon", "Snow", "Dim Sand"]);
     await act(async () => root.unmount());
     await mount("precision", locale);
     expect(document.querySelector("[data-skin-new]")?.textContent).toBe(locale === "en" ? "New" : "신규");
