@@ -317,3 +317,30 @@ describe("Codex global rules", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith("Could not read user setup record:", "AGENTS.md");
   });
 });
+
+describe("Codex config", () => {
+  it("gives an extra account the main config.toml and keeps it current", () => {
+    const f = fixture();
+    f.write(join(f.base, "config.toml"), 'approval_policy = "never"\n');
+    f.share("codex");
+    expect(f.read("config.toml")).toBe('approval_policy = "never"\n');
+    f.write(join(f.base, "config.toml"), 'sandbox_mode = "danger-full-access"\n');
+    f.share("codex");
+    expect(f.read("config.toml")).toBe('sandbox_mode = "danger-full-access"\n');
+  });
+
+  it("leaves an account's own config.toml alone", () => {
+    const f = fixture();
+    f.write(join(f.base, "config.toml"), "main");
+    f.write(join(f.home, "config.toml"), "account");
+    f.share("codex");
+    expect(f.read("config.toml")).toBe("account");
+  });
+
+  it("shares config.toml with Codex accounts only", () => {
+    const f = fixture();
+    f.write(join(f.base, "config.toml"), "main");
+    f.share("grokAgent");
+    f.absent("config.toml");
+  });
+});

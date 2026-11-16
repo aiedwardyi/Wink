@@ -55,19 +55,17 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
     const current = present(destination);
     if (complete && current?.isDirectory() && scanStart - Math.max(sourceInfo.mtimeMs, current.mtimeMs) > SETTLE_MS) skillScans.set(key, { sourceMtimeMs: sourceInfo.mtimeMs, destinationMtimeMs: current.mtimeMs });
   });
-  if (driver === "codex" || driver === "grokAgent") attempt("AGENTS.md", () => {
-    const override = join(baseHome, "AGENTS.override.md");
-    const source = sourceStat(override)?.isFile() ? override : join(baseHome, "AGENTS.md");
+  // A copy stays Wink's while it matches its record; once the account edits it, it is left alone.
+  const ownedCopy = (name: string, source: string, recordPath: string) => {
     const sourceInfo = sourceStat(source);
-    const destination = join(account.home, "AGENTS.md");
+    const destination = join(account.home, name);
     const destinationInfo = present(destination);
-    const recordPath = join(DATA_DIR, "account-shared", `${account.id}.json`);
     type Stamp = { size: number; mtimeMs: number };
     let record: { source: Stamp; destination: Stamp } | undefined;
     const recordInfo = present(recordPath);
     if (recordInfo) {
       try { record = JSON.parse(readFileSync(recordPath, "utf8")); }
-      catch { console.warn("Could not read user setup record:", "AGENTS.md"); }
+      catch { console.warn("Could not read user setup record:", name); }
     }
     const stamp = ({ size, mtimeMs }: Stamp): Stamp => ({ size, mtimeMs });
     const matches = (info: Stamp, saved?: Stamp) => info.size === saved?.size && info.mtimeMs === saved.mtimeMs;
@@ -87,5 +85,10 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
       mkdirSync(dirname(recordPath), { recursive: true });
       writeFileSync(recordPath, JSON.stringify({ source: stamp(sourceInfo), destination: stamp(destinationStat) }), "utf8");
     } finally { rmSync(temporary, { force: true }); }
+  };
+  if (driver === "codex" || driver === "grokAgent") attempt("AGENTS.md", () => {
+    const override = join(baseHome, "AGENTS.override.md");
+    ownedCopy("AGENTS.md", sourceStat(override)?.isFile() ? override : join(baseHome, "AGENTS.md"), join(DATA_DIR, "account-shared", `${account.id}.json`));
   });
+  if (driver === "codex") attempt("config.toml", () => ownedCopy("config.toml", join(baseHome, "config.toml"), join(DATA_DIR, "account-shared", `${account.id}.config.json`)));
 }
