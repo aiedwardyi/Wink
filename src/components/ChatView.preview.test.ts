@@ -288,7 +288,7 @@ describe("staged chat peek", () => {
         : createElement(TeamRoomTranscript, { lines: heavyLines, mine: () => false, base: "/api/rooms/peek-lines", label: "People", onReply: () => {} })) }),
   )));
 
-  it.each(["bot", "room", "people"] as const)("mounts a peeked %s newest row first and keeps it through promotion", async (kind) => {
+  it.each(["bot", "room", "people"] as const)("appends a peeked %s window's rows oldest first and keeps them through promotion", async (kind) => {
     await stage(kind, true);
     expect(host.querySelector("[data-orbit-transcript]")).not.toBeNull();
     expect(mids()).toEqual([]);
@@ -298,13 +298,13 @@ describe("staged chat peek", () => {
     expect(host.querySelector("[data-orbit-composer]") === null).toBe(kind === "people");
     expect(mids()).toEqual([]);
     await frame();
-    expect(mids()).toEqual(["heavy-199"]);
-    const tail = host.querySelector('[data-mid="heavy-199"]');
+    expect(mids()).toEqual(["heavy-196"]);
+    const head = host.querySelector('[data-mid="heavy-196"]');
     await frame();
-    expect(mids()).toEqual(["heavy-198", "heavy-199"]);
+    expect(mids()).toEqual(["heavy-196", "heavy-197"]);
     await stage(kind, false);
     expect(mids()).toEqual(["heavy-196", "heavy-197", "heavy-198", "heavy-199"]);
-    expect(host.querySelector('[data-mid="heavy-199"]')).toBe(tail);
+    expect(host.querySelector('[data-mid="heavy-196"]')).toBe(head);
   });
 
   it("mounts the bot header before its controls", async () => {

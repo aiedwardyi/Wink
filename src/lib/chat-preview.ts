@@ -4,7 +4,7 @@ export const CHAT_PEEK_WINDOW_SIZE = 4;
 export const ChatPreviewContext = createContext(false);
 export const useChatPreview = () => useContext(ChatPreviewContext);
 
-// A peeked page mounts one part per frame so no commit outlasts a frame: shell, controls, composer, then rows newest first.
+// A peeked page mounts one part per frame so no commit outlasts a frame: shell, controls, composer, then rows oldest first, appended so mounted rows keep their style.
 const PEEK_PARTS = { controls: 1, composer: 2, rows: 3 };
 const PEEK_SETTLED = PEEK_PARTS.rows + CHAT_PEEK_WINDOW_SIZE;
 const ChatPeekPartContext = createContext(PEEK_SETTLED);
@@ -12,14 +12,14 @@ const ChatPeekSettledContext = createContext(true);
 
 export const useChatPeekSettled = () => useContext(ChatPeekSettledContext);
 
-/** Newest messages a peeked transcript has mounted so far. */
+/** Window rows a peeked transcript has mounted so far, from its oldest. */
 export function useChatPeekRows(): number {
   const part = useContext(ChatPeekPartContext);
   return part >= PEEK_SETTLED ? Infinity : Math.max(0, part - PEEK_PARTS.rows + 1);
 }
 
 export function peekRows<T>(rows: T[], count: number): T[] {
-  return count < rows.length ? rows.slice(rows.length - count) : rows;
+  return count < rows.length ? rows.slice(0, count) : rows;
 }
 
 export function ChatPeekPart({ part, children }: { part: "controls" | "composer"; children: ReactNode }) {
