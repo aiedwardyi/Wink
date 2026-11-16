@@ -138,7 +138,8 @@ test("a hosted remote pane types its ssh line", { ...windows, timeout: 120_000 }
   assert.deepEqual(opens, [["work", "claude 'Read card.md'", "D:\\far\\folder", "work"]]);
   assert.equal(f.host.readBot("bot-1").panes.find((listed) => listed.sessionId === pane.sessionId).host, "work");
   assert.equal(f.client.state().panes, 1);
-  const [listed] = await f.client.panes();
+  // The output comes before the command's end mark, and a pane still running is kept at quit.
+  const listed = await until(async () => (await f.client.panes()).find((item) => item.mark?.kind === "D"));
   await f.host.dispose();
   assert.equal(alive(listed.pid), false);
   assert.equal(f.client.state().panes, 0);
