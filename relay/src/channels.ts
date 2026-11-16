@@ -199,7 +199,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
       if (result.ticket) ready.ticket = result.ticket;
       if (result.account?.refreshed) ready.account = result.account.refreshed;
       if (ctx.snags) ready.snags = true;
-      if (hub.recordsTeam) ready.active = true;
+      if (hub.recordsTeam(result.label)) ready.active = true;
       if (ctx.reportOwner) ready.reportOwner = ctx.reportOwner;
       if (ctx.roomCodes) ready.roomCodes = true;
       ready.pokes = true;

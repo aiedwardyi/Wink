@@ -103,7 +103,8 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
   const reports = teamOwnerEmail ? new ReportStore(opts.dataDir, teamOwnerEmail) : undefined;
   const roomCodes = await RoomCodeStore.open(opts.dataDir, now, log);
   const stats = opts.stats ? await StatsStore.open(opts.dataDir, opts.stats, now, log) : undefined;
-  const hub = new Hub({ limits, log, now, team });
+  const googleEnrolls = opts.google ? await GoogleEnrollJournal.open(opts.dataDir) : undefined;
+  const hub = new Hub({ limits, log, now, team, joinedWithGoogle: (label) => googleEnrolls?.has(label) ?? false });
   const revoked = new RevocationList(opts.revokedLabelsFile, log);
   await revoked.load();
   const store = await InviteStore.open(opts.dataDir, now);
@@ -148,10 +149,10 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
         ticketTtlSec,
       })
     : undefined;
-  const googleEnroller = accounts
+  const googleEnroller = accounts && googleEnrolls
     ? new GoogleEnroller({
         accounts,
-        journal: await GoogleEnrollJournal.open(opts.dataDir),
+        journal: googleEnrolls,
         operatorPrivateKey: opts.operatorPrivateKey,
         isRevoked: (label) => revoked.has(label),
         limits,

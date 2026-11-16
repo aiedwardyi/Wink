@@ -54,6 +54,8 @@ export interface HubOptions {
   now?: () => number;
   /** Set only when the relay has a team owner. */
   team?: TeamLog;
+  /** Labels that joined with Google rather than the owner's setup code: never on the team log. */
+  joinedWithGoogle?: (label: string) => boolean;
 }
 
 export type JoinResult = "parked" | "spliced" | "unknown-session" | "bad-token" | "pool-full";
@@ -85,8 +87,9 @@ export class Hub {
     return this.byLabel.size;
   }
 
-  get recordsTeam(): boolean {
-    return this.opts.team !== undefined;
+  /** Only the owner's own PCs, the ones joined with a setup code, report their person's active times. */
+  recordsTeam(label: string): boolean {
+    return this.opts.team !== undefined && !this.opts.joinedWithGoogle?.(label);
   }
 
   get splicedCount(): number {
@@ -165,6 +168,7 @@ export class Hub {
     const bucket = this.bySub.get(subHash) ?? new Map<string, string>();
     bucket.set(session.label, name);
     this.bySub.set(subHash, bucket);
+    if (!this.recordsTeam(session.label)) return;
     this.opts.team?.setName(session.label, name);
     this.opts.team?.setAccount(session.label, subHash, person);
   }
@@ -175,7 +179,7 @@ export class Hub {
   }
 
   active(session: Session): void {
-    if (this.byLabel.get(session.label) === session) this.opts.team?.active(session.label);
+    if (this.byLabel.get(session.label) === session && this.recordsTeam(session.label)) this.opts.team?.active(session.label);
   }
 
   /** Forwards a poke at most once per pokeIntervalMs per sender; pokes inside the interval collapse into one trailing forward. */

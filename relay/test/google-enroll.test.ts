@@ -1,11 +1,11 @@
 import { createPublicKey, sign } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { request } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { googleSubHash } from "../../shared/google-id-token.ts";
-import { verifyAccountTicket, verifyTicket } from "../../shared/relay-protocol.ts";
+import { encodeFrame, signAccountTicket, verifyAccountTicket, verifyTicket } from "../../shared/relay-protocol.ts";
 import { loadConfig } from "../src/config.ts";
 import type { RelayLimits } from "../src/limits.ts";
 import { makePc, openControl, startRelay, type Harness, type Pc } from "./fixtures.ts";
@@ -123,6 +123,33 @@ describe("POST /v1/enroll/google", () => {
     const ctl = await openControl(h, pc, { ticket: String(res.body?.ticket), account: String(res.body?.account) });
     expect(h.relay.hub.pcsFor(googleSubHash("ok-sub"))).toEqual([{ label: pc.label, name: "" }]);
     ctl.socket.destroy();
+  });
+
+  it("keeps a Google-joined pc's names and active times off the team log", async () => {
+    const s = setup();
+    const h = await startRelay({
+      google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: ORIGIN, keys: s.issuer },
+      teamOwnerEmail: "owner@example.com",
+      now: s.clock.now,
+      limits: { enrollPerIpPerHour: 1000 },
+    });
+    harnesses.push(h);
+    const stranger = makePc();
+    const joined = await enroll(h, stranger, token(s, "stranger-sub"));
+    const away = await openControl(h, stranger, { ticket: String(joined.body?.ticket), account: String(joined.body?.account), name: "Stranger PC", person: "Stranger" });
+    const mate = makePc();
+    const iat = Math.floor(s.clock.t / 1000);
+    const account = signAccountTicket({ label: mate.label, subHash: googleSubHash("mate-sub"), iat, exp: iat + 3600 }, h.operator);
+    const home = await openControl(h, mate, { account, name: "Mate PC", person: "Mate" });
+    expect([away.ready.active, home.ready.active]).toEqual([undefined, true]);
+    away.socket.write(encodeFrame({ type: "active" }));
+    home.socket.write(encodeFrame({ type: "active" }));
+    const journal = () => readFile(join(h.dataDir, "team-sessions"), "utf8").catch(() => "");
+    await vi.waitFor(async () => expect(await journal()).toMatch(new RegExp(`^act ${mate.label} `, "m")));
+    expect((await journal()).split("\n").filter((line) => line.includes(stranger.label) && !line.startsWith("pc "))).toEqual([]);
+    expect(h.relay.hub.pcsFor(googleSubHash("stranger-sub"))).toEqual([{ label: stranger.label, name: "Stranger PC" }]);
+    away.socket.destroy();
+    home.socket.destroy();
   });
 
   it("refuses a stale token", async () => {

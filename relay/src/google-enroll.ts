@@ -93,6 +93,10 @@ export class GoogleEnrollJournal {
     return journal;
   }
 
+  has(label: string): boolean {
+    return this.byLabel.has(label);
+  }
+
   /**
    * Checks every cap and marks the label in one synchronous turn, so concurrent
    * enrollments cannot both take the last spot.
