@@ -6,6 +6,7 @@ import { captureTranscriptAnchor, distanceFromTranscriptEdge, restoreTranscriptA
 import { TRANSCRIPT_WINDOW_SIZE, advanceWindow, shouldAdvanceWindow } from "./transcript-window";
 import { groupActivityRuns } from "./activity-runs";
 import { workerAnchors, type WorkerRun } from "./worker-runs";
+import { useChatPreview } from "./chat-preview";
 
 // rows a window reading back keeps mounted; the rest below unmount until the reader scrolls down
 const EARLIER_CAP = TRANSCRIPT_WINDOW_SIZE * 2;
@@ -86,10 +87,11 @@ function lookupMessage(threadId: string, messageId: string): Promise<Message | n
 
 /** A pinned or quoted message, fetched alone when it is older than every loaded page. */
 export function useThreadMessage(threadId: string, messageId: string | undefined, held: Message | undefined): Message | undefined {
+  const preview = useChatPreview();
   const [fetched, setFetched] = useState<Message | null>(null);
   const missing = Boolean(messageId && !held);
   useEffect(() => {
-    if (!missing || !messageId) return;
+    if (preview || !missing || !messageId) return;
     let alive = true;
     void lookupMessage(threadId, messageId).then((message) => {
       if (alive) setFetched(message);
@@ -97,7 +99,7 @@ export function useThreadMessage(threadId: string, messageId: string | undefined
     return () => {
       alive = false;
     };
-  }, [threadId, messageId, missing]);
+  }, [threadId, messageId, missing, preview]);
   return held ?? (fetched && fetched.id === messageId ? fetched : undefined);
 }
 

@@ -342,6 +342,20 @@ describe("steer-queue module", () => {
     expect([plain.groupId, plain.ready, plain.spoken]).toEqual(["room-plain", undefined, undefined]);
   });
 
+  it("keeps chain hops from different asks, or none, in their own room participations", () => {
+    const skye = fakeBot("skye-chain", "skye-chain-1to1", true);
+    const store = fakeStore([skye]);
+    queueRoomParticipation(skye.id, "room-chain", { groupId: "room-chain", hop: 1, chainAsk: "ask-from-sora" });
+    queueRoomParticipation(skye.id, "room-chain", { groupId: "room-chain", hop: 1, chainAsk: "ask-from-mina" });
+    queueRoomParticipation(skye.id, "room-chain", { groupId: "room-chain", hop: 1, chainAsk: "ask-from-mina" });
+    queueRoomParticipation(skye.id, "room-chain", { groupId: "room-chain" });
+    expect(_queuedCount("room-chain")).toBe(3);
+    skye.busy = false;
+    const run = vi.fn();
+    for (let i = 0; i < 3; i++) drainSteeredMessages(store, run);
+    expect(run.mock.calls.map((call) => call[5].chainAsk)).toEqual(["ask-from-sora", "ask-from-mina", undefined]);
+  });
+
   it("passes a room dispatch-error hook through drain without appending", () => {
     const skye = fakeBot("skye-card", "skye-card-1to1", true);
     const store = fakeStore([skye]);

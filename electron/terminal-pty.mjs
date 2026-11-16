@@ -1,10 +1,11 @@
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { createRequire } from "node:module";
+import { spawnGate, startTerminal } from "./spawn-gate.mjs";
 
 const require = createRequire(import.meta.url);
 
 export function spawnTerminalPty(modulePath, shell, args, options) {
-  const worker = new Worker(new URL(import.meta.url), { workerData: { modulePath, shell, args, options } });
+  const worker = new Worker(new URL(import.meta.url), { workerData: { modulePath, shell, args, options, gate: spawnGate } });
   const dataListeners = new Set();
   const exitListeners = new Set();
   const errorListeners = new Set();
@@ -123,7 +124,7 @@ export function spawnTerminalPty(modulePath, shell, args, options) {
 if (!isMainThread && workerData?.modulePath) {
   try {
     const killRequests = new Set();
-    const pty = require(workerData.modulePath).spawn(workerData.shell, workerData.args, workerData.options);
+    const pty = startTerminal(workerData.gate, () => require(workerData.modulePath).spawn(workerData.shell, workerData.args, workerData.options));
     pty.onData((data) => parentPort.postMessage({ type: "data", data }));
     pty.onExit(({ exitCode }) => {
       for (const requestId of killRequests) parentPort.postMessage({ type: "ack", requestId });

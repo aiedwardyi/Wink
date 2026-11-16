@@ -101,6 +101,8 @@ import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import {
   TRANSCRIPT_TAIL_SIZE,
@@ -599,7 +601,7 @@ const MessagesList = memo(function MessagesList({
   editingId,
   lastBotTextId,
   canonicalLastMessageId,
-  streamingMessage,
+  streamingMessage: streamingRow,
   dock,
   canRetryLast,
   engine,
@@ -645,10 +647,12 @@ const MessagesList = memo(function MessagesList({
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
+  const shownRows = useChatPeekRows();
+  const streamingMessage = shownRows ? streamingRow : null;
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
   // Fold finished tool chips into runs, so a stretch of them cannot bury
   // what the bot actually said. Hidden unless Settings → Tool calls is on.
-  const items = useMemo(() => {
+  const listedItems = useMemo(() => {
     const options = { showToolCalls, showActivities, transcript };
     // a launch with no worker row, or a hidden worker, draws nothing
     const shown = (m: Message) => {
@@ -659,10 +663,14 @@ const MessagesList = memo(function MessagesList({
     };
     return groupActivityRuns(streamingMessage ? [...messages, streamingMessage] : messages, terminal, shown);
   }, [messages, streamingMessage, terminal, showToolCalls, showActivities, transcript, workerAt]);
-  const rows = useMemo(
-    () => chatTranscriptRows(items, { showToolCalls, showActivities, transcript }),
-    [items, showToolCalls, showActivities, transcript],
+  const listedRows = useMemo(
+    () => chatTranscriptRows(listedItems, { showToolCalls, showActivities, transcript }),
+    [listedItems, showToolCalls, showActivities, transcript],
   );
+  const { items, rows } = useMemo(() => {
+    const shown = peekRows(listedRows, shownRows, (row) => row.visible).length;
+    return { items: listedItems.slice(0, shown), rows: listedRows.slice(0, shown) };
+  }, [listedItems, listedRows, shownRows]);
   // by message order, so an anchor folded into a run or linked as a notice still places the card
   const whatsNewAnchor = useWhatsNewAnchor();
   const whatsNewAfter = useMemo(() => {
@@ -957,7 +965,11 @@ export function PinnedBanner({
   );
 }
 
-export function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+  const preview = useChatPreview();
+  const peekSettled = useChatPeekSettled();
+  const phone = useIsPhone();
+  const compactWindow = preview || phone;
   const { t } = useI18n();
   const { state, dispatch, turnOrigin } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
@@ -986,7 +998,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const liveCall = useActiveCall();
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
-  useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
+  useEffect(() => (onLiveCall && !hidden && !preview ? showCallChat() : undefined), [hidden, onLiveCall, preview]);
   // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
   const startCall = useCallback(() => {
     const ctx = callAudio();
@@ -1004,7 +1016,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     runs: state.routineRuns,
     groups: state.groups,
   });
-  const find = useSearchFindSeed(bot.threadId);
+  const find = useSearchFindSeed(bot.threadId, !preview);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     bot.threadId,
@@ -1027,10 +1039,10 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     setMenuThread(bot.threadId);
     setMenu(null);
   }
-  useEffect(() => endSelectMode, [bot.threadId]);
+  useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if (focusComposerBlocked) return;
+      if (focusComposerBlocked || preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1038,7 +1050,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind, focusComposerBlocked]);
+  }, [find.openFind, focusComposerBlocked, preview]);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const accepted = state.acceptedSends[bot.threadId];
@@ -1057,7 +1069,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const shown = jump.messages ?? messages;
   const runs = useMemo(() => workerRuns(messages), [messages]);
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
-  const livePanes = useLivePanes(bot.id, runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0, paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
+  const livePanes = useLivePanes(bot.id, !preview && (runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0), paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
   const workers = useMemo(() => runs.map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })), [runs, livePanes, bot.id]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
@@ -1076,21 +1088,27 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     start: number;
     end: number | null;
     expanded?: boolean;
+    size?: number;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders),
+    start: tailWindowStart(messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders),
     end: null,
+    size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
   }));
+  const windowSize = transcriptWindow.size ?? TRANSCRIPT_WINDOW_SIZE;
+  const tailSize = transcriptWindow.size ?? TRANSCRIPT_TAIL_SIZE;
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders), end: null, size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined });
   }
+  if (!compactWindow && windowSize < TRANSCRIPT_WINDOW_SIZE) setTranscriptWindow((w) => ({ ...w, size: TRANSCRIPT_WINDOW_SIZE }));
   const [windowTerminal, setWindowTerminal] = useState(terminal);
   if (windowTerminal !== terminal) {
     setWindowTerminal(terminal);
     setTranscriptWindow({
       key: transcriptKey,
-      start: tailWindowStart(shown.length, TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
+      start: tailWindowStart(shown.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
       end: null,
+      size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
     });
   }
   // The window is index-based, so an older page landing on top shifts it.
@@ -1112,7 +1130,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const prepended = windowHead ? shown.findIndex((message) => message.id === windowHead) : -1;
     // a window set on an empty branch has no rows to anchor to
     if (!windowHead) {
-      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
+      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, tailSize, renders), end: null, size: transcriptWindow.size });
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
@@ -1138,9 +1156,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     endIndex,
   } = useMemo(
     () => resolveTranscriptWindow(shown, follow && !jump.messages
-      ? followedWindow(transcriptWindow, shown.length, TRANSCRIPT_WINDOW_SIZE, renders).start
-      : transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
-    [shown, follow, jump.messages, renders, transcriptWindow],
+      ? followedWindow(transcriptWindow, shown.length, windowSize, renders).start
+      : transcriptWindow.start, windowSize, transcriptWindow.end),
+    [shown, follow, jump.messages, renders, transcriptWindow, windowSize],
   );
   useLayoutEffect(() => {
     windowAnchor.current = { id: windowedMessages[0]?.id, index: startIndex };
@@ -1210,14 +1228,15 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   // The selected leaf, or the prompt behind a long tool run, can sit on an
   // older page. Page back until the leaf lands; the prompt gets a few pages in
   // one request, since a later page lands as a long frame under a reader.
-  const leafPaging = Boolean(bot.hasMore) && canonicalMessages.length === 0 && !jump.messages && !jump.pending;
-  const promptPaging = Boolean(bot.hasMore) && Boolean(canonicalMessages[0]?.parentId) && !lastUserMessage;
+  const leafPaging = !preview && Boolean(bot.hasMore) && canonicalMessages.length === 0 && !jump.messages && !jump.pending;
+  const promptPaging = !preview && Boolean(bot.hasMore) && Boolean(canonicalMessages[0]?.parentId) && !lastUserMessage;
   const joinPaging = editJoin?.key === transcriptKey && Boolean(bot.hasMore) && !bot.messages.some((message) => message.id === editJoin.parentId);
   // another view's join is kept; it resumes when its conversation is shown again
   if (editJoin?.key === transcriptKey && !joinPaging) setEditJoin(null);
   const promptHunt = useRef<{ key: string; cursor: string; landed: boolean } | null>(null);
   const cursor = bot.messages[0]?.id;
   useEffect(() => {
+    if (preview) return;
     if (leafPaging) {
       loadOlder();
       return;
@@ -1238,7 +1257,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const next = hunt?.key === transcriptKey && hunt.cursor === cursor ? hunt : { key: transcriptKey, cursor, landed: false };
     promptHunt.current = next;
     loadOlder(() => (next.landed = true), undefined, PROMPT_PAGES);
-  }, [leafPaging, joinPaging, joinRetry, promptPaging, loadOlder, cursor, transcriptKey]);
+  }, [leafPaging, joinPaging, joinRetry, promptPaging, loadOlder, cursor, transcriptKey, preview]);
 
   // Stream buffers belong to the canonical tail, never an optimistic send.
   const lastMessage = canonicalMessages.at(-1);
@@ -1328,13 +1347,13 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const requestedFocus = useRef<number | null>(null);
   const { open: openJump } = jump;
   useEffect(() => {
-    if (!reanchor) return;
+    if (preview || !reanchor) return;
     setReanchor(null);
     if (!followRef.current && bot.hasMore) dispatch({ type: "focusMessage", threadId: bot.threadId, messageId: reanchor });
-  }, [reanchor, bot.hasMore, bot.threadId, dispatch]);
+  }, [reanchor, bot.hasMore, bot.threadId, dispatch, preview]);
   useEffect(() => {
     const focus = state.focusMessage;
-    if (!focus || focus.consumed || focus.threadId !== bot.threadId || appliedFocus.current === focus.nonce) return;
+    if (preview || !focus || focus.consumed || focus.threadId !== bot.threadId || appliedFocus.current === focus.nonce) return;
     const liveIndex = messages.findIndex((message) => message.id === focus.messageId);
     const list = liveIndex >= 0 ? messages : shown;
     const targetIndex = liveIndex >= 0 ? liveIndex : shown.findIndex((message) => message.id === focus.messageId);
@@ -1360,19 +1379,19 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     setBottomFollow(false);
     if (switching || next !== current) setTranscriptWindow({ key: transcriptKey, ...next, expanded: next.end === null });
     setFocusWindowNonce(focus.nonce);
-  }, [bot.threadId, bot.hasMore, closeJump, endIndex, messages, openJump, setBottomFollow, showActivities, showToolCalls, shown, startIndex, state.focusMessage, transcriptKey, transcriptWindow.end]);
+  }, [bot.threadId, bot.hasMore, closeJump, endIndex, messages, openJump, setBottomFollow, showActivities, showToolCalls, shown, startIndex, state.focusMessage, transcriptKey, transcriptWindow.end, preview]);
   const focusPaging =
     Boolean(bot.hasMore) &&
     state.focusMessage?.threadId === bot.threadId &&
     !shown.some((message) => message.id === state.focusMessage?.messageId);
-  useFocusMessage(bot.threadId, shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
+  useFocusMessage(bot.threadId, !preview && shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
   useEffect(() => {
-    if (!follow || jump.messages || followedWindow(transcriptWindow, messages.length, TRANSCRIPT_WINDOW_SIZE, renders) === transcriptWindow) return;
-    setTranscriptWindow((w) => followedWindow(w, messages.length, TRANSCRIPT_WINDOW_SIZE, renders));
-  }, [follow, jump.messages, messages.length, renders, transcriptWindow]);
+    if (!follow || jump.messages || followedWindow(transcriptWindow, messages.length, windowSize, renders) === transcriptWindow) return;
+    setTranscriptWindow((w) => followedWindow(w, messages.length, windowSize, renders));
+  }, [follow, jump.messages, messages.length, renders, transcriptWindow, windowSize]);
   // A plain tail holds at least the newest window of visible rows. Shifting it
   // for an auto-paged older page would leave a tool-heavy tail nearly blank.
-  const tailStart = useMemo(() => tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), [messages.length, renders]);
+  const tailStart = useMemo(() => tailWindowStart(messages.length, tailSize, renders), [messages.length, renders, tailSize]);
 
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
@@ -1390,6 +1409,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
   }, []);
+  useLayoutEffect(() => {
+    if (transcriptWindow.size !== undefined) pinBottom();
+  }, [bot.id, bot.threadId, pinBottom, windowSize, transcriptWindow.size, startIndex]);
   useEffect(() => {
     if (!pinFrame.current) pinFrame.current = requestAnimationFrame(pinBottom);
   }, [pinBottom, bot.id, messages.length, bot.busy, composerDock.pad]);
@@ -1421,12 +1443,19 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
   // A plain tail too short to scroll pages older rows in until it fills or the thread runs out.
   // A widening window still to commit is not short of rows.
+  // Keep the small window on promotion; grow cached rows only when they cannot fill the viewport.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!peekSettled || windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
+    const size = Math.min(TRANSCRIPT_WINDOW_SIZE, windowSize * 2);
+    setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(messages.length, size, renders) }));
+  }, [peekSettled, windowSize, startIndex, messages.length, renders, jump.messages, transcriptWindow, underfilled]);
   const fillPaging =
-    Boolean(bot.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart;
+    Boolean(bot.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart && (windowSize >= TRANSCRIPT_WINDOW_SIZE || startIndex === 0);
   useEffect(() => {
     const el = scrollRef.current;
-    if (fillPaging && el && transcriptUnderfilled(el)) loadOlder();
-  }, [fillPaging, loadOlder, underfilled]);
+    if (!preview && fillPaging && el && transcriptUnderfilled(el)) loadOlder();
+  }, [fillPaging, loadOlder, underfilled, preview]);
 
   const preExpandScroll = useRef<TranscriptScroll | null>(null);
   const expandEarlier = (onFail: () => void, beforeCommit: () => boolean, pages: number) => {
@@ -1471,7 +1500,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1484,13 +1513,14 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   // follow like an upward wheel; the at-end onScroll check re-arms it
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (preview) return;
       if (e.key === "PageUp" || (e.key === "Home" && !(e.target instanceof HTMLTextAreaElement))) {
         setBottomFollow(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setBottomFollow]);
+  }, [setBottomFollow, preview]);
 
   const atEnd = () => {
     const el = scrollRef.current;
@@ -1589,6 +1619,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           )}
         </div>
         <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-md:min-w-0 max-md:shrink max-md:flex-nowrap">
+          <ChatPeekPart part="controls">
           {keepGoing && (
             <button
               type="button"
@@ -1620,6 +1651,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} />
 
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
+          </ChatPeekPart>
         </div>
       </div>
 
@@ -1724,6 +1756,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       <div
         ref={scrollRef}
         data-orbit-transcript
+        data-compact-transcript={compactWindow && transcriptWindow.size !== undefined && !transcriptWindow.expanded || undefined}
         data-rail-bar={railShown || undefined}
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
@@ -1781,7 +1814,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           aria-live="polite"
           aria-label={t("chat.conversationAria", { name: bot.name })}
         >
-          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : bot.hasMore)) && (
+          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : bot.hasMore)) && (!preview || messages.length > 0) && (
             <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
@@ -1826,7 +1859,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
               </button>
             </div>
           )}
-          {provisioning && (
+          {provisioning && (!preview || messages.length > 0) && (
             <div className="flex justify-start">
               <div className="flex items-center gap-2 border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary">
                 <Loader2 size={13} className="animate-spin" />
@@ -1847,7 +1880,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
                 trackPointer={false}
               />
             }
-            visible={waiting && !jump.messages && !dockLive}
+            visible={waiting && !jump.messages && !dockLive && (!preview || messages.length > 0)}
             docked={dockLive}
             label={activityLabel}
             instant={phase === "responding"}
@@ -1913,10 +1946,11 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           selected one. ArrowUp-to-edit stays gated on busy because editing
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
+        <ChatPeekPart part="composer">
         {onLiveCall
           ? <Suspense fallback={null}><LiveCallBar bot={bot} /></Suspense>
           : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
-        <CallWidgetSlot className="px-3 pb-2 md:hidden" />
+        {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
         {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
           <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}
@@ -1930,7 +1964,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         {!terminal && (
           <ChatPlanMeters
             identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
-            hidden={hidden}
+            hidden={hidden || preview}
             instanceId={shownEngine?.instanceId}
             windows={shownEngine?.rateLimits?.windows}
             driverKind={shownEngine?.driverKind}
@@ -1947,7 +1981,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             jumpToLatest();
             sceneSend.current?.();
           }}
-          focusBlocked={focusComposerBlocked}
+          focusBlocked={focusComposerBlocked || preview}
           replyTo={replyTo}
           onClearReply={clearReply}
           onConsumeReply={consumeReply}
@@ -1957,11 +1991,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onCall={!onLiveCall && callsSupported() ? startCall : undefined}
           callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} helpAbove /> : undefined}
         />
-        {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
+        {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden || preview} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
+        </ChatPeekPart>
       </div>
       </div>
 
     </main>
     </MediaViewerProvider>
   );
-}
+});

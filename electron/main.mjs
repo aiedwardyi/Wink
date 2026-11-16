@@ -22,10 +22,12 @@ import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { publishTerminalDiscovery } from "./terminal-discovery.mjs";
 import { createRemoteHosts } from "./terminal-remote.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
+import { adoptWorkers } from "./worker-host-adopt.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
+import { createWorkerHostClient } from "./worker-host-client.mjs";
 import { readTerminalAppearance } from "./terminal-appearance.mjs";
 import { applyPendingUpdateInstall, consumePendingUpdateInstall, isUpdateInstallPending, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
 import { channelFromCommandLine } from "./update-channel.mjs";
@@ -333,8 +335,21 @@ async function paneMailbox() {
   const binDir = await installOrbitMsg(path.join(app.getPath("home"), ".orbit", "bin"), process.platform, app.getPath("userData")).catch(() => null);
   return { url: `http://127.0.0.1:${port}`, token, binDir };
 }
+async function paneBotNames() {
+  const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
+  const response = await fetch(`http://127.0.0.1:${port}/api/bots?messages=0`, {
+    headers: serverToken ? { Authorization: `Bearer ${serverToken}` } : {},
+    redirect: "error",
+    signal: AbortSignal.timeout(2000),
+  });
+  if (!response.ok) throw new Error("Could not read bot names");
+  return Object.fromEntries((await response.json()).bots.map((bot) => [bot.id, bot.name]));
+}
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
 const scratchRoot = process.env.ORBIT_TEMP_ROOT || os.tmpdir();
+const ptyModule = () => require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty");
+// The runtime lives outside the install folder, so an update can replace the app while the host keeps running.
+const workerHost = createWorkerHostClient({ root: path.join(app.getPath("userData"), "worker-host"), runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), app.isPackaged ? "Wink" : "Wink-dev", "worker-host"), ptyModule, adopt: true, log: slog });
 const terminalHost = createTerminalHost({
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
@@ -351,9 +366,8 @@ const terminalHost = createTerminalHost({
   processes: paneProcesses,
   paneCleanup: createPaneCleanupWorker({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
-  loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
-    require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,
-  ) }),
+  loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(ptyModule(), shell, args, options) }),
+  hostPty: workerHost.spawn,
   async resolveCwd(botId) {
     if (app.isPackaged && !serverToken) throw new Error("Server is not ready");
     const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
@@ -368,16 +382,7 @@ const terminalHost = createTerminalHost({
     if (!response.ok) throw new Error("Could not resolve terminal folder");
     return response.json();
   },
-  async botNames() {
-    const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
-    const response = await fetch(`http://127.0.0.1:${port}/api/bots?messages=0`, {
-      headers: serverToken ? { Authorization: `Bearer ${serverToken}` } : {},
-      redirect: "error",
-      signal: AbortSignal.timeout(2000),
-    });
-    if (!response.ok) throw new Error("Could not read bot names");
-    return Object.fromEntries((await response.json()).bots.map((bot) => [bot.id, bot.name]));
-  },
+  botNames: paneBotNames,
 });
 const writeCredential = createCredentialWriter({
   packaged: app.isPackaged,
@@ -1434,7 +1439,7 @@ ipcMain.on("desktop:taskbar-busy", (event, value) => {
 
 const closeGuard = createCloseGuard({
   platform: process.platform,
-  workerCount: () => terminalHost.liveWorkerCount(),
+  workerCount: () => terminalHost.liveWorkerCount({ closing: true }),
   botBusy: () => botBusy,
   reveal() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2208,8 +2213,10 @@ app.whenReady().then(async () => {
   if (!verifyProbe) {
     const mailboxUrl = `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`;
     if (serverReady && terminalBridgeAccess) await publishTerminalDiscovery(app.getPath("userData"), terminalBridgeAccess, mailboxUrl).catch(slog);
-    const reports = serverReady ? deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns).catch(slog) : Promise.resolve();
-    void reports.then(async (result) => {
+    // Panes the worker host kept come back first, so a delivered report never closes the record of a pane that still runs.
+    void adoptWorkers({ client: workerHost, runs: paneRuns, host: terminalHost, mailbox: paneMailbox, botNames: paneBotNames, warn: slog, recover: async (kept) => {
+      // Queued reports reach their bots before any KEPT or RESTARTED note.
+      const result = serverReady ? await deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns).catch(slog) : undefined;
       const held = new Set();
       for (const panes of paneRuns.restarted().values()) {
         for (const run of panes) {
@@ -2222,9 +2229,9 @@ app.whenReady().then(async () => {
         forget: botId => paneRuns.forget(botId, held),
         missed: botId => paneRuns.missed(botId, held),
       };
-      await recoverWorkers({ runs, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog });
+      await recoverWorkers({ runs, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog, kept });
       if (serverReady) await deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns);
-    }).catch(slog);
+    } }).catch(slog);
   }
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the

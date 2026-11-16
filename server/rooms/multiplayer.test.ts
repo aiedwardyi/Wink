@@ -272,7 +272,7 @@ describe("a teammate's request under the host's setting for the bot", () => {
   }
 
   /** The `approval` and `readOnly` a room turn sends: the `access` its sendTurn call spreads in index.ts. */
-  function turnAccess(authority: string | undefined, bot: { autoApprove: boolean }, lane = false, works = true) {
+  function turnAccess(authority: string | undefined, bot: { autoApprove: boolean }, lane = false, works = true, chainAsk?: string) {
     const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
     let spread = false;
     const walk = (node: ts.Node) => {
@@ -282,13 +282,13 @@ describe("a teammate's request under the host's setting for the bot", () => {
     };
     walk(runner);
     expect(spread).toBe(true);
-    return new Function("authority", "bot", "lane", "works", `${js(`const access = ${runnerConst("access")};`)}\nreturn access;`)(authority, bot, lane, works);
+    return new Function("authority", "chainAsk", "bot", "lane", "works", `const asked = ${runnerConst("asked")};\n${js(`const access = ${runnerConst("access")};`)}\nreturn access;`)(authority, chainAsk, bot, lane, works);
   }
 
   /** Whether a room turn may make the bot work: the `works` of index.ts, from the asks it answers. */
-  function turnWorks(authority: string | undefined) {
-    const deps = { authority, askById, askRiders, asksWork };
-    return new Function(...Object.keys(deps), `const riders = ${runnerConst("riders")};\nconst lead = ${runnerConst("lead")};\nreturn ${runnerConst("works")};`)(...Object.values(deps)) as boolean;
+  function turnWorks(authority: string | undefined, chainAsk?: string) {
+    const deps = { authority, chainAsk, askById, askRiders, asksWork };
+    return new Function(...Object.keys(deps), `const riders = ${runnerConst("riders")};\nconst asked = ${runnerConst("asked")};\nconst lead = ${runnerConst("lead")};\nreturn ${runnerConst("works")};`)(...Object.values(deps)) as boolean;
   }
 
   /** The request.opened fold of index.ts for a request on the room's thread, up to its first break. */
@@ -341,11 +341,21 @@ describe("a teammate's request under the host's setting for the bot", () => {
     expect(turnWorks("no-such-ask")).toBe(false);
   });
 
+  it("holds an @mention hop to the ask that started its chain", () => {
+    const { ask } = hostedSend(group, said(sora), "hi");
+    expect(turnWorks(undefined, ask!.id)).toBe(false);
+    expect(turnAccess(undefined, { autoApprove: true }, false, turnWorks(undefined, ask!.id), ask!.id)).toEqual({ approval: "ask", readOnly: true });
+    setPersonWorks(group.hosted.roomId, sora.id, true);
+    expect(turnWorks(undefined, ask!.id)).toBe(true);
+    expect(turnAccess(undefined, { autoApprove: false }, false, true, ask!.id)).toEqual({ approval: "ask", readOnly: true });
+  });
+
   it("never hands a teammate's turn the host's 1:1 chat search or topics, even with the switch on", () => {
-    const owned = (authority: string | undefined, dm = false) =>
-      new Function("group", "authority", "ownerChats", "bot", "notOwnerChats", `return ${runnerConst("owned")};`)({ dm }, authority, () => ["one-on-one"], {}, () => []);
+    const owned = (authority: string | undefined, dm = false, chainAsk?: string) =>
+      new Function("group", "authority", "chainAsk", "ownerChats", "bot", "notOwnerChats", `const asked = ${runnerConst("asked")};\nreturn ${runnerConst("owned")};`)({ dm }, authority, chainAsk, () => ["one-on-one"], {}, () => []);
     expect(owned(undefined)).toEqual(["one-on-one"]);
     expect(owned("ask-1")).toEqual([]);
+    expect(owned(undefined, false, "ask-1")).toEqual([]);
     expect(owned(undefined, true)).toEqual([]);
     expect(runnerConst("searchable")).toContain("hasOwnerChat(store, owned)");
     expect(runnerConst("topics")).toMatch(/^searchable \?/);
@@ -482,6 +492,21 @@ describe("the answer", () => {
     expect(queuedRoomBotIds(group.id, group.threadId)).toEqual([]);
     return drained[0]!;
   }
+
+  it("keeps the teammate's ask on a chain hop that waits behind a busy bot, apart from the host's own line", async () => {
+    const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation, store, broadcast: vi.fn(), publicGroupState: (value: HostedGroup) => value });
+    const run = load("runGroupMemberTurn", {
+      store, cfg: { profile: {} }, hostedTurnRefused, botHasActiveTurn: () => true, tryClaimTurnStart: vi.fn(), queueBusyRoomMember,
+      threadHasLiveTurn: () => false, roomLanes: { claim: () => false }, laneKey: (id: string) => id, botAccounts: { instance: () => undefined },
+      runClaimedGroupMemberTurn: vi.fn(), takeStartingHold: vi.fn(), turnStartClaims: new Map(), continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {},
+    });
+    // the host's own line already waits for Wink; the chain hop queues on its own
+    queueRoomParticipation(wink, group.threadId, { groupId: group.id, hop: 0 });
+    expect(await run(group.id, group.threadId, wink, 1, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, undefined, undefined, "ask-from-sora")).toBe(true);
+    const drained: RoomDrain[] = [];
+    for (let i = 0; i < 2; i++) drainSteeredMessages({ bot: (id: string) => store.bot(id), messagesFor: () => [], appendMessage: vi.fn(), patchMessage: vi.fn() } as never, (_bot, _thread, _prompt, _user, _ex, room) => { drained.push(room!); });
+    expect(drained.map((room) => [room.hop, room.chainAsk, room.askId])).toEqual([[0, undefined, undefined], [1, "ask-from-sora", undefined]]);
+  });
 
   function viewer(bots: boolean) {
     const res = new PassThrough();

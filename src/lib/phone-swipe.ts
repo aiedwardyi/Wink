@@ -81,15 +81,15 @@ export function dragOffset(dx: number, canMove: boolean): number {
   return canMove ? dx : dx / 3;
 }
 
-/** Swipe order: the sidebar's bots whatever search or folded sections hide; from an archived bot, the Archived list. */
-export function swipeBotIds(
+/** Swipe order: the sidebar's chats whatever search or folded sections hide; from an archived bot, the Archived list. */
+export function swipeChatIds(
   bots: readonly SidebarStartupBot[],
   groups: readonly SidebarStartupGroup[],
   order: SidebarOrder,
   currentId: string | undefined,
 ): string[] {
   if (bots.some((bot) => bot.id === currentId && bot.hidden)) return bots.filter((bot) => bot.hidden).map((bot) => bot.id);
-  return sidebarOrderedItems(bots, groups, order).flatMap((item) => (item.kind === "bot" ? [item.id] : []));
+  return sidebarOrderedItems(bots, groups, order).map((item) => item.id);
 }
 
 export function swipeBlocked(target: EventTarget | null, startX: number, win: typeof window = window): boolean {

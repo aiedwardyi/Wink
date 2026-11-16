@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -83,15 +84,33 @@ describe("mascot style ids", () => {
     expect(mascotStyleSchema.safeParse("cursor").success).toBe(false);
   });
 
-  it("keeps forty-nine stable artwork ids and offers Wink, job, then engine icons", () => {
-    expect(BOT_AVATAR_IDS).toEqual(Array.from({ length: 49 }, (_, index) => `icon-${String(index + 1).padStart(2, "0")}`));
-    expect(BOT_AVATAR_PICKER_ORDER).toEqual(BOT_AVATAR_IDS.slice(30));
+  it("keeps fifty-eight stable artwork ids and offers Wink, brand, then engine icons", () => {
+    expect(BOT_AVATAR_IDS).toEqual(Array.from({ length: 58 }, (_, index) => `icon-${String(index + 1).padStart(2, "0")}`));
+    expect(BOT_AVATAR_PICKER_ORDER).toEqual([...WINK_ICON_IDS, ...BOT_AVATAR_IDS.slice(49), ...BOT_AVATAR_IDS.slice(44, 49)]);
     expect([...EXTENDED_BOT_AVATAR_IDS]).toEqual(BOT_AVATAR_IDS.slice(35));
     for (const id of BOT_AVATAR_IDS) {
       expect(botAvatarChoiceSchema.parse(id)).toBe(id);
       expect(BOT_AVATAR_ASSETS[id]).toMatch(new RegExp(`^${id}-`));
       expect(BOT_AVATAR_LABELS[id]).toBeTruthy();
       expect(botAvatarAssetPath(id)).toBe(`/avatars/${BOT_AVATAR_ASSETS[id]}`);
+    }
+  });
+
+  it("offers the brand winks right after the Wink icons, bundled", () => {
+    const brand = ["icon-50", "icon-51", "icon-52", "icon-53", "icon-54", "icon-55", "icon-56", "icon-57", "icon-58"] as const;
+    expect(BOT_AVATAR_PICKER_ORDER.slice(WINK_ICON_IDS.length, WINK_ICON_IDS.length + brand.length)).toEqual(brand);
+    expect(brand.slice(3).map((id) => BOT_AVATAR_LABELS[id])).toEqual(["Wink neon", "Wink arcade", "Wink gold", "Wink circuit", "Wink glass", "Wink sakura"]);
+    for (const id of brand) {
+      expect(EXTENDED_BOT_AVATAR_IDS.has(id)).toBe(true);
+      expect(existsSync(new URL(`../public${botAvatarAssetPath(id)}`, import.meta.url))).toBe(true);
+    }
+  });
+
+  it("hides the job icons from the picker but still renders bots that use them", () => {
+    for (const id of ["icon-37", "icon-38", "icon-39", "icon-40", "icon-41", "icon-42", "icon-43", "icon-44"] as const) {
+      expect(BOT_AVATAR_PICKER_ORDER).not.toContain(id);
+      expect(botAvatarProfile({ mascotStyle: id, color: "red" }).mascotStyle).toBe(id);
+      expect(existsSync(new URL(`../public${botAvatarAssetPath(id)}`, import.meta.url))).toBe(true);
     }
   });
 

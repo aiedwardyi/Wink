@@ -42,6 +42,15 @@ const AVATAR_LABEL_KEYS: Partial<Record<BotAvatarChoice, MessageKey>> = {
   "icon-47": "bot.avatarGemini",
   "icon-48": "bot.avatarGrok",
   "icon-49": "bot.avatarMuse",
+  "icon-50": "bot.avatarGeometric",
+  "icon-51": "bot.avatarInk",
+  "icon-52": "bot.avatarWarp",
+  "icon-53": "bot.avatarNeon",
+  "icon-54": "bot.avatarArcade",
+  "icon-55": "bot.avatarGold",
+  "icon-56": "bot.avatarCircuit",
+  "icon-57": "bot.avatarGlass",
+  "icon-58": "bot.avatarSakura",
 };
 
 export function BotProfileAvatarCard({
@@ -62,14 +71,16 @@ export function BotProfileAvatarCard({
   const [rejected, setRejected] = useState(false);
   const crop = bot.avatarCrop ?? "mascot";
   const selectedAvatar = resolveBotAvatarChoice(bot.mascotStyle, bot.color);
+  const pickedAvatar = crop === "mascot" ? selectedAvatar : null;
   const pickerButtonRefs = useRef<Partial<Record<BotAvatarChoice, HTMLButtonElement | null>>>({});
   const cropRef = useRef(crop);
   cropRef.current = crop;
 
   useEffect(() => {
-    const button = pickerButtonRefs.current[selectedAvatar];
+    if (!pickedAvatar) return;
+    const button = pickerButtonRefs.current[pickedAvatar];
     button?.scrollIntoView?.({ block: "nearest" });
-  }, [selectedAvatar]);
+  }, [pickedAvatar]);
 
   const upload = async (file: File | undefined) => {
     if (!file) return;
@@ -161,44 +172,44 @@ export function BotProfileAvatarCard({
         </div>
         {(showAvatarFormatsHint() || rejected) && <div className="mt-1.5 text-[11.5px] text-ink-secondary">{t("bot.avatarFormats")}</div>}
 
+        <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
+          {t("bot.avatarStyle")}
+        </div>
+        <div className="max-h-[280px] overflow-y-auto rounded-lg border border-hairline/40 bg-inset p-2">
+          <div className="grid grid-cols-4 gap-2">
+            {BOT_AVATAR_PICKER_ORDER.map((choice) => {
+              const labelKey = AVATAR_LABEL_KEYS[choice];
+              const label = labelKey ? t(labelKey) : BOT_AVATAR_LABELS[choice];
+              return (
+                <button
+                  key={choice}
+                  type="button"
+                  ref={(element) => {
+                    pickerButtonRefs.current[choice] = element;
+                  }}
+                  aria-pressed={pickedAvatar === choice}
+                  onClick={() => onPatch(crop === "mascot" ? { mascotStyle: choice } : { mascotStyle: choice, avatarCrop: "mascot" })}
+                  className={cn(
+                    "flex h-[68px] min-w-0 items-center justify-center rounded-lg bg-card hover:bg-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border",
+                    pickedAvatar === choice && "ring-2 ring-accent-border",
+                  )}
+                  title={label}
+                  aria-label={t("bot.useAvatar", { label })}
+                >
+                  <BotAvatar
+                    bot={{ name: label, color: bot.color, mascotStyle: choice, avatarCrop: "mascot" }}
+                    size={52}
+                    animated={false}
+                    label={label}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {crop === "mascot" && (
           <>
-            <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
-              {t("bot.avatarStyle")}
-            </div>
-            <div className="max-h-[280px] overflow-y-auto rounded-lg border border-hairline/40 bg-inset p-2">
-              <div className="grid grid-cols-4 gap-2">
-                {BOT_AVATAR_PICKER_ORDER.map((choice) => {
-                  const labelKey = AVATAR_LABEL_KEYS[choice];
-                  const label = labelKey ? t(labelKey) : BOT_AVATAR_LABELS[choice];
-                  return (
-                    <button
-                      key={choice}
-                      type="button"
-                      ref={(element) => {
-                        pickerButtonRefs.current[choice] = element;
-                      }}
-                      aria-pressed={selectedAvatar === choice}
-                      onClick={() => onPatch({ mascotStyle: choice })}
-                      className={cn(
-                        "flex h-[68px] min-w-0 items-center justify-center rounded-lg bg-card hover:bg-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border",
-                        selectedAvatar === choice && "ring-2 ring-accent-border",
-                      )}
-                      title={label}
-                      aria-label={t("bot.useAvatar", { label })}
-                    >
-                      <BotAvatar
-                        bot={{ name: label, color: bot.color, mascotStyle: choice, avatarCrop: "mascot" }}
-                        size={52}
-                        animated={false}
-                        label={label}
-                      />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {isBotAvatarId(selectedAvatar) ? (
               <div className="mt-3 text-[11.5px] text-ink-secondary">{t("bot.packColors")}</div>
             ) : (

@@ -16,7 +16,7 @@ describe("main window asks before closing while work is running", () => {
   });
 
   it("counts live worker panes and the last taskbar-busy value", () => {
-    expect(main).toContain("workerCount: () => terminalHost.liveWorkerCount()");
+    expect(main).toContain("workerCount: () => terminalHost.liveWorkerCount({ closing: true })");
     expect(main).toContain("botBusy: () => botBusy");
     const busy = main.slice(main.indexOf('ipcMain.on("desktop:taskbar-busy"'));
     expect(busy.indexOf("botBusy = value === true")).toBeLessThan(busy.indexOf('process.platform !== "win32"'));

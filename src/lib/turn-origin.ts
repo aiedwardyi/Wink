@@ -66,6 +66,8 @@ export function nextTurnOrigin(prev: TurnOriginState, event: Event): TurnOriginS
       return { ...prev, rowId: event.row.id, origin };
     }
     case "hydrated":
+      // a busy bot's hydration claims its room thread rowless; the room's own hydration brings the row
+      if (prev.active && !prev.rowId && event.row) return nextTurnOrigin(prev, { type: "history", row: event.row });
       if (prev.active && (!event.row || !prev.rowId || prev.rowId === event.row.id)) return prev;
       return { active: true, rowId: event.row?.id, origin: fromRow(event.turnKey, event.row, event.now) };
     case "completed":

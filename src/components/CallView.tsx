@@ -35,6 +35,7 @@ import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { consentOf } from "@/lib/live-call/consent";
 import { sendInput } from "@/lib/usage-stats";
+import { useChatPreview } from "@/lib/chat-preview";
 
 type Phase = "listening" | "sending" | "working" | "speaking";
 const CALL_ENDPOINT_MS = 850;
@@ -191,8 +192,9 @@ export function CallTargetButton({
 }
 
 export function CallOverlay({ bot }: { bot: Bot }) {
+  const preview = useChatPreview();
   const active = useOnCall() === bot.id;
-  if (!active) return null;
+  if (preview || !active) return null;
   return <Call bot={bot} />;
 }
 

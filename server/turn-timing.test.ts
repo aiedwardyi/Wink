@@ -303,7 +303,7 @@ describe("flags off", () => {
   });
   const scope = {
     tracePart, slimStaticText, privateWorkspace: true, canMessage: true, tagged: [], opts: {}, cfg: {},
-    integrations: {}, instance: { driverKind: "claudeAgent" }, SHOW_IMAGE_GUIDANCE: "show. To create a new image, call generate_image.",
+    integrations: {}, instance: { driverKind: "claudeAgent" }, SHOW_IMAGE_GUIDANCE: "show. To create a new image, call generate_image.", roomTaskThreads: () => new Set(),
   } as Record<string | symbol, unknown>;
   const build = (body: string) => {
     const run = new Function(`${ts.transpileModule(`function run(scope) { with (scope) { ${body} } }`, {

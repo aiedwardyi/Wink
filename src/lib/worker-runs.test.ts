@@ -98,6 +98,13 @@ describe("workerRuns", () => {
     expect(shownState(runs[1]!, new Set())).toBe("ended");
   });
 
+  it("leaves a worker working when a note says its pane kept running through a restart", () => {
+    const kept = `KEPT RUNNING: A | Opus 5.5 | high [pane ${PANE.slice(0, 8)}] (claude) still working; B [pane ${OTHER.slice(0, 8)}] (script) still running.`;
+    const runs = workerRuns([launch("l1", 1, "A | Opus 5.5 | high"), note("n1", 2, kept, null)]);
+    expect(runs.map((run) => [run.nick, run.state, run.messageIds])).toEqual([["A", "working", ["l1", "n1"]]]);
+    expect(shownState(runs[0]!, new Set([PANE]))).toBe("working");
+  });
+
   it("lets DONE replace a stalled note", () => {
     const runs = workerRuns([
       launch("l1", 1, "A | GPT-6 Astra | high"),
