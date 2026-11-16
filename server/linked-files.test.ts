@@ -428,23 +428,30 @@ describe("linked files", () => {
     }
   });
 
-  it("serves a page linked outside the bot's folders with its own folder's assets and nothing beyond", async () => {
+  it("serves a page linked outside the bot's folders with its repo's files and nothing beyond", async () => {
     const root = temp("linked-outside-page-", process.cwd());
     const folder = join(root, "Desktop");
-    const site = join(root, "wt", "site-long", "public", "redo", "long");
+    const repo = join(root, "wt", "site-long");
+    const site = join(repo, "public", "redo", "long");
     const hidden = join(root, "wt", ".cache", "index.html");
     const appdata = join(root, "AppData", "Local", "index.html");
+    const files = {
+      ".git/config": "secret",
+      "public/redo/long/index.html": '<link rel="stylesheet" href="style.css"><script src="app.js"></script><img src="../kit/logo.svg">',
+      "public/redo/long/style.css": "body { color: red; }",
+      "public/redo/long/app.js": "document.title = 'ready';",
+      "public/redo/long/img/logo.png": "png-bytes",
+      "public/redo/kit/logo.svg": "<svg/>",
+      "public/img/theme.webp": "webp-bytes",
+      "public/redo/long/.private/keys.json": "secret",
+      "public/redo/long/AppData/Local/token.json": "secret",
+      "../secret.css": "secret",
+    };
     mkdirSync(folder, { recursive: true });
-    mkdirSync(join(site, "img"), { recursive: true });
-    mkdirSync(join(site, ".private"));
-    mkdirSync(join(site, "AppData", "Local"), { recursive: true });
-    writeFileSync(join(site, "index.html"), '<link rel="stylesheet" href="style.css"><script src="app.js"></script><img src="img/logo.png">');
-    writeFileSync(join(site, "style.css"), "body { color: red; }");
-    writeFileSync(join(site, "app.js"), "document.title = 'ready';");
-    writeFileSync(join(site, "img", "logo.png"), "png-bytes");
-    writeFileSync(join(site, ".private", "keys.json"), "secret");
-    writeFileSync(join(site, "AppData", "Local", "token.json"), "secret");
-    writeFileSync(join(root, "wt", "site-long", "public", "redo", "secret.css"), "secret");
+    for (const [name, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(repo, name)), { recursive: true });
+      writeFileSync(join(repo, name), text);
+    }
     for (const path of [hidden, appdata]) {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, "<p>private</p>");
@@ -459,14 +466,15 @@ describe("linked files", () => {
       const shown = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(page)}`, { headers: { Range: "bytes=0-0" } });
       expect(shown.status).toBe(206);
       expect(shown.headers.get("content-security-policy")).toMatch(/^sandbox allow-scripts;.*connect-src 'none'/);
-      for (const [asset, type, body] of [["style.css", "text/css", "color: red"], ["app.js", "javascript", "ready"], ["img/logo.png", "image/png", "png-bytes"]]) {
+      for (const [asset, type, body] of [["style.css", "text/css", "color: red"], ["app.js", "javascript", "ready"], ["img/logo.png", "image/png", "png-bytes"],
+        ["../kit/logo.svg", "image/svg+xml", "<svg/>"], ["../../img/theme.webp", "image/webp", "webp-bytes"]]) {
         const res = await fetch(new URL(asset, shown.url));
         expect(res.status, asset).toBe(200);
         expect(res.headers.get("content-type"), asset).toContain(type);
         expect(await res.text(), asset).toContain(body);
       }
-      for (const asset of [".private/keys.json", "AppData/Local/token.json", "../secret.css", "%2e%2e%2fsecret.css"]) {
-        const res = await fetch(`${shown.url}${asset}`);
+      for (const asset of [".private/keys.json", "AppData/Local/token.json", "../../../.git/config", "../../../../secret.css", "%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fsecret.css"]) {
+        const res = await fetch(asset.startsWith("%") ? `${shown.url}${asset}` : new URL(asset, shown.url));
         expect(res.status, asset).toBe(404);
         expect(await res.text(), asset).not.toContain("secret");
       }
