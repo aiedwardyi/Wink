@@ -407,8 +407,8 @@ describe("SettingsModal friends chrome", () => {
     expect(dark).toBeGreaterThan(-1);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["neon-grid", "samurai-ink", "night-rain", "warp", "circuit", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night"]);
-    expect(ids(html.slice(light))).toEqual(["dim-sand", "lagoon", "snow", "wink-day", "notebook"]);
+    expect(ids(html.slice(dark, light))).toEqual(["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon-night", "snow-night", "bronze", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot"]);
+    expect(ids(html.slice(light))).toEqual(["lagoon", "snow", "dim-sand", "wink-day", "notebook"]);
     expect(ids(html)).toHaveLength(20);
   });
 
