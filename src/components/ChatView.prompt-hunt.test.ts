@@ -70,13 +70,12 @@ describe("ChatView prompt hunt", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    const flush = () => act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
     try {
       await act(async () => root.render(createElement(StoreProvider, null, createElement(View))));
       expect(pages).toHaveLength(1);
       await act(async () => waiting.shift()!());
-      await flush();
-      expect(host.querySelectorAll("[data-orbit-message]").length).toBeGreaterThan(30);
+      await vi.waitFor(() => expect(host.querySelectorAll("[data-orbit-message]").length).toBeGreaterThan(30));
+      await act(async () => {});
       // every later landing re-renders the chat while its rows sit still: a long frame mid-scroll
       expect(pages).toHaveLength(1);
     } finally {
