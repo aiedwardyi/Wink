@@ -2627,8 +2627,9 @@ describe("harness HTTP API", () => {
 
   it("persists task continuity across completed and stopped turns", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const packetPath = join(home, ".orbit", "task-state", `${bot.threadId}.json`);
+    const stream = await openSse(`${BASE}/api/events`);
     try {
+      await stream.until((frame) => frame.kind === "hello");
       const instances = z.array(z.object({
         instanceId: z.string(),
         models: z.object({ default: z.string() }),
@@ -2646,7 +2647,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${bot.id}/messages`, {
         text: "Prepare a durable weekly brief",
       })).status).toBe(202);
-      await expect.poll(() => existsSync(packetPath) && storedTaskPacket(bot.threadId).flushReason).toBe("turn-end");
+      await stream.until((frame) => frame.kind === "task.packet" && frame.threadId === bot.threadId && frame.packet.flushReason === "turn-end");
 
       const completed = storedTaskPacket(bot.threadId);
       expect(completed).toMatchObject({
@@ -2791,6 +2792,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${bot.id}/tasks/${bot.threadId}/recovery`, {})).status).toBe(200);
       expect(storedTaskPacket(bot.threadId).flushReason).toBe("progress");
     } finally {
+      stream.close();
       await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
       await api("DELETE", `/api/bots/${bot.id}`);
     }

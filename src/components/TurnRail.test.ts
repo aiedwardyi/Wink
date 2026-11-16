@@ -55,9 +55,12 @@ afterEach(async () => {
   localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 async function mount({ width = 1000, height = 800, touch = false, hasMore = true, wire = index } = {}) {
+  // the card takes clicks 300 ms after its 80 ms intent timer opens it, a 20 ms margin a loaded runner's late timer eats
+  vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   applyLocale("en");
   const calls: string[] = [];
@@ -108,7 +111,7 @@ async function mount({ width = 1000, height = 800, touch = false, hasMore = true
   // the rail's own box starts 16 px down, so a rail y is clientY - 16; the card opens on a rest and takes clicks a moment later
   const hover = async (clientY: number) => {
     await act(async () => strip().dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse", clientX: 985, clientY })));
-    await act(() => new Promise((done) => setTimeout(done, 400)));
+    await act(() => vi.advanceTimersByTimeAsync(400));
   };
   return { host, calls, turnCalls, strip, scroller, select, near, hover };
 }

@@ -97,7 +97,7 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { execSync, spawn } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -684,7 +684,10 @@ const playTurn = (prompt: JsonValue, held = false) => {
         /* leave null — the test will see it */
       }
     }
-    writeFileSync(process.env.FAKE_CLAUDE_DUMP, JSON.stringify({ pid: process.pid, argv, env: process.env, prompt, mcpConfig, systemPrompt }, null, 2));
+    // tests poll for the file and read it at once, so it must never exist half written
+    const partial = `${process.env.FAKE_CLAUDE_DUMP}.${process.pid}.tmp`;
+    writeFileSync(partial, JSON.stringify({ pid: process.pid, argv, env: process.env, prompt, mcpConfig, systemPrompt }, null, 2));
+    renameSync(partial, process.env.FAKE_CLAUDE_DUMP);
   }
 
   if (mode === "exit-early") {
