@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -32,6 +32,26 @@ function scratch(t) {
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   return root;
 }
+
+test("a folder that cannot be removed does not keep a test's open client alive", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-cleanup-"));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  const fixture = path.join(root, "fixture.mjs");
+  fs.writeFileSync(fixture, [
+    'import net from "node:net";',
+    'import test from "node:test";',
+    `import { defer } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "node-test-cleanup.mjs")).href)};`,
+    'test("holds a socket", (t) => {',
+    "  const server = net.createServer().listen(0);",
+    '  defer(t, () => { throw new Error("folder busy"); });',
+    "  defer(t, () => server.close());",
+    "});",
+  ].join("\n"));
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const run = spawnSync(process.execPath, [fixture], { env, encoding: "utf8", timeout: 20_000, windowsHide: true });
+  assert.deepEqual([run.signal, /folder busy/.test(run.stdout)], [null, true]);
+});
 
 // The first run of a freshly copied exe takes seconds; a test about the instant of the launch needs it quick.
 async function warmed(root) {
