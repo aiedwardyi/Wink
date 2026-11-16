@@ -794,13 +794,17 @@ it("says how many new files a capped worker left out", async () => {
 });
 
 const posts: string[][] = [];
+const finished: string[] = [];
 let dropDone = false;
 class Tokenizer {
   onmessage?: (event: { data: object }) => void;
   postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[]; removed: boolean[] }) {
     if (data.stop) return;
     posts.push(data.code);
-    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => dropDone || this.onmessage?.({ data: { id: data.id, done } }));
+    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => {
+      finished.push(data.path);
+      if (!dropDone) this.onmessage?.({ data: { id: data.id, done } });
+    });
   }
   terminate() {}
 }
@@ -843,8 +847,7 @@ it("colors code like VS Code's light theme on a light skin", async () => {
 
 it("leaves a file in an unknown language as plain text", async () => {
   await openSource("notes.zzz");
-  await until(() => posts.some(code => code.includes("// sum two numbers")) && !!host.querySelector(".map-code-row"));
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  await until(() => finished.includes("notes.zzz") && !!host.querySelector(".map-code-row"));
   expect(host.querySelector(".map-code-row code span")).toBeNull();
   expect(host.querySelector('.map-code-row[data-kind="add"] code')?.textContent).toBe('const total = "two";');
 });

@@ -72,6 +72,7 @@ type Guest = { roomId: string; person: RoomPerson };
 let door: {
   deps: RoomDoorDeps;
   unauthenticated: RateLimiter;
+  everyone: RateLimiter;
   badKeys: RateLimiter;
   snapshots: RateLimiter;
   connects: RateLimiter;
@@ -91,7 +92,8 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
   const now = () => Date.now();
   door = {
     deps,
-    unauthenticated: new RateLimiter(120, MINUTE, now, 1),
+    unauthenticated: new RateLimiter(120, MINUTE, now),
+    everyone: new RateLimiter(1_200, MINUTE, now, 1),
     badKeys: new RateLimiter(20, MINUTE, now),
     snapshots: new RateLimiter(30, MINUTE, now),
     connects: new RateLimiter(10, MINUTE, now),
@@ -369,12 +371,15 @@ function bodyError(res: ServerResponse, status: 400 | 413): void {
   else send(res, 400, { error: "bad request" });
 }
 
+/** Each peer gets its own share, so one stranger can't spend every guest's. */
+const unauthenticatedOk = (peer: string | null) => door!.unauthenticated.take(rateKey(peer)) && door!.everyone.take("door");
+
 const record = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 
-async function join(req: IncomingMessage, res: ServerResponse, relayHost: string): Promise<void> {
-  const { deps, unauthenticated } = door!;
-  if (!unauthenticated.take("door")) return send(res, 429, { error: "rate-limited" });
+async function join(req: IncomingMessage, res: ServerResponse, relayHost: string, peer: string | null): Promise<void> {
+  const { deps } = door!;
+  if (!unauthenticatedOk(peer)) return send(res, 429, { error: "rate-limited" });
   const body = await readJson(req, JOIN_BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
   const fields = record(body.value);
@@ -389,7 +394,7 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
   const group = roomId ? doorGroup(roomId) : null;
   if (roomId && !group) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(codeId, secret, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
+  const result = joinRoom(codeId, secret, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device }, rateKey(peer));
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);
@@ -400,11 +405,11 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
 const bearerOf = (req: IncomingMessage) => /^Bearer (\S{1,256})$/.exec(req.headers.authorization ?? "")?.[1];
 
 function guestFor(req: IncomingMessage, res: ServerResponse, peer: string | null): Guest | null {
-  const { unauthenticated, badKeys } = door!;
+  const { badKeys } = door!;
   const bearer = bearerOf(req);
   const guest = bearer ? guestByKey(bearer, req.headers["x-wink-device"]) : null;
   if (guest) return guest;
-  const limited = !unauthenticated.take("door") || (bearer !== undefined && !badKeys.take(rateKey(peer)));
+  const limited = !unauthenticatedOk(peer) || (bearer !== undefined && !badKeys.take(rateKey(peer)));
   send(res, limited ? 429 : 401, { error: limited ? "rate-limited" : "unauthorized" });
   return null;
 }
@@ -514,7 +519,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (!door) return notFound(res);
   const url = new URL(req.url ?? "/", "https://relay.invalid");
   const method = req.method ?? "GET";
-  if (url.pathname === "/room/v1/join") return method === "POST" ? join(req, res, relay.host) : notFound(res);
+  if (url.pathname === "/room/v1/join") return method === "POST" ? join(req, res, relay.host, relay.peer) : notFound(res);
   const file = url.pathname.startsWith("/room/v1/") ? FILE_PATH.exec(url.pathname.slice("/room/v1".length)) : null;
   const route = file ?? ROUTE.exec(url.pathname);
   const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[3] ? "remove-bot" : route?.[2];

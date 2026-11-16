@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { LiveVoice } from "../../shared/live-call";
+import type { CallPrefs, LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -197,7 +197,7 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string; works?: boolean }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
 }
 
 /** A teammate's own bot in a team room; it runs on its owner's PC. */
@@ -337,6 +337,7 @@ export interface Bot {
   speakReplies?: boolean;
   /** this bot's own voice id (falls back to the app-wide one) */
   voice?: string;
+  call?: CallPrefs;
   pinned?: boolean;
   hidden?: boolean;
   /** Sidebar section this bot renders under; absent = unsectioned. */

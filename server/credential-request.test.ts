@@ -138,7 +138,7 @@ describe("saved keys prompt", () => {
     for (const [i, [site, base]] of sites.entries()) {
       const cfg: CredentialConfig = {};
       const prompt = (agents: boolean, depth = 0) => runInNewContext(`const canMessage = ${gates[i]?.[1]}; ${site}`, {
-        integrations: agents ? { agents: {} } : {}, commsDepth: depth, hop: depth, MAX_COMMS_DEPTH: 1,
+        integrations: agents ? { agents: {} } : {}, commsDepth: depth, hop: depth, MAX_COMMS_DEPTH: 1, works: true, readOnly: false,
         cfg, CREDENTIAL_PROMPT: "Ask first.", savedKeysPrompt,
       });
       for (const key of ["", "tts-7f3a", ""]) {

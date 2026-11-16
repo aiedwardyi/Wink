@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
+import { parsePaneNote } from "../shared/pane-note.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
 
@@ -19,15 +20,20 @@ const id = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 const mailboxScopeSchema = z.object({ pane: id, bot: id, teacher: id });
 
 /** `report` is orbit-msg --report; `auto` is an engine hook; `stall` is the watcher. Absent is a plain note. */
-export const mailboxPostSchema = z.object({ text: z.string(), kind: z.enum(["report", "auto", "stall"]).optional() });
+export const mailboxPostSchema = z.object({
+  text: z.string(), kind: z.enum(["report", "auto", "stall"]).optional(),
+  messageId: z.string().uuid().optional(), sentAt: z.number().int().min(0).max(8.64e15).optional(), queued: z.literal(true).optional(),
+});
 
-export async function deferMailboxAuto(access: TerminalBridgeAccess | null, scope: { bot: string; pane: string }, text: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+export type MailboxIdentity = Pick<z.infer<typeof mailboxPostSchema>, "messageId" | "sentAt" | "queued">;
+
+export async function deferMailboxAuto(access: TerminalBridgeAccess | null, scope: { bot: string; pane: string }, text: string, fetchImpl: typeof fetch = fetch, identity?: MailboxIdentity): Promise<boolean> {
   if (!access) return false;
   try {
     const response = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(scope.bot)}/terminal/attention`, {
       method: "POST",
       headers: { authorization: `Bearer ${terminalReadGrant(access.token, scope.bot)}`, "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: scope.pane, kind: "auto", text }),
+      body: JSON.stringify({ sessionId: scope.pane, kind: "auto", text, identity }),
       signal: AbortSignal.timeout(5_000),
     });
     if (!response.ok) return false;
@@ -132,6 +138,9 @@ export function mailboxRecipient<T extends { id: string }>(bots: readonly T[], s
   return bots.find((bot) => bot.id === scope.bot);
 }
 
+/** Deliverables that are not PRs (pages, sites, docs) never get a built.md line on merge. */
+export const BUILT_REMINDER = "Add or edit its built.md line now (PR or not).";
+
 /** Pane text is untrusted: strip escapes and controls, cap it, tag it. Null when nothing is left. */
 export function mailboxNoteText(pane: string, from: string, botId: string, text: string, label?: string | null): string | null {
   const clean = text
@@ -141,7 +150,10 @@ export function mailboxNoteText(pane: string, from: string, botId: string, text:
     .replace(UNSAFE_CONTROLS, "")
     .trim();
   if (!clean) return null;
-  const capped = clean.length > MAILBOX_NOTE_MAX_CHARS ? `${clean.slice(0, MAILBOX_NOTE_MAX_CHARS)}\n[truncated]` : clean;
+  const cut = clean.length > MAILBOX_NOTE_MAX_CHARS;
+  const done = parsePaneNote(clean).status === "done" ? `\n${BUILT_REMINDER}` : "";
+  // [truncated] stays last: parsePaneNote only spots a cut at the very end.
+  const capped = `${cut ? clean.slice(0, MAILBOX_NOTE_MAX_CHARS) : clean}${done}${cut ? "\n[truncated]" : ""}`;
   const who = sanitizeMailboxName(from);
   const pane8 = `[pane ${pane.slice(0, 8)}]`;
   const tag = label ? `${pane8} [${sanitizeMailboxName(label).replace(/\]/g, ")")}]` : pane8;

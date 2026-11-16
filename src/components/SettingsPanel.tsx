@@ -27,6 +27,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
+import { BotAlarms } from "./BotAlarms";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { currentTask, MemoryEditButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
@@ -44,6 +45,7 @@ import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
+import { VoiceChatSettings } from "./CallSettings";
 import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
@@ -824,6 +826,9 @@ export function SettingsPanel({
                 )}
               </div>
 
+              <BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />
+
+              <VoiceChatSettings bot={bot} />
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
             </>
           )}

@@ -13,7 +13,7 @@ const CSS = readFileSync(join(ROOT, "site/signin/signin.css"), "utf8");
 const MARKUP = HTML.slice(HTML.indexOf("<main>"), HTML.indexOf("</main>") + "</main>".length);
 
 const CLIENT = "test-client.apps.googleusercontent.com";
-const BASE = "wink.edwardyi.dev";
+const BASE = "app.getwink.dev";
 const LABEL_A = "aaaaaaaaaaaaaaaa";
 const LABEL_B = "bbbbbbbbbbbbbbbb";
 const M = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -196,7 +196,7 @@ describe("phone sign-in page", () => {
 
   it("ships a strict page with no inline script", () => {
     expect(HTML).toContain("script-src 'self' https://accounts.google.com/gsi/client");
-    expect(HTML).toContain("connect-src https://relay.wink.edwardyi.dev");
+    expect(HTML).toContain("connect-src https://relay.app.getwink.dev");
     expect(HTML).not.toMatch(/<script(?![^>]*\bsrc=)/);
     expect(HTML.match(/script-src ([^;]+);/)![1]).not.toContain("unsafe-inline");
     const workflow = readFileSync(join(ROOT, ".github/workflows/pages.yml"), "utf8");
@@ -209,7 +209,8 @@ describe("phone sign-in page", () => {
     expect(workflow).not.toContain("contents: write");
     expect(workflow).toContain("WINK_GOOGLE_WEB_CLIENT_ID");
     expect(workflow).toContain("WINK_RELAY_BASE");
-    expect(workflow).toContain('requested || "wink.edwardyi.dev"');
+    expect(workflow).toContain('requested || "app.getwink.dev"');
+    expect(workflow).toContain('writeFileSync("site/CNAME", `${base}\\n`);');
   });
 
   it.each(["site/signin/index.html", "site/privacy/index.html"])("keeps %s's meta policy to directives a meta tag honors", (page) => {
@@ -220,12 +221,12 @@ describe("phone sign-in page", () => {
 
   it("allows Google and relay requests, with PC images limited to the relay base", () => {
     const policy =
-      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.wink.edwardyi.dev; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
+      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.app.getwink.dev; connect-src https://relay.app.getwink.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
     expect(HTML).toContain(policy);
     const relay = "https://relay.example.dev";
-    const shipped = HTML.replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", "https://*.example.dev");
-    expect(shipped).toContain(policy.replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", "https://*.example.dev"));
-    expect(shipped).not.toContain("https://relay.wink.edwardyi.dev");
+    const shipped = HTML.replaceAll("https://relay.app.getwink.dev", relay).replaceAll("https://*.app.getwink.dev", "https://*.example.dev");
+    expect(shipped).toContain(policy.replaceAll("https://relay.app.getwink.dev", relay).replaceAll("https://*.app.getwink.dev", "https://*.example.dev"));
+    expect(shipped).not.toContain("https://relay.app.getwink.dev");
   });
 
   it("sends its origin to Google's button frame", () => {
@@ -297,6 +298,15 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(3));
     const rows = [...document.querySelectorAll("#list button")].map((button) => [button.textContent, button.classList.contains("last")]);
     expect(rows).toEqual([["Ada", false], ["Mid", false], ["Zed", true]]);
+  });
+
+  it("draws the last-used arcs in Wink's blue accent, not pink, in light and dark", () => {
+    const precision = readFileSync(join(ROOT, "src/styles.css"), "utf8").match(/\[data-skin="precision"\] \{([^}]+)\}/)![1]!;
+    const accent = precision.match(/--color-accent: ([^;]+);/)![1]!;
+    expect(CSS.match(/:root \{([^}]+)\}/)![1]).toContain(`--edge: ${accent};`);
+    expect([...CSS.matchAll(/--edge(-glow)?: ([^;]+);/g)].map((each) => each[2]!.slice(0, 7))).toEqual([accent, accent, accent]);
+    expect(CSS.toLowerCase()).not.toContain("#ff4d9d");
+    expect(CSS).toMatch(/\.last::after \{[^}]*border-color: var\(--edge\);/);
   });
 
   it.each([[LABEL_B, true], ["", false], ["short", false]])("rings Google's button only for a remembered PC (%s)", (label, ringed) => {

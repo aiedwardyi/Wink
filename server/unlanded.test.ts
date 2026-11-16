@@ -311,9 +311,11 @@ describe("unlanded wiring", () => {
   });
 
   it("refreshes a task's list as soon as a worker report is stored, so an idle bot's next typed turn has it", () => {
-    const route = source.slice(source.indexOf('path === "/api/mailbox"'), source.indexOf("return json(res, 200, { ok: true, id: message.id });"));
-    const stored = route.indexOf('const message = store.appendMessage(source.threadId, { role: "bot", kind: "note"');
+    const route = source.slice(source.indexOf('path === "/api/mailbox"'), source.indexOf('path.startsWith("/api/")', source.indexOf('path === "/api/mailbox"')));
+    expect(route).toContain("reported: (scope, text, source) => { usageStats.workerReported(scope.pane, text); void unlandedWork.refresh(source.id, source.threadId); },");
+    const delivery = readFileSync(new URL("./mailbox-delivery.ts", import.meta.url), "utf8");
+    const stored = delivery.indexOf("deps.store.appendMessage(source.threadId, row);");
     expect(stored).toBeGreaterThan(0);
-    expect(route.indexOf('if (kind === "report") void unlandedWork.refresh(source.id, source.threadId);')).toBeGreaterThan(stored);
+    expect(delivery.indexOf('if (kind === "report") { await deps.attention(scope, kind, input.text); deps.reported(scope, input.text, source); }')).toBeGreaterThan(stored);
   });
 });

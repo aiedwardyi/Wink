@@ -66,8 +66,10 @@ export class FakeAcme {
   port = 0;
   validator: AlpnValidator = async () => false;
   validity: () => Validity = () => ({});
-  /** "reject" fails every new order; "hold" parks finalize until release(). */
-  mode: "ok" | "reject" | "hold" = "ok";
+  /** "reject" fails every new order; "limited" answers new orders rateLimited with Retry-After; "hold" parks finalize until release(). */
+  mode: "ok" | "reject" | "limited" | "hold" = "ok";
+  /** Seconds in the Retry-After of a "limited" answer. */
+  retryAfterSec = 3600;
   readonly log: string[] = [];
   onHold: (() => void) | null = null;
   /** Thumbprints of every account key that signed a request. */
@@ -130,10 +132,10 @@ export class FakeAcme {
     res.writeHead(200, { "replay-nonce": this.nonce(), "content-type": "application/pem-certificate-chain" }).end(pem);
   }
 
-  private problem(res: ServerResponse, status: number, type: string, detail: string): void {
+  private problem(res: ServerResponse, status: number, type: string, detail: string, headers: Record<string, string> = {}): void {
     this.log.push(`error:${type}`);
     res
-      .writeHead(status, { "replay-nonce": this.nonce(), "content-type": "application/problem+json" })
+      .writeHead(status, { "replay-nonce": this.nonce(), "content-type": "application/problem+json", ...headers })
       .end(JSON.stringify({ type: `urn:ietf:params:acme:error:${type}`, detail }));
   }
 
@@ -272,6 +274,7 @@ export class FakeAcme {
 
   private newOrder(res: ServerResponse, payload: { identifiers?: Array<{ type: string; value: string }> }): void {
     if (this.mode === "reject") return this.problem(res, 403, "rejectedIdentifier", "test rejects orders");
+    if (this.mode === "limited") return this.problem(res, 429, "rateLimited", "too many certificates", { "retry-after": String(this.retryAfterSec) });
     const ids = payload?.identifiers ?? [];
     if (ids.length !== 1 || ids[0].type !== "dns") return this.problem(res, 400, "malformed", "one dns identifier");
     const authz: Authz = { id: this.nextId++, host: ids[0].value, status: "pending", token: randomBytes(32).toString("base64url") };

@@ -52,6 +52,7 @@ jobs:
       - run: pnpm check:glyphs
       - run: pnpm check:ko-keys
       - run: pnpm check:fixture-dates
+      - run: pnpm check:test-sleeps
       - run: pnpm build
       - run: pnpm check:electron
       - run: node scripts/check-skin-contrast.mjs

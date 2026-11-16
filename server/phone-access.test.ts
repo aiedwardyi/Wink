@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { PHONE_RELAY_OFF, buildSetupCode, mintInvite } from "../shared/relay-protocol.ts";
 import * as atomic from "./atomic.ts";
-import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, PC_HOLDER, serveLinkedFile } from "./linked-files.ts";
 import { PhoneAccess, loadRelayClient, type PhoneAccessOptions } from "./phone-access.ts";
 import { phoneSetCookie, requestCredentials } from "./phone-auth.ts";
 import { PAIRING_TTL_MS, PHONES_FILE, PhoneDevices } from "./phone-devices.ts";
@@ -33,6 +33,7 @@ import { isRelayRequest, markRelaySocket } from "./phone-relay/via.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
+import { addPushSubscription, loadPushSubscriptions } from "./web-push.ts";
 
 const COMMS = "c".repeat(48);
 const BOT_BEARER = "Bearer bot-caller";
@@ -105,7 +106,7 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
       !(method === "GET" && path === "/api/health") &&
       !credentials.phoneSession &&
       !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) &&
-      !linkedFileGrant(method, path)
+      !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)
     ) {
       return send(res, 401, { error: "unauthorized" });
     }
@@ -132,6 +133,7 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
     if (method === "GET" && /^\/api\/threads\/t1\/linked-file(?:\/.*)?$/.test(path)) {
       return serveLinkedFile(req, res, {
         ...credentials,
+        holder: phone?.id,
         threadId: "t1",
         messages: [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
         deviceId: "this-pc",
@@ -825,6 +827,29 @@ describe("relay request gate", () => {
     expect((await viaRelay(w.r, "/api/bots", { headers: { origin: "null", cookie: session } })).status).toBe(403);
   });
 
+  it("drops a phone's push subscription when it is signed out", async () => {
+    const w = await world();
+    await pairPhone(w);
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    const keys = { p256dh: "BA", auth: "AA" };
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/phone", keys }, phones[0]!.id);
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/pc", keys });
+    expect((await w.local(`/api/phone/devices/${phones[0]!.id}`, { method: "DELETE" })).status).toBe(200);
+    expect(loadPushSubscriptions(w.r.dataDir).map((sub) => sub.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/pc"]);
+  });
+
+  it("ends a linked page's grant when its phone is signed out", async () => {
+    const w = await world();
+    const session = await pairPhone(w);
+    const opened = await viaRelay(w.r, `/api/threads/t1/linked-file?path=${encodeURIComponent(join(w.linkedRoot, "page.html"))}`, { headers: { cookie: session } });
+    const scope = String(opened.headers.location);
+    expect((await viaRelay(w.r, `${scope}body.woff2`)).status).toBe(200);
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    expect((await w.local(`/api/phone/devices/${phones[0]!.id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await viaRelay(w.r, `${scope}body.woff2`)).status).toBe(401);
+    expect((await viaRelay(w.r, `${scope}body.woff2`, { headers: { origin: "null" } })).status).toBe(401);
+  });
+
   it("applies the same rules to an upgrade request", async () => {
     const w = await world();
     const session = await pairPhone(w);
@@ -1025,6 +1050,21 @@ describe("phone removal that fails to save", () => {
     expect(await access.handle(retry.req, retry.res, path, "DELETE", true)).toBe(true);
     expect(retry.res.statusCode).toBe(200);
     expect(new PhoneDevices(dir, clock).authenticate(paired.token)).toBeNull();
+  });
+
+  it("ends a linked page's grant even when the sign-out write fails", async () => {
+    const w = await world();
+    const session = await pairPhone(w);
+    const opened = await viaRelay(w.r, `/api/threads/t1/linked-file?path=${encodeURIComponent(join(w.linkedRoot, "page.html"))}`, { headers: { cookie: session } });
+    const scope = String(opened.headers.location);
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementationOnce(() => {
+      throw Object.assign(new Error("phone registry is busy"), { code: "EBUSY" });
+    });
+    const path = `/api/phone/devices/${phones[0]!.id}`;
+    const revoke = exchange(path, "DELETE");
+    await expect(w.access.handle(revoke.req, revoke.res, path, "DELETE", true)).rejects.toThrow("phone registry is busy");
+    expect((await viaRelay(w.r, `${scope}body.woff2`)).status).toBe(401);
   });
 });
 

@@ -94,6 +94,9 @@ export class FakeRelay extends EventEmitter {
   offerGoogle = true;
   googleEnrollAnswer: ((body: string) => EnrollAnswer) | null = null;
   readonly googleEnrollBodies: string[] = [];
+  /** Without it, /v1/acme/eab answers 404 like a relay with no second CA. */
+  eabAnswer: ((body: string) => EnrollAnswer) | null = null;
+  readonly eabBodies: string[] = [];
   lookups = 0;
   private server: Server | null = null;
   private readonly controls = new Map<string, Control>();
@@ -383,6 +386,12 @@ export class FakeRelay extends EventEmitter {
         this.googleEnrollBodies.push(body);
         this.record("enroll:google");
         const answer = this.googleEnrollAnswer ? this.googleEnrollAnswer(body) : this.defaultGoogleEnroll(body);
+        res.writeHead(answer.status, { "content-type": "application/json" }).end(answer.body);
+        return;
+      }
+      if (req.method === "POST" && req.url === "/v1/acme/eab" && this.eabAnswer) {
+        this.eabBodies.push(body);
+        const answer = this.eabAnswer(body);
         res.writeHead(answer.status, { "content-type": "application/json" }).end(answer.body);
         return;
       }

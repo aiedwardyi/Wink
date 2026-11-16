@@ -1,7 +1,7 @@
 // Process entry: node wink-relay.mjs --config /etc/wink-relay/config.json
 
 import { parseArgs } from "node:util";
-import { loadConfig, operatorKeyPath, readOperatorKey } from "./config.ts";
+import { loadConfig, loadGts, operatorKeyPath, readOperatorKey } from "./config.ts";
 import { stdoutLogger } from "./log.ts";
 import { createRelay } from "./relay.ts";
 
@@ -12,6 +12,7 @@ async function main(): Promise<void> {
   const log = stdoutLogger();
   const relay = await createRelay({
     base: config.base,
+    oldBases: config.oldBases,
     operatorPrivateKey: await readOperatorKey(operatorKeyPath(config)),
     dataDir: config.dataDir,
     revokedLabelsFile: config.revokedLabelsFile,
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
     google: config.google,
     teamOwnerEmail: config.teamOwnerEmail,
     stats: config.stats,
+    gts: await loadGts(config),
     limits: config.limits,
     log,
   });

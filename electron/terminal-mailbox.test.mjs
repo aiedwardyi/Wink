@@ -373,7 +373,7 @@ describe("installOrbitMsg", () => {
     try {
       const bin = await installOrbitMsg(path.join(dir, "orbit-bin"), "win32");
       const settings = JSON.parse(readFileSync(path.join(bin, "claude-worker.json"), "utf8"));
-      expect(settings.hooks.Notification).toEqual([{ matcher: "permission_prompt", hooks: [{ type: "command", command: expect.any(String), timeout: 15 }] }]);
+      expect(settings.hooks.Notification).toEqual([{ matcher: "permission_prompt", hooks: [{ type: "command", command: expect.any(String), timeout: 90 }] }]);
       const { command } = settings.hooks.Notification[0].hooks[0];
       expect(command).toContain(`-File "${path.join(bin, "orbit-msg.ps1").replace(/\\/g, "/")}" "WAITING: `);
       expect(command).toMatch(/ "WAITING: [^"$`!%\\]+"$/);

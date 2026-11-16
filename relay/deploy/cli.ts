@@ -30,6 +30,11 @@ const USAGE = `usage: wink-relay <provision|update|move|pause> --project P --bas
   [--google-desktop-client-id ID --google-web-client-id ID --google-signin-origin ORIGIN]
   [--team-owner-email E]   (needs the Google flags)
   [--stats-read-key-sha256 HEX]   (turns on /v1/stats)
+  [--old-base B]         (earlier base still served; its resources count as owned)
+  [--gts-project P]      (turns on /v1/acme/eab; key via the gts.json credential)
+  [--gts-per-hour N]     (certificates an hour from Google Trust Services, default 60; Google allows 100; needs --gts-project)
+  [--enroll-per-week N]  (new PCs a week through Google; default half of what the certificate providers issue,
+                          5065 with --gts-project, the relay's own 35 without; needs the Google flags)
   [--from-project OLD]   (move)
   [--offline]            (provision/update: plan without reading cloud state)
   [--apply]              (without it, nothing is changed)
@@ -82,6 +87,10 @@ export function parseOptions(argv: string[]): ParsedArgs {
       "google-signin-origin": { type: "string" },
       "team-owner-email": { type: "string" },
       "stats-read-key-sha256": { type: "string" },
+      "old-base": { type: "string" },
+      "gts-project": { type: "string" },
+      "gts-per-hour": { type: "string" },
+      "enroll-per-week": { type: "string" },
       "accept-acme-terms": { type: "boolean", default: false },
       offline: { type: "boolean", default: false },
       apply: { type: "boolean", default: false },
@@ -115,6 +124,10 @@ export function parseOptions(argv: string[]): ParsedArgs {
   if (google) opts.google = google;
   if (values["team-owner-email"] !== undefined) opts.teamOwnerEmail = values["team-owner-email"].toLowerCase();
   if (values["stats-read-key-sha256"] !== undefined) opts.statsReadKeySha256 = values["stats-read-key-sha256"];
+  if (values["old-base"] !== undefined) opts.oldBase = values["old-base"].toLowerCase();
+  if (values["gts-project"] !== undefined) opts.gtsProject = values["gts-project"];
+  if (values["gts-per-hour"] !== undefined) opts.gtsPerHour = Number(values["gts-per-hour"]);
+  if (values["enroll-per-week"] !== undefined) opts.enrollPerWeek = Number(values["enroll-per-week"]);
   if (action === "move" && !values["from-project"]) throw new PlanError("move needs --from-project");
   if (values.offline && values.apply) throw new PlanError("--offline cannot be combined with --apply");
   if (values.offline && (action === "move" || action === "pause")) {

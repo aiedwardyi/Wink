@@ -42,7 +42,7 @@ interface Phone {
 
 const STATUS_POLL_MS = 3_000;
 // The sign-in page lists only PCs on its own relay base.
-const FRONT_DOOR = "wink.edwardyi.dev";
+const FRONT_DOOR = "app.getwink.dev";
 
 const PROBLEM = {
   superseded: "settings.phoneAccess.problem.superseded",

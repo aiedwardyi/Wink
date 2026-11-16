@@ -154,6 +154,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
   const link = {
     notice: (code: NoticeCode) => send(socket, { type: "notice", code }),
     want: (n: number) => send(socket, { type: "want", n }),
+    poked: () => send(socket, { type: "poked" }),
     close: () => {
       if (closing) return;
       closing = true;
@@ -192,14 +193,16 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
         return true;
       }
       session = hub.register(result.label, link);
+      session.pokes = msg.pokes === true;
       if (result.account) hub.setAccount(session, result.account.subHash, result.account.name, result.account.person);
       const ready: ReadyMessage = { type: "ready", session: session.id, poolToken: session.poolToken, pool: { ...POOL } };
       if (result.ticket) ready.ticket = result.ticket;
       if (result.account?.refreshed) ready.account = result.account.refreshed;
-      if (ctx.snags) ready.snags = true;
-      if (hub.recordsTeam) ready.active = true;
+      if (ctx.snags && hub.recordsTeam(result.label)) ready.snags = true;
+      if (hub.recordsTeam(result.label)) ready.active = true;
       if (ctx.reportOwner) ready.reportOwner = ctx.reportOwner;
       if (ctx.roomCodes) ready.roomCodes = true;
+      ready.pokes = true;
       send(socket, ready);
       const waiting = hub.waitingCount(result.label);
       if (waiting > 0) link.want(waiting);
@@ -217,6 +220,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
     else if (msg.type === "snag") onSnag(session.label, msg);
     else if (msg.type === "active") hub.active(session);
     else if (msg.type === "roomcode") onRoomCode(session.label, msg.id);
+    else if (msg.type === "poke") hub.poke(session);
     else if (msg.type !== "pong") return false;
     hub.seen(session);
     return true;
@@ -226,7 +230,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
   const onSnag = (label: string, msg: SnagMessage) => {
     const parsed = teamSnagSchema.safeParse(msg.data);
     let reason: string;
-    if (!ctx.snags) reason = "snags-off";
+    if (!ctx.snags || !hub.recordsTeam(label)) reason = "snags-off";
     else if (Buffer.byteLength(JSON.stringify(msg), "utf8") > SNAG_MAX_BYTES) reason = "too-large";
     else if (!parsed.success) reason = "bad-snag";
     else {

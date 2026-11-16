@@ -23,18 +23,35 @@ export const pushSubscriptionSchema = z.object({
   keys: z.object({ p256dh: b64url, auth: b64url }),
   off: z.array(z.string().max(100)).max(500).optional(),
 });
+/**
+ * Who subscribed, set by the server and never read from the request: `phone` is a relay phone's id,
+ * `pc` a browser that reached this PC without the relay. An entry with neither predates both and is dropped on load.
+ */
+const storedSubscriptionSchema = pushSubscriptionSchema.extend({ phone: z.string().max(100).optional(), pc: z.literal(true).optional() });
 const subscriptionsFileSchema = z.object({ subscriptions: z.array(z.unknown()) });
 export const pushEndpointSchema = z.object({ endpoint: z.string() });
 export const pushTestSchema = pushEndpointSchema.extend({ botId: z.string().optional() });
 
 export type VapidKeys = z.infer<typeof vapidKeysSchema>;
-export type PushSubscriptionRecord = z.infer<typeof pushSubscriptionSchema>;
+export type PushSubscriptionRecord = z.infer<typeof storedSubscriptionSchema>;
 /** `call` marks a ringing call alert by its call id. */
 export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string; at?: number; call?: string };
 export type PushTarget = { botId: string; threadId: string };
 export type WebPushResult = { ok: true } | { ok: false; gone: boolean; error: string };
 
 const fromB64url = (value: string) => Buffer.from(value, "base64url");
+
+const PUSH_HOSTS = /^(?:fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|[\w-]+(?:\.[\w-]+)*\.push\.apple\.com|[\w-]+(?:\.[\w-]+)*\.notify\.windows\.com)$/;
+
+/** Browsers' own push services only, so a subscription can't aim the PC at another host. */
+export function pushServiceEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" && !url.port && PUSH_HOSTS.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 export function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
   const path = join(dataDir, WEB_PUSH_KEYS_FILE);
@@ -120,6 +137,7 @@ export async function sendWebPush(
   fetchImpl: typeof fetch = fetch,
   warn: (line: string) => void = console.warn,
 ): Promise<WebPushResult> {
+  if (!pushServiceEndpoint(subscription.endpoint)) return { ok: false, gone: true, error: "not a push service" };
   try {
     const res = await fetchImpl(subscription.endpoint, {
       method: "POST",
@@ -150,8 +168,8 @@ export function loadPushSubscriptions(dataDir: string): PushSubscriptionRecord[]
     const parsed = subscriptionsFileSchema.safeParse(JSON.parse(readFileSync(join(dataDir, WEB_PUSH_SUBS_FILE), "utf8")));
     if (!parsed.success) return [];
     return parsed.data.subscriptions.flatMap((entry) => {
-      const sub = pushSubscriptionSchema.safeParse(entry);
-      return sub.success ? [sub.data] : [];
+      const sub = storedSubscriptionSchema.safeParse(entry);
+      return sub.success && (sub.data.phone || sub.data.pc) && pushServiceEndpoint(sub.data.endpoint) ? [sub.data] : [];
     });
   } catch {
     return [];
@@ -164,10 +182,19 @@ function savePushSubscriptions(dataDir: string, subscriptions: PushSubscriptionR
 }
 
 /** One entry per device; re-enabling the same browser replaces its entry. `off` lists the rooms this device muted. */
-export function addPushSubscription(dataDir: string, subscription: PushSubscriptionRecord): void {
+export function addPushSubscription(dataDir: string, subscription: PushSubscriptionRecord, phone?: string): void {
   const rest = loadPushSubscriptions(dataDir).filter((sub) => sub.endpoint !== subscription.endpoint);
   const off = subscription.off?.length ? { off: subscription.off } : {};
-  savePushSubscriptions(dataDir, [...rest, { endpoint: subscription.endpoint, keys: subscription.keys, ...off }]);
+  const entry: PushSubscriptionRecord = { endpoint: subscription.endpoint, keys: subscription.keys, ...off };
+  if (phone) entry.phone = phone;
+  else entry.pc = true;
+  savePushSubscriptions(dataDir, [...rest, entry]);
+}
+
+export function removePhonePushSubscriptions(dataDir: string, phone: string): void {
+  const all = loadPushSubscriptions(dataDir);
+  const rest = all.filter((sub) => sub.phone !== phone);
+  if (rest.length !== all.length) savePushSubscriptions(dataDir, rest);
 }
 
 export function removePushSubscription(dataDir: string, endpoint: string): void {
@@ -176,16 +203,23 @@ export function removePushSubscription(dataDir: string, endpoint: string): void 
   if (rest.length !== all.length) savePushSubscriptions(dataDir, rest);
 }
 
-/** Sends to one device (by endpoint) or all; drops every subscription the push service says is gone. */
+/**
+ * Sends to one device (by endpoint) or all; drops every subscription the push service says is gone,
+ * and every phone's once `signedIn` no longer knows it (removed, or idle past the cutoff).
+ */
 export async function sendWebPushToDevices(
   dataDir: string,
   payload: PushPayload,
   subject: string,
+  signedIn: (phone: string) => boolean,
   only?: string,
   fetchImpl: typeof fetch = fetch,
   warn?: (line: string) => void,
 ): Promise<WebPushResult[]> {
-  const subscriptions = loadPushSubscriptions(dataDir).filter((sub) => (only === undefined || sub.endpoint === only) && !(payload.chat && sub.off?.includes(payload.chat)));
+  const all = loadPushSubscriptions(dataDir);
+  const held = all.filter((sub) => !sub.phone || signedIn(sub.phone));
+  if (held.length !== all.length) savePushSubscriptions(dataDir, held);
+  const subscriptions = held.filter((sub) => (only === undefined || sub.endpoint === only) && !(payload.chat && sub.off?.includes(payload.chat)));
   if (!subscriptions.length) return [];
   const keys = loadOrCreateVapidKeys(dataDir);
   const results = await Promise.all(subscriptions.map((sub) => sendWebPush(sub, payload, keys, subject, fetchImpl, warn)));

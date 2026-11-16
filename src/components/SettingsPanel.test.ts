@@ -52,6 +52,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           },
         ],
         bots: [],
+        routines: [],
         config: { features: { terminalHost: configMock.terminalHost } },
         mascotMotion: null,
       },
@@ -313,5 +314,20 @@ describe("SettingsPanel share terminal switch", () => {
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(SettingsPanel, { bot })));
     expect(terminalButtonTag(html)).not.toContain('disabled=""');
+  });
+});
+
+describe("SettingsPanel voice chat", () => {
+  afterEach(() => {
+    chrome.voiceAndStartupSettings = false;
+  });
+
+  it.each([false, true])("shows the call voice and speed with voice settings %s", async (shown) => {
+    chrome.voiceAndStartupSettings = shown;
+    const { SettingsPanel } = await import("./SettingsPanel");
+    const { I18nProvider } = await import("@/lib/i18n");
+    const render = (b: Bot) => renderToStaticMarkup(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: b })));
+    expect(render(bot)).toMatch(/data-call-voice-row=""[^>]*><span>Jenn 1\.0x<\/span>/);
+    expect(render({ ...bot, call: { voice: "Kore", speed: 0.8 } })).toMatch(/data-call-voice-row=""[^>]*><span>Kore 0\.8x<\/span>/);
   });
 });
