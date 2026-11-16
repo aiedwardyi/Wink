@@ -61,7 +61,7 @@ import { FileAttachmentRows } from "./FileAttachmentRow";
 import { RoomFileRows, RoomLineTranslation, RoomTranslateButton, RoomTranslationText, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { RoomTitle } from "./RoomTitle";
 import { RoomAlertsBell } from "./RoomAlertsBell";
@@ -113,11 +113,13 @@ export function RoomToolChip({
   notices,
   onRetry,
   group,
+  onMessageMenu,
 }: {
   message: Message;
   notices?: LinkedApproval[];
   onRetry?: (callbacks?: { onError?: () => void }) => void;
   group?: Group;
+  onMessageMenu?: (menu: MessageMenuRequest) => void;
 }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
@@ -151,10 +153,14 @@ export function RoomToolChip({
       </div>
     );
     if (!message.text) return chip;
+    const menuProps = group && onMessageMenu
+      ? messageMenuProps({ threadId: group.threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
+      : {};
     return (
-      <div>
+      <div {...menuProps}>
         {chip}
         <PeerMessageBody text={message.text} />
+        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
       </div>
     );
   }
@@ -351,6 +357,7 @@ export const Transcript = memo(function Transcript({
                         message={step}
                         notices={item.notices?.get(step.id)}
                         onRetry={onRetryFor(step.id)}
+                        onMessageMenu={readOnly ? undefined : onMessageMenu}
                       />
                     </div>
                   ))}
@@ -451,6 +458,7 @@ export const Transcript = memo(function Transcript({
               message={m}
               notices={item.notices}
               onRetry={onRetryFor(m.id)}
+              onMessageMenu={readOnly ? undefined : onMessageMenu}
             />
           ) : m.kind === "screen" && m.image ? (
             <ShownImage name={m.image} caption={m.text} />
@@ -469,30 +477,7 @@ export const Transcript = memo(function Transcript({
               data-orbit-message={user ? "user" : "bot"}
               className={cn("group flex w-full flex-col outline-none", mine ? "animate-msg-in items-end" : "items-start")}
               tabIndex={-1}
-              {...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget })))}
-              onContextMenu={menuTarget ? (e) => {
-                if (isTouchPrimary() || !(e.target instanceof Element)) return;
-                const kind = contextClickKind(e.target, e.clientX, e.clientY);
-                if (kind === "native") return;
-                e.preventDefault();
-                e.stopPropagation();
-                onMessageMenu(kind === "selection"
-                  ? { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" }
-                  : { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, target: menuTarget });
-              } : undefined}
-              onKeyDown={menuTarget ? (e) => {
-                if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
-                if (e.target instanceof Element && keepsNativeMenu(e.target)) return;
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                onMessageMenu({
-                  kind: "message",
-                  x: rect.left + rect.width / 2,
-                  y: rect.top + rect.height / 2,
-                  opener: e.currentTarget,
-                  target: menuTarget,
-                });
-              } : undefined}
+              {...messageMenuProps(menuTarget, onMessageMenu)}
             >
               <RoomLineTranslation base={roomBase ?? ""} entryId={translateId} text={translateText} canTranslate={canTranslate && !streaming}>{(translation) => (
               <div
