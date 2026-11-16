@@ -226,6 +226,37 @@ it("puts every worker on one tree in its own color and marks clashes by how near
   expect(host.querySelector('.map-tree-file[data-map-file="b.ts"] .map-tree-x[data-same]')).not.toBeNull();
 });
 
+it("lists only workers with changes and folds idle ones into one chip", async () => {
+  const idle = (id: string, nick: string) => ({ id, nick, task: "Wait", git: true, editedAt: 0, files: [] });
+  const legend = () => [...host.querySelectorAll(".map-tree-legend span")].map(item => item.textContent);
+  const chip = () => host.querySelector<HTMLButtonElement>(".map-tree-legend button");
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([idle("t", "TIMER"), ...workers, idle("w", "WALK")]);
+  expect(legend()).toEqual(["ALPHA2", "BETA1"]);
+  expect([chip()?.textContent, chip()?.getAttribute("aria-expanded")]).toEqual(["+2 idle", "false"]);
+  await click(".map-tree-legend button");
+  expect(legend()).toEqual(["ALPHA2", "BETA1", "TIMER0", "WALK0"]);
+  expect([chip()?.textContent, chip()?.getAttribute("aria-expanded")]).toEqual(["Hide idle", "true"]);
+  await click(".map-tree-legend button");
+  expect(legend()).toEqual(["ALPHA2", "BETA1"]);
+  await emit(workers);
+  expect(chip()).toBeNull();
+  await emit([idle("t", "TIMER"), idle("w", "WALK")]);
+  expect(legend()).toEqual([]);
+  expect(chip()?.textContent).toBe("+2 idle");
+});
+
+it("keeps the phone file toolbar to its three controls at one 32px height", () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  const phone = css.slice(css.indexOf("@media (max-width: 767px) {")).split(/\r?\n\}/)[0];
+  expect(phone).toContain(".map-path { display: none; }");
+  expect(phone).not.toMatch(/min-height: 44px|height: 44px; padding-block|width: 44px; height: 44px/);
+  expect(phone).toMatch(/\.map-crumbs \[role="radio"\] \{ padding: 4px 9px; font-size: 12\.5px; line-height: 18px; \}/);
+  expect(phone).toMatch(/\.map-follow \{ height: 32px;/);
+  expect(phone).toMatch(/\.map-crumbs > \.verify-watch-icon \{ width: 32px; height: 32px;/);
+  expect(phone).toMatch(/\.map-crumbs :is\(\[role="radio"\], \.map-follow, \.verify-watch-icon\)::after[^{]*\{[^}]*height: 44px;/);
+});
+
 it("marks a file filled when any two of its workers overlap", async () => {
   const team = [
     { ...workers[0], files: [{ path: "src/a.ts", added: 1, removed: 0, ranges: [[10, 12]] }] },
