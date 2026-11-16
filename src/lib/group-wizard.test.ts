@@ -7,7 +7,10 @@ import {
   newBotPayload,
   suggestEngine,
   wizardEngineOptions,
+  wizardModelOptions,
+  resolveWizardModel,
 } from "./group-wizard";
+import { MSP_MUSE_MODELS } from "../../server/drivers/msp/muse.ts";
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
@@ -25,6 +28,12 @@ const engine = (
 });
 
 describe("wizard engine suggestion", () => {
+  it("offers Ember and preserves a requested Ember model", () => {
+    const muse = { ...engine("muse", "museAgent"), models: MSP_MUSE_MODELS };
+    expect(wizardModelOptions(muse)).toContainEqual({ id: "muse-ember-1.0", label: "Meta Muse Ember" });
+    expect(resolveWizardModel(muse, "muse-ember-1.0")).toBe("muse-ember-1.0");
+    expect(resolveWizardModel(muse, null)).toBe("muse-spark-1.3");
+  });
   const bases = [engine("claude", "claudeAgent"), engine("codex", "codex")];
   const copies = bases.flatMap((base, index) => Array.from({ length: index ? 1 : 3 }, (_, account) => ({
     ...base,
@@ -113,9 +122,9 @@ describe("wizard naming and payloads", () => {
     });
   });
 
-  it("trims and caps the name at 40 characters without an ellipsis", () => {
+  it("trims the name and keeps it past 40 characters", () => {
     const selection = { instanceId: "codex-1", model: "m" };
-    expect(newBotPayload(`  ${"a".repeat(45)}  `, selection).name).toBe("a".repeat(40));
+    expect(newBotPayload(`  ${"a".repeat(45)}  `, selection).name).toBe("a".repeat(45));
     expect(newBotPayload("  ", selection).name).toBe("");
   });
 

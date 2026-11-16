@@ -293,7 +293,7 @@ describe("comms e2e (fake ACP fleet)", () => {
   );
 
   it(
-    "lets a section Chief create a safe operator and delegate work to it",
+    "lets a section Chief create an operator with its settings and delegate work to it",
     async () => {
       const chief = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${chief.id}`, {
@@ -327,8 +327,8 @@ describe("comms e2e (fake ACP fleet)", () => {
         title: "Product designer",
         description: "Design and review the user experience.",
         section: "Launch",
-        composio: false,
-        autoApprove: false,
+        composio: true,
+        autoApprove: true,
         approvePeerComms: false,
         modelSelection: { instanceId: "chiefCreator", model: "fake-model" },
       });

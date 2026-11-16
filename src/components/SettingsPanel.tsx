@@ -27,6 +27,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
+import { BotAlarms } from "./BotAlarms";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { currentTask, MemoryEditButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
@@ -496,7 +497,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const edits = !loading && !loadFailed && !conflict ? startEdit : undefined;
 
   return (
-    <div ref={card} className="relative flex flex-col gap-3">
+    <div ref={card} className="mm-wrap relative flex flex-col gap-3">
       {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
@@ -697,7 +698,7 @@ export function SettingsPanel({
       </div>
 
       <div ref={pagesRef} className={cn("relative min-h-0 flex-1 overflow-hidden", paging && "pointer-events-none")}>
-        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
+        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
           {rows > 0 && (
             <>
               <KeepGoingCard bot={bot} />
@@ -769,7 +770,6 @@ export function SettingsPanel({
                     watchMetrics
                     aria-label={t("bot.description")}
                     className={cn(DETAILS_INPUT, "min-h-[96px]")}
-                    maxLength={BOT_PROFILE_LIMITS.description}
                     placeholder={t("bot.descriptionPlaceholder")}
                     value={bot.description}
                     onChange={(e) => patch({ description: e.target.value })}
@@ -825,11 +825,13 @@ export function SettingsPanel({
                 )}
               </div>
 
+              <BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />
+
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
             </>
           )}
         </div>
-        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
+        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
           {rows > 0 && <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />}
         </div>
       </div>

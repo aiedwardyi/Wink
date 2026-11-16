@@ -240,20 +240,22 @@ export function createVerifySite(deps: VerifySiteDeps) {
   const free = (runId: string) => {
     if (slot === runId) { slot = null; queue.shift()?.(); }
   };
-  const acquire = (runId: string, signal?: AbortSignal, ends = Date.now() + VERIFY_LIMITS.runMs) => new Promise<boolean>(resolve => {
-    if (signal?.aborted || Date.now() >= ends) { resolve(false); return; }
-    if (!queue.length && reserve(runId)) { resolve(true); return; }
-    if (queue.length >= 2) { resolve(false); return; }
-    const finish = (granted: boolean) => {
+  const acquire = (runId: string, signal?: AbortSignal, ends = Date.now() + VERIFY_LIMITS.runMs) => new Promise<VerifyErrorCode | null>(resolve => {
+    if (signal?.aborted) { resolve("cancelled"); return; }
+    if (Date.now() >= ends) { resolve("timeout"); return; }
+    if (!queue.length && reserve(runId)) { resolve(null); return; }
+    if (queue.length >= 2) { resolve("busy"); return; }
+    const finish = (refused: VerifyErrorCode | null) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", cancel);
       const index = queue.indexOf(enter);
       if (index >= 0) queue.splice(index, 1);
-      resolve(granted);
+      resolve(refused);
     };
-    const enter = () => finish(reserve(runId));
-    const cancel = () => finish(false);
-    const timer = setTimeout(cancel, Math.max(1, ends - Date.now()));
+    const enter = () => finish(reserve(runId) ? null : "busy");
+    const cancel = () => finish("cancelled");
+    // The timer runs on the monotonic clock, so Date.now() can still read short of ends when it fires.
+    const timer = setTimeout(() => finish("timeout"), Math.max(1, ends - Date.now()));
     queue.push(enter);
     signal?.addEventListener("abort", cancel, { once: true });
   });
@@ -438,7 +440,8 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const checked = deps.toolCheckStarted?.(run.threadId, run.turnId);
     runs.set(runId, run);
     if (slot !== null) writeCard(run, { status: "waiting" });
-    if (!await acquire(runId, caller.signal, toolDeadline)) return send(finish(run, "blocked", { errorCode: caller.signal.aborted ? "cancelled" : Date.now() >= toolDeadline ? "timeout" : "busy" }));
+    const refused = await acquire(runId, caller.signal, toolDeadline);
+    if (refused) return send(finish(run, "blocked", { errorCode: caller.signal.aborted ? "cancelled" : refused }));
     if (!turnLive(run)) return send(finish(run, "blocked", { errorCode: "cancelled" }));
     const reply = await execute(run, bridge, false, caller.signal);
     if (reply.status === "completed") checked?.();
@@ -458,7 +461,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
       const site = await resolveVerifySite(input.entry, roots, controller.signal);
       if (typeof site === "string" || controller.signal.aborted) return false;
       if (!verifyLoopbackUrl(site.root) && !(await Promise.all(roots.map(root => realpath(root).catch(() => null)))).some(root => root && within(root, site.root))) return false;
-      if (!await acquire(runId, controller.signal, toolDeadline)) return false;
+      if (await acquire(runId, controller.signal, toolDeadline)) return false;
       if (controller.signal.aborted) { free(runId); return false; }
       if (pending.get(input.threadId) === controller) pending.delete(input.threadId);
       const nonce = randomBytes(16).toString("hex");
@@ -515,8 +518,9 @@ export function createVerifySite(deps: VerifySiteDeps) {
       run.episode = [...episodes].find(([, id]) => id === run.messageId)?.[0];
       runs.set(nextId, run);
       if (slot !== null) writeCard(run, { status: "waiting" });
-      if (!await acquire(nextId, undefined, toolDeadline)) {
-        finish(run, "blocked", { errorCode: Date.now() >= toolDeadline ? "timeout" : "busy" });
+      const refused = await acquire(nextId, undefined, toolDeadline);
+      if (refused) {
+        finish(run, "blocked", { errorCode: refused });
         return json(res, 409, { error: "busy" });
       }
       void execute(run, bridge, false, null);
@@ -530,8 +534,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
   async function handleStream(req: IncomingMessage, res: ServerResponse, runId: string, replay: boolean, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
     res.setHeader("cache-control", "no-store"); res.setHeader("x-content-type-options", "nosniff");
     if (!enabled()) return json(res, 404, { error: "not found" });
-    if (deps.resolveCommsCaller(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
-    if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req)) return json(res, 401, { error: "unauthorized" });
+    if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req) && !deps.resolveCommsCaller(req.headers.authorization)) return json(res, 401, { error: "unauthorized" });
     const run = runs.get(runId) ?? deps.docRun?.(runId), threadId = run?.threadId ?? await replayThread(runId);
     if (!threadId || !store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not-here" });
     if (!replay && run?.recording && !run.card.endedAt) {

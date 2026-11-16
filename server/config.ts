@@ -26,13 +26,12 @@ import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schem
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 5;
+export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const MIN_ROOM_TURN_TIMEOUT_MINUTES = 1;
 export const MAX_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const DEFAULT_LOCAL_VM_MODE = "shared" as const;
 export const DEFAULT_LOCAL_VM_MAX_INSTANCES = 2;
 export const MIN_LOCAL_VM_MAX_INSTANCES = 1;
-export const MAX_LOCAL_VM_MAX_INSTANCES = 4;
 
 export function isValidSshAlias(value: unknown): value is string {
   return typeof value === "string" && SSH_ALIAS.test(value);
@@ -70,7 +69,6 @@ const localVmConfigSchema = z.object({
     .number()
     .int()
     .min(MIN_LOCAL_VM_MAX_INSTANCES)
-    .max(MAX_LOCAL_VM_MAX_INSTANCES)
     .optional(),
 });
 const featureConfigSchema = z.object({
@@ -478,6 +476,13 @@ export function applyCredentialAllowlist(
   for (const key of Object.keys(env)) {
     if (!keep.has(key.toUpperCase()) && (named.has(key.toUpperCase()) || CREDENTIAL_ENV_NAME.test(key))) delete env[key];
   }
+}
+
+/** A copy of `env` for a helper CLI, without saved keys or Wink's own tokens. */
+export function scrubbedEnv(env: Record<string, string | undefined>, allowed: Iterable<string> = []): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  applyCredentialAllowlist(copy, allowed);
+  return copy;
 }
 
 /** Merge a partial config into ~/.orbit/config.json (secrets never

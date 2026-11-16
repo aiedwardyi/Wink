@@ -50,4 +50,13 @@ describe("GeminiLive", () => {
     expect(socket.frames.at(-1)).toEqual({ realtimeInput: { text: "Next." } });
     expect(socket.frames.some((frame) => frame.clientContent)).toBe(false);
   });
+
+  it("waiting context rides a tool result too, once, on the first id", () => {
+    const { live, socket } = open();
+    live.sendContext("[Wink] Status now.");
+    live.sendToolResult(["a", "b"], "ask", "sent");
+    expect(socket.frames.at(-1)).toEqual({ toolResponse: { functionResponses: [{ id: "a", name: "ask", response: { result: "sent", context: "[Wink] Status now." } }, { id: "b", name: "ask", response: { result: "sent" } }] } });
+    live.sendToolResult(["c"], "ask", "sent");
+    expect(socket.frames.at(-1)).toEqual({ toolResponse: { functionResponses: [{ id: "c", name: "ask", response: { result: "sent" } }] } });
+  });
 });

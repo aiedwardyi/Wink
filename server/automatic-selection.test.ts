@@ -198,6 +198,17 @@ describe("resolveAutomaticSelection", () => {
     })).toMatchObject({ instanceId: "grok", model: "grok-default" });
   });
 
+  it("lands a fresh pick on a signed-in engine ahead of signed-out Claude", () => {
+    const claude = candidate("claude", { driverKind: "claudeAgent", authenticated: false });
+    const codex = candidate("codex", { driverKind: "codex", authenticated: true });
+    expect(resolveAutomaticSelection({ candidates: [claude, codex] })).toMatchObject({ instanceId: "codex", model: "codex-default" });
+    expect(resolveAutomaticSelection({ candidates: [claude, { ...codex, rateLimits: [{ id: "seven_day", usedPercent: 100, resetsAt: null }] }] }))
+      .toMatchObject({ instanceId: "codex" });
+    expect(resolveAutomaticSelection({ candidates: [claude] })).toMatchObject({ instanceId: "claude" });
+    expect(resolveAutomaticSelection({ candidates: [claude, codex], current: { mode: "automatic", instanceId: "claude", model: "claude-opus-5-5" } }))
+      .toMatchObject({ instanceId: "claude" });
+  });
+
   it("returns null when no working engine meets the job", () => {
     expect(
       resolveAutomaticSelection({

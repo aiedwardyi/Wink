@@ -16,11 +16,11 @@ const pane = () => document.querySelector<HTMLElement>(".show-pane")!;
 const current = () => pane().querySelector<HTMLElement>("[data-pane-current]") ?? pane();
 const selected = () => pane().querySelector('.show-pane-tabs [aria-selected="true"]')?.textContent;
 
-function Harness() {
+function Harness({ botId }: { botId?: string }) {
   const item = useShowItem();
   const media = useMediaThread();
   const map = useMapThread();
-  return item || media || map ? createElement(ShowPane, { item: item ?? undefined, media: Boolean(media), map: Boolean(map), source, hidden: false }) : null;
+  return item || media || map ? createElement(ShowPane, { item: item ?? undefined, media: Boolean(media), map: Boolean(map), botId, source, hidden: false }) : null;
 }
 
 function touch(type: string, x: number, y: number, target: Element) {
@@ -50,12 +50,13 @@ beforeEach(async () => {
     Object.defineProperty(media, "matches", { get: () => query.includes("max-width") });
     return media;
   });
+  vi.stubGlobal("EventSource", class { onmessage = null; onerror = null; readyState = 0; close() {} });
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ v: "1", ids: ["p", "f"], at: [1, 1], kind: "ll", name: ["photo.png", "notes.txt"], ref: ["C:\\test\\photo.png", "C:\\test\\notes.txt"], size: [10, 20] })));
   time = 0;
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   showItem(shown);
-  await act(async () => root.render(createElement(Harness)));
+  await act(async () => root.render(createElement(Harness, { botId: "pane-bot" })));
 });
 
 afterEach(async () => {

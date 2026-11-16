@@ -38,8 +38,8 @@ const EVERY = 30_000;
 const PRESS = 450;
 // The line takes the color of the last stage reached: white-gray before the PR, green from the PR on, purple once merged.
 const FILL = ["ink", "ink", "ink", "open", "open", "open", "merged"];
-type Stop = { key: keyof Copy["stops"]; state?: string; tip: string[] };
-type Tip = { id: string; lines: string[]; top: number; left?: number; right?: number };
+type Stop = { key: keyof Copy["stops"]; state?: string; url?: string; tip: string[] };
+type Tip = { id: string; lines: string[]; top: number; left?: number; right?: number; tapped?: HTMLElement };
 const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "closed";
 // Review bots by the names people call them.
 const BOTS: Record<string, string> = { "chatgpt-codex-connector": "codex", "copilot-pull-request-reviewer": "copilot" };
@@ -87,12 +87,12 @@ function stops(item: MapWorker, flow: MapFlow, stages: MapStage[], c: Copy): Sto
     { key: "code", state: item.files.length || flow.total || pr ? "on" : undefined, tip: [item.files.length ? c.files(item.files.length) : c.noFiles] },
     { key: "commit", state: flow.total || pr ? "on" : undefined, tip: flow.total ? [c.commits(flow.total), ...at("commit")!.detail] : [c.noCommits] },
     { key: "push", state: flow.pushed || pr ? "on" : undefined, tip: [c.pushedOn(flow.pushed, flow.total, flow.branch)] },
-    { key: "pr", state: pr ? "on" : undefined, tip: pr ? [`#${pr.number} ${pr.title}`, c.into(pr.into)] : [c.noPr] },
-    { key: "checks", state: checks?.total ? checks.tone : undefined,
+    { key: "pr", state: pr ? "on" : undefined, url: pr?.url, tip: pr ? [`#${pr.number} ${pr.title}`, c.into(pr.into)] : [c.noPr] },
+    { key: "checks", state: checks?.total ? checks.tone : undefined, url: checks?.url,
       tip: checks?.fail ? checks.detail.map(c.failTip) : checks?.pending ? checks.detail.map(c.runTip) : [checks?.total ? c.passed(checks.total) : c.noChecks] },
-    { key: "review", state: review?.tone === "bad" ? "bad" : review?.tone === "ok" ? "on" : review?.on || review?.threads ? "half" : undefined,
+    { key: "review", state: review?.tone === "bad" ? "bad" : review?.tone === "ok" ? "on" : review?.on || review?.threads ? "half" : undefined, url: pr ? `${pr.url}/files` : undefined,
       tip: pr ? [...pr.reviews.map(each => `${person(each.login)} · ${c.reviewed[each.state]}`), ...pr.threads ? [c.threads(pr.threads)] : []].concat(pr.reviews.length ? [] : [c.noReviews]) : [c.noReviews] },
-    { key: "merge", state: merge?.on ? merge.tone : undefined,
+    { key: "merge", state: merge?.on ? merge.tone : undefined, url: pr?.url,
       tip: [merge?.tone === "closed" ? c.closedTip : merge?.on ? c.mergedInto(pr!.into, merge.at ? new Date(merge.at).toLocaleString() : "") : c.openTip] },
   ];
 }
@@ -141,28 +141,38 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     return by;
   }, [workers]);
   const [tip, setTip] = useState<Tip | null>(null);
-  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; held: boolean }>({ held: false });
+  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; held: boolean; touch?: boolean }>({ held: false });
   useEffect(() => () => clearTimeout(press.current.timer), []);
+  useEffect(() => {
+    const tapped = tip?.tapped;
+    if (!tapped) return;
+    const away = (event: PointerEvent) => { if (!(event.target instanceof Node && tapped.contains(event.target))) setTip(null); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [tip]);
   if (!shown.length) return null;
 
   // The tip sits outside the scrolling list, under the row, so the list never clips it.
-  const show = (id: string, lines: string[], target: HTMLElement) => {
+  const show = (id: string, lines: string[], target: HTMLElement, tapped?: boolean) => {
     const box = target.closest(".map-flow-rows")?.getBoundingClientRect();
     const row = target.closest(".map-flow-row")?.getBoundingClientRect();
     if (!box || !row) return;
     const at = target.getBoundingClientRect();
     const top = row.bottom - box.top - 2;
-    setTip(at.left + at.width / 2 - box.left > box.width / 2 ? { id, lines, top, right: Math.max(0, box.right - at.right) } : { id, lines, top, left: at.left - box.left });
+    const tap = tapped ? target : undefined;
+    setTip(at.left + at.width / 2 - box.left > box.width / 2 ? { id, lines, top, tapped: tap, right: Math.max(0, box.right - at.right) } : { id, lines, top, tapped: tap, left: at.left - box.left });
   };
   const hide = (id: string) => setTip(current => current?.id === id ? null : current);
   const hover = (id: string, lines: string[]) => ({
     onPointerOver: (event: React.PointerEvent<HTMLElement>) => { if (event.pointerType !== "touch" && tip?.id !== id) show(id, lines, event.currentTarget); },
-    onPointerLeave: () => hide(id),
+    // A finger lifting fires pointerleave too, which would hide the tip it just opened.
+    onPointerLeave: (event: React.PointerEvent<HTMLElement>) => { if (event.pointerType !== "touch") hide(id); },
     onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
-      if (event.pointerType !== "touch") return;
+      press.current.touch = event.pointerType === "touch";
+      if (!press.current.touch) return;
       const target = event.currentTarget;
       clearTimeout(press.current.timer);
-      press.current = { held: false, timer: setTimeout(() => { press.current.held = true; show(id, lines, target); }, PRESS) };
+      press.current = { held: false, touch: true, timer: setTimeout(() => { press.current.held = true; show(id, lines, target); }, PRESS) };
     },
     onPointerUp: () => {
       clearTimeout(press.current.timer);
@@ -170,7 +180,14 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     },
     onPointerCancel: () => { clearTimeout(press.current.timer); hide(id); },
     onContextMenu: (event: React.MouseEvent) => { if (press.current.held) event.preventDefault(); },
-    onClick: (event: React.MouseEvent) => { if (press.current.held) { event.preventDefault(); press.current.held = false; } },
+    onClick: (event: React.MouseEvent<HTMLElement>) => {
+      if (press.current.held) { event.preventDefault(); press.current.held = false; }
+      else if (press.current.touch && !event.currentTarget.hasAttribute("href")) {
+        press.current.touch = false;
+        if (tip?.id === id) hide(id);
+        else show(id, lines, event.currentTarget, true);
+      }
+    },
   });
   const link = (url: string | undefined) => url ? { href: url, target: "_blank", rel: "noreferrer" } : { tabIndex: 0 };
 
@@ -191,27 +208,27 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
       const color = mapWorkerColor(slots.get(item.id) ?? 99);
       // Keyboard focus on the row shows what the stops say on hover.
       const lines = [...list.flatMap(stop => (pr ? stop.key === "checks" || stop.key === "review" : stop.key === "commit") ? stop.tip : []), ...clash ? [c.also([...clash.who].join(", "))] : []];
-      return <a key={item.id} className="map-flow-row" data-tone={tone} style={{ "--flow-line": color } as CSSProperties} aria-label={`${item.nick}, ${summary(flow, c)}`} {...link(pr?.url ?? stages.findLast(stage => stage.url)?.url)}
+      return <div key={item.id} role="group" tabIndex={0} className="map-flow-row" data-tone={tone} style={{ "--flow-line": color } as CSSProperties} aria-label={`${item.nick}, ${summary(flow, c)}`}
         onFocus={event => { if (event.currentTarget.matches(":focus-visible")) show(`${item.id}:row`, lines, event.currentTarget); }} onBlur={() => hide(`${item.id}:row`)}>
         <i /><b>{item.nick}</b>
-        <span className="map-flow-stops" data-reach={reach} data-fill={FILL[reach]} aria-hidden="true">
+        <span className="map-flow-stops" data-reach={reach} data-fill={FILL[reach]}>
           {list.map((stop, index) => <Fragment key={stop.key}>
             {index > 0 && <i data-on={index <= reach || undefined} />}
             {stop.key === "checks"
-              ? <span className="map-flow-box" data-k={stop.key} data-state={stop.state} {...hover(`${item.id}:${stop.key}`, stop.tip)}>
+              ? <a className="map-flow-box" data-k={stop.key} data-state={stop.state} {...link(stop.url)} {...hover(`${item.id}:${stop.key}`, stop.tip)}>
                 <b>{c.stops.checks}<span>{status}</span></b>
                 <span>{checks.map((check, at) => <i key={`${check.name}\0${at}`} data-state={check.state} />)}</span>
-              </span>
-              : <span data-k={stop.key} data-state={stop.state} data-line={index < reach ? "through" : index === reach && index > 0 ? "in" : undefined} {...hover(`${item.id}:${stop.key}`, stop.tip)}>
+              </a>
+              : <a data-k={stop.key} data-state={stop.state} {...link(stop.url)} data-line={index < reach ? "through" : index === reach && index > 0 ? "in" : undefined} {...hover(`${item.id}:${stop.key}`, stop.tip)}>
                 <small>{stop.state === "closed" ? c.closed : c.stops[stop.key]}</small><i />
-              </span>}
+              </a>}
           </Fragment>)}
         </span>
         <span className="map-flow-end">
           <small data-tone={tone} data-short={pr ? `#${pr.number}` : undefined}>{summary(flow, c)}</small>
           {clash && <em className="map-flow-clash" data-short={`⚠ ${clash.paths.size}`} {...hover(`${item.id}:clash`, [c.also([...clash.who].join(", ")), ...clash.paths])}>{c.clash(clash.paths.size)}</em>}
         </span>
-      </a>;
+      </div>;
     })}
   </div>{tip && <div className="map-flow-tip" role="tooltip" style={{ top: tip.top, left: tip.left, right: tip.right }}>{tip.lines.map((line, at) => <p key={at}>{line}</p>)}</div>}</section>;
 }

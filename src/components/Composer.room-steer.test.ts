@@ -102,29 +102,29 @@ describe("busy room Enter", () => {
     expect(ui.holds()).toBe(0);
   });
 
-  it("holds Ctrl+Enter for after the turn with the Sends next chip", async () => {
+  it("holds Ctrl+Enter for after the turn", async () => {
     const ui = await mount([scout, pixel], room(scout.id, [scout.id, pixel.id]));
     await ui.send("after this", { ctrlKey: true });
     expect(ui.sent()).toEqual([]);
     expect(ui.holds()).toBe(1);
-    expect(ui.host.textContent).toContain("Sends next");
   });
 
-  it("holds a line for another bot until the room settles", async () => {
+  it("posts a line for another bot at once, without a hold", async () => {
     const ui = await mount([scout, pixel], room(scout.id, [scout.id, pixel.id]));
     await ui.type("@Pixel take a look");
     expect(ui.host.querySelector("button[aria-label='Send message']")).not.toBeNull();
     await ui.send("@Pixel take a look");
-    expect(ui.sent()).toEqual([]);
-    expect(ui.holds()).toBe(1);
+    expect(ui.sent()).toEqual(["@Pixel take a look"]);
+    expect(ui.holds()).toBe(0);
+    expect(ui.host.textContent).not.toContain("Sends next");
   });
 
-  it("holds plain Enter when the busy member's engine can't steer, like a 1:1 queue", async () => {
+  it("posts plain Enter at once when the busy member's engine can't steer", async () => {
     const waits = member("waits", "Scout", "waits", true);
     const ui = await mount([waits], room(waits.id, [waits.id]));
     expect(ui.box.placeholder).not.toMatch(/queues/);
     await ui.send("later");
-    expect(ui.sent()).toEqual([]);
-    expect(ui.holds()).toBe(1);
+    expect(ui.sent()).toEqual(["later"]);
+    expect(ui.holds()).toBe(0);
   });
 });

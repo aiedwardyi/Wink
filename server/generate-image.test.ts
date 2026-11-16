@@ -32,6 +32,13 @@ describe("generate_image", () => {
     expect(body).toEqual({ model: "gpt-image-2", prompt: "a teal fox logo", size: "1024x1024", quality: "medium", output_format: "png" });
   });
 
+  it("sends a long prompt to OpenAI whole", async () => {
+    const prompt = "a teal fox logo ".repeat(2000).trim();
+    const fetchMock = pngFetch();
+    await generateImageFile(KEY, generateImageRequestSchema.parse({ prompt }), [root], fetchMock);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body)).prompt).toBe(prompt);
+  });
+
   it("rejects unsupported sizes and qualities", () => {
     expect(generateImageRequestSchema.safeParse({ prompt: "x", size: "512x512" }).success).toBe(false);
     expect(generateImageRequestSchema.safeParse({ prompt: "x", quality: "ultra" }).success).toBe(false);

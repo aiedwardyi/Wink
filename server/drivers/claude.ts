@@ -26,7 +26,7 @@ import { ATTACHMENTS_DIR, sniffImageMime } from "../attachments.ts";
 import { BACKGROUND_DENY_NOTE } from "../auto-approve.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
-import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
+import { brokerSocketPath, cliVersion, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
@@ -72,8 +72,11 @@ import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
+import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
+// Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
+const authChecks = new Map<string, Promise<string>>();
 
 /** Whether `claude` is signed in, and as whom.
  *
@@ -87,9 +90,19 @@ export function claudeAuthStatus(
   env: NodeJS.ProcessEnv,
   run: typeof execCli = execCli,
   account?: AccountContext,
+  deadlineMs = 3000,
 ): Promise<{ signedIn?: boolean; account?: string; identity?: string; engineSignedIn?: boolean }> {
+  const key = `${cli}\n${account?.home ?? claudeConfigDir(env)}`;
+  const check = authChecks.get(key) ?? new Promise<string>((resolve) => {
+    run(cli, ["auth", "status", "--json"], { env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => resolve(stdout));
+  });
+  if (!authChecks.has(key)) {
+    authChecks.set(key, check);
+    void check.finally(() => authChecks.delete(key)).catch(() => {});
+  }
   return new Promise((resolve) => {
-    run(cli, ["auth", "status", "--json"], { timeout: 3000, env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => {
+    const deadline = setTimeout(() => resolve({}), deadlineMs);
+    check.finally(() => clearTimeout(deadline)).then((stdout) => {
       try {
         const parsed = claudeAuthSchema.safeParse(JSON.parse(stdout));
         if (!parsed.success) resolve({});
@@ -275,11 +288,32 @@ const ASK_SETTINGS = JSON.stringify({
   permissions: { ask: WRITE_TOOLS },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
-// Auto sends commands to the broker for approval; edits run under acceptEdits.
-const AUTO_SETTINGS = JSON.stringify({
-  permissions: { ask: ["Bash", "PowerShell"] },
-  sandbox: { autoAllowBashIfSandboxed: false },
-});
+
+const ownDefaultModeSchema = z.object({ permissions: z.object({ defaultMode: z.string() }) });
+
+function hasOwnDefaultMode(configDir: string, cwd: string): boolean {
+  return [join(configDir, "settings.json"), join(cwd, ".claude", "settings.json"), join(cwd, ".claude", "settings.local.json")].some((file) => {
+    try {
+      return ownDefaultModeSchema.safeParse(JSON.parse(readFileSync(file, "utf8"))).success;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** The grants of the launch flags in sendTurn; server/turn-access.test.ts checks them against the real argv. */
+export function claudeAccess(config: Pick<ClaudeConfig, "permissionMode" | "tools" | "disallowedTools">, turn: AccessTurn, ownMode = false): TurnAccess {
+  if (turn.readOnly) return { edits: "off", commands: "off" };
+  const has = (names: string[]) => names.some((name) => (config.tools?.includes(name) ?? true) && !config.disallowedTools?.includes(name));
+  const grants: TurnAccess = ownMode ? { edits: "own", commands: "own" }
+    : config.permissionMode === "bypassPermissions" ? FREE_ACCESS
+    : turn.approval === "ask" ? { edits: "ask", commands: "ask" }
+    : { edits: "free", commands: turn.approval === "auto" ? "auto" : "ask" };
+  return {
+    edits: has(["Edit", "Write", "MultiEdit", "NotebookEdit"]) ? grants.edits : "off",
+    commands: has(["Bash", "PowerShell"]) ? grants.commands : "off",
+  };
+}
 
 const DENY_TIMEOUT_NOTE =
   "Wink: nobody answered this permission request in time. Skip this action and finish what you can without it.";
@@ -657,7 +691,7 @@ function claudeToolDetail(name: string, input: unknown, output: string, isError:
 }
 
 const NATIVE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-const NATIVE_IMAGE_MAX_COUNT = 8;
+const NATIVE_IMAGE_MAX_COUNT = 20;
 const NATIVE_IMAGE_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const ATTACHED_IMAGE_TAG = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
 
@@ -685,7 +719,7 @@ function storeImage(path: string, storeDir: string): { block: ClaudeImageBlock; 
 }
 
 /** Attached store images ride along as native blocks; anything else stays the plain string.
- * Newest tags win the 8-image and 20 MiB budgets, so a replayed turn's old history can't
+ * Newest tags win the 20-image and 20 MiB budgets, so a replayed turn's old history can't
  * starve out the image the user just attached. A replayed turn also marks where history
  * ends and the user's latest message begins (`REPLY_MARKER`); tags before that marker are
  * old history re-attached as text, not something the user just sent, so only tags after it
@@ -840,6 +874,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       restartTurn?: () => void;
       /** started by prepare and no turn has taken it yet */
       prepared?: Lease;
+      /** a new session started without its system text; the turn that takes it sends it in `initialize` */
+      systemDeferred?: boolean;
     }
     const sessions = new Map<string, Session>();
     const lastSpawn = new Map<string, ClaudeSpawn>();
@@ -960,7 +996,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const writeControl = (
       s: Session,
       threadId: string,
-      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } } | EffortRequest,
+      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } | { subtype: "initialize"; appendSystemPrompt?: string } } | EffortRequest,
     ): Promise<boolean> => {
       if (!s.child.stdin.writable || s.child.stdin.destroyed) return Promise.resolve(false);
       return new Promise((resolve) => {
@@ -973,6 +1009,25 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         } catch {
           resolve(false);
         }
+      });
+    };
+
+    // true once the CLI acknowledges the system text; false if it refuses or exits first
+    const initialize = (s: Session, threadId: string, system: string): Promise<boolean> => {
+      const requestId = newId();
+      return new Promise((resolve) => {
+        const done = (ok: boolean) => {
+          s.replies.delete(requestId);
+          s.child.off("exit", gone);
+          resolve(ok);
+        };
+        const gone = () => done(false);
+        s.replies.set(requestId, done);
+        s.child.once("exit", gone);
+        if (s.child.exitCode !== null) return done(false);
+        void writeControl(s, threadId, { type: "control_request", request_id: requestId, request: { subtype: "initialize", appendSystemPrompt: system } }).then((written) => {
+          if (!written) done(false);
+        });
       });
     };
 
@@ -1029,6 +1084,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const asks = turn.approval === "ask" && config.permissionMode !== "bypassPermissions";
       const auto = turn.approval === "auto";
       const autoAttended = auto && turn.attended === true;
+      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
+      turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
+      // Wink's acceptEdits default yields to a defaultMode the user set in their own settings;
+      // desktop control keeps it, since its guards live in the broker an inherited bypass would skip.
+      const ownMode =
+        !asks && !controlsHost && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+        hasOwnDefaultMode(input.account?.home ?? claudeConfigDir(turnEnvironment), turn.cwd ?? homedir());
+      const permissionMode = asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode;
 
       const args = [
         "-p",
@@ -1038,17 +1101,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // token-level streaming: content_block_delta events between the
         // whole-message frames, so the bubble grows as the model writes
         "--include-partial-messages",
-        "--permission-mode", asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode,
+        ...(ownMode ? [] : ["--permission-mode", permissionMode]),
       ];
       if (asks) args.push("--settings", ASK_SETTINGS);
-      else if (turn.approval === "auto" && config.permissionMode !== "bypassPermissions") {
-        args.push("--settings", AUTO_SETTINGS);
-      }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
-      const disallowed = [...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
+      // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
+      // `--tools ""` already removes it, so no deny entry there.
+      const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
-      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
-      turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
       if (input.account && turnModel && !models.options.some((model) => model.id === turnModel)) throw new Error("Unsupported subscription model");
       if (restart?.turn.settled) return { turnId };
@@ -1063,7 +1123,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
       // Orbit's own servers skip ToolSearch deferral; a fresh CLI session
-      // would otherwise re-fetch their schemas every time.
+      // would otherwise re-fetch their schemas every time. A tool can still
+      // opt out with _meta "anthropic/alwaysLoad": false (deferOptional).
       const orbitOwned = { alwaysLoad: true, timeout: 1_800_000 };
       if (turn.integrations?.composio) {
         mcpServers.composio = { ...turn.integrations.composio };
@@ -1094,7 +1155,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // agentsIntegration(); pre-allowing matters doubly here, or the CLI's
       // own ListAgents look-alike shadows it and "@Bot" asks go nowhere
       if (turn.integrations?.agents) {
-        mcpServers.agents = { ...experimentalAgents(turn.integrations.agents), ...orbitOwned };
+        const agents = experimentalAgents(turn.integrations.agents);
+        mcpServers.agents = { ...agents, env: { ...agents.env, OMB_WINK_TOOL_DEFER: "1" }, ...orbitOwned };
         allowed.push("mcp__agents");
       }
       if (turn.integrations?.phone) {
@@ -1190,14 +1252,24 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           return { turnId };
         }
         lease = reserved;
-      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
+      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && (sessionId === null ? live.systemDeferred === true : sessionId === live.sessionId)) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         unprepare(live, "adopted");
+        const deferred = live.systemDeferred === true;
         turnTimer.setMeta({ reusedSession: true });
         turnTimer.mark("spawnOrReuse");
-        trace?.span("spawn", "reused")();
-        trace?.span("initialize", "reused")();
-        trace?.span("resume", "loaded-session")();
+        trace?.span("spawn", deferred ? "prepared" : "reused")();
+        trace?.span("initialize", deferred ? "prepared" : "reused")();
+        trace?.span(deferred ? "start" : "resume", deferred ? "prepared-session" : "loaded-session")();
+        if (deferred) {
+          live.systemDeferred = false;
+          const prior = lastSpawn.get(threadId);
+          if (prior) lastSpawn.set(threadId, { ...prior, args: [...args], cursor: live.sessionId! });
+          plans.delete(threadId);
+          plans.set(threadId, { ...turn, text: "", trace: undefined, transcript: undefined, resumeFallback: undefined, systemUpdate: undefined, resumeCursor: live.sessionId! });
+          if (plans.size > 64) plans.delete(plans.keys().next().value!);
+          trace?.delivered("start", () => ({ system: turn.system ?? "" }));
+        }
         turnTimer.mark("cliReady");
         live.turn = { turnId, settled: false, sawStreamDelta: false, timer: turnTimer, trace, launch: { request: turn, retry, abort: retryAbort } };
         live.auto = auto;
@@ -1214,6 +1286,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           broker: live.broker,
         });
         if (!relaunchOf) emit({ ...base(threadId, turnId), type: "turn.started" });
+        const initialized = !deferred || !turn.system || await initialize(live, threadId, turn.system);
+        if (!initialized) {
+          active.delete(threadId);
+          live.turn = null;
+          closeSession(threadId, "initialize refused");
+          throw new Error("claude session did not accept its system prompt");
+        }
         const written = await writeUser(live, threadId, turn.text);
         if (!written) {
           active.delete(threadId);
@@ -1343,6 +1422,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         argsKey,
         sessionId: sessionId ?? newSessionId,
         prepared: lease,
+        systemDeferred: prepare && sessionId === null && !turn.system ? true : undefined,
         turn: prepare ? null : {
           ...restart?.turn,
           merging: undefined,
@@ -1563,6 +1643,51 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
         if (session.turn?.quietEnd && !o.parent_tool_use_id && (o.type === "stream_event" || o.type === "assistant" || o.type === "user")) return;
         dispatch(o);
+      };
+
+      const resumeRejected = (t: NonNullable<Session["turn"]>, diagnostic: string) => Boolean(
+        t.launch &&
+        sessionId &&
+        t.launch.request.resumeFallback &&
+        !t.sawStreamDelta &&
+        isResumeCursorRejected(diagnostic),
+      );
+
+      const startFresh = (t: NonNullable<Session["turn"]>) => {
+        const launch = t.launch!;
+        session.broker?.pause();
+        session.broker?.close();
+        if (session.mcpConfigPath) {
+          try {
+            rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
+          } catch {}
+          session.mcpConfigPath = null;
+        }
+        sessions.delete(threadId);
+        t.narrationNotice = undefined;
+        session.turn = null;
+        active.delete(threadId);
+        retryState.delete(threadId);
+        emit({ ...base(threadId, t.turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
+        void sendTurn({
+          ...launch.request,
+          text: launch.request.resumeFallback!.text,
+          resumeCursor: undefined,
+          resumeFallback: undefined,
+        }, t.turnId).catch((error) => {
+          emit({
+            ...base(threadId, t.turnId),
+            type: "runtime.error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          t.timer.mark("turnDone");
+          t.timer.finish();
+          emit({ ...base(threadId, t.turnId), type: "turn.completed",
+            ok: false,
+            stopReason: "resume_fallback_failed",
+            cost: null,
+          });
+        });
       };
 
       const dispatch = (o: any) => {
@@ -1836,6 +1961,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             if (o.is_error === true) {
               const errors = Array.isArray(o.errors) ? o.errors.filter((error: unknown) => typeof error === "string") : [];
               const text = [typeof o.result === "string" ? o.result : "", ...errors].join("\n");
+              // the CLI reports a missing session here, before it exits
+              if (session.turn && resumeRejected(session.turn, text)) {
+                startFresh(session.turn);
+                killCliTree(child);
+                break;
+              }
               if (!injected.injected && isSignOut(text)) {
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
@@ -1904,47 +2035,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           const message = `claude exited ${code} before result${session.stderr ? `: ${session.stderr.trim().slice(-300)}` : ""}`;
           t.usageFailure ??= t.usageStderr;
           const limit = chatUsageLimit("claude", t.usageFailure, t.usageWindows, !injected.injected);
-          const resumeRejected = Boolean(
-            launch &&
-            sessionId &&
-            launch.request.resumeFallback &&
-            !t.sawStreamDelta &&
-            isResumeCursorRejected(session.stderr),
-          );
-          if (launch && resumeRejected) {
-            session.broker?.pause();
-            session.broker?.close();
-            if (session.mcpConfigPath) {
-              try {
-                rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
-              } catch {}
-              session.mcpConfigPath = null;
-            }
-            sessions.delete(threadId);
-            t.narrationNotice = undefined;
-            session.turn = null;
-            active.delete(threadId);
-            retryState.delete(threadId);
-            emit({ ...base(threadId, t.turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
-            void sendTurn({
-              ...launch.request,
-              text: launch.request.resumeFallback!.text,
-              resumeCursor: undefined,
-              resumeFallback: undefined,
-            }, t.turnId).catch((error) => {
-              emit({
-                ...base(threadId, t.turnId),
-                type: "runtime.error",
-                message: error instanceof Error ? error.message : String(error),
-              });
-              t.timer.mark("turnDone");
-              t.timer.finish();
-              emit({ ...base(threadId, t.turnId), type: "turn.completed",
-                ok: false,
-                stopReason: "resume_fallback_failed",
-                cost: null,
-              });
-            });
+          if (resumeRejected(t, session.stderr)) {
+            startFresh(t);
             return;
           }
           const verdict = classifyError({ exitCode: code, stderr: message });
@@ -2101,12 +2193,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     );
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
       const env = claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account);
-      const version = await new Promise<string | null>((resolve) => {
-        execCli(config.cli, ["--version"], { timeout: 8000, env, ...launchPolicy }, (err, stdout) =>
-          resolve(err ? null : stdout.trim()),
-        );
-      });
-      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
+      const version = await new Promise<string | null>((resolve) => cliVersion(config.cli, { timeout: 8000, env, ...launchPolicy }, resolve));
+      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
       const { signedIn: authenticated, account, identity, engineSignedIn } = await authStatus(opts?.rescan || opts?.refresh);
       if (input.account) admitted = authenticated === true;
       // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
@@ -2249,6 +2337,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           rateLimits: true,
         },
         sendTurn,
+        // same test as sendTurn's ownMode: the user's own defaultMode replaces Wink's acceptEdits
+        access: (turn) => claudeAccess(config, turn,
+          turn.approval !== "ask" && turn.integrations?.localComputer?.scope !== "local-computer" && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+          hasOwnDefaultMode(input.account?.home ?? claudeConfigDir({ ...process.env, ...input.environment }), turn.cwd ?? homedir())),
         steer,
         applyEffort: async (threadId, effort) => {
           const s = sessions.get(threadId);
@@ -2309,8 +2401,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           moved = true;
         }
         if (!admitted || accountBlocked || preparing.has(focus.threadId)) return;
-        const plan = plans.get(focus.threadId);
-        if (!plan?.resumeCursor || usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
+        if (usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
+        const { fresh, ...settings } = focus;
+        // a thread whose next turn starts a new session gets that session now, its system text at Send
+        const plan = fresh ? { ...settings, ...fresh, text: "" } : plans.get(focus.threadId);
+        if (!plan || (!fresh && !plan.resumeCursor)) return;
         if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
         preparing.add(focus.threadId);
         try {

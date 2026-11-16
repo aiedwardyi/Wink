@@ -104,6 +104,71 @@ describe("chat scene host", () => {
     expect(other.drawn).toHaveLength(3);
   });
 
+  it("reads the skin where it is told to and still rests with the window", async () => {
+    const look = document.createElement("div");
+    look.dataset.skin = "snow";
+    root.dataset.skin = "precision";
+    let skin = "";
+    const module: SceneModule = {
+      pauseOnBlur: false,
+      create: (api) => ({ frame: () => true, event: () => ((skin = api.skin()), api.wake()), dispose: () => undefined }),
+    };
+    host = startScene(document.createElement("div"), module, root, look);
+    host.emit({ name: "loop" });
+    delete root.dataset.skin;
+    expect(skin).toBe("snow");
+    flush(1);
+    expect(host.running()).toBe(true);
+    root.setAttribute("data-orbit-idle", "hidden");
+    await Promise.resolve();
+    expect(host.running()).toBe(false);
+  });
+
+  it("draws nothing while its layer is scrolled out of view and picks up when it is back", () => {
+    let seen: (entries: { isIntersecting: boolean }[]) => void = () => undefined;
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof seen) {
+        seen = callback;
+      }
+      observe() {}
+      disconnect() {}
+    });
+    const view = (isIntersecting: boolean) => seen([{ isIntersecting }]);
+    const { drawn } = scene();
+    host!.emit({ name: "loop" });
+    host!.emit({ name: "busy" });
+    flush(2);
+    expect(drawn).toHaveLength(2);
+    view(false);
+    flush(5);
+    expect(drawn).toHaveLength(2);
+    expect(host!.running()).toBe(false);
+    expect(frames).toHaveLength(0);
+    view(true);
+    flush(1);
+    expect(drawn).toHaveLength(3);
+  });
+
+  it("idles between frames when the scene asks, and a hidden window cancels the wait", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let drawn = 0;
+    const module: SceneModule = { pauseOnBlur: false, create: (api) => ({ frame: () => (drawn++, true), idle: () => 17, event: () => api.wake(), dispose: () => undefined }) };
+    host = startScene(document.createElement("div"), module, root);
+    host.emit({ name: "busy" });
+    flush(1);
+    expect(drawn).toBe(1);
+    expect(frames).toHaveLength(0);
+    vi.advanceTimersByTime(17);
+    flush(1);
+    expect(drawn).toBe(2);
+    root.setAttribute("data-orbit-idle", "hidden");
+    await Promise.resolve();
+    vi.advanceTimersByTime(100);
+    expect(frames).toHaveLength(0);
+    expect(host.running()).toBe(false);
+    vi.useRealTimers();
+  });
+
   it("never starts a loop under reduced motion", () => {
     reduce = true;
     const { drawn, seen } = scene();

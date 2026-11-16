@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { File as FileIcon, FileArchive, FileAudio, FileCode, FileSpreadsheet, FileText, Play, Presentation, type LucideIcon } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
@@ -53,8 +53,11 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized, previewKin
   const months = useMemo(() => mediaMonths(kind === "photos" ? photos : others, locale), [kind, photos, others, locale]);
   const day = useMemo(() => new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }), [locale]);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
-  const [open, setOpen] = useState<MediaFile | null>(null);
-  const at = open ? images.indexOf(open) : -1;
+  // by key: a room's list reloads as new objects whenever someone posts a file
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const at = openKey === null ? -1 : images.findIndex((file) => file.key === openKey);
+  const open = at >= 0 ? images[at]! : null;
+  const openFile = useCallback((file: MediaFile) => setOpenKey(file.key), []);
   const scroller = useRef<HTMLDivElement>(null);
   const { layout, viewport, from, to } = useMediaGrid(scroller, months);
   const choose = (next: MediaKind) => {
@@ -78,16 +81,16 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized, previewKin
           {layout.height > 0 && (
             <div data-media-grid style={{ height: layout.height }}>
               {layout.months.map((month) => month.top < to && month.top + month.height > from && (
-                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={setOpen} />
+                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={openFile} />
               ))}
             </div>
           )}
         </div>
         <MediaScrollThumb scroller={scroller} layout={layout} viewport={viewport} />
       </div>
-      {open && at >= 0 && (
-        <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpen(null)} previous={at > 0} next={at < images.length - 1}
-          onNavigate={(step) => setOpen(images[at + step] ?? open)} />
+      {open && (
+        <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpenKey(null)} previous={at > 0} next={at < images.length - 1}
+          onNavigate={(step) => setOpenKey(images[at + step]?.key ?? open.key)} />
       )}
       <MediaMenu frame={scroller} files={files} roomId={source.roomId} readOnly={Boolean(room?.error)} />
       {source.roomId && room && <RoomMedia list={room} />}

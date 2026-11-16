@@ -128,7 +128,7 @@ it("debounces reply bursts and stops waking when the root's last four credits ar
     markMailRead(store, bot.threadId, mailForTurn(store, bot.threadId), "wake");
   });
   const paid = vi.fn();
-  const scheduler = new PaneWakeScheduler({ enabled: () => true, busy: () => false, hasNotes: () => unreadMail(store, bot.threadId).length > 0, wake: () => { const count = unreadMail(store, bot.threadId).length; wake(); if (count && !unreadMail(store, bot.threadId).length) paid(); }, warn: () => {} });
+  const scheduler = new PaneWakeScheduler({ enabled: () => true, busy: () => false, hasNotes: () => unreadMail(store, bot.threadId).length > 0, wake: () => { const count = unreadMail(store, bot.threadId).length; wake(); if (count && !unreadMail(store, bot.threadId).length) paid(); } });
   for (let i = 0; i < 5; i++) {
     recordDelegationReceipt({ id: String(i), sourceThreadId: bot.threadId, toBotId: "peer", toBotName: "Peer", status: "done", root });
     registerReplyWake(reply(`reply ${i}`, String(i)));

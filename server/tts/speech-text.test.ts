@@ -66,6 +66,10 @@ describe("speakable", () => {
     expect(out).toContain("Scout, idle");
   });
 
+  it("reads each table row on its own, the header too", () => {
+    expect(speakable("| Question | Answer |\n| --- | --- |\n| Did it pass? | Yes |\n| What failed? | Hush |")).toBe("Question, Answer. Did it pass?, Yes. What failed?, Hush");
+  });
+
   it("drops emphasis markers, emoji and checkboxes", () => {
     expect(speakable("**Done** ✅ — [x] shipped the _thing_")).toBe("Done — shipped the thing");
   });

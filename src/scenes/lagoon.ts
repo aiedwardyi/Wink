@@ -1,10 +1,12 @@
 // Lagoon: water caustics behind the chat, one shader pass; the JS only sets
 // uniforms. Send drops a ripple from the chat box, the reply a smaller one
-// from its bubble, and at night the ripple lights plankton.
+// from its bubble, the newest bubble keeps rippling while the bot works, and
+// at night the ripple lights plankton.
 import type { SceneApi, SceneModule } from "./scene-host";
 
 const SPEED = 260;
 const RIPPLE_LIFE = 4.6;
+const BUBBLES = '[data-orbit-message="bot"] [data-orbit-message-content]';
 const PALETTE = {
   "lagoon-night": { shal: "#114550", deep: "#06232b", light: [0.13, 0.52, 0.5], spark: [0.45, 1.0, 0.86], night: 1, calm: 0.3, veil: "#0d343c" },
   lagoon: { shal: "#e0f4f1", deep: "#a3dcd5", light: [0.4, 0.46, 0.44], spark: [0, 0, 0], night: 0, calm: 0.34, veil: "#d6efeb" },
@@ -54,7 +56,7 @@ void main() {
   float b = cell(q * 1.63 + 4.2, uT * 0.42 + 1.7);
   float la = exp(-a * 11.0), lb = exp(-b * 13.0);
   float c = la * 0.55 + lb * 0.35 + la * lb * 1.2 + exp(-a * 3.5) * 0.16;
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = 1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX));
   float gain = mix(1.0, uCalm, lane);
   vec2 uv = px / uSize;
   float depth = clamp(uv.y * 0.55 + length((uv - vec2(0.5, 0.3)) * vec2(1.2, 1.0)) * 0.7, 0.0, 1.0);
@@ -103,6 +105,9 @@ function create(api: SceneApi) {
   let flowTarget = 0;
   let flowUntil = -1;
   let ripples: Ripple[] = [];
+  let busy = false;
+  let nextDrop = 0;
+  let burstUntil = -1;
 
   const gl = canvas.getContext("webgl", { alpha: false, antialias: false, preserveDrawingBuffer: false, powerPreference: "low-power" });
   const U = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
@@ -155,11 +160,10 @@ function create(api: SceneApi) {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
 
-  // The water is soft, so one buffer px per css px upsamples cleanly.
+  // The water is soft, so one buffer px per css px upsamples cleanly. Layout size: a theme tile shrinks its layer with a transform.
   const resize = () => {
-    const r = api.layer.getBoundingClientRect();
-    width = Math.max(1, Math.round(r.width));
-    height = Math.max(1, Math.round(r.height));
+    width = Math.max(1, api.layer.clientWidth);
+    height = Math.max(1, api.layer.clientHeight);
     canvas.width = width;
     canvas.height = height;
     render();
@@ -174,10 +178,28 @@ function create(api: SceneApi) {
     flowUntil = api.time() + 2600;
     api.wake();
   };
+  // Only the part of the newest bubble in view ripples; none in view, the chat's bottom edge does.
+  const drop = () => {
+    const box = main?.querySelector("[data-orbit-transcript]");
+    const view = box ? api.rectIn(box) : { x: 0, y: 0, w: width, h: height };
+    const col = main?.querySelector("[data-orbit-transcript] > div");
+    const bubbles = main?.querySelectorAll(BUBBLES);
+    const b = bubbles?.length ? api.rectIn(bubbles[bubbles.length - 1]) : null;
+    const top = b ? Math.max(b.y, view.y) : 0;
+    const bottom = b ? Math.min(b.y + b.h, view.y + view.h) : 0;
+    const at = b && bottom > top ? b : col ? api.rectIn(col) : view;
+    const y = b && bottom > top ? top + Math.random() * (bottom - top) : view.y + view.h - 40;
+    ripple(at.x + 36 + Math.random() * Math.max(0, at.w - 72), y, 0.85);
+  };
+  const gap = () => api.time() + 1200 + Math.random() * 600;
 
   return {
     frame(t: number, dt: number) {
       const k = dt / 1000;
+      if (busy && t >= nextDrop) {
+        drop();
+        nextDrop = gap();
+      }
       if (flowUntil >= 0 && t >= flowUntil) {
         flowTarget = 0;
         flowUntil = -1;
@@ -189,8 +211,11 @@ function create(api: SceneApi) {
       for (const x of ripples) x.age += k;
       ripples = ripples.filter((x) => x.age < RIPPLE_LIFE);
       render();
-      return flow > 0 || ripples.length > 0;
+      // flowTarget too: a first frame with no time passed has not moved flow off 0 yet.
+      return flowTarget > 0 || flow > 0 || ripples.length > 0;
     },
+    // A turn can run for minutes; past the send burst its soft ripples read the same at 30 fps.
+    idle: () => (busy && api.time() >= burstUntil ? 17 : 0),
     event(event) {
       if (!ready) return;
       if (event.name === "skin") {
@@ -199,7 +224,21 @@ function create(api: SceneApi) {
         return;
       }
       if (event.name === "motion") return render();
+      if (event.name === "reply") busy = false;
       if (api.reduced()) return;
+      if (event.name === "loop") {
+        flowTarget = 1;
+        flowUntil = -1;
+        api.wake();
+      }
+      if (event.name === "busy") {
+        busy = true;
+        nextDrop = gap();
+        flowTarget = 1;
+        flowUntil = api.time() + 2600;
+        api.wake();
+      }
+      if (event.name === "send" || event.name === "reply") burstUntil = api.time() + RIPPLE_LIFE * 1000;
       if (event.name === "send") {
         const r = api.rectIn(event.at);
         ripple(r.cx, r.y + 6, 1);

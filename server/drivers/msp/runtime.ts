@@ -38,6 +38,7 @@ import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
+import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
@@ -342,7 +343,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       }
       const active = new Map<string, Turn>();
       const children = new Set<ReturnType<typeof spawnCli>>();
-      const systemHeld = systemLedger();
+      const systemHeld = systemLedger(false, instanceId);
 
       // Idle hosts live in the warm pool. A session host keeps its session
       // across turns only while its sign-in is still the CLI's current one;
@@ -832,6 +833,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           state.settled = true;
           if (state.sessionId && compacted) systemHeld.forget(state.sessionId);
           else if (state.sessionId && systemSent && ok && stopReason === null) systemHeld.record(state.sessionId, systemSent);
+          else if (state.sessionId) systemHeld.keep(state.sessionId);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const ask of [...asks.values()]) ask.finish("deny", "system");
           // The entry drops BEFORE turn.completed: the queue drain on that
@@ -1402,7 +1404,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             if (system) {
               systemHeld.forget(sessionId);
               systemSent = system;
-            }
+            } else systemHeld.begin(sessionId);
             const text = system ? `${system}\n\n${promptText}` : promptText;
             await startTurnOn(sessionId, text);
           } catch (err) {
@@ -1463,6 +1465,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             localComputerMcp: !config.fullAuto,
           },
           sendTurn,
+          // fullAuto answers every approval itself (openApproval); the rest reach Wink
+          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
           interruptTurn: async (threadId) => {
             active.get(threadId)?.interrupt();
           },

@@ -41,6 +41,7 @@ let lastGenerateImageBody: any = null;
 let lastCallApiBody: any = null;
 let lastReactBody: any = null;
 let lastRoutineQuery = "";
+let lastUsageUrl = "";
 let routinesResponse: unknown = {
   now: "2026-08-28T10:30:00.000Z",
   timeZone: "Asia/Kolkata",
@@ -257,6 +258,11 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "GET" && req.url?.startsWith("/api/internal/usage?")) {
+      lastUsageUrl = req.url;
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ text: "Claude:\n- Claude 1 (Main): 5h 34% left" }));
+    }
     if (req.method === "GET" && req.url?.startsWith("/api/internal/routines?")) {
       lastRoutineQuery = req.url;
       res.writeHead(200, { "content-type": "application/json" });
@@ -364,6 +370,8 @@ describe("agents-proxy MCP surface", () => {
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
+      "board_search",
+      "board_post",
       "list_bots",
       "update_task_state",
       "ask_bot",
@@ -378,11 +386,13 @@ describe("agents-proxy MCP surface", () => {
       "generate_image",
       "call_api",
       "request_credential",
+      "usage_status",
       "list_routines",
       "propose_routine",
       "propose_routine_action",
       "set_keep_going",
       "no_reply_needed",
+      "link_room_fix",
     ]);
   });
 
@@ -638,15 +648,13 @@ describe("agents-proxy MCP surface", () => {
     const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
     expect(update.inputSchema.properties.goal).toMatchObject({ minLength: 1, pattern: "\\S" });
     expect(update.inputSchema.properties.plan.items.properties.step).toMatchObject({ minLength: 1, pattern: "\\S" });
-    const limits: Array<[Record<string, unknown>, "maxLength" | "maxItems", number]> = [
+    for (const list of ["plan", "blockers", "artifacts", "asks"]) expect(update.inputSchema.properties[list]).not.toHaveProperty("maxItems");
+    const limits: Array<[Record<string, unknown>, "maxLength", number]> = [
       [update.inputSchema.properties.goal, "maxLength", 500],
-      [update.inputSchema.properties.plan, "maxItems", 20],
       [update.inputSchema.properties.plan.items.properties.step, "maxLength", 200],
       [update.inputSchema.properties.completed_note, "maxLength", 300],
       [update.inputSchema.properties.next_action, "maxLength", 300],
-      [update.inputSchema.properties.blockers, "maxItems", 10],
       [update.inputSchema.properties.blockers.items.properties.note, "maxLength", 300],
-      [update.inputSchema.properties.artifacts, "maxItems", 20],
       [update.inputSchema.properties.artifacts.items.properties.ref, "maxLength", 500],
       [update.inputSchema.properties.artifacts.items.properties.label, "maxLength", 200],
     ];
@@ -709,12 +717,13 @@ describe("agents-proxy MCP surface", () => {
     const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
     const asks = update.inputSchema.properties.asks;
     expect(JSON.stringify(asks)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
-    expect(asks).toMatchObject({ type: "array", maxItems: 20 });
+    expect(asks).toMatchObject({ type: "array" });
+    expect(asks).not.toHaveProperty("maxItems");
     expect(asks.items.required).toEqual(["status"]);
     expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
     expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
     expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
-    for (const [field, limit] of [[asks, 20], [asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
+    for (const [field, limit] of [[asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
       expect(field.description).toContain(String(limit));
     }
 
@@ -876,6 +885,11 @@ describe("agents-proxy MCP surface", () => {
       role: "Product designer",
       instructions: "Design and review the user experience.",
     });
+  });
+
+  it("forwards create_bot model and effort to the harness", async () => {
+    await callTool("create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things.", model: " grok-4.6 ", effort: "xhigh" });
+    expect(lastCreateBody).toMatchObject({ model: "grok-4.6", effort: "xhigh" });
   });
 
   it("create_channel tells the model to call the tool instead of scanning localhost", async () => {
@@ -1040,6 +1054,16 @@ describe("agents-proxy MCP surface", () => {
     const wait = list.result.tools.find((t: { name: string }) => t.name === "wait_delegation");
     expect(wait.description).toContain("only sent when this turn ends");
     delegationStatusResponse = { status: "done", toBotName: "Helper", result: "All done." };
+  });
+
+  it("reads the Usage page through usage_status without arguments", async () => {
+    const tool = (await rpc("tools/list")).result.tools.find((t: { name: string }) => t.name === "usage_status");
+    expect(tool.inputSchema).toEqual({ type: "object", properties: {} });
+    const res = await callTool("usage_status", {});
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("Claude:\n- Claude 1 (Main): 5h 34% left");
+    expect(new URL(lastUsageUrl, "http://localhost").searchParams.get("self")).toBe("bot-asker");
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
   it("lists only the current bot's routines with authoritative time context", async () => {
@@ -1282,7 +1306,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(19);
+    expect(list.result.tools).toHaveLength(23);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1419,10 +1443,10 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 19, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 20, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 20, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 21, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 23, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 24, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 24, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 25, true],
     [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
     [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],

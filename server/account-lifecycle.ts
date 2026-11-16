@@ -1,6 +1,7 @@
 import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { AccountError, AccountService, type AccountRecord } from "./accounts.ts";
+import { ENGINE_OF } from "./account-names.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
 import { baseAccount } from "./worker-resume.ts";
 import { clearCodexPromo, codexPromoBlocked } from "../electron/codex-promo.mjs";
@@ -16,7 +17,7 @@ type Hooks = {
 };
 
 type Main = { id: string; generation: number };
-export type MainChange = { base: string; engine: "claude" | "codex"; from: Main; to: Main; seq: number };
+export type MainChange = { base: string; engine: "claude" | "codex" | "grok"; from: Main; to: Main; seq: number };
 
 let mainSeq = 0;
 
@@ -459,7 +460,7 @@ export class AccountLifecycle {
     const rows = this.accounts.list();
     return new Map(rows.filter((row) => row.existing).map((row) => {
       const id = this.accounts.defaultFor(row.of) ?? row.of;
-      return [row.of, { engine: row.driverKind === "codex" ? "codex" as const : "claude" as const, id, generation: rows.find((entry) => entry.id === id)?.generation ?? 0 }];
+      return [row.of, { engine: ENGINE_OF[row.driverKind] ?? "claude", id, generation: rows.find((entry) => entry.id === id)?.generation ?? 0 }];
     }));
   }
 

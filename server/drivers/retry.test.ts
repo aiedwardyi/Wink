@@ -30,6 +30,7 @@ describe("isResumeCursorRejected", () => {
     "missing session",
     "session expired",
     "expired conversation",
+    "No conversation found with session ID: 0b6f2f6e-1111-4222-8333-944445555666",
   ])("recognizes %j", (stderr) => {
     expect(isResumeCursorRejected(stderr)).toBe(true);
   });

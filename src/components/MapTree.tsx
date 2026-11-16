@@ -1,7 +1,8 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeOrder, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
+import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeFoot, treeLayout, treeOrder, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
 import { mapWorkerColor } from "@/lib/map-worker-colors";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import "./MapTree.css";
 
 interface Labels { folders(n: number): string; files(n: number): string; count(n: number, shown: string): string; more(n: number): string; same: string; different: string }
@@ -21,7 +22,7 @@ interface MapTreeProps {
 
 interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y: number; t0: number }
 
-// The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 13x14.
+// The arrow's tip: path point (2, 1) of the 20x20 viewBox drawn at 14x14.
 const TIP = { x: 1.4, y: 0.7 };
 // It rests 1px off the bottom-right corner of the row's 7px square, so its halo clears the square.
 const corner = (row: Point) => ({ x: row.x + 8, y: row.y + 4.5 });
@@ -46,7 +47,7 @@ function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: s
   if (!node) return null;
   const cut = (id: string, key: "bus" | "busOf") => down.slice(0, down.findIndex(point => point[key] === id) + 1).reverse();
   const g = at(node);
-  const points: Point[] = node.kind === "stack" ? [start] : [start, { x: top(node, g).x, y: g.y + TREE.BOX }];
+  const points: Point[] = node.kind === "stack" ? [start] : [start, treeFoot(node, g)];
   if (down.some(point => point.busOf === node!.id)) return [...points, ...cut(node.id, "busOf")];
   for (; node.parent; node = node.parent) {
     const parent: TreeItem = node.parent;
@@ -55,7 +56,7 @@ function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: s
     points.push(head, { x: head.x, y: bus });
     if (down.some(point => point.bus === parent.id)) return [...points, ...cut(parent.id, "bus")];
     const pg = at(parent);
-    points.push({ x: top(parent, pg).x, y: bus }, { x: top(parent, pg).x, y: pg.y + TREE.BOX });
+    points.push({ x: treeFoot(parent, pg).x, y: bus }, treeFoot(parent, pg));
   }
   return null;
 }
@@ -115,6 +116,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const [width, setWidth] = useState(0);
   const W = width || 560;
   const phone = W < 480;
+  const line = useIsPhone() ? TREE.TOUCH : TREE.LINE;
   const color = (id: string) => mapWorkerColor(slots.get(id) ?? 99);
   const owners = useMemo(() => {
     const owners = new Map<string, string[]>();
@@ -130,8 +132,8 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const named = new Set([...clashBy.keys(), ...focus ? [focus] : []]);
     const rank = (path: string) => slots.get(owners.get(path)?.[0] ?? "") ?? 99;
     const measure = view.current ? measurer(view.current, phone) : (text: string) => text.length * 7;
-    return { changed, ...treeLayout(index, { width: W, phone, changed, current: focus, team: team ? { named, marks: new Set(clashBy.keys()), rank } : undefined, measure, folders: labels.folders, files: labels.files }) };
-  }, [index, W, phone, ownersKey, clashKey, focus, team, labels, slots]);
+    return { changed, ...treeLayout(index, { width: W, phone, line, changed, current: focus, team: team ? { named, marks: new Set(clashBy.keys()), rank } : undefined, measure, folders: labels.folders, files: labels.files }) };
+  }, [index, W, phone, line, ownersKey, clashKey, focus, team, labels, slots]);
   const order = useMemo(() => treeOrder(index, layout.changed), [index, layout.changed]);
   const shown = useMemo(() => new Set(layout.items.flatMap(it => it.squares ?? it.files ?? [])), [layout.items]);
   const fill = (path: string) => {
@@ -238,7 +240,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const changed = layout.changed.has(path);
     const clash = clashBy.get(path);
     const props = { className: "map-tree-file", "data-tree-row": path, "data-now": path === current?.path || undefined, "data-lit": path === focus || undefined, title: path,
-      style: { top: 2 + (it.squaresHeight ?? 0) + index * TREE.LINE, ...tint(team ? fill(path) : undefined) } };
+      style: { top: 2 + (it.squaresHeight ?? 0) + index * line, height: line, ...tint(team ? fill(path) : undefined) } };
     const body = <><i /><span>{name(path)}</span>{clash && <Clash same={clash.same} />}</>;
     return changed
       ? <button key={path} type="button" {...props} data-map-file={path} data-state="changed" aria-current={selected === path} onClick={() => onOpen(path)}>{body}</button>
@@ -283,10 +285,10 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
         {it.files && <div className="map-tree-files" style={{ top: it.kind === "col" ? TREE.BOX + TREE.SGAP : 0 }}>
           {it.squares && <div className="map-tree-sqs" style={{ width: it.per! * TREE.SQ }}>{it.squares.map(path => <button key={path} type="button" className="map-tree-sq" data-map-file={path} data-tree-row={it.files!.includes(path) ? undefined : path} aria-current={selected === path} aria-label={path} title={`${path}: ${(owners.get(path) ?? []).map(nick).join(", ")}`} style={tint(fill(path))} onClick={() => onOpen(path)} />)}</div>}
           {it.files.map((path, index) => row(it, path, index))}
-          {it.hidden ? <span className="map-tree-hidden" style={{ top: 2 + it.files.length * TREE.LINE }}>{labels.files(it.hidden)}</span> : null}
+          {it.hidden ? <span className="map-tree-hidden" style={{ top: 2 + it.files.length * line }}>{labels.files(it.hidden)}</span> : null}
         </div>}
       </div>)}
-      <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>
+      <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M2 1L18.5 7L10 9L8 17.5Z" /></svg></span>
     </div>
   </>;
 });

@@ -75,7 +75,8 @@ import { MediaViewerProvider } from "./MediaViewerProvider";
 import { ModelPicker } from "./ModelPicker";
 import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
+import { ReactionChips } from "./Reactions";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
 import { CallCard } from "./CallCard";
 import { ChatScene, sceneOf } from "./ChatScene";
@@ -100,6 +101,7 @@ import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, rest
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import {
+  TRANSCRIPT_TAIL_SIZE,
   TRANSCRIPT_WINDOW_SIZE,
   focusWindow,
   followedWindow,
@@ -122,7 +124,7 @@ import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
-import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
+import { listedRuns, shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
@@ -278,13 +280,13 @@ export function ErrorRow({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-export const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot?: Bot }) {
+export const ActivityChip = memo(function ActivityChip({ message, notices, bot, onMessageMenu }: { message: Message; notices?: LinkedApproval[]; bot?: Bot; onMessageMenu?: (menu: MessageMenuRequest) => void }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
   if (tool.name === "memory.save" && bot) return <MemoryCleanSave message={message} bot={bot} />;
-  if (message.comm) return <CommChip message={message} comm={message.comm} />;
+  if (message.comm) return <CommChip message={message} comm={message.comm} threadId={bot?.threadId} onMessageMenu={onMessageMenu} />;
   if (terminal) return <ActivityStep message={message} notices={notices} />;
   const failed = tool.ok === false;
   const status = isServerLine(tool.name);
@@ -308,7 +310,7 @@ export const ActivityChip = memo(function ActivityChip({ message, notices, bot }
       </div>
     </div>
   );
-}, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
+}, (a, b) => a.message === b.message && a.bot === b.bot && a.onMessageMenu === b.onMessageMenu && sameNotices(a.notices, b.notices));
 
 /** A row synced from another PC names the peer by that PC's bot id; the name still finds it here. */
 export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]>): Bot | undefined {
@@ -317,7 +319,7 @@ export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]
 }
 
 /** bot⇄bot comm chip: opens the channel where the exchange lives. */
-function CommChip({ message, comm }: { message: Message; comm: NonNullable<Message["comm"]> }) {
+function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message; comm: NonNullable<Message["comm"]>; threadId?: string; onMessageMenu?: (menu: MessageMenuRequest) => void }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
   const peer = commPeer(state.bots, comm);
@@ -335,10 +337,14 @@ function CommChip({ message, comm }: { message: Message; comm: NonNullable<Messa
     </div>
   );
   if (!message.text) return chip;
+  const menuProps = threadId && onMessageMenu
+    ? messageMenuProps({ threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
+    : {};
   return (
-    <div>
+    <div {...menuProps} tabIndex={-1}>
       {chip}
       <PeerMessageBody text={message.text} />
+      {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
     </div>
   );
 }
@@ -705,6 +711,16 @@ const MessagesList = memo(function MessagesList({
   }, [transcript]);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
+  // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
+  const callAt = useMemo(() => {
+    const at = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind !== "message" || !item.message.call) continue;
+      const { id } = item.message.call;
+      if (!at.has(id) || (id !== calls.live && isVoiceLine(item.message))) at.set(id, item.message.id);
+    }
+    return at;
+  }, [items, calls.live]);
   // A search hit inside a folded run has to open it: the fold keeps the
   // row out of the DOM, and there is nothing for the scroll to land on.
   const focus = state.focusMessage;
@@ -761,7 +777,7 @@ const MessagesList = memo(function MessagesList({
         }
         const m = item.message;
         const callId = m.call?.id;
-        const callStart = callId && !items.some((x, j) => j < i && x.kind === "message" && x.message.call?.id === callId);
+        const callHere = callId && callAt.get(callId) === m.id;
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -831,7 +847,7 @@ const MessagesList = memo(function MessagesList({
                 );
               }
               if (!activityVisibleInChat(m, showActivities) && !found) return null;
-              return <ActivityChip bot={bot} message={m} notices={item.notices} />;
+              return <ActivityChip bot={bot} message={m} notices={item.notices} onMessageMenu={onMessageMenu} />;
             }
             case "screen":
               if (m.image) return <ShownImage name={m.image} caption={m.text} />;
@@ -869,13 +885,14 @@ const MessagesList = memo(function MessagesList({
               );
           }
         })();
-        if (!row && !callStart) return null;
+        // a call line that opens a day keeps the divider, now that the card may sit further down
+        if (!row && !callHere && !(callId && newDay)) return null;
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
-            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
+            {callHere && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
@@ -1059,18 +1076,18 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     expanded?: boolean;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders),
+    start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders),
     end: null,
   }));
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
   }
   const [windowTerminal, setWindowTerminal] = useState(terminal);
   if (windowTerminal !== terminal) {
     setWindowTerminal(terminal);
     setTranscriptWindow({
       key: transcriptKey,
-      start: tailWindowStart(shown.length, TRANSCRIPT_WINDOW_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
+      start: tailWindowStart(shown.length, TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
       end: null,
     });
   }
@@ -1093,7 +1110,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const prepended = windowHead ? shown.findIndex((message) => message.id === windowHead) : -1;
     // a window set on an empty branch has no rows to anchor to
     if (!windowHead) {
-      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
@@ -1106,7 +1123,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       else if (rehydrated && id && transcriptWindow.key === transcriptKey && (transcriptWindow.expanded || transcriptWindow.end !== null)) {
         // the reader's row is older than the new snapshot: reopen around it
         setReanchor(id);
-        setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+        setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
       }
     }
   }
@@ -1147,6 +1164,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
+  const reaching = useRef(false);
+  const touchTop = useRef(0);
 
   const setBottomFollow = useCallback((next: boolean) => {
     followRef.current = next;
@@ -1172,7 +1192,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     if (edited) {
       closeJump();
       setBottomFollow(true);
-      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
       if (edited.parentId) {
         joinFails.current = 0;
         setEditJoin({ key: transcriptKey, parentId: edited.parentId });
@@ -1232,7 +1252,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const modelSwitch = useNoReplySwitch(bot, lastUserMessage?.id, turnSignal !== undefined);
   const activityLabel = turnStageLabel(
     phase,
-    liveActivityLabel(lastMessage, showActivities),
+    liveActivityLabel(lastMessage, showActivities, bot.activity === "no-signal"),
     busyRetryLabel(lastMessage),
     noReply?.label,
   );
@@ -1330,7 +1350,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const current = requestedFocus.current === focus.nonce
       ? null
       : switching
-        ? { start: tailWindowStart(list.length, TRANSCRIPT_WINDOW_SIZE, listRenders), end: null }
+        ? { start: tailWindowStart(list.length, TRANSCRIPT_TAIL_SIZE, listRenders), end: null }
         : { start: startIndex, end: transcriptWindow.end === null ? null : endIndex };
     const next = focusWindow(current, list.length, targetIndex, TRANSCRIPT_WINDOW_SIZE, listRenders);
     setBottomFollow(false);
@@ -1348,7 +1368,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   }, [follow, jump.messages, messages.length, renders, transcriptWindow]);
   // A plain tail holds at least the newest window of visible rows. Shifting it
   // for an auto-paged older page would leave a tool-heavy tail nearly blank.
-  const tailStart = useMemo(() => tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), [messages.length, renders]);
+  const tailStart = useMemo(() => tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), [messages.length, renders]);
 
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
@@ -1481,7 +1501,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     closeJump();
     setBottomFollow(true);
     cancelEarlier();
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     });
@@ -1502,7 +1522,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
     <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} sendRef={sceneSend} />}
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} hidden={hidden} sendRef={sceneSend} />}
       {/* Call mode covers the thread while the bot is on the line */}
       {!onLiveCall && <CallOverlay bot={bot} />}
       {/* Header */}
@@ -1593,7 +1613,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} />
+          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} />
 
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
         </div>
@@ -1704,19 +1724,27 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
         onWheel={(e) => followWheel(e.deltaY)}
-        onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
+        onTouchStart={(e) => {
+          touchY.current = e.touches[0]?.clientY ?? 0;
+          reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
+        }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) breakFollow();
+          if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
+        onTouchEnd={() => (reaching.current = false)}
+        onTouchCancel={() => (reaching.current = false)}
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,
@@ -1818,6 +1846,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             visible={waiting && !jump.messages && !dockLive}
             docked={dockLive}
             label={activityLabel}
+            instant={phase === "responding"}
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
@@ -1835,8 +1864,8 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
                 sendsNext={sendsNext && index === 0}
                 sendsAfterSync={pending?.some((entry) => entry.queueId === m.id && entry.reason === "sync")}
                 queuedActions={{
-                  // Send now steers the running turn; a preparing turn has nothing to steer into yet.
-                  sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === m.id && entry.sendId && (entry.reason === "sync" || engine?.capabilities?.queueing === true))
+                  // Send now steers this chat's running turn; a preparing turn, or one in a room, has nothing to steer into.
+                  sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === m.id && entry.sendId && (entry.reason === "sync" || (canSteer && turnSignal !== undefined)))
                     ? () => dispatch({ type: "sendQueuedNow", botId: bot.id, threadId: bot.threadId, queueId: m.id })
                     : undefined,
                   cancel: () => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId: m.id }),

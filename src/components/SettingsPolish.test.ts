@@ -49,6 +49,7 @@ const { mockState, mockApi } = vi.hoisted(() => {
       appSettingsOpen: true,
       appSettingsSection: "connections",
       bots: [] as Bot[],
+      routines: [],
       instances: [claudeInstance],
       config: {
         composio: { configured: false, mode: "local" },

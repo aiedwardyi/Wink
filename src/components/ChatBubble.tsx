@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Phone, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
@@ -9,7 +9,7 @@ import { ReplyQuote } from "./ReplyQuote";
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRows } from "./FileAttachmentRow";
 import { ReactionBar, ReactionChips } from "./Reactions";
-import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
+import { messageMenuProps, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { cn } from "@/lib/cn";
 import { useThreadMessage } from "@/lib/message-pages";
 import { detectChatOptions } from "@/lib/chat-options";
@@ -318,6 +318,10 @@ const Bubble = memo(function Bubble({
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
   const collapsible = user && !webhookView && !expanded && userTextFolds(visibleText);
+  // floated beside markdown: shorter than a line, so only the first line makes room
+  const callMark = message.call && (
+    <Phone size={12} className={cn("mr-1.5 text-ink-secondary/70", user ? "inline align-[-1px]" : "float-left mt-[calc((1lh-12px)/2)]")} />
+  );
 
   if (user && editing && !webhookView) {
     return (
@@ -346,32 +350,7 @@ const Bubble = memo(function Bubble({
       }
       : null;
 
-  const menuProps: HTMLAttributes<HTMLDivElement> = {
-    ...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget }))),
-    onContextMenu: menuTarget ? (e) => {
-      if (isTouchPrimary() || !(e.target instanceof Element)) return;
-      const kind = contextClickKind(e.target, e.clientX, e.clientY);
-      if (kind === "native") return;
-      e.preventDefault();
-      e.stopPropagation();
-      onMessageMenu(kind === "selection"
-        ? { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" }
-        : { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, target: menuTarget });
-    } : undefined,
-    onKeyDown: menuTarget ? (e) => {
-      if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
-      if (e.target instanceof Element && keepsNativeMenu(e.target)) return;
-      e.preventDefault();
-      const rect = e.currentTarget.getBoundingClientRect();
-      onMessageMenu({
-        kind: "message",
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-        opener: e.currentTarget,
-        target: menuTarget,
-      });
-    } : undefined,
-  };
+  const menuProps = messageMenuProps(menuTarget, onMessageMenu);
 
   // a teammate's message lands as a user row; it reads as theirs, like the asker side's
   if (user && message.from) {
@@ -482,6 +461,7 @@ const Bubble = memo(function Bubble({
                 <AttachedImageGallery paths={attachedImages.images} />
               )}
               <div className={cn(collapsible && USER_FOLD_CLASS)}>
+                {callMark}
                 <LinkedText text={visibleText} />
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
@@ -494,6 +474,7 @@ const Bubble = memo(function Bubble({
             </>
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
+              {callMark}
               <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />
             </MessageBoundary>
           ) : null}
@@ -551,14 +532,7 @@ const Bubble = memo(function Bubble({
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
         />
       )}
-      {message.call ? (
-        <div className="flex items-center gap-1">
-          <Phone size={11} className="mt-0.5 text-ink-secondary/70" />
-          <TimestampLabel at={message.at} hidden={streaming} />
-        </div>
-      ) : (
-        <TimestampLabel at={message.at} hidden={streaming} />
-      )}
+      <TimestampLabel at={message.at} hidden={streaming} />
       {(sendsNext || sendsAfterSync) && (
         <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
           <Clock size={11} aria-hidden="true" />

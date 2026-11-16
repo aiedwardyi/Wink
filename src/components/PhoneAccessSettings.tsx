@@ -4,6 +4,7 @@ import { QRCodeSVG } from "qrcode.react";
 
 import { onThisPc } from "@/lib/devices-setup";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
+import { googleSignInError } from "@/lib/google-signin-error";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -122,6 +123,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | undefined>(undefined);
+  const [signingIn, setSigningIn] = useState(false);
+  const signInAttempt = useRef(0);
 
   const loadGoogle = useCallback(
     () => request("/api/google-account").then((body: Google) => {
@@ -231,9 +234,19 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       },
       () => t("settings.phoneAccess.removeError"),
     );
+  // A second press reopens the browser: the desktop app drops the attempt before it.
   const signIn = async () => {
-    const result = await window.ogb?.googleAccount?.signIn().catch(() => null);
-    if (result?.ok) await loadGoogle();
+    const account = window.ogb?.googleAccount;
+    if (!account) return;
+    const attempt = ++signInAttempt.current;
+    setSigningIn(true);
+    setError(null);
+    const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
+    if (attempt !== signInAttempt.current) return;
+    setSigningIn(false);
+    if (result.ok) return void (await loadGoogle());
+    const failure = googleSignInError(result.error);
+    if (failure) setError(t(failure));
   };
   const configured = status?.configured === true;
   const confirm = () => {
@@ -283,7 +296,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     </form>
   );
 
-  const signedOut = known && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  // Without a relay a sign-in cannot turn this on: the switch opens the other ways instead.
+  const signedOut = known && configured && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
   const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
   const toggle = (
     <button
@@ -312,7 +326,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const control = !known
     ? <span data-switch-pending="" aria-hidden="true" className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-control motion-reduce:animate-none" />
     : enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
-  const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t("settings.devices.reachSignIn") : google?.email;
+  const sub = enabled ? google?.email : unavailable || (known && !configured) ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);
   const day = (ms: number) => new Date(ms).toLocaleDateString(tag, { month: "short", day: "numeric" });

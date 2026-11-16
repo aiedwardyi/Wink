@@ -6,8 +6,8 @@ type Engine = MainChange["engine"];
 type Main = { id: string; generation: number; name: string; seq: number };
 type Run = WorkerRun & { name: string; number: number };
 
-const ENGINES: Engine[] = ["claude", "codex"];
-const LABELS: Record<Engine, string> = { claude: "Claude", codex: "Codex" };
+const ENGINES: Engine[] = ["claude", "codex", "grok"];
+const LABELS: Record<Engine, string> = { claude: "Claude", codex: "Codex", grok: "Grok" };
 const MAX_LABELS = 3;
 const REFRESH_MS = 300;
 const byText = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });

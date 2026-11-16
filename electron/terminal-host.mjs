@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
-import { REMOTE_PANE_CEILING, remoteSlot } from "./terminal-remote.mjs";
+import { remoteSlot, startingPanes } from "./terminal-remote.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
@@ -15,6 +15,7 @@ import { watchCodexPromo } from "./codex-promo.mjs";
 import { nudgeApiBlip } from "./pane-blip.mjs";
 import { mapBase } from "./map-base.mjs";
 import { createMapEvents } from "./map-events.mjs";
+import { withClaudePaneEnv } from "../shared/claude-launch-env.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -68,10 +69,6 @@ const stallSignature = (screenText) => AGENT_BUSY_RE.test(screenText) ? screenTe
 const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!waitsOnly || /\b[1-9]\d* (?:shells?|monitors?)\b/u.test(line)));
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
-// Only stops a runaway loop; free memory is the real gate (16 workers used about 13 GB).
-export const BOT_PANE_LIMIT = 128;
-// Pane-count readers (terminal-bridge, server/terminal-snapshot.ts, src/lib/terminal-panes.ts) accept up to this many per bot.
-export const BOT_PANE_TOTAL = BOT_PANE_LIMIT + REMOTE_PANE_CEILING;
 // Exited panes stay readable until this many terminals are open.
 const SESSION_LIMIT = 32;
 const MB = 1024 ** 2;
@@ -185,8 +182,10 @@ function normalizeTerminalText(text) {
 // Real limit screens only: Claude's line sits at the start of its gutter row, Codex's starts the "■" error block. Quoted sentences in diffs, greps and logs carry a prefix.
 const CLAUDE_LIMIT_RE = /^\s*(?:⎿\s+)?You['’]ve hit your [^·\n]*limit\s*·\s*resets (\S.*)$/i;
 const CODEX_LIMIT_RE = /^\s*■\s+You['’]ve hit your usage limit\..{0,400}?try again at (.+?)\.(?: |$)/i;
+// A model cap names the model and no reset: "You've reached your Fable limit. Switch to another model, ..., to continue."
+const CLAUDE_MODEL_LIMIT_RE = /^\s*(?:⎿\s+)?You['’]ve (?:hit|reached) your (?!(?:usage|session|weekly) )([a-z][\w.-]*) limit\..*to continue\.$/i;
 
-const LIMIT_START = { claude: /^\s*(?:⎿\s+)?You['’]ve hit your /i, codex: /^\s*■\s+You['’]ve hit your usage limit\./i };
+const LIMIT_START = { claude: /^\s*(?:⎿\s+)?You['’]ve (?:hit|reached) your /i, codex: /^\s*■\s+You['’]ve hit your usage limit\./i };
 const LIMIT_IDLE_RE = /^(?:What do you want to do\?|[❯›]?\s*\d+\. .+|Approaching rate limits|Switch to .+|Fast and affordable .+|enter select · esc back|› .*|\d+ background terminals? running · \/ps to view.*|\? for shortcuts.*|(?:gpt|GPT)-.+|\d+(?:\.\d+)?% context left.*|⏵.*|[❯›?]|[─━]+|● Usage limit reached · .+|\/usage-credits .+|✻ \S+ for \d.+)$/u;
 const CLAUDE_RESUME_RE = /^● Usage limit reached · continuing automatically at (.+?)(?: · |$)/u;
 
@@ -206,7 +205,8 @@ function usageLimit(screenText, engine, cols = 80) {
   let end = start;
   let text = tail[start];
   let reset = reader.exec(text)?.[1];
-  while ((!reset || (reset.includes("(") && !reset.includes(")"))) && end + 1 < tail.length) {
+  const model = () => engine === "claude" && !reset ? CLAUDE_MODEL_LIMIT_RE.exec(text)?.[1] : undefined;
+  while ((!reset || (reset.includes("(") && !reset.includes(")"))) && !model() && end + 1 < tail.length) {
     const next = tail[end + 1];
     if (!next.trim() || LIMIT_IDLE_RE.test(next.trim())) break;
     text += next;
@@ -220,13 +220,14 @@ function usageLimit(screenText, engine, cols = 80) {
   if (after.some((line) => line.trim() && !LIMIT_IDLE_RE.test(line.trim()))) return null;
   reset = reset?.trim();
   const resumes = after.map((line) => CLAUDE_RESUME_RE.exec(line.trim())?.[1]).find(Boolean);
-  return reset ? { engine: engine === "claude" ? "Claude" : "Codex", reset, resumes } : null;
+  return reset || model() ? { engine: engine === "claude" ? "Claude" : "Codex", reset, resumes, model: model() } : null;
 }
 
 // A turn that dies on a usage limit or a menu runs no engine hook, so the screen is the only signal.
 function stallNoteText(screenText, stallMs, cwd, engine, cols) {
   const lines = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES);
   const limit = usageLimit(screenText, engine, cols);
+  if (limit?.model) return `LIMIT: ${limit.engine} hit its ${limit.model} limit. Its work so far stays in ${cwd}. Switch it to another model, or move the job to another engine.`;
   if (limit) return `LIMIT: ${limit.engine} hit its usage limit (resets ${limit.reset}). Its work so far stays in ${cwd}. ${limit.resumes ? `It resumes by itself at ${limit.resumes}.` : 'Send "continue" after the reset, or move the job to another engine.'}`;
   const tail = lines.join("\n");
   return `STALLED: no screen change for ${Math.max(1, Math.round(stallMs / 60_000))} min and no report. It may be stuck on a usage limit, a menu or an error. terminal_read its pane, then act or tell the user. Last lines:\n${tail}`;
@@ -528,8 +529,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const active = new Map();
   const generations = new Map();
   const pending = new Map();
-  const paneReservations = new Map();
   const remoteOpens = new Set();
+  let loadingPanes = [];
   const deletedBots = new Set();
   const closedBotPanes = new Map();
   let reservedPanes = 0;
@@ -797,7 +798,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
       }
       const limit = usageLimit(text, session.engine, session.cols);
-      const limitKey = limit ? JSON.stringify([session.engine, limit.reset.replace(/\s+/g, "")]) : null;
+      // A model cap names no reset, so it is told once per task, not once per pane.
+      const limitKey = limit ? JSON.stringify([session.engine, limit.reset?.replace(/\s+/g, "") ?? [limit.model, session.stallArmedAt]]) : null;
       if (session.stallDirty) {
         session.stallDirty = false;
         const signature = limitKey ?? stallSignature(text);
@@ -924,7 +926,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     session.stopPromise = (async () => {
       const leftovers = stopLeftovers(session);
+      // Quit cannot wait out a Windows process list, which takes seconds.
       if (leftovers && platform !== "win32") await timeout(leftovers, SHUTDOWN_TIMEOUT_MS, "Process snapshot timed out").catch(() => {});
+      else if (leftovers && !disposed) await leftovers.catch(() => {});
       if (forceKill || session.exitCode === null) {
         try {
           if (!session.workerReady) {
@@ -953,7 +957,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     })();
     return session.stopPromise;
   };
-  // Windows keeps a dead parent's pid on its children, so its slower snapshot can run alongside the kill; POSIX reparents them, so ps runs first.
+  // The list comes before the kill: a process is traced to the pane only through parents still in the table, and the kill takes the CLI.
   const stopLeftovers = (session) => {
     const root = session.pty.pid;
     if (!processes || !session.botPane || !Number.isInteger(root)) return null;
@@ -1211,7 +1215,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         Object.assign(paneEnv, { ORBIT_SCRATCH: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
       } catch {}
     }
-    if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
+    if (botPane) await withClaudePaneEnv(Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) }));
     const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
     });
@@ -1304,6 +1308,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const commands = `${session.commandInput}${text}`.split("\r");
     if (submit && !text.includes("\r")) commands.push("");
     session.commandInput = commands.pop().slice(-INPUT_ECHO_LIMIT);
+    // An Enter sent apart from its line still launches what the line typed.
+    const submitted = commands.join("\r");
     for (const command of commands) {
       if (command.trim()) session.commandInputs.push({ hash: commandHash(command), reported: false });
     }
@@ -1317,7 +1323,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.stallArmedAt = now();
       session.stallChangedAt = session.stallArmedAt;
       session.idleCompacting = false;
-      const engineText = launch ?? text;
+      const engineText = launch ?? submitted;
       const launched = session.botPane ? WORKER_CLI_RE.exec(engineText) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
@@ -1329,7 +1335,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.claudeTrustAnswered = false;
         session.agentSeen = false;
         session.agentEchoed = false;
-        session.agentCommand = text.replace(/\s+/g, "");
+        session.agentCommand = (launch ? text : submitted).replace(/\s+/g, "");
         session.contextNote = null;
         session.contextCompactPending = false;
         watchStalls(session);
@@ -1726,7 +1732,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.reportLost = null;
         if (session.reportSignal) { try { fs.unlinkSync(session.reportSignal); } catch {} }
         if (session.runningCommand) session.runningCommand.reported = true;
-        paneRuns?.reported(session.id);
+        // BLOCKED waits on the teacher, so the run is still live for a restart to bring back.
+        const blocked = /^\s*BLOCKED\b\s*([\s\S]*)/.exec(text ?? "");
+        if (blocked) paneRuns?.blocked(session.id, blocked[1].trim().slice(0, 2000) || "your last report");
+        else paneRuns?.reported(session.id);
         session.finished = [];
         session.autoNote = null;
         session.autoReported = true;
@@ -1782,21 +1791,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (disposed) throw new Error("Terminal host is shutting down");
       const sender = paneOwner();
       if (!sender || sender.isDestroyed?.()) throw new Error("Wink window is not available");
-      // Reserved before the first await so concurrent opens cannot overshoot the caps.
-      const botReserved = paneReservations.get(botId) ?? 0;
       const slot = input.host === undefined ? null : remoteSlot(input.host, remotePanes(), now());
-      // A remote pane counts toward its host's cap; at home it is only a shell running ssh.
-      if (!slot && botSessions(botId).filter((session) => session.botPane && !session.remote && session.exitCode === null).length + botReserved >= BOT_PANE_LIMIT) throw new Error(`Too many bot terminals (limit ${BOT_PANE_LIMIT})`);
-      if (botSessions(botId).filter((session) => session.botPane && session.exitCode === null).length + botReserved >= BOT_PANE_TOTAL) throw new Error(`Too many bot terminals (limit ${BOT_PANE_TOTAL})`);
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
       const floor = paneMemoryFloor(slot ? "" : input.command);
       const free = freeMemory();
-      if (free < floor) {
+      // A pane still loading is missing from the reading, so it holds its own floor until it shows or closes.
+      const loading = { at: now(), memory: floor };
+      loadingPanes = startingPanes(loadingPanes, loading.at).filter((pane) => !pane.session || (pane.session.exitCode === null && !pane.session.retired));
+      const needed = loadingPanes.reduce((sum, pane) => sum + pane.memory, floor);
+      if (free < needed) {
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
-        throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(floor / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close or open it on another PC with host.`);
+        throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(needed / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close or open it on another PC with host.`);
       }
-      paneReservations.set(botId, botReserved + 1);
       reservedPanes += 1;
+      loadingPanes.push(loading);
       if (slot) remoteOpens.add(slot);
       let session;
       let worker;
@@ -1808,7 +1816,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           if (!claimed) throw new Error("Worker recovery already claimed or unavailable");
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
-        if (recovery) launchInput.resume = recovery.session;
+        if (recovery) launchInput.resume = recovery.blocked ? { ...recovery.session, blocked: recovery.blocked } : recovery.session;
         // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
         else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
         if (slot) remoteLine = await remote.open({ name: input.host, command: input.command, cwd: input.cwd, slot });
@@ -1847,10 +1855,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } finally {
         if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
         remoteOpens.delete(slot);
+        if (session) loading.session = session;
+        else loadingPanes = loadingPanes.filter((pane) => pane !== loading);
         reservedPanes -= 1;
-        const left = paneReservations.get(botId) - 1;
-        if (left) paneReservations.set(botId, left);
-        else paneReservations.delete(botId);
       }
       emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
       if (input.command) {

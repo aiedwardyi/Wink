@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, mapClashes, treeIndex, treeLayout } from "./map-tree";
+import { fmt, mapClashes, rowY, treeClimb, treeEdges, treeIndex, treeLayout } from "./map-tree";
 
 it("sizes a folder box for the padding, border and gap its name and count are drawn with", () => {
   const box = readFileSync("src/components/MapTree.css", "utf8").match(/\.map-tree-box \{([^}]*)\}/)![1];
@@ -86,6 +86,30 @@ it("keeps every box apart across random small projects on a phone", () => {
   expect(bad).toBe(0);
 });
 
+it("runs a parent's line straight into a kid that sits under it, at every width", () => {
+  let seed = 7;
+  const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor(seed / 2147483648 * n); };
+  const tops = ["src", "server", ".github", "supabase", "services", "docs", "lib", "app", "tests", "scripts", "public", "ios", "assets", "electron", "shared"];
+  const jags: string[] = [];
+  for (let run = 0; run < 40; run++) {
+    const paths = tops.filter(() => rand(5) < 2).flatMap(top => Array.from({ length: 1 + rand(40) }, (_, i) => `${top}/${rand(2) ? "sub/" : ""}file-${i}.ts`));
+    const changed = new Set(paths.filter(() => !rand(20)));
+    const px = 5.5 + rand(20) / 10;
+    for (let width = 320; width <= 1000; width += 7) {
+      const { items } = treeLayout(treeIndex("zlife-audit-fixes", paths), opts(width, changed, { phone: width < 480 }, px));
+      for (const parent of items.filter(it => it.kids?.length)) {
+        const [[x, , bus], ...kids] = [...treeEdges([parent], it => it).matchAll(/M([\d.]+) ([\d.]+)V([\d.]+)/g)].map(match => match.slice(1).map(Number));
+        for (const [kid, y] of kids) if (y === bus && kid !== x && Math.abs(kid - x) <= 4) jags.push(`run ${run} width ${width} ${parent.id}: ${x} -> ${kid}`);
+      }
+      for (const path of changed) {
+        const climb = treeClimb(items, path, it => it) ?? [];
+        climb.forEach((point, i) => { const off = point.busOf ? Math.abs(Math.round(point.x) - Math.round(climb[i - 1].x)) : 0; if (off && off <= 4) jags.push(`run ${run} width ${width} ${path}: lit line ${off}px`); });
+      }
+    }
+  }
+  expect(jags).toEqual([]);
+});
+
 it("keeps a changed root file reachable when the phone's top row folds it away", () => {
   const dirs: [string, number][] = [["src/lib", 14], ["src/components", 14], ["server", 12], ["shared", 5], ["docs", 4], ["scripts", 3], ["electron", 3], ["tests", 3], ["public", 2]];
   const paths = ["package.json", "README.md", "tsconfig.json", "LICENSE", ...dirs.flatMap(([dir, n]) => Array.from({ length: n }, (_, i) => `${dir}/file-${i}.ts`))];
@@ -105,4 +129,13 @@ it("lists a file many workers share as one clash", () => {
   workers[9].files[0].ranges = [[1, 2]];
   expect(mapClashes(workers)).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.map(worker => worker.id), same: true }]);
   expect(mapClashes(workers.slice(1, 9))).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.slice(1, 9).map(worker => worker.id), same: false }]);
+});
+
+it("spaces a stack's file rows by the given pitch, so a phone can give each a finger's height", () => {
+  const paths = ["src/a.ts", "src/b.ts", "src/c.ts"];
+  const stack = (line?: number) => treeLayout(treeIndex("repo", paths), { width: 600, phone: false, line, changed: new Set(paths), measure: text => text.length * 7, folders: n => `+${n} folders`, files: n => `+${n} files` }).items.find(it => it.files)!;
+  const [mouse, finger] = [stack(), stack(44)];
+  expect(rowY(mouse, mouse, 1) - rowY(mouse, mouse, 0)).toBe(17);
+  expect(rowY(finger, finger, 1) - rowY(finger, finger, 0)).toBe(44);
+  expect(finger.h - mouse.h).toBe(3 * (44 - 17));
 });

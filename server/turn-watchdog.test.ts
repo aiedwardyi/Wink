@@ -5,19 +5,19 @@ import { describe, expect, it } from "vitest";
 import { TurnWatchdog, type WatchedTurn } from "./turn-watchdog.ts";
 
 const STALL = 10_000;
-const TOOL_CAP = 30_000;
 
 function rig() {
   let now = 0;
   const stalls: WatchedTurn[] = [];
+  const quiet: boolean[] = [];
   const dog = new TurnWatchdog({
     stallMs: STALL,
-    toolCapMs: TOOL_CAP,
     checkMs: 60_000,
     onStall: (turn) => stalls.push(turn),
+    onQuiet: (turn) => quiet.push(turn.quiet),
     now: () => now,
   });
-  return { dog, stalls, tick: (ms: number) => (now += ms) };
+  return { dog, stalls, quiet, tick: (ms: number) => (now += ms) };
 }
 
 describe("TurnWatchdog", () => {
@@ -63,16 +63,59 @@ describe("TurnWatchdog", () => {
     expect(stalls).toHaveLength(1);
   });
 
-  it("holds the clock for a tool in flight, up to the absolute cap", () => {
+  it("never stalls a turn with a tool in flight, however long it runs", () => {
     const { dog, stalls, tick } = rig();
     dog.watch("t1", "bot1");
     dog.toolStarted("t1", "call-1");
     tick(STALL * 2);
     dog.sweep();
     expect(stalls).toHaveLength(0);
-    tick(TOOL_CAP);
+    tick(2 * 60 * 60_000);
     dog.sweep();
-    expect(stalls).toEqual([expect.objectContaining({ threadId: "t1" })]);
+    expect(stalls).toHaveLength(0);
+  });
+
+  it("flags a tool silent past the stall window once, and clears it when the turn speaks", () => {
+    const { dog, stalls, quiet, tick } = rig();
+    dog.watch("t1", "bot1");
+    dog.toolStarted("t1", "call-1");
+    tick(STALL - 1);
+    dog.sweep();
+    expect(quiet).toEqual([]);
+    tick(2);
+    dog.sweep();
+    tick(STALL * 100);
+    dog.sweep();
+    expect(quiet).toEqual([true]);
+    expect(stalls).toHaveLength(0);
+    expect(dog.watching("t1")).toBe(true);
+    dog.touch("t1");
+    dog.touch("t1");
+    expect(quiet).toEqual([true, false]);
+  });
+
+  it("an approval clears a quiet tool", () => {
+    const { dog, quiet, tick } = rig();
+    dog.watch("t1", "bot1");
+    dog.toolStarted("t1", "call-1");
+    tick(STALL + 1);
+    dog.sweep();
+    dog.setWaitingOnHuman("t1", true);
+    expect(quiet).toEqual([true, false]);
+  });
+
+  it("Stop settling a quiet tool's turn forgets it", () => {
+    const { dog, stalls, quiet, tick } = rig();
+    dog.watch("t1", "bot1");
+    dog.toolStarted("t1", "call-1");
+    tick(STALL + 1);
+    dog.sweep();
+    dog.settle("t1");
+    expect(dog.watching("t1")).toBe(false);
+    tick(STALL * 2);
+    dog.sweep();
+    expect(stalls).toHaveLength(0);
+    expect(quiet).toEqual([true]);
   });
 
   it("stalls a silent turn once its tool completes", () => {

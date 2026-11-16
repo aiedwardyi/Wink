@@ -113,7 +113,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const actions = useRef<HTMLDivElement>(null);
   const name = named && saved && saved.revision >= revision ? saved : named;
   const ready = accountReady(account);
-  const canName = Boolean(named) && ["claudeAgent", "codex"].includes(account.driverKind);
+  const canName = Boolean(named) && ["claudeAgent", "codex", "grokAgent"].includes(account.driverKind);
   useEffect(() => {
     if (!menu) return;
     actions.current?.querySelector<HTMLButtonElement>("button")?.focus();

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { z } from "zod";
 import type { Message } from "@/state/store";
-import { localLinks, showKind, type ShowKind } from "./chat-media";
+import { linkedFileSrc, localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
@@ -36,7 +37,29 @@ const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
-export function showItem(next: ShowItem) {
+export const PANE_TAB_KEY = "omb-pane-tab";
+const paneTab = z.union([z.enum(["media", "map"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text"]), src: z.string().optional() })]);
+type PaneTab = z.infer<typeof paneTab>;
+const picked = new Map<string, PaneTab>();
+
+function picks(): Record<string, PaneTab> {
+  try {
+    return z.record(z.string(), paneTab).catch({}).parse(JSON.parse(globalThis.localStorage?.getItem(PANE_TAB_KEY) ?? "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function pick(threadId: string, tab: PaneTab) {
+  picked.set(threadId, tab);
+  try {
+    globalThis.localStorage?.setItem(PANE_TAB_KEY, JSON.stringify({ ...picks(), [threadId]: tab }));
+  } catch {
+    // Storage blocked: the pick lasts until the app closes.
+  }
+}
+
+function openItem(next: ShowItem) {
   last.set(next.threadId, next);
   if (!media && !checking && !mapping && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
   showing = next;
@@ -46,12 +69,22 @@ export function showItem(next: ShowItem) {
   emit();
 }
 
-export function showMedia(threadId: string) {
+export function showItem(next: ShowItem) {
+  pick(next.threadId, next);
+  openItem(next);
+}
+
+function openMedia(threadId: string) {
   if (media === threadId) return;
   media = threadId;
   checking = null;
   mapping = null;
   emit();
+}
+
+export function showMedia(threadId: string) {
+  pick(threadId, "media");
+  openMedia(threadId);
 }
 
 /** Fronts the Check tab; the checker itself lives in verify-watch. */
@@ -76,12 +109,14 @@ export function closeShow() {
 
 export const lastShown = (threadId: string) => last.get(threadId);
 
-/** The header button: shuts this chat's pane, or opens what it last showed, else Media. */
-export function togglePane(threadId: string) {
+/** The header button: shuts this chat's pane, or opens the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map`; a room's runs on each person's own PC. */
+export function togglePane(threadId: string, map?: "idle" | "live") {
   if (showing?.threadId === threadId || media === threadId || mapping === threadId) return closeShow();
-  const was = last.get(threadId);
-  if (was) showItem(was);
-  else showMedia(threadId);
+  const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
+  if (tab === "map" && map) openMap(threadId);
+  else if (tab === "map") openMedia(threadId);
+  else if (tab === "media") openMedia(threadId);
+  else openItem(last.get(threadId) ?? tab);
 }
 
 export function useShowItem(): ShowItem | null {
@@ -98,12 +133,17 @@ export function useCheckThread(): string | null {
   return useSyncExternalStore(subscribe, () => checking, () => null);
 }
 
-export function showMap(threadId: string) {
+function openMap(threadId: string) {
   if (mapping === threadId) return;
   mapping = threadId;
   checking = null;
   media = null;
   emit();
+}
+
+export function showMap(threadId: string) {
+  pick(threadId, "map");
+  openMap(threadId);
 }
 
 export function useMapThread(): string | null {
@@ -170,12 +210,22 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
   const onMap = useMapThread() !== null;
   const state = useRef<AutoShow>({ seen: null });
   const was = useRef(shown);
+  const probe = useRef<AbortController>(undefined);
+  // A probe still out when the user picks another tab or file, or a newer file arrives, is stale.
+  useEffect(() => () => probe.current?.abort(), [threadId, shown, free, onMedia, onMap]);
   useEffect(() => {
     const closed = Boolean(was.current && !shown && was.current.threadId === threadId);
     was.current = shown;
     if (!threadId) return;
     const step = autoShowStep(state.current, threadId, messages, closed);
     state.current = step.state;
-    if (step.item && free && !onMedia && !onMap) showItem(step.item);
+    const item = step.item;
+    // A file this PC can't serve would open a dead pane; its link still opens it in the browser.
+    if (item && free && !onMedia && !onMap) {
+      probe.current?.abort();
+      const { signal } = probe.current = new AbortController();
+      fetch(linkedFileSrc(item.threadId, item.path), { headers: { Range: "bytes=0-0" }, signal })
+        .then((res) => { if (!signal.aborted && (res.ok || res.status === 416)) openItem(item); }, () => {});
+    }
   }, [threadId, messages, shown, free, onMedia, onMap]);
 }

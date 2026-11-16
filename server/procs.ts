@@ -20,7 +20,7 @@ import os from "node:os";
 import { realpathSync, statSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { basename, isAbsolute, join } from "node:path";
-import { findCliCandidates, resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
+import { findCliCandidates, preferCli, resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
 
@@ -138,12 +138,38 @@ export function execCli(
   const versionKey = args.length === 1 && args[0] === "--version" ? binaryKey(cli, resolved, opts.env) : null;
   const known = versionKey ? versionByBinary.get(versionKey) : undefined;
   if (known !== undefined) return queueMicrotask(() => cb(null, known, ""));
-  execFile(resolved.command, launch.args, { ...options, ...(account ? { env: launch.env } : {}), windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) => {
-    if (versionKey && !err) {
-      if (versionByBinary.size >= VERSION_CACHE_MAX) versionByBinary.clear();
-      versionByBinary.set(versionKey, stdout);
-    }
-    cb(err, stdout, stderr);
+  try {
+    execFile(resolved.command, launch.args, { ...options, ...(account ? { env: launch.env } : {}), windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) => {
+      if (versionKey && !err) {
+        if (versionByBinary.size >= VERSION_CACHE_MAX) versionByBinary.clear();
+        versionByBinary.set(versionKey, stdout);
+      }
+      cb(err, stdout, stderr);
+    });
+  } catch (error) {
+    // Windows throws here, not in the callback, for a file it can't start (npm's placeholder claude.exe).
+    queueMicrotask(() => cb(error instanceof Error ? error : new Error(String(error)), "", ""));
+  }
+}
+
+/** `cli --version`, else the first later `cli` on PATH that answers, which every later spawn of `cli` then runs. */
+export function cliVersion(cli: string, opts: ExecFileOptions & AccountLaunchOptions, cb: (version: string | null) => void): void {
+  execCli(cli, ["--version"], opts, (err, stdout) => {
+    if (!err) return cb(stdout.trim());
+    // Two npm shims can both run node.exe; only the whole launch tells them apart.
+    const launch = (file: string) => JSON.stringify(resolveCli(file));
+    const failed = launch(cli);
+    preferCli(cli, null);
+    const rest = findCliCandidates(cli).filter((file) => file !== cli && launch(file) !== failed);
+    const next = (i: number): void => {
+      if (i === rest.length) return cb(null);
+      execCli(rest[i], ["--version"], opts, (err, stdout) => {
+        if (err) return next(i + 1);
+        preferCli(cli, rest[i]);
+        cb(stdout.trim());
+      });
+    };
+    next(0);
   });
 }
 

@@ -24,6 +24,8 @@ export type FileAttachment = {
   uploadId?: string;
   /** A picture too big to go inline: the saved smaller copy the bot sees. */
   preview?: string;
+  /** A hosted room's upload of this desktop file, what teammates get when its path is outside the project. */
+  copy?: string;
 };
 
 /** A file still on its way to the PC. Send waits until it becomes a file chip. */
@@ -39,6 +41,10 @@ export type UploadAttachment = {
   state: "uploading" | "resuming" | "failed" | "repick";
   /** A big picture whose upload also saves a smaller copy. */
   shrink?: boolean;
+  /** A picture sent whole to the image route; the chip it becomes. */
+  picture?: "image" | "file";
+  /** A document sent whole to the route that keeps its name. */
+  document?: true;
 };
 
 export type ImageAttachment = {
@@ -78,7 +84,8 @@ export function imageSupportForTargets(
   instances: readonly { instanceId: string; capabilities?: { images?: boolean } }[],
   targets: readonly { modelSelection: { instanceId: string } }[],
 ): ImageSupport {
-  if (!targets.length) return "unsupported";
+  // no bot answers, so no engine reads the picture
+  if (!targets.length) return "supported";
   let unknown = false;
   for (const target of targets) {
     const instance = instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId);
@@ -182,7 +189,6 @@ export function uploadAttachment(file: Pick<File, "name" | "size" | "type" | "la
  * oversized paste is refused before the upload starts, not mid-stream. */
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
-export const UPLOAD_MAX_BYTES = 10 * 1024 ** 3;
 /** Matches claude.ts NATIVE_IMAGE_MAX_BYTES, the lowest inline limit; other engines open the path. */
 export const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -214,9 +220,24 @@ export async function shrunkImagePath(
   }
 }
 
-async function uploadAttachmentFile(
+/** The upload route's copy of a desktop file, or undefined when it takes no such file. */
+export async function roomCopyPath(
+  file: Pick<File, "name" | "size" | "type" | "arrayBuffer">,
+  uploader: (file: Pick<File, "name" | "type" | "arrayBuffer">, document: boolean) => Promise<{ path: string }> = uploadAttachmentFile,
+): Promise<string | undefined> {
+  const picture = isImageFile(file) && file.size <= IMAGE_MAX_BYTES;
+  if (!picture && !(DOCUMENT_EXTENSION.test(file.name) && file.size <= DOCUMENT_MAX_BYTES)) return undefined;
+  try {
+    return (await uploader(file, !picture)).path;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function uploadAttachmentFile(
   file: Pick<File, "name" | "type" | "arrayBuffer">,
   document = false,
+  signal?: AbortSignal,
 ): Promise<{ path: string; name?: string; mime: string; bytes: number }> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const headers = new Headers({ "content-type": file.type || "application/octet-stream" });
@@ -226,6 +247,7 @@ async function uploadAttachmentFile(
       method: "POST",
       headers,
       body: bytes,
+      signal,
     }),
   );
   if (!response.ok) {
@@ -369,8 +391,9 @@ export function composeMessage(text: string, attachments: Attachment[]): string 
     } else if (a.kind === "file") {
       const type = a.type ? ` type="${escapeAttribute(a.type)}"` : "";
       const preview = a.preview ? ` preview="${escapeAttribute(a.preview)}"` : "";
+      const copy = a.copy ? ` copy="${escapeAttribute(a.copy)}"` : "";
       if (a.preview) parts.push(`<attached-image path="${escapeAttribute(a.preview)}" />`);
-      parts.push(`<attached-file path="${escapeAttribute(a.path)}" name="${escapeAttribute(a.name)}" size="${a.size}"${type}${preview} />`);
+      parts.push(`<attached-file path="${escapeAttribute(a.path)}" name="${escapeAttribute(a.name)}" size="${a.size}"${type}${preview}${copy} />`);
     }
   });
   return parts.filter(Boolean).join("\n\n");
@@ -507,24 +530,26 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   _opts: {
     allowImages: boolean;
     getPath: (file: T) => string;
-    uploadImage: (file: T, allowImages: boolean) => Promise<Attachment | null>;
     /** Saves a big picture's smaller copy; the browser passes shrunkPicture. */
     shrunkPath?: (file: T) => Promise<string | undefined>;
-    t: (key: "composer.uploadTooBig" | "composer.uploadFailed", vars?: Record<string, string | number>) => string;
+    /** Saves a hosted room's copy of a desktop file; Composer passes roomCopyPath. */
+    roomCopy?: (file: T) => Promise<string | undefined>;
+    t:(key: "composer.uploadFailed", vars?: Record<string, string | number>) => string;
   },
 ): Promise<{ attachments: Attachment[]; uploads: { id: string; file: T }[]; notice: string | null }> {
   const files = [..._files];
-  const { allowImages, getPath, uploadImage, t } = _opts;
+  const { allowImages, getPath } = _opts;
   const shrunkPath = _opts.shrunkPath ?? (async () => undefined);
+  const roomCopy = _opts.roomCopy ?? (async () => undefined);
+  const onDisk = async (file: T, path: string) => {
+    const attachment = fileAttachment(file.name, path, file.size, file.type);
+    const copy = await roomCopy(file);
+    if (copy) attachment.copy = copy;
+    return attachment;
+  };
   const attachments: Attachment[] = [];
   const uploads: { id: string; file: T }[] = [];
-  const tooBig: string[] = [];
-  const uploadErrors: string[] = [];
   const bigUpload = (file: T, shrink = false) => {
-    if (file.size > UPLOAD_MAX_BYTES) {
-      tooBig.push(t("composer.uploadTooBig", { name: file.name }));
-      return;
-    }
     const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 }, shrink);
     attachments.push(chip);
     uploads.push({ id: chip.id, file });
@@ -537,7 +562,7 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       // the original stays a file the bot can open; its smaller copy goes inline
       const shrink = allowImages && shrinksImage(file);
       if (path && (!allowImages || shrink || file.size > IMAGE_MAX_BYTES)) {
-        const attachment = fileAttachment(file.name, path, file.size, file.type);
+        const attachment = await onDisk(file, path);
         const preview = shrink ? await shrunkPath(file) : undefined;
         if (preview) attachment.preview = preview;
         attachments.push(attachment);
@@ -546,24 +571,22 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       } else {
         // A pathless image (phone, web) has no other way to reach the bot, so
         // it uploads even when the engine cannot read it inline, same as paste.
-        try {
-          const attachment = await uploadImage(file, allowImages);
-          if (attachment) attachments.push(attachment);
-        } catch (err) {
-          uploadErrors.push(`${file.name}: ${err instanceof Error ? err.message : t("composer.uploadFailed")}`);
-        }
+        // Its chip shows at once, so Send waits for it.
+        const chip = uploadAttachment({ name: file.name || "pasted image", size: file.size, type: file.type, lastModified: file.lastModified ?? 0 });
+        chip.picture = allowImages ? "image" : "file";
+        attachments.push(chip);
+        uploads.push({ id: chip.id, file });
       }
       continue;
     }
     if (path) {
-      attachments.push(fileAttachment(file.name, path, file.size, file.type));
+      attachments.push(await onDisk(file, path));
     } else if (DOCUMENT_EXTENSION.test(file.name) && file.size <= DOCUMENT_MAX_BYTES) {
-      try {
-        const saved = await uploadAttachmentFile(file, true);
-        attachments.push(fileAttachment(saved.name ?? attachmentBasename(file.name), saved.path, saved.bytes, file.type));
-      } catch {
-        uploadErrors.push(`${file.name}: ${t("composer.uploadFailed")}`);
-      }
+      // Its chip shows at once, so Send waits for it.
+      const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 });
+      chip.document = true;
+      attachments.push(chip);
+      uploads.push({ id: chip.id, file });
     } else if (file.type === "text/plain") {
       const result = await attachmentsFromDroppedFiles([file], getPath);
       attachments.push(...result.attachments);
@@ -572,6 +595,5 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       bigUpload(file);
     }
   }
-  const notices = [...tooBig, ...uploadErrors];
-  return { attachments, uploads, notice: notices.length ? notices.join(" ") : null };
+  return { attachments, uploads, notice: null };
 }

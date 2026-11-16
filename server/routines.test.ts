@@ -387,6 +387,19 @@ describe("RoutineManager", () => {
     expect(h.manager.listRuns().filter((run) => run.routineId === routine.id && run.status === "queued")).toHaveLength(1);
   });
 
+  it("keeps any whole-minute routine duration the user picks", () => {
+    const h = harness();
+    const create = (durationMinutes: number) => h.manager.create({
+      name: "Long audit",
+      prompt: "Audit the repo",
+      botId: "maus-2",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+      durationMinutes,
+    }).durationMinutes;
+    expect(create(5)).toBe(5);
+    expect(create(600)).toBe(600);
+  });
+
   it("queues behind a busy bot, then fires in its chat", async () => {
     const h = harness();
     h.setBot("busy");

@@ -14,6 +14,8 @@ export interface MapWorker {
   path?: string;
   reason?: string;
   files: MapFile[];
+  more?: number;
+  error?: boolean;
 }
 
 export interface MapSnapshot {

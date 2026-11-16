@@ -7,7 +7,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import type { AccountContext } from "./account-policy.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 
-export const MAX_ENGINE_ACCOUNTS = 8;
+export const ACCOUNT_DRIVERS: readonly string[] = ["claudeAgent", "codex", "grokAgent"];
 const ACCOUNT_ID = /^acct_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export function isInstanceId(value: string): boolean {
   return /^[\w.-]{1,128}$/.test(value) && !["constructor", "prototype", "__proto__", ".", ".."].includes(value.toLowerCase());
@@ -152,7 +152,7 @@ export class AccountService {
 
   list(): Array<{ id: string; of: string; driverKind: string; generation: number; existing: boolean; state: SavedAccount["state"]; error?: string }> {
     if (this.error) return [{ id: "accounts", of: "accounts", driverKind: "accounts", generation: 0, existing: false, state: "stopped", error: this.error }];
-    return Object.entries(this.bases()).filter(([, entry]) => entry.enabled !== false && ["claudeAgent", "codex"].includes(entry.driver))
+    return Object.entries(this.bases()).filter(([, entry]) => entry.enabled !== false && ACCOUNT_DRIVERS.includes(entry.driver))
       .flatMap(([of, entry]) => [
         { id: of, of, driverKind: entry.driver, generation: 0, existing: true, state: "ready" as const },
         ...this.records.filter((row) => row.of === of).map((row) => ({ id: row.id, of, driverKind: entry.driver, generation: row.generation, existing: false, state: row.state })),
@@ -163,9 +163,6 @@ export class AccountService {
     return this.change(() => {
       const base = this.base(of);
       const fleet = this.bases();
-      const count = Object.values(fleet).filter((entry) => entry.enabled !== false && entry.driver === base.driver).length
-        + this.state.accounts.filter((entry) => this.base(entry.of).driver === base.driver).length;
-      if (count >= MAX_ENGINE_ACCOUNTS) throw new AccountError(`At most ${MAX_ENGINE_ACCOUNTS} accounts per engine, including the existing sign-in`);
       let id: string;
       do { id = `acct_${randomUUID()}`; } while (Object.hasOwn(fleet, id) || this.state.retired.includes(id) || this.get(id));
       mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
@@ -213,8 +210,8 @@ export class AccountService {
     return row;
   }
   private base(id: string, bases = this.bases()) {
-    if (!isInstanceId(id) || !Object.hasOwn(bases, id) || bases[id].enabled === false || !["claudeAgent", "codex"].includes(bases[id].driver)) {
-      throw new AccountError("Account base must be an enabled Claude or Codex instance", 400);
+    if (!isInstanceId(id) || !Object.hasOwn(bases, id) || bases[id].enabled === false || !ACCOUNT_DRIVERS.includes(bases[id].driver)) {
+      throw new AccountError("Account base must be an enabled Claude, Codex or Grok instance", 400);
     }
     return bases[id];
   }
@@ -225,22 +222,18 @@ export class AccountService {
   }
   private validate(state: State, bases = this.bases()) {
     const seen = new Set<string>();
-    const counts = new Map<string, number>();
-    for (const entry of Object.values(bases)) if (entry.enabled !== false && ["claudeAgent", "codex"].includes(entry.driver)) counts.set(entry.driver, (counts.get(entry.driver) ?? 0) + 1);
     for (const id of [...state.retired, ...state.accounts.map((row) => row.id)]) {
       if (seen.has(id) || Object.hasOwn(bases, id)) throw new AccountError("Duplicate account id");
       seen.add(id);
     }
     for (const row of state.accounts) {
-      const driver = this.base(row.of, bases).driver;
-      counts.set(driver, (counts.get(driver) ?? 0) + 1);
+      this.base(row.of, bases);
       this.home(row.id);
     }
     for (const [of, accountId] of Object.entries(state.defaults ?? {})) {
       this.base(of, bases);
       if (accountId !== of && !state.accounts.some((row) => row.id === accountId && row.of === of)) throw new AccountError("Invalid default account");
     }
-    if ([...counts.values()].some((count) => count > MAX_ENGINE_ACCOUNTS)) throw new AccountError(`At most ${MAX_ENGINE_ACCOUNTS} accounts per engine`);
   }
   private commit(next: State) {
     this.validate(next);
