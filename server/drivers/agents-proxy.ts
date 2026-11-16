@@ -25,11 +25,13 @@
 //   list_routines()                       → inspect this bot's scheduled work
 //   propose_routine(...)                  → show a confirmation card for a new routine
 //   propose_routine_action(...)           → show a confirmation card for a routine change
+//   wake_me(at, note) / wake_me(cancel)   → one-off wake of this bot in this chat, no card
 //   update_task_state(...)                → save goal, progress, blockers, and next action
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
 //   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
+//   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -57,6 +59,9 @@ const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
+// A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
+export const READ_ONLY_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
+const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
@@ -229,6 +234,12 @@ const SEARCH_MY_CHATS_TOOL = {
   },
 };
 
+const HAND_OFF_TOOL = {
+  name: "hand_off",
+  description: "You are busy elsewhere and can't edit or run things in this reply. Call this when the room asks for edits or new work: it starts here as soon as you are free.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
 export const BOARD_TOOLS = [
   {
     name: "board_search",
@@ -255,6 +266,7 @@ export const BOARD_TOOLS = [
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
+  ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   ...BOARD_TOOLS,
   {
@@ -608,6 +620,21 @@ const TOOLS = [
         },
       },
       required: ["routine_id", "action"],
+    },
+  },
+  {
+    name: "wake_me",
+    description:
+      "Wake yourself once in this chat later, with a note to yourself: use it for a one-off later step (check a deploy at 03:45, resume after a cooldown) instead of a countdown terminal pane. No confirmation card; the user sees a small chip and can cancel it. At that time you get an automated [Wake] turn with your note. Recurring work still needs propose_routine. list_routines shows your pending wakes (named Wake); pass cancel with an id to cancel one. Max 10 pending.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        at: { type: "string", description: "RFC3339 with offset, 1 minute to 7 days ahead. Call list_routines first for the current time if unsure." },
+        note: { type: "string", maxLength: 500, description: "What to pick up when you wake, up to 500 characters." },
+        cancel: { type: "string", description: "A pending wake id to cancel instead of setting one." },
+      },
+      required: [],
     },
   },
   {
@@ -1117,6 +1144,15 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     });
     return confirmationResult(r, `${action.replace("_", " ")} on routine ${routineId}`);
   }
+  if (name === "wake_me") {
+    if (typeof args.cancel === "string" && args.cancel.trim()) {
+      await api("/api/internal/wake", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, cancel: args.cancel.trim() }) });
+      return { text: `Wake ${args.cancel.trim()} is cancelled.` };
+    }
+    if (typeof args.at !== "string" || typeof args.note !== "string") return { text: "wake_me needs at and note, or cancel with a wake id.", isError: true };
+    const r = await api("/api/internal/wake", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, at: args.at, note: args.note }) });
+    return { text: `Wake ${String(r.id)} is set for ${String(r.local)}. You will get a [Wake] turn in this chat then.` };
+  }
   if (name === "set_keep_going") {
     if (typeof args.on !== "boolean") return { text: "set_keep_going needs on: true or false.", isError: true };
     if (args.start_after !== undefined && typeof args.start_after !== "string") return { text: "start_after must be RFC3339 with an offset.", isError: true };
@@ -1142,6 +1178,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
     return { text: String(r.text ?? "") };
   }
+  if (name === HAND_OFF_TOOL.name) {
+    const r = await api("/api/internal/hand-off", { method: "POST", body: "{}" });
+    return { text: String(r.text ?? "") };
+  }
   if (name === "no_reply_needed") return { text: "ok" };
   if (name === "link_room_fix") {
     const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
@@ -1150,7 +1190,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
+const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => (DEPTH === 0 || PEER_TOOLS.has(tool.name)) && (!READ_ONLY || READ_ONLY_TOOLS.has(tool.name))) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
 const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
@@ -1196,6 +1236,7 @@ export async function handle(msg: Json) {
       }
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
       if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
+      if (READ_ONLY && !READ_ONLY_TOOLS.has(name)) return textResult(id, `${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`, true);
       const verify = name === VERIFY_SITE_TOOL.name ? new AbortController() : null;
       if (verify) verifyCalls.set(id, verify);
       const deadline = verify ? setTimeout(() => verify.abort("deadline"), VERIFY_LIMITS.toolMs) : undefined;

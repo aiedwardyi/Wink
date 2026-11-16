@@ -5,7 +5,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import { isIP } from "node:net";
 
 import type { PhoneRelayState } from "../shared/relay-protocol.ts";
-import { linkedFileGrant } from "./linked-files.ts";
+import { linkedFileGrant, PC_HOLDER } from "./linked-files.ts";
 
 export const PHONE_COOKIE = "__Host-wink_phone";
 /** 400 days, the browser cap; the server re-sets it weekly and expires idle phones itself. */
@@ -57,7 +57,7 @@ export function relayVerdict(req: RelayRequestLine, relayHost: string): RelayVer
   const method = req.method ?? "GET";
   const path = new URL(target, "https://relay.invalid").pathname;
   const origins = headerValues(req.rawHeaders, "origin");
-  if (origins.length > 1 || (origins.length === 1 && origins[0] !== `https://${relayHost}` && !(origins[0] === "null" && linkedFileGrant(method, path)))) {
+  if (origins.length > 1 || (origins.length === 1 && origins[0] !== `https://${relayHost}` && !(origins[0] === "null" && linkedFileGrant(method, path, (holder) => holder !== PC_HOLDER)))) {
     return { kind: "deny", status: 403, error: "forbidden: cross-origin request" };
   }
   const read = method === "GET" || method === "HEAD";

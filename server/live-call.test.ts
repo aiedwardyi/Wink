@@ -96,11 +96,55 @@ describe("call token", () => {
     expect([voice(1), voice(2)]).toEqual(["Aoede", "Alnilam"]);
   });
 
+  it("a bot's own picks win over the app voice and language, and calm rides the brief", async () => {
+    const h = harness({ liveCall: { voice: "Aoede" } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Sulafat", style: "calm", language: "ko", speed: 0.8 } });
+    const { data } = await h.post("token", { locale: "en" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(data).toMatchObject({ voice: "Sulafat", locale: "ko" });
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Sulafat");
+    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
+    expect(setup.systemInstruction.parts[0].text).toContain("On screen your voice is called Sulafat");
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Speak softly and gently");
+  });
+
+  it("a pick mid-call opens a fresh session in the new voice that knows the call so far", async () => {
+    const h = harness();
+    const first = await h.post("token");
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Read me the plan slowly.", call: { id: first.data.callId, voice: true } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Alnilam" } });
+    await h.post("token", { callId: first.data.callId, resume: true });
+    await h.post("token", { callId: first.data.callId, swap: true });
+    const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
+    expect([voice(0), voice(1), voice(2)]).toEqual(["Aoede", "Aoede", "Alnilam"]);
+    expect(h.sent(2).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Person: Read me the plan slowly.");
+    expect(h.sent(2).bidiGenerateContentSetup.sessionResumption).toEqual({});
+  });
+
+  it("a swap speaks with the picks it carries, before the bot's own save lands", async () => {
+    const h = harness();
+    const first = await h.post("token");
+    const swapped = await h.post("token", { callId: first.data.callId, swap: true, call: { voice: "Erinome", style: "calm" } });
+    const setup = h.sent(1).bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak softly");
+    expect(swapped.data).toMatchObject({ voice: "Erinome", style: "calm" });
+    await h.post("token", { callId: first.data.callId, call: { voice: "Puck" } });
+    expect(h.sent(2).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+  });
+
+  it("a new call speaks with the picks it carries, before the bot's own save lands", async () => {
+    const h = harness();
+    const { data } = await h.post("token", { call: { voice: "Fenrir", style: "lively" } });
+    expect(data).toMatchObject({ voice: "Fenrir", style: "lively" });
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("bright, upbeat");
+  });
+
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
     expect(status).toBe(200);
-    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede" });
+    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede", locale: "en", style: "normal" });
     expect(raw).not.toContain(KEY);
     const [url, init] = h.fetch.mock.calls[0]!;
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");
@@ -158,7 +202,7 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
-    expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
+    expect(brief).toContain("Told your voice changed or sounds different: they picked it in the call settings, and you're still the same assistant.");
     expect(brief).toContain("Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.");
   });
 

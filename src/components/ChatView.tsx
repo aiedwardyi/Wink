@@ -1,4 +1,5 @@
 import { chatErrorText } from "@/lib/error-text";
+import { lateReportText } from "@/lib/late-report";
 import { ErrorDetails } from "./ErrorDetails";
 import { AppErrorBanner } from "./AppErrorBanner";
 import { Fold } from "./Fold";
@@ -93,6 +94,7 @@ import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
+import { WakeChips } from "./WakeChips";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
@@ -370,7 +372,7 @@ function NoteReport({ note }: { note: PaneNote }) {
   return (
     <>
       {note.status && <div className="font-medium text-ink">{t(NOTE_STATUS_KEY[note.status])}</div>}
-      {noteText(note, t)}
+      {lateReportText(noteText(note, t), t)}
     </>
   );
 }
@@ -1965,6 +1967,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             onOpenUsage={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
           />
         )}
+        <WakeChips botIds={[bot.id]} threadId={bot.threadId} />
         <Composer
           key={bot.threadId}
           bot={bot}

@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { getCACertificates, setDefaultCACertificates, type TLSSocket } from "node:tls";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseOptions, plan } from "../deploy/cli.ts";
+import { configSchema } from "../src/config.ts";
 import {
   discover,
   execute,
@@ -423,7 +424,7 @@ describe("dry run and discovery", () => {
 
 const DESKTOP_CLIENT = "desktop-client.apps.googleusercontent.com";
 const WEB_CLIENT = "web-client.apps.googleusercontent.com";
-const SIGNIN_ORIGIN = "https://wink.edwardyi.dev";
+const SIGNIN_ORIGIN = "https://app.getwink.dev";
 
 describe("google deploy flags", () => {
   const argv = (action: string, extra: string[] = []) => [action, "--project", "wink-new-proj", "--base", BASE, "--dns-zone", "example.com", ...extra];
@@ -517,6 +518,90 @@ describe("google deploy flags", () => {
       expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"))).not.toHaveProperty("stats");
       await realLocal("/r", dir).writeConfig(parsed.opts);
       expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8")).stats).toEqual({ readKeySha256: hash });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("domain move flags", () => {
+  const NEW = "app.example.com";
+  const argv = (action: string, extra: string[] = []) => [action, "--project", "wink-new-proj", "--base", NEW, "--dns-zone", "example.com", ...extra];
+
+  it("updates a relay deployed under the old base only when --old-base names it", () => {
+    const parsed = parseOptions(argv("update", ["--old-base", BASE, "--accept-acme-terms", "--operator-key", "/keys/operator.key"]));
+    expect(parsed.opts.oldBase).toBe(BASE);
+    const state = deployedState("wink-new-proj", "34.64.0.10");
+    expect(lines(planUpdate(parsed.opts, state)).at(-1)).toContain(`https://relay.${NEW}/v1/healthz`);
+    expect(() => planUpdate({ ...parsed.opts, oldBase: undefined }, state)).toThrow(/not owned/);
+    expect(() => validate(parseOptions(argv("update", ["--old-base", NEW])).opts)).toThrow(/invalid --old-base/);
+    expect(() => validate(parseOptions(argv("update", ["--old-base", "Not A Base"])).opts)).toThrow(/invalid --old-base/);
+  });
+
+  it("refuses pause and move with --old-base, which would strand the old base's DNS", () => {
+    const o = { ...opts({ base: NEW }), oldBase: BASE };
+    expect(() => planPause(o, deployedState("wink-new-proj", "34.64.0.10"))).toThrow(/--old-base/);
+    expect(() => planMove(o, "wink-old-proj", EMPTY, deployedState("wink-old-proj", "34.64.0.20"))).toThrow(/--old-base/);
+  });
+
+  it("writes oldBases and the gts project, and neither without the flags", async () => {
+    const parsed = parseOptions(argv("update", ["--old-base", BASE, "--gts-project", "wink-gts-proj"]));
+    expect(() => validate(parsed.opts)).not.toThrow();
+    expect(() => validate(parseOptions(argv("update", ["--gts-project", "Bad_Project"])).opts)).toThrow(/invalid --gts-project/);
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    try {
+      await realLocal("/r", dir).writeConfig(parseOptions(argv("update")).opts);
+      const plain = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
+      expect(plain).not.toHaveProperty("oldBases");
+      expect(plain).not.toHaveProperty("gts");
+      await realLocal("/r", dir).writeConfig(parsed.opts);
+      const written = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
+      expect(written).toMatchObject({ base: NEW, oldBases: [BASE] });
+      expect(written.gts).toEqual({ project: "wink-gts-proj", perHour: 60 });
+      expect(configSchema.parse(written).oldBases).toEqual([BASE]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sizes the weekly join cap to the certificate providers", async () => {
+    const google = ["--google-desktop-client-id", DESKTOP_CLIENT, "--google-web-client-id", WEB_CLIENT, "--google-signin-origin", SIGNIN_ORIGIN];
+    const gts = ["--gts-project", "wink-gts-proj"];
+    const opts = (extra: string[]) => parseOptions(argv("update", extra)).opts;
+    expect(() => validate(opts([...gts, "--enroll-per-week", "100"]))).toThrow(/--enroll-per-week needs the Google flags/);
+    expect(() => validate(opts([...google, "--enroll-per-week", "51"]))).toThrow(/from 1 to 50,/);
+    expect(() => validate(opts([...google, ...gts, "--gts-per-hour", "10", "--enroll-per-week", "1731"]))).toThrow(/from 1 to 1730,/);
+    for (const bad of ["0", "1.5", "many"]) expect(() => validate(opts([...google, ...gts, "--enroll-per-week", bad])), bad).toThrow(/--enroll-per-week is/);
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    const limits = async (extra: string[]) => {
+      const parsed = opts(extra);
+      validate(parsed);
+      await realLocal("/r", dir).writeConfig(parsed);
+      return configSchema.parse(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"))).limits;
+    };
+    try {
+      // Let's Encrypt alone: the relay keeps its own 35.
+      expect(await limits(google)).toBeUndefined();
+      expect(await limits([...google, ...gts])).toEqual({ googleEnrollPerWeek: 5065 });
+      expect(await limits([...google, ...gts, "--gts-per-hour", "100"])).toEqual({ googleEnrollPerWeek: 8425 });
+      expect(await limits([...google, ...gts, "--enroll-per-week", "9000"])).toEqual({ googleEnrollPerWeek: 9000 });
+      expect(await limits([...google, "--enroll-per-week", "20"])).toEqual({ googleEnrollPerWeek: 20 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes --gts-per-hour, inside Google's 100 orders an hour and only with --gts-project", async () => {
+    const gts = (extra: string[]) => parseOptions(argv("update", ["--gts-project", "wink-gts-proj", ...extra])).opts;
+    for (const bad of ["0", "101", "1.5", "many"]) expect(() => validate(gts(["--gts-per-hour", bad])), bad).toThrow(/--gts-per-hour is a whole number from 1 to 100/);
+    expect(() => validate(parseOptions(argv("update", ["--gts-per-hour", "80"])).opts)).toThrow(/--gts-per-hour needs --gts-project/);
+    const opts = gts(["--gts-per-hour", "100"]);
+    expect(() => validate(opts)).not.toThrow();
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    try {
+      await realLocal("/r", dir).writeConfig(opts);
+      const written = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
+      expect(configSchema.parse(written).gts).toMatchObject({ project: "wink-gts-proj", perHour: 100 });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

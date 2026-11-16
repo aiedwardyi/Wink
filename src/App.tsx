@@ -52,7 +52,7 @@ import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestar
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { answerOnThread } from "@/lib/live-call/active";
-import { webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
+import { syncWebPushRooms, webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { isPhone, swipeChatIds } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe, type PhoneSwipePeek } from "@/lib/use-phone-swipe";
@@ -539,6 +539,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useEffect(() => {
     if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups, ...joinedReadState(latestJoined.current)]).catch(() => {});
   }, [readChats]);
+  // The PC drops a subscription it can't tie to a signed-in phone, so every open sends this one again.
+  useEffect(() => {
+    if (webPushSupported()) void syncWebPushRooms().catch(() => {});
+  }, []);
   // Reads on other devices show up here: no silent push, since Chrome bills each one and then shows its own alert.
   useEffect(() => {
     if (!webPushSupported()) return;

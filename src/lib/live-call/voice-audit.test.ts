@@ -38,6 +38,8 @@ function fakeAudio(): CallAudioPort & { hiss(): void } {
     async heal() { return true; },
     stopMic() {},
     play() {},
+    endTurn() {},
+    tune() {},
     flush() {},
     close() {},
     boop() {},

@@ -93,18 +93,24 @@ export class Accounts {
     }
     if (this.opts.isRevoked(opened.value.label)) return fail(403, "revoked");
 
-    const claims = await this.google(req.idToken, [this.opts.desktopClientId], now);
+    const claims = await this.desktop(req.idToken, now);
     if (!claims.ok) return claims;
     const nowSec = Math.floor(now / 1000);
-    // Skew is added so a clock a few minutes fast still accepts a token just issued on the PC.
-    if (nowSec - claims.token.iat > ACCOUNT_TOKEN_MAX_AGE_SEC + GOOGLE_CLOCK_SKEW_SEC) return fail(403, "token-stale");
-
     const subHash = googleSubHash(claims.token.sub);
     const account = signAccountTicket(
       { label: opened.value.label, subHash, iat: nowSec, exp: nowSec + (this.opts.ticketTtlSec ?? TICKET_TTL_SEC) },
       this.opts.operatorPrivateKey,
     );
     return { ok: true, label: opened.value.label, subHash, account };
+  }
+
+  /** Desktop-client token under 10 minutes old, for /v1/account and /v1/enroll/google. */
+  async desktop(idToken: string, now: number): Promise<GoogleCheck> {
+    const claims = await this.google(idToken, [this.opts.desktopClientId], now);
+    if (!claims.ok) return claims;
+    // Skew is added so a clock a few minutes fast still accepts a token just issued on the PC.
+    if (Math.floor(now / 1000) - claims.token.iat > ACCOUNT_TOKEN_MAX_AGE_SEC + GOOGLE_CLOCK_SKEW_SEC) return fail(403, "token-stale");
+    return claims;
   }
 
   /** Web-client token for GET /v1/pcs. Age is the token's own exp, not the 10 minute desktop window. */

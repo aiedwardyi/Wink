@@ -5,6 +5,7 @@ import type { GuestClient, GuestResult } from "./guest-client.ts";
 const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read|notice|older|stop))?$/;
 const REACT = /^\/api\/joined\/rooms\/([\w-]{1,64})\/entries\/([\w-]{1,64})\/reactions$/;
 const BOTS = /^\/api\/joined\/rooms\/([\w-]{1,64})\/bots(?:\/([\w-]{1,64}))?$/;
+const WORKS = /^\/api\/joined\/rooms\/([\w-]{1,64})\/people\/([\w-]{1,64})\/works$/;
 
 type Reply = { status: number; body: unknown };
 
@@ -19,7 +20,7 @@ const field = (body: unknown, name: string): unknown =>
   body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>)[name] : undefined;
 
 export async function joinedRoute(
-  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice" | "older" | "addBot" | "removeBot">, body: () => Promise<unknown>,
+  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice" | "older" | "addBot" | "removeBot" | "setWorks">, body: () => Promise<unknown>,
   query = new URLSearchParams(),
   localBot: (botId: string) => { id: string; name: string; color: string; mascotStyle?: string | null } | null = () => null,
   stopMine: (roomId: string) => Promise<void> = async () => {},
@@ -42,6 +43,8 @@ export async function joinedRoute(
     const bot = typeof botId === "string" ? localBot(botId) : null;
     return bot ? reply(await client.addBot(bots[1]!, bot.id, bot.name, bot.color, bot.mascotStyle), "bot") : { status: 404, body: { error: "no such bot" } };
   }
+  const works = WORKS.exec(path);
+  if (works) return method === "POST" ? reply(client.setWorks(works[1]!, works[2]!, field(await body(), "on")), "works") : notFound;
   const route = ROOM.exec(path);
   if (!route) return notFound;
   const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | "notice" | "older" | "stop" | undefined];

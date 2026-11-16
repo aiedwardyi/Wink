@@ -5,10 +5,11 @@
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import { FrameError, PERSON_NAME_MAX, PHONE_RELAY_OFF, PC_NAME_MAX, encodeFrame, hostFor, type PhoneRelayStatus, type TeamSnag } from "../../shared/relay-protocol.ts";
 import { ACCOUNT_TOKEN_MAX_AGE_MS, idTokenClaims, registerAccount } from "./account.ts";
-import { CertManager, type CertManagerOptions } from "./acme.ts";
+import { CertManager, SECOND_ACME_DIRECTORY, type CertManagerOptions } from "./acme.ts";
 import { RelayClient, defaultConnector, type RelayConnector } from "./client.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { CtWatch, crtShSource, type CtSource } from "./ct-watch.ts";
+import { requestEab } from "./eab.ts";
 import type { HttpsDeps } from "./https.ts";
 import type { PhoneRelay, PhoneRelayOptions, RelayAccountSource } from "./index.ts";
 import { RelayIngress, type IngressRejection } from "./ingress.ts";
@@ -158,6 +159,12 @@ class RelayRuntime {
       host,
       directories: config.acmeDirectories ?? [],
       accounts: config.acmeAccounts ?? {},
+      fallback: config.acmeDirectories?.length
+        ? undefined
+        : {
+            directory: SECOND_ACME_DIRECTORY,
+            externalAccount: () => requestEab({ base, identity, ticket: this.ticket, now: clock.now() }, this.deps.https),
+          },
       clock,
       target: ingress,
       onChange: () => this.update(),
@@ -344,8 +351,8 @@ class RelayRuntime {
       relayRttMs: connected ? link.rttMs : null,
       poolIdle: link.poolIdle,
       certNotAfter: cert.notAfter,
-      lastError: this.ctAlert ?? linkError ?? cert.error,
-      nextRetryAt: link.nextRetryAt,
+      lastError: this.ctAlert ?? linkError ?? (cert.error === "full" ? "relay-full" : cert.error),
+      nextRetryAt: link.nextRetryAt ?? cert.fullUntil,
     };
     if (connected && link.snags) next.snags = true;
     if (connected && link.reportOwner) next.reportOwner = link.reportOwner;

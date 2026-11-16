@@ -12,6 +12,9 @@ import { redactSecretsInText } from "./redact.ts";
 export const BOARD_DIR = "board";
 export const BOARD_KINDS = ["stuck", "fix", "handoff"] as const;
 export const BOARD_USER = "user";
+/** A post written on a team room turn starts its source_ref with this: people outside this PC shaped it. */
+export const ROOM_REF = "room:";
+export const fromRoom = (post: Pick<BoardPost, "source_ref">) => post.source_ref.startsWith(ROOM_REF);
 
 const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const;
 
@@ -111,6 +114,7 @@ export interface BoardSearch {
   /** Share of the query's words a post must hold; a matching error_sig always passes. */
   minShare?: number;
   limit?: number;
+  withoutRoom?: boolean;
 }
 
 export interface BoardOptions {
@@ -180,7 +184,8 @@ export function createBoard(options: BoardOptions) {
         pc_id: options.pcId(),
       };
       write(next);
-      const parent = next.kind === "fix" && next.parent_id ? posts().get(next.parent_id) : undefined;
+      // a room's fix stays a note; it never solves a post a call would be held on
+      const parent = next.kind === "fix" && next.parent_id && !fromRoom(next) ? posts().get(next.parent_id) : undefined;
       if (parent) solved(parent, next.fix || next.body, at);
       options.changed?.();
       return next;
@@ -206,7 +211,7 @@ export function createBoard(options: BoardOptions) {
       const words = boardWords(input.query);
       const minShare = input.minShare ?? 0;
       const scored = board.list().flatMap((post) => {
-        if (input.solvedOnly && (post.status !== "solved" || !post.fix)) return [];
+        if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
         const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
         const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
         const hits = words.filter((word) => held.has(word)).length;
@@ -263,5 +268,5 @@ export type Board = ReturnType<typeof createBoard>;
 export function boardLine(post: BoardPost, max = 300): string {
   const cut = (text: string) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
   const fix = post.fix ? `\nFix: ${cut(post.fix)}` : "";
-  return `[${post.id}] ${post.kind}, ${post.status}${post.project_id ? `, ${post.project_id}` : ""}: ${cut(post.title)}${post.body && post.body !== post.title ? `\n${cut(post.body)}` : ""}${fix}`;
+  return `[${post.id}] ${post.kind}, ${post.status}${fromRoom(post) ? ", from a team room" : ""}${post.project_id ? `, ${post.project_id}` : ""}: ${cut(post.title)}${post.body && post.body !== post.title ? `\n${cut(post.body)}` : ""}${fix}`;
 }
