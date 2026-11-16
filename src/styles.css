@@ -129,17 +129,24 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Symbols Nerd Font Mono", monospace;
 }
 
-/* The terminal opens and closes instantly, with no motion. */
 .orbit-terminal-overlay {
   transform: translateX(100%);
   visibility: hidden;
+  transition: transform 120ms ease-out, visibility 0s 120ms;
   pointer-events: none;
 }
 
 .orbit-terminal-overlay[data-open="true"] {
   transform: translateX(0);
   visibility: visible;
+  transition-delay: 0s;
+  animation: terminal-enter 120ms ease-out;
   pointer-events: auto;
+}
+
+@keyframes terminal-enter {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 :root[data-shape="soft"][data-skin^="tui"] {
