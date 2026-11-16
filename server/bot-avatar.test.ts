@@ -84,9 +84,9 @@ describe("mascot style ids", () => {
     expect(mascotStyleSchema.safeParse("cursor").success).toBe(false);
   });
 
-  it("keeps fifty-two stable artwork ids and offers Wink, brand, job, then engine icons", () => {
+  it("keeps fifty-two stable artwork ids and offers Wink, brand, then engine icons", () => {
     expect(BOT_AVATAR_IDS).toEqual(Array.from({ length: 52 }, (_, index) => `icon-${String(index + 1).padStart(2, "0")}`));
-    expect(BOT_AVATAR_PICKER_ORDER).toEqual([...WINK_ICON_IDS, ...BOT_AVATAR_IDS.slice(49), ...BOT_AVATAR_IDS.slice(36, 49)]);
+    expect(BOT_AVATAR_PICKER_ORDER).toEqual([...WINK_ICON_IDS, ...BOT_AVATAR_IDS.slice(49), ...BOT_AVATAR_IDS.slice(44, 49)]);
     expect([...EXTENDED_BOT_AVATAR_IDS]).toEqual(BOT_AVATAR_IDS.slice(35));
     for (const id of BOT_AVATAR_IDS) {
       expect(botAvatarChoiceSchema.parse(id)).toBe(id);
@@ -100,6 +100,14 @@ describe("mascot style ids", () => {
     expect(BOT_AVATAR_PICKER_ORDER.slice(WINK_ICON_IDS.length, WINK_ICON_IDS.length + 3)).toEqual(["icon-50", "icon-51", "icon-52"]);
     for (const id of ["icon-50", "icon-51", "icon-52"] as const) {
       expect(EXTENDED_BOT_AVATAR_IDS.has(id)).toBe(true);
+      expect(existsSync(new URL(`../public${botAvatarAssetPath(id)}`, import.meta.url))).toBe(true);
+    }
+  });
+
+  it("hides the job icons from the picker but still renders bots that use them", () => {
+    for (const id of ["icon-37", "icon-38", "icon-39", "icon-40", "icon-41", "icon-42", "icon-43", "icon-44"] as const) {
+      expect(BOT_AVATAR_PICKER_ORDER).not.toContain(id);
+      expect(botAvatarProfile({ mascotStyle: id, color: "red" }).mascotStyle).toBe(id);
       expect(existsSync(new URL(`../public${botAvatarAssetPath(id)}`, import.meta.url))).toBe(true);
     }
   });

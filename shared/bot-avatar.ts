@@ -213,7 +213,6 @@ export function nextWinkAvatar(bots: readonly { mascotStyle?: string | null; cre
 export const BOT_AVATAR_PICKER_ORDER = [
   ...WINK_ICON_IDS,
   "icon-50", "icon-51", "icon-52",
-  "icon-37", "icon-38", "icon-39", "icon-40", "icon-41", "icon-42", "icon-43", "icon-44",
   "icon-45", "icon-46", "icon-47", "icon-48", "icon-49",
 ] as const satisfies readonly BotAvatarId[];
 
