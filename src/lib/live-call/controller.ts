@@ -60,6 +60,8 @@ type Deps = {
   audio: CallAudioPort;
   post: (path: string, body: object) => Promise<Posted>;
   now?: () => number;
+  /** A call the bot rang for: the voice opens with this blocker, and a yes ends the call. */
+  opener?: string;
 };
 
 type ToolRun = (call: LiveCall, args: Record<string, unknown>, id: string) => void;
@@ -103,6 +105,13 @@ const IN_FLIGHT_MS = 3_000;
 const HANG_UP_WAIT_MS = 1_000;
 const GREETING = { en: "[Wink] The call just started. Say only \"Hey.\" or \"Hey, I'm here.\" in your calm, normal voice. Nothing else.", ko: "[Wink] The call just started. Say only \"응.\" or \"응, 나야.\" in your calm, normal voice. Nothing else." };
 const TONGUE = { en: "English", ko: "Korean" };
+// After the yes and the voice's reply, this much quiet ends a call the bot rang for.
+const CLOSE_MS = 2_000;
+// Long enough for a slow reply to start, or a stray sound to come back as words; silence after either still hangs up.
+const CLOSE_WAIT_MS = 10_000;
+// The voice is the bot calling, so it asks for itself: "I need you to...", never its own name.
+const openerLine = (note: string, app: "en" | "ko") =>
+  `[Wink] You are the caller: you rang them because you are stuck until they act: "${note}". In ${TONGUE[app]}, in first person, say what you need them to do in one or two short, plain sentences, like "I need you to sign in on Home so tonight's run can go." Then wait for their answer. Nothing else.`;
 const wrongTongue = (app: "en" | "ko") => `[Wink] Wrong language: speak only ${TONGUE[app]}. In ${TONGUE[app]}, ask them in a few words to say that again.`;
 const misheardMsg = (app: "en" | "ko") => `not sent: that line was in another language, so it is likely a mis-hear. In ${TONGUE[app]}, ask them in one short line to say that again`;
 // What the bot wrote after these answers them, not the person.
@@ -296,6 +305,8 @@ export class LiveCall {
   // The newest bot message in the chat, and the turn already answering a read-back ask from memory, which is thrown away.
   private newest?: string;
   private readNext = false;
+  private closing = false;
+  private closeTimer?: ReturnType<typeof setTimeout>;
 
   constructor(deps: Deps) {
     this.deps = deps;
@@ -307,6 +318,7 @@ export class LiveCall {
       }
       this.spokeAt = 0;
       this.turnHadAudio = true;
+      clearTimeout(this.closeTimer);
       this.refresh();
     };
     deps.audio.onIdle = () => {
@@ -314,6 +326,7 @@ export class LiveCall {
       this.pause();
       this.release();
       this.refresh();
+      if (this.closing) this.closeIn(CLOSE_MS);
     };
   }
 
@@ -375,6 +388,7 @@ export class LiveCall {
     if ((!this.connected && !this.early) || this.snapshot.muted) return;
     const speech = loud(pcm);
     if (speech) {
+      if (this.closing && !this.deps.audio.playing) this.closeIn(CLOSE_WAIT_MS);
       this.spokeAt = this.voiceAt = this.now();
       this.loudAt ||= this.spokeAt;
     }
@@ -435,7 +449,7 @@ export class LiveCall {
         this.early = undefined;
         for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
         // Sound from the tap may be a quick call or a click: the greeting waits a beat for his words, and goes only if none came.
-        if (!resumed) this.held.unshift({ text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
+        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
         if (early?.talked) this.pause();
         this.release();
       },
@@ -706,6 +720,8 @@ export class LiveCall {
     };
     const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, upto: this.stats.userLines, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
     this.pending = pending;
+    this.closing = false;
+    clearTimeout(this.closeTimer);
     this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
     if (yes) void this.answer(true);
   }
@@ -950,6 +966,12 @@ export class LiveCall {
     this.postLines([{ who: "user", text, at: this.now() }]);
     // Talk while it was told to be quiet is not for it.
     if (!this.snapshot.hushed && (!unsure || takesBack(text))) this.open.add(this.stats.userLines, text);
+    // Hanging up sends what is still open, so only a bare yes with nothing else open closes the call.
+    if (this.deps.opener && ended) {
+      this.closing = !this.pending && bareYes(text) && !this.open.text();
+      if (this.closing) this.closeIn(CLOSE_WAIT_MS);
+      else clearTimeout(this.closeTimer);
+    }
     if (ended && !unsure && !this.snapshot.hushed && !(this.card && asksToRepeat(text)) && readsBack(text) && this.readOut(req)) return;
     if (!this.pending || !ended || this.snapshot.hushed || offTongue) return;
     const reply = consentOf(text);
@@ -1255,6 +1277,11 @@ export class LiveCall {
     this.release();
   }
 
+  private closeIn(ms: number) {
+    clearTimeout(this.closeTimer);
+    this.closeTimer = setTimeout(() => this.end(), ms);
+  }
+
   private pause() {
     clearTimeout(this.gap);
     this.gap = setTimeout(() => {
@@ -1404,6 +1431,7 @@ export class LiveCall {
     clearTimeout(this.gap);
     clearInterval(this.micTimer);
     clearTimeout(this.readyTimer);
+    clearTimeout(this.closeTimer);
     this.deps.audio.close();
     const finish = (heard: LiveEngine | null) => {
       heard?.close();

@@ -120,6 +120,7 @@ import { codexCredit, codexCreditRows } from "./codex-credit.ts";
 import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
 import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
+import { createBotCalls } from "./bot-call.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
@@ -3030,6 +3031,13 @@ function roomAlert(alert: RoomAlert) {
 
 const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
+
+const botCalls = createBotCalls({
+  send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`)),
+  current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
+  chat: (threadId) => store.groupByThread(threadId)?.id,
+  skip: (threadId) => isHostedThread(store, threadId),
+});
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
@@ -7607,6 +7615,7 @@ const internalRoutes = createInternalRoutes({
   taskPacketForWrite,
   persistTaskPacket,
   notify,
+  botCalls,
   routines: routines!,
   delegationWatch,
   askHold,
@@ -8623,7 +8632,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
-    if (m && method === "POST") return await liveCall(req, res, m);
+    if (m && method === "POST") {
+      if (m[2] === "token") botCalls.answered(m[1]!);
+      return await liveCall(req, res, m);
+    }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);

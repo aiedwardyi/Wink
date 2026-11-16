@@ -50,7 +50,7 @@ const flush = () => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : new Pro
 /** The quiet a held line waits for after the voice talks. */
 const gap = () => vi.advanceTimersByTimeAsync(GAP_MS);
 
-function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000) {
+function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
@@ -60,6 +60,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
     engine: () => { const engine = new FakeEngine(); engines.push(engine); return engine; },
     audio,
     now,
+    opener,
     post: async (path, body) => {
       posts.push({ path, body });
       const hit = Object.entries(responses).find(([suffix]) => path.endsWith(suffix));
@@ -181,6 +182,121 @@ describe("LiveCall voice limit", () => {
     expect(audio.cues).toEqual([]);
     expect(posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines)).toEqual([expect.objectContaining({ who: "voice", text: "I'm out of voice for today. Keep typing, I'm still on it." })]);
     expect(posts.map((p) => p.path).filter((path) => !/\/call\/(token|lines|end)$/.test(path))).toEqual([]);
+  });
+});
+
+describe("LiveCall a bot rang for", () => {
+  const NOTE = "Sign in to Claude on Home so tonight's eval can run.";
+
+  async function rang(opener: string | null = NOTE) {
+    vi.useFakeTimers();
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(fn: (pcm: ArrayBuffer) => void) { frame = fn; } };
+    const s = setup({}, audio, () => 1_000, opener ?? undefined);
+    await s.call.start();
+    s.engine().events.ready();
+    return { ...s, audio, frame: (pcm: ArrayBuffer) => frame(pcm) };
+  }
+
+  async function exchange(s: Awaited<ReturnType<typeof rang>>, heard: string, said: string) {
+    s.engine().events.heard(heard);
+    s.engine().events.answering();
+    s.engine().events.said(said);
+    s.audio.onStart();
+    s.engine().events.turnDone();
+    s.audio.onIdle();
+    await flush();
+  }
+
+  it("opens with the blocker instead of a greeting", async () => {
+    const { engine } = await rang();
+    expect(engine().texts).toHaveLength(1);
+    expect(engine().texts[0]).toContain(`"${NOTE}"`);
+    expect(engine().texts[0]).toMatch(/^\[Wink\] You are the caller/);
+  });
+
+  it("has the voice say the blocker as the caller, in first person", async () => {
+    const { engine } = await rang();
+    const line = engine().texts[0]!;
+    expect(line).toContain("in first person");
+    expect(line).toContain(`"I need you to`);
+    expect(line).not.toMatch(/Nova (?:is|needs)/);
+    expect(engine().texts[0]).not.toContain("The call just started");
+  });
+
+  it("hangs up after their yes, the voice's reply and two quiet seconds", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    await exchange(s, "Okay.", "Thanks, see you there.");
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(s.call.state().status).not.toBe("ended");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(s.call.state().status).toBe("ended");
+  });
+
+  it("still hangs up when a stray sound after the yes brings no words", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    await exchange(s, "Okay.", "Thanks, see you there.");
+    s.frame(new Int16Array(640).fill(1_200).buffer);
+    await vi.advanceTimersByTimeAsync(9_900);
+    expect(s.call.state().status).not.toBe("ended");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(s.call.state().status).toBe("ended");
+  });
+
+  it("gives a slow voice ten seconds to start its reply after the yes", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    s.engine().events.heard("Okay.");
+    s.engine().events.turnDone();
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(s.call.state().status).not.toBe("ended");
+    s.engine().events.answering();
+    s.engine().events.said("Thanks.");
+    s.audio.onStart();
+    s.engine().events.turnDone();
+    s.audio.onIdle();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.call.state().status).toBe("ended");
+  });
+
+  it("stays on, sending nothing, when their okay brings new work", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    await exchange(s, "Okay, delete the logs.", "Delete all of them?");
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(s.call.state().status).not.toBe("ended");
+    expect(s.posts.some((p) => p.path === "/api/bots/b1/messages")).toBe(false);
+  });
+
+  it("stays on when the voice proposes an order after the yes", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    s.engine().events.heard("Okay.");
+    s.engine().events.turnDone();
+    s.engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Delete the logs." } }]);
+    s.audio.onStart();
+    s.audio.onIdle();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(s.call.state().status).not.toBe("ended");
+  });
+
+  it("stays on while they ask something back", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    await exchange(s, "Wait, which machine?", "The Home PC.");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s.call.state().status).toBe("listening");
+  });
+
+  it("leaves a plain call on after a yes", async () => {
+    const s = await rang(null);
+    expect(s.engine().texts[0]).toMatch(/^\[Wink\] The call just started/);
+    s.engine().events.turnDone();
+    await exchange(s, "Okay.", "Sure.");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s.call.state().status).toBe("listening");
   });
 });
 
