@@ -1760,6 +1760,8 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           touchTop.current = scrollRef.current?.scrollTop ?? 0;
         }}
         onTouchMove={(e) => {
+          // The chat swipe claims horizontal moves with preventDefault; they never scroll the transcript.
+          if (e.defaultPrevented) return;
           const y = e.touches[0]?.clientY ?? 0;
           if (y > touchY.current + 4) reaching.current = true;
           else {
