@@ -89,6 +89,9 @@ export class FakeRelay extends EventEmitter {
   /** Every byte the relay spliced, both directions. */
   readonly spliced: Buffer[] = [];
   readonly enrollBodies: string[] = [];
+  /** Without it, /v1/acme/eab answers 404 like a relay with no second CA. */
+  eabAnswer: ((body: string) => EnrollAnswer) | null = null;
+  readonly eabBodies: string[] = [];
   lookups = 0;
   private server: Server | null = null;
   private readonly controls = new Map<string, Control>();
@@ -371,6 +374,12 @@ export class FakeRelay extends EventEmitter {
         this.accountBodies.push(body);
         this.record("account");
         const answer = this.accountAnswer ? this.accountAnswer(body) : this.defaultAccount(body);
+        res.writeHead(answer.status, { "content-type": "application/json" }).end(answer.body);
+        return;
+      }
+      if (req.method === "POST" && req.url === "/v1/acme/eab" && this.eabAnswer) {
+        this.eabBodies.push(body);
+        const answer = this.eabAnswer(body);
         res.writeHead(answer.status, { "content-type": "application/json" }).end(answer.body);
         return;
       }

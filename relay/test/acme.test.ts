@@ -119,7 +119,7 @@ describe("relay certificate via ACME TLS-ALPN-01", () => {
     await expect(fetchAlpnCert(h.port)).rejects.toThrow();
     // Windows has no POSIX mode bits; the files still exist there.
     for (const file of ["account.key", "cert.key", "cert.pem"]) {
-      const { mode } = await stat(join(dataDir, "acme", file));
+      const { mode } = await stat(join(dataDir, "acme", `relay.${h.base}`, file));
       if (process.platform !== "win32") expect(mode & 0o077).toBe(0);
     }
     expect(h.relay.certManager!.notAfter).toBeGreaterThan(Date.now());

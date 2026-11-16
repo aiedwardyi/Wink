@@ -13,6 +13,7 @@ import { Accounts } from "./accounts.ts";
 import { CertManager, type AcmeClientLike } from "./acme.ts";
 import { BASE_RE } from "./config.ts";
 import { handleControl, handleData, type ChannelContext } from "./channels.ts";
+import { EabIssuer, type GtsOptions } from "./eab.ts";
 import { Enroller, TICKET_TTL_SEC } from "./enroll.ts";
 import { createApiServer } from "./http.ts";
 import { Hub } from "./hub.ts";
@@ -44,11 +45,13 @@ export const PHONE_ALPNS: readonly string[] = ["http/1.1", ALPN_ACME];
 export interface RelayOptions {
   /** Base domain, e.g. from config. Never hardcoded. */
   base: string;
+  /** Earlier bases still routed, each with its own relay.<base> certificate. */
+  oldBases?: string[];
   operatorPrivateKey: KeyObject;
   /** /var/lib/wink-relay in production. */
   dataDir: string;
   revokedLabelsFile?: string;
-  /** Fixed certificate for relay.<base>; when absent, `acme` must be set. */
+  /** Fixed certificate for every relay.<base>; when absent, `acme` must be set. */
   certificate?: { key: string | Buffer; cert: string | Buffer };
   acme?: {
     directoryUrl: string;
@@ -67,6 +70,8 @@ export interface RelayOptions {
   teamOwnerEmail?: string;
   /** Without this, /v1/stats answers 404. */
   stats?: StatsConfig;
+  /** Without this, /v1/acme/eab answers 404. */
+  gts?: GtsOptions;
   limits?: Partial<RelayLimits>;
   log?: Logger;
   now?: () => number;
@@ -89,7 +94,9 @@ export interface Relay {
 
 export async function createRelay(opts: RelayOptions): Promise<Relay> {
   const base = opts.base.toLowerCase();
+  const bases = [base, ...(opts.oldBases ?? []).map((old) => old.toLowerCase()).filter((old) => old !== base)];
   const relayHost = hostForRelay(base);
+  const relayHosts = bases.map(hostForRelay);
   const limits: RelayLimits = { ...DEFAULT_LIMITS, ...opts.limits };
   const log = opts.log ?? silentLogger;
   const now = opts.now ?? Date.now;
@@ -130,8 +137,8 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
     roomCodes,
   };
 
-  let serving: SecureContext | null = null;
-  let challenge: SecureContext | null = null;
+  const serving = new Map<string, SecureContext>();
+  const challenges = new Map<string, SecureContext>();
   const connLimit = new RateLimiter(limits.connPerIpPerSec, limits.connPerIpBurst, now);
   const authLimit = RateLimiter.perMinute(limits.controlAuthPerIpPerMin, now);
 
@@ -147,9 +154,10 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
         ticketTtlSec,
       })
     : undefined;
+  const eab = opts.gts ? new EabIssuer(opts.gts, { operatorPublicKey, isRevoked: (label) => revoked.has(label), log, now }) : undefined;
   const api = createApiServer({
-    base,
-    relayHost,
+    bases,
+    relayHosts,
     hub,
     enroller,
     accounts,
@@ -160,13 +168,17 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
     reports,
     roomCodes,
     stats,
+    eab,
     limits,
     log,
     now,
   });
 
   const relayTls = createTlsServer({
-    SNICallback: (name, cb) => (name === relayHost && serving ? cb(null, serving) : cb(new Error("no certificate"))),
+    SNICallback: (name, cb) => {
+      const context = serving.get(name);
+      return context ? cb(null, context) : cb(new Error("no certificate"));
+    },
     ALPNCallback: ({ protocols }) => protocols.find((p) => RELAY_ALPNS.includes(p)),
     handshakeTimeout: limits.tlsHandshakeTimeoutMs,
     minVersion: "TLSv1.2",
@@ -198,7 +210,10 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
   });
 
   const acmeTls = createTlsServer({
-    SNICallback: (name, cb) => (name === relayHost && challenge ? cb(null, challenge) : cb(new Error("no challenge"))),
+    SNICallback: (name, cb) => {
+      const context = challenges.get(name);
+      return context ? cb(null, context) : cb(new Error("no challenge"));
+    },
     ALPNProtocols: [ALPN_ACME],
     handshakeTimeout: limits.tlsHandshakeTimeoutMs,
   });
@@ -209,29 +224,33 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
   });
   acmeTls.on("tlsClientError", (_error: Error, socket: TLSSocket) => socket.destroy());
 
-  let certManager: CertManager | null = null;
+  const certManagers: CertManager[] = [];
   if (opts.certificate) {
-    serving = createSecureContext({ key: opts.certificate.key, cert: opts.certificate.cert });
+    const context = createSecureContext({ key: opts.certificate.key, cert: opts.certificate.cert });
+    for (const host of relayHosts) serving.set(host, context);
   } else if (opts.acme) {
-    certManager = new CertManager({
-      host: relayHost,
-      dir: join(opts.dataDir, "acme"),
-      directoryUrl: opts.acme.directoryUrl,
-      email: opts.acme.email,
-      termsOfServiceAgreed: opts.acme.termsOfServiceAgreed,
-      createClient: opts.acme.createClient,
-      log,
-      now,
-      onCertificate: (context) => {
-        serving = context;
-      },
-      onChallenge: (context) => {
-        challenge = context;
-      },
-    });
+    const acme = opts.acme;
+    for (const host of relayHosts) {
+      certManagers.push(
+        new CertManager({
+          host,
+          dir: join(opts.dataDir, "acme", host),
+          legacyDir: join(opts.dataDir, "acme"),
+          directoryUrl: acme.directoryUrl,
+          email: acme.email,
+          termsOfServiceAgreed: acme.termsOfServiceAgreed,
+          createClient: acme.createClient,
+          log,
+          now,
+          onCertificate: (context) => serving.set(host, context),
+          onChallenge: (context) => (context ? challenges.set(host, context) : challenges.delete(host)),
+        }),
+      );
+    }
   } else {
     throw new Error("either certificate or acme is required");
   }
+  const certManager = certManagers[0] ?? null;
 
   const sockets = new Set<Socket>();
   const pending = new Set<Socket>();
@@ -244,9 +263,9 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
       socket.destroy();
       return;
     }
-    if (sni === relayHost) {
+    if (relayHosts.includes(sni)) {
       if (alpn.includes(ALPN_ACME)) {
-        if (!challenge) {
+        if (!challenges.has(sni)) {
           socket.destroy();
           return;
         }
@@ -260,7 +279,7 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
         sendAlert(socket, ALERT_NO_APPLICATION_PROTOCOL);
         return;
       }
-      if (!serving) {
+      if (!serving.has(sni)) {
         log.log("relay-rejected", { peer, reason: "no-certificate" });
         sendAlert(socket, ALERT_INTERNAL_ERROR);
         return;
@@ -268,7 +287,7 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
       handOff(socket, buffered, relayTls);
       return;
     }
-    const label = labelFromHost(sni, base);
+    const label = bases.map((each) => labelFromHost(sni, each)).find((found) => found !== null) ?? null;
     if (!label) {
       log.log("phone-rejected", { peer, reason: "unknown-sni" });
       sendAlert(socket, ALERT_UNRECOGNIZED_NAME);
@@ -362,7 +381,7 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
       });
       revocationTimer = setInterval(() => void reloadRevocations(false), opts.revocationPollMs ?? 60_000);
       revocationTimer.unref();
-      await certManager?.start();
+      await Promise.all(certManagers.map((manager) => manager.start()));
       log.log("relay-listening", {});
       // SAFETY: the server listens on TCP, so address() is an AddressInfo, not a pipe name or null.
       return server.address() as AddressInfo;
@@ -373,7 +392,7 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
       closing = true;
       log.log("relay-draining", { count: hub.sessionCount });
       clearInterval(revocationTimer);
-      certManager?.stop();
+      for (const manager of certManagers) manager.stop();
       const listening = new Promise<void>((resolve) => server.close(() => resolve()));
       for (const socket of pending) socket.destroy();
       hub.drain();

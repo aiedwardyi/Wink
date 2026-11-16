@@ -430,7 +430,9 @@ describe("This PC", () => {
   });
 
   it.each([
-    ["abcdefghijklmnop.wink.edwardyi.dev", "wink.edwardyi.dev", "https://wink.edwardyi.dev/"],
+    ["abcdefghijklmnop.app.getwink.dev", "app.getwink.dev", "https://app.getwink.dev/"],
+    // A PC set up before the move keeps its own link: the old front door is gone.
+    ["abcdefghijklmnop.wink.edwardyi.dev", "abcd….wink.edwardyi.dev", "https://abcdefghijklmnop.wink.edwardyi.dev/"],
     [HOST, "abcd….wink.test", `https://${HOST}/`],
   ])("shows and copies the front door when it can open %s", async (host, shown, copied) => {
     const writeText = vi.fn().mockResolvedValue(undefined);

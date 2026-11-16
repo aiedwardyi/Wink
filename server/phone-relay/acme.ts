@@ -14,6 +14,7 @@ import acme from "acme-client";
 import { z } from "zod";
 
 import { CancelledError, sleep, type Cancel, type Clock } from "./clock.ts";
+import { EabFullError } from "./eab.ts";
 import {
   loadOrCreateAccountKey,
   newEcKeyPem,
@@ -29,9 +30,13 @@ import {
 } from "./store.ts";
 
 export const DEFAULT_ACME_DIRECTORY = acme.directory.letsencrypt.production;
+/** Google Trust Services: the second CA, tried when Let's Encrypt says rate-limited. */
+export const SECOND_ACME_DIRECTORY = "https://dv.acme-v02.api.pki.goog/directory";
 export const RENEW_CHECK_MS = 12 * 60 * 60_000;
-export const RETRY_BASE_MS = 60 * 60_000;
-export const RETRY_CAP_MS = 12 * 60 * 60_000;
+/** Let's Encrypt's asked-for backoff after a failed order: 1 min, 10 min, 100 min, then once a day. */
+export const RETRY_SCHEDULE_MS = [60_000, 10 * 60_000, 100 * 60_000, 24 * 60 * 60_000] as const;
+export const RETRY_BASE_MS = RETRY_SCHEDULE_MS[0];
+export const RETRY_CAP_MS = RETRY_SCHEDULE_MS[3];
 export const FALLBACK_AFTER_MS = 3 * 24 * 60 * 60_000;
 export const POLL_MS = 2_000;
 export const MAX_POLLS = 30;
@@ -52,6 +57,8 @@ interface RequestScope {
   httpAgent: HttpAgent;
   httpsAgent: HttpsAgent;
   signal: AbortSignal;
+  /** How long a CA that answered rateLimited says to wait. acme-client keeps only the detail text. */
+  limitedFor: number | null;
 }
 const requestScope = new AsyncLocalStorage<RequestScope>();
 acme.axios.defaults.timeout = REQUEST_TIMEOUT_MS;
@@ -72,6 +79,22 @@ acme.axios.interceptors.request.use((config) => {
   }
   return config;
 });
+const problemSchema = z.object({ type: z.literal("urn:ietf:params:acme:error:rateLimited") });
+const retryAfterSchema = z.string().trim().catch("");
+
+acme.axios.interceptors.response.use((response) => {
+  const scope = requestScope.getStore();
+  if (scope && (response.status === 429 || problemSchema.safeParse(response.data).success)) {
+    scope.limitedFor = retryAfterMs(retryAfterSchema.parse(response.headers["retry-after"]));
+  }
+  return response;
+});
+
+function retryAfterMs(text: string): number {
+  if (/^\d{1,9}$/.test(text)) return Number(text) * 1000;
+  const at = Date.parse(text);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : RETRY_BASE_MS;
+}
 
 export interface AcmeExternalAccount {
   kid: string;
@@ -100,6 +123,8 @@ export interface CertManagerOptions {
   clock: Clock;
   target: ChallengeTarget;
   onChange(): void;
+  /** Tried at once when the current CA answers rate-limited. `externalAccount` gives null when no key is offered. */
+  fallback?: { directory: string; externalAccount(): Promise<AcmeExternalAccount | null> };
   /** Tests only: allow a plain-http fake directory. */
   allowInsecureDirectories?: boolean;
   createClient?: (options: acme.ClientOptions) => acme.Client;
@@ -128,8 +153,10 @@ export interface CertSnapshot {
   notAfter: number | null;
   valid: boolean;
   issuing: boolean;
-  /** Last issuance failure, cleared by success. */
+  /** Last issuance failure, cleared by success. "full" when every CA is rate-limited. */
   error: string | null;
+  /** With error "full": when a CA takes orders again. */
+  fullUntil: number | null;
 }
 
 x509.cryptoProvider.set(crypto);
@@ -250,6 +277,12 @@ export class CertManager {
   private connected = false;
   private error: string | null = null;
   private directoryIndex = 0;
+  /** The last certificate came from the fallback CA, so renewals go there too. */
+  private onFallback = false;
+  private eab: AcmeExternalAccount | null = null;
+  /** Certificates this PC got from the configured CA and from the fallback. */
+  private issued: [number, number] = [0, 0];
+  private fullUntil: number | null = null;
   private failingSince: number | null = null;
   private failures = 0;
   private retryAt = 0;
@@ -267,6 +300,7 @@ export class CertManager {
       httpAgent: new HttpAgent({ keepAlive: false }),
       httpsAgent: new HttpsAgent({ keepAlive: false }),
       signal: this.abort.signal,
+      limitedFor: null,
     };
   }
 
@@ -277,6 +311,7 @@ export class CertManager {
       valid: this.cert !== null && this.cert.notBefore <= now && now < this.cert.notAfter,
       issuing: this.issuing,
       error: this.error,
+      fullUntil: this.fullUntil,
     };
   }
 
@@ -294,11 +329,16 @@ export class CertManager {
       this.directoryIndex = state.value.directoryIndex;
       this.failingSince = state.value.failingSince;
       this.failures = state.value.failures;
+      this.onFallback = state.value.onFallback === true && this.opts.fallback !== undefined;
+      this.eab = state.value.eab ?? null;
+      this.issued = state.value.issued ?? [0, 0];
+      this.retryAt = state.value.retryAt ?? 0;
     } else if (state.kind === "invalid") {
       // Logged, not this.error: Settings reads that as a failed renewal, and fresh retry state is safe.
       console.warn(`phone relay: ACME retry state not loaded (${state.reason})`);
     }
-    this.scheduleCheck(RENEW_CHECK_MS);
+    const wait = this.retryAt - this.clock.now();
+    this.scheduleCheck(wait > 0 ? Math.min(wait, RENEW_CHECK_MS) : RENEW_CHECK_MS);
   }
 
   /** The relay connection is up (true) or down. Issuance needs it for the challenge. */
@@ -355,6 +395,10 @@ export class CertManager {
         directoryIndex: this.directoryIndex,
         failingSince: this.failingSince,
         failures: this.failures,
+        onFallback: this.onFallback,
+        issued: this.issued,
+        retryAt: this.retryAt,
+        eab: this.eab ?? undefined,
       });
     } catch {
       /* the in-memory state still applies until restart */
@@ -367,8 +411,7 @@ export class CertManager {
     if (!cert || this.checkingRenewalInfo || this.issuing || this.due()) return;
     const certId = ariCertId(cert.certPem);
     if (!certId) return;
-    const directories = this.directories();
-    const directoryUrl = directories[this.directoryIndex % directories.length];
+    const directoryUrl = this.current();
     this.checkingRenewalInfo = true;
     try {
       const window = await requestScope.run(this.requests, async () => {
@@ -391,6 +434,12 @@ export class CertManager {
     this.maybeIssue();
   }
 
+  private current(): string {
+    if (this.onFallback && this.opts.fallback) return this.opts.fallback.directory;
+    const directories = this.directories();
+    return directories[this.directoryIndex % directories.length];
+  }
+
   private checkedUrl(raw: string): string {
     const url = new URL(raw);
     if (url.protocol !== "https:" && !this.opts.allowInsecureDirectories) throw new Error("ACME directory must be https");
@@ -401,10 +450,15 @@ export class CertManager {
     this.issuing = true;
     this.opts.onChange();
     const directories = this.directories();
-    const directory = directories[this.directoryIndex % directories.length];
+    const directory = this.current();
+    this.requests.limitedFor = null;
     try {
-      await requestScope.run(this.requests, () => this.order(directory));
+      const fallback = await requestScope.run(this.requests, () => this.orderOrFallback(directory));
+      this.onFallback = fallback;
+      this.issued[fallback ? 1 : 0]++;
+      console.log(`phone relay: certificates issued, first CA ${this.issued[0]}, second CA ${this.issued[1]}`);
       this.error = null;
+      this.fullUntil = null;
       this.failingSince = null;
       this.failures = 0;
       this.retryAt = 0;
@@ -413,14 +467,24 @@ export class CertManager {
     } catch (cause) {
       if (cause instanceof CancelledError || this.stopped) return;
       const now = this.clock.now();
+      if (cause instanceof FullError) {
+        this.error = "full";
+        this.fullUntil = cause.until;
+        this.retryAt = cause.until;
+        this.saveState();
+        this.scheduleCheck(Math.max(0, cause.until - now));
+        return;
+      }
+      this.fullUntil = null;
       this.error = `certificate request failed: ${message(cause)}`;
       this.failingSince ??= now;
-      if (now - this.failingSince >= FALLBACK_AFTER_MS && directories.length > 1) {
-        this.directoryIndex = (this.directoryIndex + 1) % directories.length;
+      if (now - this.failingSince >= FALLBACK_AFTER_MS && (directories.length > 1 || this.onFallback)) {
+        if (this.onFallback) this.onFallback = false;
+        else this.directoryIndex = (this.directoryIndex + 1) % directories.length;
         this.failingSince = now;
         this.failures = 0;
       }
-      const delay = Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** Math.min(this.failures, 10));
+      const delay = Math.max(RETRY_SCHEDULE_MS[Math.min(this.failures, RETRY_SCHEDULE_MS.length - 1)], this.requests.limitedFor ?? 0);
       this.failures++;
       this.retryAt = now + delay;
       this.saveState();
@@ -452,12 +516,48 @@ export class CertManager {
     return value;
   }
 
-  private async order(directoryUrl: string): Promise<void> {
+  /** Orders from `directory`; on a rate limit there, from the fallback CA. True when the fallback issued. */
+  private async orderOrFallback(directory: string): Promise<boolean> {
+    const fallback = this.opts.fallback;
+    try {
+      await this.order(directory, this.opts.accounts[directory]);
+      return directory === fallback?.directory;
+    } catch (cause) {
+      const limited = this.requests.limitedFor;
+      if (limited === null || !fallback) throw cause;
+      if (directory === fallback.directory) throw new FullError(this.until(limited));
+      let eab: AcmeExternalAccount | null;
+      try {
+        eab = this.eab ?? this.opts.accounts[fallback.directory]?.eab ?? (await this.step(fallback.externalAccount()));
+      } catch (refused) {
+        if (refused instanceof EabFullError) throw new FullError(Math.min(this.until(limited), refused.retryAt));
+        throw refused;
+      }
+      if (!eab) throw cause;
+      // One EAB key opens one account; keep it for this PC's account at that CA.
+      this.eab = eab;
+      this.saveState();
+      this.requests.limitedFor = null;
+      try {
+        await this.order(fallback.directory, { ...this.opts.accounts[fallback.directory], eab });
+      } catch (second) {
+        const again = this.requests.limitedFor;
+        if (again !== null) throw new FullError(Math.min(this.until(limited), this.until(again)));
+        throw second;
+      }
+      return true;
+    }
+  }
+
+  private until(waitMs: number): number {
+    return this.clock.now() + waitMs;
+  }
+
+  private async order(directoryUrl: string, account: AcmeAccountConfig | undefined): Promise<void> {
     const { dataDir, host } = this.opts;
     this.checkedUrl(directoryUrl);
     // Refuse before asking the CA, rather than lose older keys CT watch relies on.
     readKeyHistory(dataDir);
-    const account = this.opts.accounts[directoryUrl];
     const create = this.opts.createClient ?? ((options: acme.ClientOptions) => new acme.Client(options));
     const client = create({
       directoryUrl,
@@ -527,6 +627,12 @@ export class CertManager {
       if (this.stopped) throw new CancelledError();
     }
     throw new Error(`${what} still pending after ${MAX_POLLS} checks`);
+  }
+}
+
+class FullError extends Error {
+  constructor(readonly until: number) {
+    super("every CA is rate-limited");
   }
 }
 

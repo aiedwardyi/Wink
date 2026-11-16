@@ -287,12 +287,23 @@ export interface AcmeState {
   directoryIndex: number;
   failingSince: number | null;
   failures: number;
+  onFallback?: boolean;
+  /** No new order before this time, so a restart never skips the backoff. */
+  retryAt?: number;
+  /** Certificates from the configured CA and from the fallback. */
+  issued?: [number, number];
+  /** The fallback CA's EAB key, bound to this PC's account there. */
+  eab?: { kid: string; hmacKey: string };
 }
 
 const acmeStateSchema = z.object({
   directoryIndex: z.int().min(0),
   failingSince: z.number().nullable(),
   failures: z.int().min(0),
+  onFallback: z.boolean().optional(),
+  retryAt: z.number().optional(),
+  issued: z.tuple([z.int().min(0), z.int().min(0)]).optional(),
+  eab: z.object({ kid: z.string().min(1), hmacKey: z.string().min(1) }).optional(),
 });
 
 export function readAcmeState(dataDir: string): Loaded<AcmeState> {

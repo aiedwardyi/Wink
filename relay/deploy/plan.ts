@@ -40,6 +40,10 @@ export interface DeployOptions {
   teamOwnerEmail?: string;
   /** Written into wink-relay.config.json as stats.readKeySha256. */
   statsReadKeySha256?: string;
+  /** Written as oldBases: [oldBase]. Resources marked for it count as owned. */
+  oldBase?: string;
+  /** Written as gts.project. */
+  gtsProject?: string;
 }
 
 export interface AddressState {
@@ -145,6 +149,12 @@ export function validate(opts: DeployOptions): void {
   if (opts.statsReadKeySha256 !== undefined && !/^[a-f0-9]{64}$/.test(opts.statsReadKeySha256)) {
     throw new PlanError("invalid --stats-read-key-sha256");
   }
+  if (opts.oldBase !== undefined && (!BASE_RE.test(opts.oldBase) || opts.oldBase === opts.base)) {
+    throw new PlanError("invalid --old-base");
+  }
+  if (opts.gtsProject !== undefined && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(opts.gtsProject)) {
+    throw new PlanError("invalid --gts-project");
+  }
 }
 
 export function names(opts: Pick<DeployOptions, "prefix" | "addressName">) {
@@ -211,8 +221,9 @@ export function checkReusableAddress(opts: DeployOptions, address: AddressState)
   if (foreign.length > 0) throw new PlanError(`address ${address.name} is used by another resource`);
 }
 
-function checkOwned(base: string, what: string, resource: ResourceState): void {
-  if (resource.description !== ownerMarker(base)) {
+function checkOwned(opts: Pick<DeployOptions, "base" | "oldBase">, what: string, resource: ResourceState): void {
+  const markers = [opts.base, opts.oldBase].filter((base) => base !== undefined).map(ownerMarker);
+  if (!markers.includes(resource.description)) {
     throw new PlanError(`${what} ${resource.name} exists but is not owned by this service`);
   }
 }
@@ -285,7 +296,7 @@ export function planProvision(opts: DeployOptions, state: ProjectState): Step[] 
   for (const { name, action, ports, source, priority } of rules) {
     const existing = state.firewall[name];
     if (existing) {
-      checkOwned(opts.base, "firewall rule", existing);
+      checkOwned(opts, "firewall rule", existing);
       continue;
     }
     steps.push(
@@ -318,7 +329,7 @@ export function planProvision(opts: DeployOptions, state: ProjectState): Step[] 
   }
 
   if (state.instance) {
-    checkOwned(opts.base, "instance", state.instance);
+    checkOwned(opts, "instance", state.instance);
   } else {
     steps.push(
       g(
@@ -379,7 +390,7 @@ export function planUpdate(opts: DeployOptions, state: ProjectState): Step[] {
   validate(opts);
   if (!opts.acceptAcmeTerms) throw new PlanError("update needs --accept-acme-terms (CA subscriber agreement)");
   if (!state.instance) throw new PlanError(`instance ${names(opts).vm} not found in ${opts.project}`);
-  checkOwned(opts.base, "instance", state.instance);
+  checkOwned(opts, "instance", state.instance);
   return [
     ...installSteps(opts, Boolean(opts.operatorKeyFile)),
     { kind: "local", action: "healthz", detail: `https://relay.${opts.base}/v1/healthz` },
@@ -404,13 +415,13 @@ export function planPause(opts: DeployOptions, state: ProjectState, protect?: Ip
   }
 
   if (state.instance) {
-    checkOwned(opts.base, "instance", state.instance);
+    checkOwned(opts, "instance", state.instance);
     steps.push(g(["compute", "instances", "delete", n.vm, ...where(opts, "zone"), "--quiet"], true));
   }
   for (const name of firewallNames(opts)) {
     const rule = state.firewall[name];
     if (!rule) continue;
-    checkOwned(opts.base, "firewall rule", rule);
+    checkOwned(opts, "firewall rule", rule);
     steps.push(g(["compute", "firewall-rules", "delete", name, ...where(opts, "global"), "--quiet"], true));
   }
   if (state.address) {

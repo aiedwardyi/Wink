@@ -39,7 +39,7 @@ jobs:
 
           const clientId = (process.env.WINK_GOOGLE_WEB_CLIENT_ID ?? "").trim();
           const requested = (process.env.WINK_RELAY_BASE ?? "").trim();
-          const base = requested || "wink.edwardyi.dev";
+          const base = requested || "app.getwink.dev";
           const clientOk = /^[0-9A-Za-z_-]+(?:\.[0-9A-Za-z_-]+)*\.apps\.googleusercontent\.com$/.test(clientId);
           const baseOk = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(base);
           if (!clientOk) {
@@ -51,10 +51,10 @@ jobs:
             process.exit(1);
           }
           const relay = `https://relay.${base}`;
-          const page = readFileSync("site/signin/index.html", "utf8").replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", `https://*.${base}`);
+          const page = readFileSync("site/signin/index.html", "utf8").replaceAll("https://relay.app.getwink.dev", relay).replaceAll("https://*.app.getwink.dev", `https://*.${base}`);
           copyFileSync("public/app-icon.svg", "site/app-icon.svg");
           writeFileSync("site/signin/config.js", `globalThis.WINK_SIGNIN = ${JSON.stringify({ clientId, base })};\n`);
-          writeFileSync("site/CNAME", "wink.edwardyi.dev\n");
+          writeFileSync("site/CNAME", `${base}\n`);
           writeFileSync("site/signin/index.html", page);
           writeFileSync("site/index.html", page);
           EOF

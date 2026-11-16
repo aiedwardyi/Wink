@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { getCACertificates, setDefaultCACertificates, type TLSSocket } from "node:tls";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseOptions, plan } from "../deploy/cli.ts";
+import { configSchema } from "../src/config.ts";
 import {
   discover,
   execute,
@@ -423,7 +424,7 @@ describe("dry run and discovery", () => {
 
 const DESKTOP_CLIENT = "desktop-client.apps.googleusercontent.com";
 const WEB_CLIENT = "web-client.apps.googleusercontent.com";
-const SIGNIN_ORIGIN = "https://wink.edwardyi.dev";
+const SIGNIN_ORIGIN = "https://app.getwink.dev";
 
 describe("google deploy flags", () => {
   const argv = (action: string, extra: string[] = []) => [action, "--project", "wink-new-proj", "--base", BASE, "--dns-zone", "example.com", ...extra];
@@ -517,6 +518,40 @@ describe("google deploy flags", () => {
       expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"))).not.toHaveProperty("stats");
       await realLocal("/r", dir).writeConfig(parsed.opts);
       expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8")).stats).toEqual({ readKeySha256: hash });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("domain move flags", () => {
+  const NEW = "app.example.com";
+  const argv = (action: string, extra: string[] = []) => [action, "--project", "wink-new-proj", "--base", NEW, "--dns-zone", "example.com", ...extra];
+
+  it("updates a relay deployed under the old base only when --old-base names it", () => {
+    const parsed = parseOptions(argv("update", ["--old-base", BASE, "--accept-acme-terms", "--operator-key", "/keys/operator.key"]));
+    expect(parsed.opts.oldBase).toBe(BASE);
+    const state = deployedState("wink-new-proj", "34.64.0.10");
+    expect(lines(planUpdate(parsed.opts, state)).at(-1)).toContain(`https://relay.${NEW}/v1/healthz`);
+    expect(() => planUpdate({ ...parsed.opts, oldBase: undefined }, state)).toThrow(/not owned/);
+    expect(() => validate(parseOptions(argv("update", ["--old-base", NEW])).opts)).toThrow(/invalid --old-base/);
+    expect(() => validate(parseOptions(argv("update", ["--old-base", "Not A Base"])).opts)).toThrow(/invalid --old-base/);
+  });
+
+  it("writes oldBases and the gts project, and neither without the flags", async () => {
+    const parsed = parseOptions(argv("update", ["--old-base", BASE, "--gts-project", "wink-gts-proj"]));
+    expect(() => validate(parsed.opts)).not.toThrow();
+    expect(() => validate(parseOptions(argv("update", ["--gts-project", "Bad_Project"])).opts)).toThrow(/invalid --gts-project/);
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    try {
+      await realLocal("/r", dir).writeConfig(parseOptions(argv("update")).opts);
+      const plain = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
+      expect(plain).not.toHaveProperty("oldBases");
+      expect(plain).not.toHaveProperty("gts");
+      await realLocal("/r", dir).writeConfig(parsed.opts);
+      const written = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
+      expect(written).toMatchObject({ base: NEW, oldBases: [BASE], gts: { project: "wink-gts-proj" } });
+      expect(configSchema.parse(written).oldBases).toEqual([BASE]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
