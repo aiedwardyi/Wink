@@ -46,7 +46,7 @@ describe("configuration boundaries", () => {
     saveConfig(parseConfigPatch({ liveCall: { language: "ko" } }));
     expect(loadConfig().liveCall).toEqual({ voice: "Alnilam" });
     expect(["Kore", "Aoede", "Charon", "Achird"].map((voice) => parseStoredConfig({ liveCall: { voice } }).liveCall)).toEqual([{ voice: "Aoede" }, { voice: "Aoede" }, { voice: "Alnilam" }, { voice: "Alnilam" }]);
-    expect(parseStoredConfig({ liveCall: { voice: "Zephyr", language: "ko" } }).liveCall).toEqual({});
+    expect(parseStoredConfig({ liveCall: { voice: "Nova", language: "ko" } }).liveCall).toEqual({});
   });
 
   it("drops retired browser settings on read and patch", () => {

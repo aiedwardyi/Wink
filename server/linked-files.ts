@@ -57,6 +57,8 @@ export interface ServeLinkedFileOptions {
   remoteKey: string | undefined;
   /** A valid phone session on a relay request; see requestCredentials. */
   phoneSession?: boolean;
+  /** The phone a page's grant is minted for; this PC when unset. */
+  holder?: string;
   threadId: string;
   messages: readonly LinkedMessage[];
   deviceId: string;
@@ -341,24 +343,29 @@ function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, s
   });
 }
 
-function grant(threadId: string, filePath: string, expires = Date.now() + GRANT_MS): string {
-  return `${expires.toString(36)}.${createHmac("sha256", GRANT_KEY).update(`${threadId}\n${filePath}\n${expires}`).digest("base64url")}`;
+/** Who a page's grant was minted for: this PC, or the id of the phone that opened it. */
+export const PC_HOLDER = "pc";
+
+function grant(threadId: string, filePath: string, holder: string, expires = Date.now() + GRANT_MS): string {
+  return `${expires.toString(36)}.${holder}.${createHmac("sha256", GRANT_KEY).update(`${threadId}\n${filePath}\n${holder}\n${expires}`).digest("base64url")}`;
 }
 
 function grantValid(threadId: string, filePath: string, value: string): boolean {
-  const expires = Number.parseInt(value, 36);
-  if (!(expires > Date.now())) return false;
+  const [stamp = "", holder = ""] = value.split(".");
+  const expires = Number.parseInt(stamp, 36);
+  if (!(expires > Date.now()) || !/^[\w-]{1,64}$/.test(holder)) return false;
   const got = Buffer.from(value);
-  const want = Buffer.from(grant(threadId, filePath, expires));
+  const want = Buffer.from(grant(threadId, filePath, holder, expires));
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-/** `path` must be the parsed pathname the router matches, so `..` cannot carry a grant to another route. */
-export function linkedFileGrant(method: string | undefined, path: string): boolean {
+/** `path` must be the parsed pathname the router matches, so `..` cannot carry a grant to another route. `holds` says whether the grant's holder may use it here. */
+export function linkedFileGrant(method: string | undefined, path: string, holds: (holder: string) => boolean): boolean {
   const match = /^\/api\/threads\/([\w-]+)\/linked-file\/([^/]+)\/([^/]+)\//.exec(path);
   if (method !== "GET" || !match) return false;
   try {
-    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!);
+    const [, holder = ""] = match[3]!.split(".");
+    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!) && holds(holder);
   } catch {
     return false;
   }
@@ -470,7 +477,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   if (html && !scoped) {
-    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested)}/${pageBase(real).at.split("/").map(encodeURIComponent).join("/")}`, "cache-control": "private, no-store" });
+    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested, options.holder ?? PC_HOLDER)}/${pageBase(real).at.split("/").map(encodeURIComponent).join("/")}`, "cache-control": "private, no-store" });
     res.end();
     return;
   }

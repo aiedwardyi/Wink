@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CallLine, LiveVoice } from "../../../shared/live-call";
+import { liveVoiceNames, type CallLine, type LiveVoice } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
@@ -39,6 +39,8 @@ function fakeAudio(): Audio {
     stopMic() {},
     async heal() { return true; },
     play() { this.played += 1; },
+    endTurn() {},
+    tune() {},
     flush() { this.flushed += 1; this.playing = false; },
     close() { clearInterval(room); },
     boop() {},
@@ -552,7 +554,7 @@ describe("9 quiet means quiet", () => {
     ["Aoede", "Wink", "I told Peter to say hey when he arrives."], ["Aoede", "Wink", "Jennings is meeting us downstairs."], ["Aoede", "Wink", "피터야, hey라고 말해 줘."], ["Aoede", "Wink", "제니퍼, 피터가 곧 온대."], ["Aoede", "Wink", "Hola, hey, ¿cómo estás?"],
   ];
   const WAKE: Array<[LiveVoice, string]> = [["Aoede", "Wink?"], ["Aoede", "Hey Wink."], ["Aoede", "Jenn, are you there?"], ["Aoede", "Jennifer, you can talk now."], ["Alnilam", "Eddie?"], ["Alnilam", "에디야"], ["Erinome", "아델, 이제 말해도 돼."]];
-  const names = (voice: LiveVoice) => ({ Aoede: ["Jenn"], Alnilam: ["Eddie"], Erinome: ["Adele", "아델"] })[voice];
+  const names = (voice: LiveVoice) => liveVoiceNames(voice);
 
   it("every quiet ask in the audits hushes, extra words and all", () => {
     expect(QUIET.filter((line) => !guard.asksForQuiet(line, "Wink", ["Jenn"]))).toEqual([]);

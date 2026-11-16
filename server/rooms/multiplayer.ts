@@ -15,13 +15,24 @@ export function askNote(askId: string | undefined, botName: string, riders: read
   return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
-export const COLLAB_LINE = "Any member's request here is collab work for this team: help them as you would your owner, and never refuse because they aren't your owner.";
+/** A teammate's ask as a lane may hand it off: who asked, in their own words. */
+export function laneAsk(askId: string): { asker: string; ask: string } | null {
+  const ask = askById(askId);
+  const entry = ask && roomEntry(ask.roomId, ask.entryId);
+  return entry ? { asker: entry.author.name, ask: entry.text } : null;
+}
+
+/** `refusal` is what the bot says when someone read-only asks it to do more than read. */
+export const collabLine = (refusal: string) =>
+  `Any member's request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "${refusal}"`;
+
+export const COLLAB_LINE = collabLine("The host has to turn this on for you.");
 
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {
   if (!group.hosted) return "";
   try {
     const people = roomPeople(group.hosted.roomId);
-    const names = people.map((person) => person.name);
+    const names = people.map((person) => (person.works ? person.name : `${person.name} (read-only)`));
     const line = names.length ? `Teammates in this room: ${names.join(", ")}. ${COLLAB_LINE}` : "";
     const bots = teamBots(group.hosted.roomId).flatMap((bot) => {
       const owner = people.find((person) => person.id === bot.owner);

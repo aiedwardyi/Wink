@@ -1,8 +1,8 @@
 // relay.<base> HTTP API over the outer TLS, ALPN http/1.1 (design sections 4 and 7):
 // GET /v1/healthz, GET /v1/status/<label>, POST /v1/enroll,
-// and, when config.google is set, POST /v1/account and GET /v1/pcs,
+// and, when config.google is set, POST /v1/enroll/google, POST /v1/account and GET /v1/pcs,
 // plus GET /v1/team and POST /v1/team/snags/{claim,ack} when teamOwnerEmail is set too,
-// GET /v1/room-codes/<code>,
+// GET /v1/room-codes/<code>, POST /v1/acme/eab when config.gts is set,
 // and, when config.stats is set, POST /v1/stats and GET /v1/stats/day/<date>.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -13,7 +13,9 @@ import { z } from "zod";
 import { LABEL_RE, ROOM_CODE_RE, SNAG_ID_RE, hostFor } from "../../shared/relay-protocol.ts";
 import { STATS_MAX_BYTES, STATS_MAX_INFLATED } from "../../shared/usage-stats.ts";
 import { BAD_ACCOUNT_REQUEST, accountRequestSchema, type Accounts } from "./accounts.ts";
+import { BAD_EAB_REQUEST, eabRequestSchema, type EabIssuer } from "./eab.ts";
 import { BAD_REQUEST, enrollRequestSchema, type Enroller } from "./enroll.ts";
+import { BAD_GOOGLE_ENROLL, googleEnrollRequestSchema, type GoogleEnroller } from "./google-enroll.ts";
 import type { Hub } from "./hub.ts";
 import { RateLimiter, type RelayLimits } from "./limits.ts";
 import type { Logger } from "./log.ts";
@@ -26,13 +28,16 @@ import type { RoomCodeStore } from "./room-codes.ts";
 import type { StatsStore } from "./stats.ts";
 
 export interface ApiOptions {
-  base: string;
-  relayHost: string;
+  /** Every served base, new first. */
+  bases: string[];
+  relayHosts: string[];
   hub: Hub;
   enroller: Enroller;
   /** Set together. Without them, /v1/account and /v1/pcs are 404. */
   accounts?: Accounts;
   signinOrigin?: string;
+  /** Set with `accounts`. Without it, /v1/enroll/google is 404. */
+  googleEnroller?: GoogleEnroller;
   /** Set together, and only with `accounts`. Without them, /v1/team is 404. */
   team?: TeamLog;
   teamOwnerEmail?: string;
@@ -42,6 +47,8 @@ export interface ApiOptions {
   roomCodes?: RoomCodeStore;
   /** Without it, /v1/stats is 404. */
   stats?: StatsStore;
+  /** Without it, /v1/acme/eab is 404. */
+  eab?: EabIssuer;
   limits: RelayLimits;
   log: Logger;
   now: () => number;
@@ -126,6 +133,7 @@ function drain(req: IncomingMessage): Promise<void> {
 export function createApiServer(opts: ApiOptions): Server {
   const { hub, limits, log } = opts;
   const enrollLimit = RateLimiter.perHour(limits.enrollPerIpPerHour, opts.now);
+  const eabLimit = RateLimiter.perHour(limits.enrollPerIpPerHour, opts.now);
   const accountLimit = RateLimiter.perHour(limits.accountPerIpPerHour, opts.now);
   const pcsLimit = RateLimiter.perMinute(limits.pcsPerIpPerMin, opts.now);
   const statusLimit = RateLimiter.perMinute(limits.statusPerIpPerMin, opts.now);
@@ -135,7 +143,7 @@ export function createApiServer(opts: ApiOptions): Server {
   const roomCodeAll = RateLimiter.perHour(limits.roomCodeLookupsPerHour, opts.now);
   const statsLimit = RateLimiter.perHour(limits.statsPerIpPerHour, opts.now);
   const statsReadLimit = RateLimiter.perMinute(limits.statsReadsPerIpPerMin, opts.now);
-  const { accounts, signinOrigin, team, teamOwnerEmail, snags, stats } = opts;
+  const { accounts, googleEnroller, signinOrigin, team, teamOwnerEmail, snags, stats } = opts;
 
   function directoryCors(origin: string | undefined) {
     const headers: Record<string, string> = {};
@@ -164,7 +172,7 @@ export function createApiServer(opts: ApiOptions): Server {
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const host = (req.headers.host ?? "").toLowerCase().replace(/:443$/, "");
-    if (host !== opts.relayHost) {
+    if (!opts.relayHosts.includes(host)) {
       reply(res, 421, { error: "misdirected" });
       return;
     }
@@ -186,7 +194,7 @@ export function createApiServer(opts: ApiOptions): Server {
       const origin = req.headers.origin;
       const cors: Record<string, string> = {};
       cors.vary = "Origin";
-      if (origin === `https://${hostFor(label, opts.base)}`) cors["access-control-allow-origin"] = origin;
+      if (origin && opts.bases.some((base) => origin === `https://${hostFor(label, base)}`)) cors["access-control-allow-origin"] = origin;
       const { online, since } = hub.status(label);
       return reply(res, 200, { online, since }, cors);
     }
@@ -224,6 +232,62 @@ export function createApiServer(opts: ApiOptions): Server {
       }
       log.log("enrolled", { label: result.label, peer: peerPrefix(req.socket.remoteAddress) });
       return reply(res, 200, { ticket: result.ticket });
+    }
+
+    if (opts.eab && url === "/v1/acme/eab") {
+      if (req.method !== "POST") return reply(res, 405, { error: "method" });
+      if (!eabLimit.take(ip)) {
+        log.log("eab-rejected", { reason: "rate-limited" });
+        return reply(res, 429, { error: "rate-limited" });
+      }
+      if (!/^application\/json(;|$)/i.test(req.headers["content-type"] ?? "")) {
+        return reply(res, 415, { error: "content-type" });
+      }
+      const body = await readBody(req, limits.maxBodyBytes);
+      if (!body) return reply(res, 413, { error: "too-large" });
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        return reply(res, 400, { error: "bad-request" });
+      }
+      const request = eabRequestSchema.safeParse(parsed);
+      const result = request.success ? await opts.eab.issue(request.data) : BAD_EAB_REQUEST;
+      if (!result.ok) {
+        log.log("eab-rejected", { reason: result.error });
+        if (result.retryAfter === undefined) return reply(res, result.status, { error: result.error });
+        return reply(res, result.status, { error: result.error, retryAfter: result.retryAfter }, { "retry-after": String(result.retryAfter) });
+      }
+      return reply(res, 200, { kid: result.kid, hmacKey: result.hmacKey });
+    }
+
+    if (googleEnroller && url === "/v1/enroll/google") {
+      if (req.method !== "POST") return reply(res, 405, { error: "method" });
+      const peer = peerPrefix(req.socket.remoteAddress);
+      if (!enrollLimit.take(ip)) {
+        log.log("google-enroll-rejected", { peer, reason: "rate-limited" });
+        return reply(res, 429, { error: "rate-limited" });
+      }
+      if (!/^application\/json(;|$)/i.test(req.headers["content-type"] ?? "")) {
+        return reply(res, 415, { error: "content-type" });
+      }
+      const body = await readBody(req, ACCOUNT_MAX_BODY);
+      if (!body) return reply(res, 413, { error: "too-large" });
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        return reply(res, 400, { error: "bad-request" });
+      }
+      const request = googleEnrollRequestSchema.safeParse(parsed);
+      const result = request.success ? await googleEnroller.enroll(request.data) : BAD_GOOGLE_ENROLL;
+      if (!result.ok) {
+        log.log("google-enroll-rejected", { peer, reason: result.error });
+        if (result.retryAfter === undefined) return reply(res, result.status, { error: result.error });
+        return reply(res, result.status, { error: result.error, retryAfter: result.retryAfter }, { "retry-after": String(result.retryAfter) });
+      }
+      log.log("google-enrolled", { label: result.label, peer, reason: result.fresh ? "new" : "again" });
+      return reply(res, 200, { ticket: result.ticket, account: result.account });
     }
 
     if (stats && url === "/v1/stats") {

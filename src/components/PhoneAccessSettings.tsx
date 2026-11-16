@@ -29,6 +29,8 @@ export interface RelayStatus {
   lastError: string | null;
   nextRetryAt: number | null;
   problem: RelayProblem | null;
+  /** No relay saved, but this PC can join the team relay with its Google sign-in. */
+  joinable?: boolean;
 }
 
 interface Phone {
@@ -40,7 +42,7 @@ interface Phone {
 
 const STATUS_POLL_MS = 3_000;
 // The sign-in page lists only PCs on its own relay base.
-const FRONT_DOOR = "wink.edwardyi.dev";
+const FRONT_DOOR = "app.getwink.dev";
 
 const PROBLEM = {
   superseded: "settings.phoneAccess.problem.superseded",
@@ -224,6 +226,16 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       },
       setupError,
     );
+  const joinWithGoogle = () =>
+    run(
+      async () => {
+        setStatus(await request("/api/phone-relay/google-enroll", { method: "POST" }));
+      },
+      (cause) => {
+        onNoRelay();
+        return t(cause instanceof Error && cause.message === "relay-full" ? "settings.devices.reachFull" : "settings.devices.reachUnavailable");
+      },
+    );
   const remove = (phone: Phone) =>
     run(
       async () => {
@@ -249,9 +261,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     if (failure) setError(t(failure));
   };
   const configured = status?.configured === true;
+  const joinable = !configured && status?.joinable === true;
   const confirm = () => {
     setAsking(false);
-    void save(true);
+    void (joinable ? joinWithGoogle() : save(true));
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
@@ -297,7 +310,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   );
 
   // Without a relay a sign-in cannot turn this on: the switch opens the other ways instead.
-  const signedOut = known && configured && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  const signedOut = known && (configured || joinable) && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
   const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
   const toggle = (
     <button
@@ -309,7 +322,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       onClick={() => {
         if (enabled) return void save(false);
         // No relay: no one sent a setup code, so go to the other ways to connect.
-        if (!configured) return void onNoRelay();
+        if (!configured && !joinable) return void onNoRelay();
         setAsking(true);
       }}
       className={cnSwitch(enabled)}
@@ -326,7 +339,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const control = !known
     ? <span data-switch-pending="" aria-hidden="true" className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-control motion-reduce:animate-none" />
     : enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
-  const sub = enabled ? google?.email : unavailable || (known && !configured) ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
+  const sub = enabled ? google?.email : unavailable || (known && !configured && !joinable) ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);
   const day = (ms: number) => new Date(ms).toLocaleDateString(tag, { month: "short", day: "numeric" });

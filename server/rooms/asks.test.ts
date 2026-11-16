@@ -6,10 +6,10 @@ import { DATA_DIR } from "../config.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation } from "../steer-queue.ts";
 import { Store } from "../store.ts";
 import {
-  admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, createAsk, endAsk, failInterruptedAsks, hostedTurnRefused,
-  revalidatePersonAsks, roomAsks, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps,
+  admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, createAsk, endAsk, failInterruptedAsks, handOffRefused, hostedTurnRefused,
+  revalidatePersonAsks, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps,
 } from "./asks.ts";
-import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, setPersonWorks, type RoomPerson } from "./db.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -185,5 +185,40 @@ describe("held asks", () => {
     expect(admitAsk(first.id, "work")).toMatchObject({ state: "queued" });
     expect(admitAsk(second.id, "work")).toMatchObject({ state: "queued" });
     expect(deps.dispatch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a lane's hand-off", () => {
+  const handedOff = (asker: RoomPerson | "host") => {
+    const asked = ask(asker);
+    expect(startAsk(asked.id)).toBe(true);
+    settleAsk(asked.id, true);
+    return asked.id;
+  };
+
+  it("starts while its asker is still in the room with work on", () => {
+    setPersonWorks(group.hosted.roomId, mina.id, true);
+    expect(handOffRefused(handedOff(mina))).toBe(false);
+    expect(handOffRefused(handedOff("host"))).toBe(false);
+    expect(terminal()).toEqual([]);
+  });
+
+  it("drops once the host turns its asker's work switch off", () => {
+    setPersonWorks(group.hosted.roomId, mina.id, true);
+    const id = handedOff(mina);
+    setPersonWorks(group.hosted.roomId, mina.id, false);
+    expect(handOffRefused(id)).toBe(true);
+    expect(terminal()).toEqual(['Wink can\'t take requests from you yet. Edward has to turn on "Can make bots work" for you.']);
+  });
+
+  it("drops once its asker is removed", async () => {
+    setPersonWorks(group.hosted.roomId, mina.id, true);
+    const id = handedOff(mina);
+    const { DatabaseSync } = await import("node:sqlite");
+    const raw = new DatabaseSync(`${DATA_DIR}/rooms.db`);
+    raw.prepare("DELETE FROM people WHERE id = ?").run(mina.id);
+    raw.close();
+    expect(handOffRefused(id)).toBe(true);
+    expect(terminal()).toEqual(["Cancelled."]);
   });
 });

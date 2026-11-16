@@ -59,7 +59,7 @@ describe("thread log caps", () => {
       limitWaits: { cancel: noop }, stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop },
       lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegationsFrom: noop, commsBus: {},
       computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop },
-      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), groupIsWorking: () => false, json: noop,
+      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), groupIsWorking: () => false, json: noop, rooms: undefined,
       EVENTS_DIR, NATIVE_DIR, join, unlinkSync, ...rotatingLog,
     };
     const invoke = new Function(...Object.keys(deps), `${javascript}\nreturn invoke;`)(...Object.values(deps));

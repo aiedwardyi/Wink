@@ -40,6 +40,22 @@ export interface DeployOptions {
   teamOwnerEmail?: string;
   /** Written into wink-relay.config.json as stats.readKeySha256. */
   statsReadKeySha256?: string;
+  /** Written as oldBases: [oldBase]. Resources marked for it count as owned. */
+  oldBase?: string;
+  /** Written as gts.project. */
+  gtsProject?: string;
+  /** Written as gts.perHour: PCs an hour that get a Google Trust Services key. */
+  gtsPerHour?: number;
+  /** Written as limits.googleEnrollPerWeek: new PCs a week through Google. Each one needs a certificate. */
+  enrollPerWeek?: number;
+}
+
+/** Under the 100 new orders an hour Google allows a project, leaving room for retries. */
+export const GTS_PER_HOUR = 60;
+
+/** Certificates a week: Let's Encrypt's 50 for the registered domain, plus Google Trust Services at its hourly rate when it is on. */
+export function certsPerWeek(opts: Pick<DeployOptions, "gtsProject" | "gtsPerHour">): number {
+  return 50 + (opts.gtsProject ? (opts.gtsPerHour ?? GTS_PER_HOUR) * 168 : 0);
 }
 
 export interface AddressState {
@@ -145,6 +161,25 @@ export function validate(opts: DeployOptions): void {
   if (opts.statsReadKeySha256 !== undefined && !/^[a-f0-9]{64}$/.test(opts.statsReadKeySha256)) {
     throw new PlanError("invalid --stats-read-key-sha256");
   }
+  if (opts.oldBase !== undefined && (!BASE_RE.test(opts.oldBase) || opts.oldBase === opts.base)) {
+    throw new PlanError("invalid --old-base");
+  }
+  if (opts.gtsProject !== undefined && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(opts.gtsProject)) {
+    throw new PlanError("invalid --gts-project");
+  }
+  if (opts.gtsPerHour !== undefined) {
+    if (opts.gtsProject === undefined) throw new PlanError("--gts-per-hour needs --gts-project");
+    if (!Number.isInteger(opts.gtsPerHour) || opts.gtsPerHour < 1 || opts.gtsPerHour > 100) {
+      throw new PlanError("--gts-per-hour is a whole number from 1 to 100");
+    }
+  }
+  if (opts.enrollPerWeek !== undefined) {
+    if (!opts.google) throw new PlanError("--enroll-per-week needs the Google flags");
+    const most = certsPerWeek(opts);
+    if (!Number.isInteger(opts.enrollPerWeek) || opts.enrollPerWeek < 1 || opts.enrollPerWeek > most) {
+      throw new PlanError(`--enroll-per-week is a whole number from 1 to ${most}, what the certificate providers issue in a week`);
+    }
+  }
 }
 
 export function names(opts: Pick<DeployOptions, "prefix" | "addressName">) {
@@ -211,10 +246,15 @@ export function checkReusableAddress(opts: DeployOptions, address: AddressState)
   if (foreign.length > 0) throw new PlanError(`address ${address.name} is used by another resource`);
 }
 
-function checkOwned(base: string, what: string, resource: ResourceState): void {
-  if (resource.description !== ownerMarker(base)) {
+function checkOwned(opts: Pick<DeployOptions, "base" | "oldBase">, what: string, resource: ResourceState): void {
+  const markers = [opts.base, opts.oldBase].filter((base) => base !== undefined).map(ownerMarker);
+  if (!markers.includes(resource.description)) {
     throw new PlanError(`${what} ${resource.name} exists but is not owned by this service`);
   }
+}
+
+function oneBaseOnly(opts: Pick<DeployOptions, "oldBase">): void {
+  if (opts.oldBase !== undefined) throw new PlanError("--old-base is for provision and update; pause and move change DNS for --base only");
 }
 
 /** Steps that copy the build to the VM and (re)start the service. */
@@ -285,7 +325,7 @@ export function planProvision(opts: DeployOptions, state: ProjectState): Step[] 
   for (const { name, action, ports, source, priority } of rules) {
     const existing = state.firewall[name];
     if (existing) {
-      checkOwned(opts.base, "firewall rule", existing);
+      checkOwned(opts, "firewall rule", existing);
       continue;
     }
     steps.push(
@@ -318,7 +358,7 @@ export function planProvision(opts: DeployOptions, state: ProjectState): Step[] 
   }
 
   if (state.instance) {
-    checkOwned(opts.base, "instance", state.instance);
+    checkOwned(opts, "instance", state.instance);
   } else {
     steps.push(
       g(
@@ -379,7 +419,7 @@ export function planUpdate(opts: DeployOptions, state: ProjectState): Step[] {
   validate(opts);
   if (!opts.acceptAcmeTerms) throw new PlanError("update needs --accept-acme-terms (CA subscriber agreement)");
   if (!state.instance) throw new PlanError(`instance ${names(opts).vm} not found in ${opts.project}`);
-  checkOwned(opts.base, "instance", state.instance);
+  checkOwned(opts, "instance", state.instance);
   return [
     ...installSteps(opts, Boolean(opts.operatorKeyFile)),
     { kind: "local", action: "healthz", detail: `https://relay.${opts.base}/v1/healthz` },
@@ -392,6 +432,7 @@ export function planUpdate(opts: DeployOptions, state: ProjectState): Step[] {
  */
 export function planPause(opts: DeployOptions, state: ProjectState, protect?: IpRef): Step[] {
   validate(opts);
+  oneBaseOnly(opts);
   const n = names(opts);
   const steps: Step[] = [];
   const oldIp = state.address?.ip ?? state.instance?.ip;
@@ -404,13 +445,13 @@ export function planPause(opts: DeployOptions, state: ProjectState, protect?: Ip
   }
 
   if (state.instance) {
-    checkOwned(opts.base, "instance", state.instance);
+    checkOwned(opts, "instance", state.instance);
     steps.push(g(["compute", "instances", "delete", n.vm, ...where(opts, "zone"), "--quiet"], true));
   }
   for (const name of firewallNames(opts)) {
     const rule = state.firewall[name];
     if (!rule) continue;
-    checkOwned(opts.base, "firewall rule", rule);
+    checkOwned(opts, "firewall rule", rule);
     steps.push(g(["compute", "firewall-rules", "delete", name, ...where(opts, "global"), "--quiet"], true));
   }
   if (state.address) {
@@ -433,6 +474,7 @@ export function planMove(
   oldState: ProjectState,
 ): Step[] {
   if (fromProject === opts.project) throw new PlanError("--from-project must differ from --project");
+  oneBaseOnly(opts);
   const oldOpts = { ...opts, project: fromProject };
   validate(oldOpts);
   const provision = planProvision(opts, newState);

@@ -7,6 +7,7 @@ import type { HarnessHandler } from "../early-listen.ts";
 import type { PhoneRelayStatus, TeamSnag } from "../../shared/relay-protocol.ts";
 import type { AcmeAccountConfig } from "./acme.ts";
 import { enrollWith } from "./enroll.ts";
+import { enrollWithGoogle, type GoogleEnrollOptions, type GoogleJoinResult } from "./google-enroll.ts";
 import { createPhoneRelay, defaultDeps } from "./runtime.ts";
 
 export type { AcmeAccountConfig, AcmeExternalAccount } from "./acme.ts";
@@ -83,4 +84,9 @@ export function startPhoneRelay(options: PhoneRelayOptions): PhoneRelay {
  */
 export function enrollPhoneRelay(options: PhoneRelayEnrollOptions): Promise<void> {
   return enrollWith(options);
+}
+
+/** Trades this PC's Google sign-in for a ticket and an account ticket at https://relay.<base>/v1/enroll/google. */
+export function enrollPhoneRelayWithGoogle(options: GoogleEnrollOptions): Promise<GoogleJoinResult> {
+  return enrollWithGoogle(options);
 }

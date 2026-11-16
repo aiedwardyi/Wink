@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { chipEffortLabel, chipEffortShortLabel } from "@/lib/model-chip";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
+import { lateReportText } from "@/lib/late-report";
 import { isPhone, PHONE_QUERY } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useSheetSwipe } from "@/lib/use-phone-swipe";
@@ -135,7 +136,7 @@ export function WorkerRow({ run, state, live, onOpenTerminalPane, open: expanded
           {run.notes.map(({ id, note }) => (
             <div key={id} className="whitespace-pre-wrap break-words">
               {note.status && <div className="font-medium text-ink">{t(NOTE_STATUS_KEY[note.status])}</div>}
-              {noteText(note, t)}
+              {lateReportText(noteText(note, t), t)}
             </div>
           ))}
         </div>

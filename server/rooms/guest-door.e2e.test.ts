@@ -101,7 +101,7 @@ beforeAll(async () => {
     config: () => ({ base: BASE, enabled: true }),
     saveEnabled: () => {},
     start: () => relay,
-    loadClient: async () => ({ start: () => relay, enroll: async () => {}, peer: () => "203.0.113.7" }),
+    loadClient: async () => ({ start: () => relay, enroll: async () => {}, googleEnroll: async () => ({ ok: true }), peer: () => "203.0.113.7" }),
     room: handleRoomDoor,
   });
   await access.start(app);
@@ -265,7 +265,7 @@ describe("teammate and the real door", () => {
     expect(JSON.stringify(restarted.rooms())).not.toContain(shared.secret);
   });
 
-  it("keeps a host-removed PC barred from the same code", async () => {
+  it("retires the code on Remove and keeps the removed PC barred from the next one", async () => {
     const group = teamRoom();
     const shared = roomCode(group.hosted.roomId);
     const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
@@ -276,7 +276,9 @@ describe("teammate and the real door", () => {
     removeRoomPerson(group.hosted.roomId, person.id);
     barRoomPerson(group.hosted.roomId, person.id);
     await until(() => joinedRoom(group.hosted.roomId)?.status === "removed");
-    expect(await c.join(code)).toMatchObject({ ok: false, status: 403, error: "removed" });
+    expect(await c.join(code)).toMatchObject({ ok: false, status: 404 });
+    const next = roomCode(group.hosted.roomId);
+    expect(await c.join(`wkr1:${HOST}:${next.id}.${next.secret}`)).toMatchObject({ ok: false, status: 403, error: "removed" });
     expect(roomPeople(group.hosted.roomId)).toEqual([]);
   });
 
@@ -715,6 +717,7 @@ describe("bots in two homes hand work to each other", () => {
           return turns.settled(threadId, true);
         });
       },
+      readOnlyTurns: () => true,
       messagesFor: () => thread,
       changed: () => {},
       interrupt: async () => {},

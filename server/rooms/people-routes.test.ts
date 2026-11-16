@@ -163,7 +163,7 @@ beforeAll(async () => {
     config: () => ({ base: "wink.test", enabled: true }),
     saveEnabled: () => {},
     start: () => relay,
-    loadClient: async () => ({ start: () => relay, enroll: async () => {}, peer: () => "203.0.113.7" }),
+    loadClient: async () => ({ start: () => relay, enroll: async () => {}, googleEnroll: async () => ({ ok: true }), peer: () => "203.0.113.7" }),
     room: handleRoomDoor,
   });
   await access.start(app);
@@ -239,6 +239,41 @@ describe("invite", () => {
   });
 });
 
+describe("can make bots work", () => {
+  const works = (roomId: string, personId: string, body: unknown, authorization = BOT) =>
+    call(`/api/rooms/${roomId}/people/${personId}/works`, { method: "POST", body, authorization });
+
+  it("starts a joiner off and lets only the host's PC flip it, one person at a time", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const joon = await joined(group, "Joon");
+    expect(roomPeople(id).map((person) => person.works)).toEqual([false, false]);
+    const emitted = vi.spyOn(store, "emit");
+    expect(await works(id, mina.personId, { on: true })).toEqual({ status: 200, body: { ok: true } });
+    expect(emitted).toHaveBeenLastCalledWith({ type: "group", groupId: group.id });
+    expect(roomPeople(id).map((person) => [person.name, person.works])).toEqual([["Mina", true], ["Joon", false]]);
+    expect((await call(`/api/rooms/${id}/people/${joon.personId}/works`, { method: "POST", relay: true, key: mina.key, body: { on: true } })).status).not.toBe(200);
+    expect(await works(id, joon.personId, { on: "yes" })).toEqual({ status: 400, body: { error: "on must be true or false" } });
+    expect(await works(id, "nobody", { on: true })).toEqual({ status: 404, body: { error: "not found" } });
+    expect((await call(`/api/rooms/${id}/people/${mina.personId}/works`, { method: "DELETE", authorization: BOT })).status).toBe(404);
+    expect(roomPeople(id).map((person) => person.works)).toEqual([true, false]);
+    expect(await works(id, mina.personId, { on: false })).toEqual({ status: 200, body: { ok: true } });
+    expect(roomPeople(id)[0]!.works).toBe(false);
+  });
+
+  it("keeps the switch on a rejoin from the same PC, and a stranger with the code starts off", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    await works(id, mina.personId, { on: true });
+    const { body } = await invite(id);
+    expect((await joinAs(body.code, "Mina", pcOf("Mina"))).body.person.id).toBe(mina.personId);
+    expect((await joinAs(body.code, "Stranger", pcOf("Stranger"))).status).toBe(200);
+    expect(roomPeople(id).map((person) => [person.name, person.works])).toEqual([["Mina", true], ["Stranger", false]]);
+  });
+});
+
 describe("remove", () => {
   it("binds a pre-upgrade member's resumed stream to the same seat and removal ban", async () => {
     const group = peopleRoom();
@@ -255,8 +290,9 @@ describe("remove", () => {
     expect(roomPeople(id)).toHaveLength(1);
     await stream.closed;
     expect((await remove(id, mina.body.person.id)).status).toBe(200);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
-    expect((await joinAs(body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+    const fresh = await invite(id);
+    expect(await joinAs(fresh.body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect((await joinAs(fresh.body.code, "Joon", pcOf("Joon"))).status).toBe(200);
   });
 
   it("never replaces an existing seat or removal ban when binding an authenticated guest", async () => {
@@ -271,7 +307,7 @@ describe("remove", () => {
     expect((await joinAs(body.code, "Mina", pcOf("Mina"))).body.person.id).toBe(mina.personId);
     expect((await remove(id, mina.personId)).status).toBe(200);
     expect((await snapshot()).status).toBe(200);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect(await joinAs((await invite(id)).body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
   });
 
   it("does not bind a device without a live guest key", async () => {
@@ -362,7 +398,7 @@ describe("remove", () => {
     const mina = await joined(group, "Mina");
     const stream = await openStream(group.hosted.roomId, mina.key);
     await stream.until((frames) => frames.length >= 1);
-    expect(await remove(group.hosted.roomId, mina.personId)).toEqual({ status: 200, body: { ok: true } });
+    expect(await remove(group.hosted.roomId, mina.personId)).toEqual({ status: 200, body: { ok: true, codeChanged: true, barred: true } });
     expect((await stream.until((frames) => frames.at(-1)?.kind === "ended")).map((frame) => frame.kind)).toEqual(["state", "ended"]);
     await stream.closed;
     expect(roomPeople(group.hosted.roomId)).toEqual([]);
@@ -370,24 +406,27 @@ describe("remove", () => {
     expect(await remove(group.hosted.roomId, mina.personId)).toEqual({ status: 404, body: { error: "not found" } });
   });
 
-  it("keeps a removed teammate's PC out of the room code while others still join", async () => {
+  it("retires the code on Remove and keeps the removed PC out of the next one while others join", async () => {
     const group = peopleRoom();
     const { body } = await invite(group.hosted.roomId);
     const mina = await joinAs(body.code, "Mina", pcOf("Mina"));
     expect(mina.status).toBe(200);
     expect((await remove(group.hosted.roomId, mina.body.person.id)).status).toBe(200);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
-    expect((await joinAs(body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", "pc-new-device-0123456789")).toEqual({ status: 404, body: { error: "no-invite" } });
+    const fresh = await invite(group.hosted.roomId);
+    expect(await joinAs(fresh.body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect((await joinAs(fresh.body.code, "Joon", pcOf("Joon"))).status).toBe(200);
     expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Joon"]);
   });
 
-  it("lists a removed teammate until the host lets them back in with the same code", async () => {
+  it("lists a removed teammate until the host lets them back in with the new code", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const { body } = await invite(id);
-    const mina = await joinAs(body.code, "Mina", pcOf("Mina"));
+    const old = await invite(id);
+    const mina = await joinAs(old.body.code, "Mina", pcOf("Mina"));
     const emitted = vi.spyOn(store, "emit");
-    expect(await remove(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true } });
+    expect(await remove(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true, codeChanged: true, barred: true } });
+    const { body } = await invite(id);
     expect(emitted).toHaveBeenLastCalledWith({ type: "group", groupId: group.id });
     expect(hostedRoomView(group.hosted)).toMatchObject({ people: [], removed: [{ id: mina.body.person.id, name: "Mina" }] });
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });

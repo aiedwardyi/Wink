@@ -35,6 +35,8 @@ vi.mock("@/lib/live-call/audio", () => ({
     async capture() {}
     stopMic() {}
     play() {}
+    endTurn() {}
+    tune() {}
     flush() {}
     close() {}
     boop() {}
@@ -266,21 +268,24 @@ describe("call follows you", () => {
     expect(widget()!.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("Not sent: Fix the login page bug. (declined)");
   });
 
-  it("calls on a plain click and opens nothing on right-click", async () => {
+  it("calls on a plain click and opens the call settings on right-click", async () => {
     await mount(atlas);
     const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
-    expect(right.defaultPrevented).toBe(false);
-    expect(document.querySelector("[role=menu]")).toBeNull();
+    expect(right.defaultPrevented).toBe(true);
+    expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
     expect(fakes.engines).toHaveLength(0);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await call();
   });
 });
 
 describe("call voice in Settings", () => {
-  it("offers three voices, no call language, and saves each pick", async () => {
+  it("offers every voice in the call menu's grid, no call language, and saves each pick", async () => {
     await mount(atlas);
-    expect(pills("Call voice").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"], ["Adele", "false"]]);
+    expect(pills("Call voice")).toHaveLength(30);
+    expect(pills("Call voice").slice(0, 3).map((p) => [p.textContent!.replace(/^(Jenn|Eddie|Adele).*/, "$1"), p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"], ["Adele", "false"]]);
+    expect(settings().querySelector("[data-call-voices]")).not.toBeNull();
     expect(settings().textContent).not.toContain("Call language");
     await act(async () => pills("Call voice")[1]!.click());
     expect(fakes.puts).toEqual([{ liveCall: { voice: "Alnilam" } }]);

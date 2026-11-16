@@ -110,7 +110,7 @@ export type SyncRequest =
   | { method: "changes"; args: [SyncScope, number, number] }
   | { method: "threads"; args: [string] }
   | { method: "legacyThreads"; args: [string] }
-  | { method: "migrate"; args: [SyncScope, MigrationCrash?, boolean?] }
+  | { method: "migrate"; args: [SyncScope, MigrationCrash?, boolean?, Record<string, string>?] }
   | { method: "close"; args: [] };
 
 type SyncResponse = SyncApplyResult | SyncFlushResult | ThreadRowPage | SyncVariant[] | SyncState | SyncChange[] | MigrationProgress | string[] | undefined;
@@ -206,8 +206,8 @@ export class ThreadSyncV2 {
     return this.request({ method: "legacyThreads", args: [botSyncId] });
   }
 
-  migrate(scope: SyncScope, crash?: MigrationCrash, deferUnreadable = false): Promise<MigrationProgress> {
-    return this.request({ method: "migrate", args: [scope, crash, deferUnreadable] });
+  migrate(scope: SyncScope, crash?: MigrationCrash, deferUnreadable = false, botIds?: Record<string, string>): Promise<MigrationProgress> {
+    return this.request({ method: "migrate", args: [scope, crash, deferUnreadable, botIds] });
   }
 
   get failed(): boolean {
