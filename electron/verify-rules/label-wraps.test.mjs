@@ -1,5 +1,6 @@
+import { Window } from "happy-dom";
 import { expect, it } from "vitest";
-import { check } from "./label-wraps.mjs";
+import { check, observe } from "./label-wraps.mjs";
 
 const row = (text, fields) => ({ where: "div#row", text, length: text.length, words: text.split(" ").length, lines: 2, control: false, split: "", box: [85, 233, 62, 54], ...fields });
 
@@ -20,4 +21,30 @@ it("leaves prose, long links and short text that wraps between words alone", () 
 it("reports each wrapped label once, even when two share a truncated path", () => {
   const label = row("Sign Out", { control: true });
   expect(check({ rows: [label, label, { ...label, box: [283, 299, 48, 44] }] }).problems).toHaveLength(2);
+});
+
+it("reports a label that wraps between its text nodes", async () => {
+  const window = new Window();
+  // happy-dom has no layout or UA stylesheet: give span its browser display, then put "Out" on the second line.
+  window.document.head.innerHTML = "<style>span { display: inline }</style>";
+  window.document.body.innerHTML = "<button>Sign <span>Out</span></button>";
+  window.Range.prototype.getClientRects = function () {
+    return [{ top: this.startContainer.textContent.includes("Out") ? 20 : 0, width: 30, height: 16 }];
+  };
+  const tools = { all: selector => [...window.document.querySelectorAll(selector)], visible: () => true, where: node => node.tagName.toLowerCase() };
+  const { problems } = check(window.eval(`(${observe})`)(tools));
+  await window.happyDOM.close();
+  expect(problems).toEqual([expect.objectContaining({ where: "button", measured: '"Sign Out" on 2 lines; keep the label on one line', value: 2 })]);
+});
+
+it("leaves a control that stacks its parts in separate blocks alone", async () => {
+  const window = new Window();
+  window.document.body.innerHTML = "<button><div>Nova</div><div>NovaGPT-6.1-Sol</div></button>";
+  window.Range.prototype.getClientRects = function () {
+    return [{ top: this.startContainer.textContent.includes("GPT") ? 20 : 0, width: 30, height: 16 }];
+  };
+  const tools = { all: selector => [...window.document.querySelectorAll(selector)], visible: () => true, where: node => node.tagName.toLowerCase() };
+  const { problems } = check(window.eval(`(${observe})`)(tools));
+  await window.happyDOM.close();
+  expect(problems).toEqual([]);
 });
