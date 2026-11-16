@@ -19,6 +19,7 @@ import { applyLocale } from "@/lib/i18n";
 import { setCallVolume } from "@/lib/live-call/volume";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { CallSettings, CallSettingsHold, VoiceChatSettings } from "./CallSettings";
+import { MENU_CLASS } from "./MessageMenu";
 
 const ada = { id: "bot-1", name: "Ada", color: "iris", messages: [] } as unknown as Bot;
 const tuned = { ...ada, call: { voice: "Puck", speed: 1.2 } } as Bot;
@@ -97,6 +98,8 @@ it("right-click on Call opens the panel and a left-click still calls", async () 
   expect(onCall).toHaveBeenCalledTimes(1);
   expect(menu()?.getAttribute("role")).toBe("dialog");
   expect(menu()?.querySelector("[data-call-settings]")).not.toBeNull();
+  // the app's shared menu motion: pop-in on open, the data-closing fade on close
+  expect([...menu()!.classList]).toEqual(expect.arrayContaining(MENU_CLASS.split(" ").filter((name) => !name.startsWith("py-"))));
 
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
   expect(menu()?.dataset.closing).toBe("true");
