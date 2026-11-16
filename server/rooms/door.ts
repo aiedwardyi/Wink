@@ -107,6 +107,11 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
         if (group) broadcastDoorReactions(group.hosted.roomId, [lineReactions(change.message)]);
         return;
       }
+      if (change.type === "bot") {
+        if (!anyDoorStreams()) return;
+        for (const roomId of new Set(door!.watched.values())) if (doorGroup(roomId)?.memberIds.includes(change.botId)) pushRoomState(roomId);
+        return;
+      }
       const roomId = (change.type === "group" || change.type === "group.deleted") && door?.watched.get(change.groupId);
       if (!roomId || !anyDoorStreams()) return;
       if (doorGroup(roomId)) return pushRoomState(roomId);

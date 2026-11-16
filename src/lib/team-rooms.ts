@@ -51,7 +51,7 @@ export const hostLines = (messages: readonly Message[], bots: readonly TeamBot[]
     // A bot's answer row carries `from`, not `author`; it stays once the room is back to no bots.
     const bot = !message.author && message.from;
     const author = bot ? { kind: "bot" as const, id: bot.botId, name: bot.name } : message.author;
-    const mascotStyle = bot ? bots.find((candidate) => candidate.id === bot.botId)?.mascotStyle : undefined;
+    const mascotStyle = author?.kind === "bot" ? bots.find((candidate) => candidate.id === author.id)?.mascotStyle : undefined;
     return author && message.roomEntryId
       ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), ...(mascotStyle ? { mascotStyle } : {}), message }]
       : [];

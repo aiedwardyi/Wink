@@ -21,11 +21,21 @@ const ROOM_VIEWS = [
   "TeamRoomView.tsx",
 ];
 
+const botProp = (tag: string) => {
+  const start = tag.indexOf("bot={");
+  if (start < 0) return "";
+  for (let at = start + 4, depth = 0; at < tag.length; at++) {
+    depth += tag[at] === "{" ? 1 : tag[at] === "}" ? -1 : 0;
+    if (!depth) return tag.slice(start + 5, at);
+  }
+  return "";
+};
+
 describe("room bot faces", () => {
   it.each(ROOM_VIEWS)("%s draws a room bot only through RoomBotAvatar", (file) => {
     const source = readFileSync(join(here, file), "utf8");
     expect(source, "draw a room bot with RoomBotAvatar, not lucide's Bot icon").not.toMatch(/import \{[^}]*\bBot\b[^}]*\} from "lucide-react"/);
-    const bare = [...source.matchAll(/<BotAvatar\b[\s\S]*?\/>/g)].map((tag) => tag[0]).filter((tag) => /bot=\{[^/]*\{\s*name\b/.test(tag));
+    const bare = [...source.matchAll(/<BotAvatar\b[\s\S]*?\/>/g)].map((tag) => tag[0]).filter((tag) => /\{\s*(?:\.\.\.|\w+\s*[:,}])/.test(botProp(tag)));
     expect(bare, "a room record ({ name, color, mascotStyle }) goes through RoomBotAvatar").toEqual([]);
   });
 

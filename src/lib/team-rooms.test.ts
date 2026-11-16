@@ -87,6 +87,8 @@ describe("team room shape", () => {
     const messages: Message[] = [{ id: "c", role: "bot", kind: "text", text: "hi", at: 3, from: { botId: "tb-1", name: "포키", color: "teal" }, roomEntryId: "e3" }];
     expect(hostLines(messages, [{ id: "tb-1", name: "포키", color: "", owner: "jj", mascotStyle: "icon-11" }])[0]).toMatchObject({ mascotStyle: "icon-11" });
     expect(hostLines(messages)[0]).not.toHaveProperty("mascotStyle");
+    const mirrored: Message[] = [{ ...messages[0]!, author: { kind: "bot", id: "tb-1", name: "포키", owner: "jj" } }];
+    expect(hostLines(mirrored, [{ id: "tb-1", name: "포키", color: "", owner: "jj", mascotStyle: "icon-11" }])[0]).toMatchObject({ mascotStyle: "icon-11" });
   });
 
   it("shows the host's full pinned line when the room has it, else the pin's preview", () => {

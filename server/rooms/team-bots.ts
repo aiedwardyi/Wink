@@ -29,6 +29,7 @@ function db(): DatabaseSync {
         owner TEXT NOT NULL,
         name TEXT NOT NULL,
         color TEXT NOT NULL,
+        mascot TEXT,
         at INTEGER NOT NULL,
         PRIMARY KEY (room_id, id)
       );
