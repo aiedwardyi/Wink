@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { request } from "./api-request";
+import { t } from "./i18n";
+
 import type { Group, Message } from "@/state/store-types";
 
 import {
@@ -16,6 +19,7 @@ import {
   looksLikeRoomCode,
   ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
   ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
+  roomFileRefusal,
   roomMessage,
   roomNoticeText,
   sendToRoom,
@@ -200,6 +204,17 @@ describe("sending to a room", () => {
     }
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     expect(await sendToRoom("/api/rooms/r1", "hi", [], "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
+  });
+
+  it("words a group send refused over the host's file as a teammate's upload", async () => {
+    const refused = (status: number, body: object) => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status })));
+      return request("/api/groups/g/messages", { method: "POST" }).catch(roomFileRefusal);
+    };
+    expect(await refused(413, { error: "pictures can be up to 100 MB", code: "ROOM_FILE", file: "big.png" })).toBe(t("teamRoom.tooBig", { name: "big.png" }));
+    expect(await refused(507, { error: "this room is out of space for files", code: "ROOM_FILE", file: "a.pdf" })).toBe(t("teamRoom.outOfSpace"));
+    expect(await refused(400, { error: "at most 50 files per message", code: "ROOM_FILE" })).toBe(t("teamRoom.tooMany"));
+    expect(await refused(409, { error: "sendId already belongs to another message" })).toBeNull();
   });
 
   it("names a rate-limited send", async () => {

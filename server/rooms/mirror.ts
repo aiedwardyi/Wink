@@ -23,7 +23,8 @@ function mirrorRoomEntry(store: MirrorStore, roomId: string, threadId: string, e
     ...(entry.author.kind === "bot" ? { from: { botId: entry.author.id, name: entry.author.name, color: bot?.color ?? (entry.author.owner ? teamBot(roomId, entry.author.id)?.color : undefined) ?? "" } } : {}),
     ...(replyTo ? { replyToId: replyTo.id } : {}),
     ...(sendId ? { sendId } : {}),
-    ...(entry.files ? { roomFiles: entry.files } : {}),
+    // the host's own text keeps its local files; the room's copies of them would show twice
+    ...(entry.files && local.text === undefined ? { roomFiles: entry.files } : {}),
   });
 }
 

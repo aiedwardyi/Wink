@@ -2,7 +2,7 @@
 import type { Group, Message, RoomJoin, TeamBot } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
-import type { MessageKey } from "./i18n";
+import { t, type MessageKey } from "./i18n";
 
 export type RoomFile = NonNullable<Message["roomFiles"]>[number];
 export type RoomAuthor = NonNullable<Message["author"]>;
@@ -272,6 +272,14 @@ function uploadProblem(status: number, name: string, error?: string): RoomProble
   if (status === 507) return { key: "teamRoom.outOfSpace" };
   if (status === 503 && error === "room files folder is unavailable") return { key: "teamRoom.folderError" };
   return { key: "teamRoom.sendFailed" };
+}
+
+/** A group send the room refused over the host's files, in a teammate upload's words; null for any other failure. */
+export function roomFileRefusal(error: unknown): string | null {
+  const { code, status, file, message } = error as { code?: string; status?: number; file?: string; message?: string };
+  if (code !== "ROOM_FILE") return null;
+  const problem = file === undefined ? { key: "teamRoom.tooMany" as const } : uploadProblem(status ?? 500, file, message);
+  return t(problem.key, problem.vars);
 }
 
 /** A retry skips files the room already took and resends the same uploadId for the rest. */
