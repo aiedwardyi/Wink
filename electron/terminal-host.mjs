@@ -1732,7 +1732,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (session.reportSignal) { try { fs.unlinkSync(session.reportSignal); } catch {} }
         if (session.runningCommand) session.runningCommand.reported = true;
         // BLOCKED waits on the teacher, so the run is still live for a restart to bring back.
-        if (!/^\s*BLOCKED\b/.test(text ?? "")) paneRuns?.reported(session.id);
+        const blocked = /^\s*BLOCKED\b\s*([\s\S]*)/.exec(text ?? "");
+        if (blocked) paneRuns?.blocked(session.id, blocked[1].trim().slice(0, 2000) || "your last report");
+        else paneRuns?.reported(session.id);
         session.finished = [];
         session.autoNote = null;
         session.autoReported = true;
@@ -1813,7 +1815,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           if (!claimed) throw new Error("Worker recovery already claimed or unavailable");
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
-        if (recovery) launchInput.resume = recovery.session;
+        if (recovery) launchInput.resume = recovery.blocked ? { ...recovery.session, blocked: recovery.blocked } : recovery.session;
         // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
         else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
         if (slot) remoteLine = await remote.open({ name: input.host, command: input.command, cwd: input.cwd, slot });

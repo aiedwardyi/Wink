@@ -429,6 +429,27 @@ test("managed recovery preserves teacher and binds a new pane, generation and fr
   assert.equal(children.length, 1);
 });
 
+test("a recovered BLOCKED worker launches with its question", async (t) => {
+  const row = record("claude", { blocked: "FIX-B which key?" });
+  const f = fixture(t, [row]);
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const inputs = [];
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 8 * 1024 ** 3, setPriority() {},
+    mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh" }),
+    workerLaunch: async (input) => {
+      inputs.push(input);
+      return { kind: "managed", executable: "claude", args: ["-r", row.session.nativeId, NUDGE], environment: {}, account: { id: "claude", generation: 0 },
+        session: { engine: "claude", nativeId: row.session.nativeId, launchGeneration: randomUUID(), template: row.session.template } };
+    },
+    loadPty: () => ({ spawn() { return { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }; } }),
+  });
+  t.after(() => host.dispose());
+  const pane = await host.openForBot(row.botId, { label: row.label, cwd: ROOT, command: "claude" }, row);
+  assert.equal(inputs[0].resume.blocked, "FIX-B which key?");
+  assert.equal(JSON.parse(fs.readFileSync(f.file, "utf8")).find((run) => run.id === pane.sessionId).blocked, "FIX-B which key?");
+});
+
 function gatedRecovery(t, count, freeMemory) {
   const rows = Array.from({ length: count }, (_, index) => record("claude", { label: `W${index + 1}` }));
   const f = fixture(t, rows);
