@@ -239,6 +239,23 @@ test("a pane that finished while the app was closed is told to its bot once, and
   await closeAll(second, [quiet, gone]);
 });
 
+test("a pane that finished while Wink was closed (host exited after its last kept pane ended) reports as finished, not restarted", { ...windows, timeout: 300_000 }, async (t) => {
+  const before = await left(t, { count: 1, command: [GONE], typed: null });
+  const [gone] = before.panes;
+  await until(() => !alive(before.host));
+  const second = app(before.root, runtimeRoot);
+  t.after(async () => {
+    await second.host.dispose();
+    second.client.close();
+  });
+  await second.adopt();
+  assert.deepEqual([second.notes.map((note) => `${note.bot}: ${note.text}`), second.spawned, record(before.root)], [
+    [`bot-0: FINISHED WHILE WINK WAS DOWN: KEEP-0 [pane ${gone.sessionId.slice(0, 8)}] exit 3, no report: its pane closed with the worker host.`],
+    [],
+    [],
+  ]);
+});
+
 test("a kept pane with no record or an unknown owner never becomes a row and is stopped", { ...windows, timeout: 300_000 }, async (t) => {
   const before = await left(t, { count: 3, end: "kill" });
   const [stray, orphan, kept] = before.panes;
@@ -268,7 +285,7 @@ test("a host the app cannot reach blocks both adoption and restart until it is g
     const calls = [];
     let state = "unknown";
     let tick;
-    const client = { left: () => state, prewarm: async () => { calls.push("prewarm"); return false; }, panes: async () => [], attach: () => { calls.push("attach"); return null; }, drop: () => calls.push("drop"), state: () => ({ fault: { detail: "protocol 9" } }) };
+    const client = { left: () => state, ended: () => new Map(), prewarm: async () => { calls.push("prewarm"); return false; }, panes: async () => [], attach: () => { calls.push("attach"); return null; }, drop: () => calls.push("drop"), state: () => ({ fault: { detail: "protocol 9" } }) };
     const kept = [];
     const done = adoptWorkers({ client, runs, host: { adoptPane: () => null, closeForBot: async () => {} }, recover: async (notes) => { kept.push([[...notes].map(([botId, note]) => `${botId}: ${note.text}`), [...runs.restarted().keys()]]); }, wait: () => new Promise((resolve) => { tick = resolve; }) });
     await until(() => kept.length === 1 && tick);
