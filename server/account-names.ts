@@ -6,7 +6,7 @@ import { isInstanceId, type AccountService } from "./accounts.ts";
 import { writeFileAtomic } from "./atomic.ts";
 
 type Engine = "claude" | "codex" | "grok";
-const ENGINE_OF: Record<string, Engine> = { claudeAgent: "claude", codex: "codex", grokAgent: "grok" };
+export const ENGINE_OF: Record<string, Engine> = { claudeAgent: "claude", codex: "codex", grokAgent: "grok" };
 type AccountRow = ReturnType<AccountService["list"]>[number];
 export type AccountName = { id: string; engine: Engine; number: number; nickname: string | null; name: string };
 type NameCode = "too-long" | "invalid-character" | "taken" | "reserved" | "unknown-account";

@@ -1497,9 +1497,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         refreshModels: support.resolveModels ? refreshModels : undefined,
         snapshot,
         loginConfig: () => ({ cli: effectiveCli(), env: childEnv() }),
-        ...(input.account ? { account: input.account } : {}),
-        ...(input.account ? { invalidateAccount: () => { admitted = false; listeners.clear(); } } : {}),
-        ...(input.account ? { accountBusy: () => active.size > 0 } : {}),
+        ...(input.account ? { account: input.account, invalidateAccount: () => { admitted = false; listeners.clear(); }, accountBusy: () => active.size > 0 } : {}),
         setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; },
         adapter: {
           provider: DRIVER_KIND,
