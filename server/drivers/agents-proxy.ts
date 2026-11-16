@@ -21,6 +21,7 @@
 //   generate_image(prompt, …)             → create a PNG with the saved image key
 //   call_api(credential_id, method, url)  → call a service with its saved key
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
+//   usage_status()                        → the Usage page's % left and resets, read-only
 //   list_routines()                       → inspect this bot's scheduled work
 //   propose_routine(...)                  → show a confirmation card for a new routine
 //   propose_routine_action(...)           → show a confirmation card for a routine change
@@ -532,6 +533,11 @@ const TOOLS = [
     },
   },
   {
+    name: "usage_status",
+    description: "Read-only live Usage page: % left, reset, Main and limit per engine account. Call before any account, burn order or limit answer.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "list_routines",
     description:
       "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's record, with up to 2,000 characters of its instructions and its latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
@@ -998,6 +1004,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return {
       text: `A secure ${r.label ?? label} card is now visible to the user. End this turn; Wink will resume the task after they save or decline. Never ask them to paste the key into chat.`,
     };
+  }
+  if (name === "usage_status") {
+    const r = await api(`/api/internal/usage?self=${encodeURIComponent(BOT_ID)}`);
+    return { text: String(r.text ?? "") };
   }
   if (name === "list_routines") {
     const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID });
