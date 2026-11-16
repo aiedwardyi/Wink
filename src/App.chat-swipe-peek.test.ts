@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Group } from "@/state/store";
 import { ChatPeekPart } from "@/lib/chat-preview";
 import { forgetJoinedRoom, noteJoinedRoom } from "@/lib/joined-rooms";
-import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
 import { UNASSIGNED_SECTION_ID, sidebarItemKey } from "@/lib/sidebar-order";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
@@ -32,7 +31,7 @@ let frames: Map<number, FrameRequestCallback>;
 
 const chat = (id: string) => host.querySelector<HTMLElement>(`[data-test-chat="${id}"]`);
 const mountedChats = () => [...host.querySelectorAll<HTMLElement>("[data-test-chat]")].map((node) => node.dataset.testChat);
-const wait = (ms: number) => act(() => new Promise<void>((done) => setTimeout(done, ms)));
+const settled = (ids: string[]) => vi.waitFor(() => expect(mountedChats()).toEqual(ids));
 
 async function mount(selectedId: string, emptyId?: string, room = false, joined: string[] = []) {
   const order = room ? ["a", "room", "b", "c"] : ["a", "b", "c"];
@@ -144,9 +143,8 @@ describe("phone chat peek", () => {
     const incoming = chat("c");
     expect(incoming?.querySelector("footer")).toBeNull();
     await touch("touchend", 140, 300, 2000, target);
-    await wait(SWIPE_MOTION_MS + 80);
+    await settled(["c"]);
     expect(chat("c")).toBe(incoming);
-    expect(mountedChats()).toEqual(["c"]);
     expect(incoming?.querySelector("footer")).not.toBeNull();
   });
 
@@ -173,8 +171,7 @@ describe("phone chat peek", () => {
     const target = await drag("b", 300, 270);
     expect(chat("c")).not.toBeNull();
     await touch(end, 270, 300, 2000, target);
-    await wait(SWIPE_MOTION_MS + 80);
-    expect(mountedChats()).toEqual(["b"]);
+    await settled(["b"]);
   });
 
   it("does not create a peek after locking to vertical scroll", async () => {
@@ -198,7 +195,6 @@ describe("phone chat peek", () => {
     await mount("b");
     const target = await drag("b", 300, 140);
     await touch("touchend", 140, 300, 2000, target);
-    await wait(SWIPE_MOTION_MS + 80);
     expect(mountedChats()).toEqual(["b"]);
   });
 
@@ -210,9 +206,8 @@ describe("phone chat peek", () => {
     expect(incoming?.closest("[data-phone-chat-page]")?.querySelector("button[aria-expanded]")).not.toBeNull();
     expect(host.querySelectorAll("[data-phone-menu]")).toHaveLength(1);
     await touch("touchend", 140, 300, 2000, target);
-    await wait(SWIPE_MOTION_MS + 80);
+    await settled(["c"]);
     expect(chat("c")).toBe(incoming);
-    expect(mountedChats()).toEqual(["c"]);
     for (let node = incoming; node && host.contains(node); node = node.parentElement) {
       expect(node.getAnimations?.() ?? []).toHaveLength(0);
     }
@@ -241,8 +236,7 @@ describe("phone chat peek", () => {
     expect(incoming).not.toBeNull();
     expect(incoming?.textContent).toContain(toId === "room" ? "Cached room message" : `Cached tail ${toId}`);
     await touch("touchend", to, 300, 2000, target);
-    await wait(SWIPE_MOTION_MS + 80);
+    await settled([toId]);
     expect(chat(toId)).toBe(incoming);
-    expect(mountedChats()).toEqual([toId]);
   });
 });
