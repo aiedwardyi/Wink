@@ -272,6 +272,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const ordered = workers.toSorted((a, b) => (slots.get(a.id) ?? 99) - (slots.get(b.id) ?? 99));
   const busy = ordered.filter(worker => worker.files.length > 0);
   const idle = ordered.filter(worker => worker.files.length === 0);
+  if (idleOpen && !idle.length) setIdleOpen(false);
   const nick = (id: string) => workers.find(worker => worker.id === id)?.nick ?? id;
 
   return <>

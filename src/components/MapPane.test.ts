@@ -239,8 +239,11 @@ it("lists only workers with changes and folds idle ones into one chip", async ()
   expect([chip()?.textContent, chip()?.getAttribute("aria-expanded")]).toEqual(["Hide idle", "true"]);
   await click(".map-tree-legend button");
   expect(legend()).toEqual(["ALPHA2", "BETA1"]);
+  await click(".map-tree-legend button");
   await emit(workers);
   expect(chip()).toBeNull();
+  await emit([...workers, idle("w", "WALK")]);
+  expect([legend(), chip()?.textContent, chip()?.getAttribute("aria-expanded")]).toEqual([["ALPHA2", "BETA1"], "+1 idle", "false"]);
   await emit([idle("t", "TIMER"), idle("w", "WALK")]);
   expect(legend()).toEqual([]);
   expect(chip()?.textContent).toBe("+2 idle");
