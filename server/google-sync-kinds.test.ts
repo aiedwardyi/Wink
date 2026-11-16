@@ -170,7 +170,7 @@ describe("Google reader kind recovery", () => {
     const reader = profile.match(/const isSyncOperationFile = .+/)![0].match(/json\|[a-z|]+/)![0];
     const google = source("./google-sync.ts").match(/const OPERATION_FILE = .+/)![0].match(/json\|[a-z|]+/)![0];
     expect({ revision: DRIVE_READER_REVISION, classifier: createHash("sha256").update(classifier).digest("hex"), own, reader, google }).toEqual({
-      revision: 2, classifier: "b8b6172ce68aeff03018551f0ac323b2bccfafcc9d1e4746e197ff0e2d90d8cd", own: ["notes", "paths", "pin", "style", "trash"], reader: "json|notes|paths|pin|style|trash", google: "json|notes|paths|pin|style|trash",
+      revision: 3, classifier: "a899edef43e3e02e94c55abda42796d61686ea04c69bba398afee2987167c426", own: ["notes", "paths", "pin", "style", "trash"], reader: "json|notes|paths|pin|style|trash", google: "json|notes|paths|pin|style|trash",
     });
     for (const ext of ["json", ...own]) {
       expect(drivePathRule(`changes/1-device-writer-op.${ext}`, IDS)).toBe("once");

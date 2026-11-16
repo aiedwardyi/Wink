@@ -10,6 +10,7 @@ import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
+import type { BoardCalls } from "./board-calls.ts";
 import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
@@ -61,6 +62,7 @@ type InternalRouteDeps = {
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
+  boardCalls?: Pick<BoardCalls, "hold">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -179,10 +181,13 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       if (body.next_action !== undefined) assignTaskNextAction(next, body.next_action);
       foldCompletedNextAction(next);
+      const board = body.blockers !== undefined && deps.boardCalls
+        ? deps.boardCalls.hold(bot.id, body.fromThreadId, current.blockers, body.blockers)
+        : null;
       if (body.blockers !== undefined) {
         next.blockers = [
           ...next.blockers.filter((blocker) => blocker.kind === "approval"),
-          ...body.blockers,
+          ...(board?.blockers ?? body.blockers),
         ];
       }
       for (const artifact of artifacts) {
@@ -202,7 +207,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {

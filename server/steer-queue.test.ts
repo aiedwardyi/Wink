@@ -638,6 +638,29 @@ describe("steer-queue module", () => {
     expect(_queuedCount(bot.threadId)).toBe(2);
   });
 
+  it("a steering engine's turn takes a send whose sync hold has passed", () => {
+    const bot = fakeBot("bot-fold-synced", "thread-fold-synced", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "line 1", { syncUntil: 1 });
+    queueSteeredMessage(bot.id, bot.threadId, "line 2", { syncUntil: 1 });
+    const folds: string[][] = [];
+    drainSteeredMessages(store, (botId, threadId) => {
+      folds.push(foldPeerQueuedSends(store as never, botId, threadId, queueMark(), true));
+    });
+    expect(folds).toEqual([["line 2"]]);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it("a send queued to go after the turn waits, while a plain one sent next joins it", () => {
+    const bot = fakeBot("bot-fold-after", "thread-fold-after", false);
+    const store = fakeStore([bot]);
+    const claim = queueMark();
+    queueSteeredMessage(bot.id, bot.threadId, "step 1", { after: true });
+    queueSteeredMessage(bot.id, bot.threadId, "step 2");
+    expect(foldPeerQueuedSends(store as never, bot.id, bot.threadId, claim, true)).toEqual(["step 2"]);
+    expect(_queuedCount(bot.threadId)).toBe(1);
+  });
+
   it("drains only one queue per bot per settle so a 1:1 and a room wait cannot double-fire", () => {
     const skye = fakeBot("skye-both", "skye-both-1to1", true);
     const store = fakeStore([skye]);

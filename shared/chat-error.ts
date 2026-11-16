@@ -1,7 +1,7 @@
 export type ChatError =
   | { kind: "quiet"; site: "chatRace" | "chatQueue" }
   | { kind: "keep"; raw: string }
-  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied" | "errors.codexPromo" | "errors.groupBusy" | "errors.groupWorking"; vars?: Record<string, string | number>; raw?: string }
+  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.cliMissing" | "errors.signInUnconfirmed" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied" | "errors.codexPromo" | "errors.groupBusy" | "errors.groupWorking"; vars?: Record<string, string | number>; raw?: string }
   | { kind: "unknown"; raw: string };
 
 export function classifyChatError(line: string): ChatError {
@@ -23,6 +23,9 @@ export function classifyChatError(line: string): ChatError {
   if (/^(?:provider|model) instance .*unavailable|model is unavailable|no working engine supports/.test(reason)) return { kind: "known", key: "errors.model" };
   if (/^connected apps are unavailable/.test(reason)) return { kind: "known", key: "errors.apps" };
   if (reason === "This account is signed out. Sign in again, then send your message.") return { kind: "known", key: "errors.signedOut" };
+  if (reason === "This account's sign-in isn't confirmed yet.") return { kind: "known", key: "errors.signInUnconfirmed" };
+  const missing = /^(Claude|Codex) isn't installed or isn't answering on this PC\.$/.exec(reason);
+  if (missing) return { kind: "known", key: "errors.cliMissing", vars: { engine: missing[1] } };
   if (reason === "Gemini is still busy after 3 tries. Try another model.") return { kind: "known", key: "chat.busyGaveUp" };
   const selfStopped = /^(.+?) stopped this reply on its own(?: \((.+)\))?$/.exec(reason);
   if (selfStopped) return { kind: "known", key: "errors.engineStopped", vars: { engine: selfStopped[1] }, raw: selfStopped[2] ? reason : undefined };

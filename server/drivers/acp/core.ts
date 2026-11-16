@@ -132,6 +132,7 @@ const COMPUTER_PROXY_PATH = SPAWNED_PROXIES.computer;
 import { appendNative, finishNative } from "../native.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
+import { FREE_ACCESS, routedAccess, type AccessTurn, type TurnAccess } from "../turn-access.ts";
 
 export interface AcpConfig {
   cli: string;
@@ -182,6 +183,8 @@ export interface AcpSupport {
   install?: EngineInstall;
   /** CLI argv AFTER the binary name to enter ACP stdio mode. */
   spawnArgs(config: AcpConfig, turn: SendTurnInput): string[];
+  /** The grants spawnArgs launches with; without it, fullAuto is free and every other ask reaches Wink. */
+  grants?(config: AcpConfig, turn: AccessTurn): TurnAccess;
   /** Provider credential variables this ACP child is allowed to inherit. */
   credentialEnv?: readonly string[];
   /** Select the model through a session config option instead of argv, for
@@ -1518,6 +1521,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             askApproval: !config.fullAuto,
           },
           sendTurn,
+          // fullAuto selects "allow" on every session/request_permission; the rest reach Wink
+          access: (turn) => support.grants?.(config, turn) ?? (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
           steer: support.grokInterjections
             ? async (threadId, text, consumed) => {
               const result: SteerResult = await (active.get(threadId)?.steer(text) ?? { taken: false });

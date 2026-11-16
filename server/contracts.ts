@@ -269,8 +269,11 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   captured: import("./drivers/warm-pool.ts").Captured;
 };
 
-/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it. */
-export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval">;
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it.
+ *  `fresh` is the spawn shape of a thread whose next turn starts a new session; Claude starts it ahead of Send. */
+export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval"> & {
+  fresh?: Pick<SendTurnInput, "integrations" | "cwd" | "leanStartup">;
+};
 
 export interface TurnStartResult {
   turnId: TurnId;
@@ -343,6 +346,8 @@ export interface ProviderAdapter {
     askApproval?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
+  /** What this turn may do, from the same values the driver sets its flags with; the prompt states it. Only the box agent omits it (its box never asks); turn-access.test scans the rest. */
+  access?(turn: import("./drivers/turn-access.ts").AccessTurn): import("./drivers/turn-access.ts").TurnAccess;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
   /** End this running turn as a clean finish, through the driver's own
    * interrupt. Absent = the turn runs on to its natural end. */

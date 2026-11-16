@@ -12,7 +12,7 @@ const SITES = {
   "electron/terminal-host.mjs": { launches: 4, claude: "withClaudePaneEnv(" },
   "electron/terminal-remote.mjs": { launches: 1, claude: "CLAUDE_PANE_ENV" },
   // Headless Claude: Code Mode only runs in the interactive terminal.
-  "server/drivers/claude.ts": { launches: 3 },
+  "server/drivers/claude.ts": { launches: 2 },
   "server/drivers/claude-fork.ts": { launches: 1 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
@@ -44,7 +44,7 @@ const SITES = {
   "server/map-git.ts": { launches: 1 },
   "server/map-pr.ts": { launches: 1 },
   "server/mcp-bridge.ts": { launches: 2 },
-  "server/procs.ts": { launches: 5 },
+  "server/procs.ts": { launches: 7 },
   "server/remote-access.ts": { launches: 1 },
   "server/tailscale-setup.ts": { launches: 1 },
   "server/usage-refresh.ts": { launches: 5 },
@@ -59,6 +59,18 @@ function shipped(dir: string): string[] {
     .map((entry) => relative(ROOT, join(entry.parentPath, entry.name)).replace(/\\/g, "/"))
     .filter((file) => !file.includes("/testing/") && !file.includes("/node_modules/"));
 }
+
+// Child processes that may hold the user's own keys: their user-set MCP servers, and Wink's own sync worker.
+const RAW_ENV = new Map([["server/mcp-bridge.ts", 2], ["server/thread-sync-v2.ts", 1]]);
+
+it("helper CLIs start without saved keys", () => {
+  const problems: string[] = [];
+  for (const file of shipped("server")) {
+    const count = readFileSync(join(ROOT, file), "utf8").match(/\benv: \{ ?\.\.\.process\.env\b/g)?.length ?? 0;
+    if (count !== (RAW_ENV.get(file) ?? 0)) problems.push(`${file} passes process.env to ${count} launch(es) as is: wrap it in scrubbedEnv() from server/config.ts so saved keys and Wink's token stay out.`);
+  }
+  expect(problems).toEqual([]);
+});
 
 it("every process launch is listed, and every Claude pane gets the shared pane env", () => {
   const problems: string[] = [];

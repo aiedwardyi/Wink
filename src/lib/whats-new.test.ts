@@ -37,5 +37,5 @@ describe("unseen release notes", () => {
 
 it("calls a worker 작업자 in Korean, as the rest of the app does", () => {
   expect(JSON.stringify(WHATS_NEW["1.0.263"])).not.toContain("워커");
-  expect(JSON.stringify(WHATS_NEW["1.0.263"].tiles[0].show)).toContain("작업자");
+  expect(WHATS_NEW["1.0.263"].tiles[0].title.ko).toContain("작업자");
 });

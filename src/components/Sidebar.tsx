@@ -110,6 +110,7 @@ import { ArchivedBotsPanel, BotListItem, RecentlyDeletedPanel, type MenuState, t
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
+import { BoardButton } from "./BoardButton";
 import { DeviceSwitcher } from "./DeviceSwitcher";
 import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
@@ -1603,8 +1604,9 @@ export function Sidebar({
         {macInset ? (
           <div className={density === "icons" ? "h-5 w-full" : "w-14"} />
         ) : isPhone() && !window.ogb ? (
-          <div className={cn("min-w-0", density === "icons" ? "flex w-full justify-center" : "flex-1")}>
+          <div className={cn("flex min-w-0 items-center", density === "icons" ? "w-full flex-col justify-center gap-1" : "flex-1 gap-1")}>
             <DeviceSwitcher labeled iconOnly={density === "icons"} drawerOpen={open} />
+            <BoardButton onOpen={onClose} />
           </div>
         ) : density === "icons" ? (
           <div />
@@ -1616,6 +1618,7 @@ export function Sidebar({
           style={windowNoDragStyle}
         >
           {density !== "icons" && <DeviceSwitcher />}
+          {!(isPhone() && !window.ogb) && <BoardButton />}
           {(!isPhone() || showPhoneDrawerCollapse()) && <button
             type="button"
             onClick={toggleCollapsed}

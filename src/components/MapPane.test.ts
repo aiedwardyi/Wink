@@ -89,9 +89,9 @@ it("follows edits across workers, pins a worker, and keeps a manual file with Fo
 });
 
 it("uses plain empty and non-git lines in both languages", async () => {
-  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, {})); });
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
+  await emit([]);
   expect(host.textContent).toContain("실행 중인 작업자가 없어요");
-  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[0], git: false, files: [] }]);
   expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 · Git 폴더가 아니에요wink / ALPHA");
   expect([...host.querySelectorAll(".map-tree-file")].map(row => row.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts", "README.md", "b.ts"]);
@@ -794,12 +794,17 @@ it("says how many new files a capped worker left out", async () => {
 });
 
 const posts: string[][] = [];
+const finished: string[] = [];
+let dropDone = false;
 class Tokenizer {
   onmessage?: (event: { data: object }) => void;
   postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[]; removed: boolean[] }) {
     if (data.stop) return;
     posts.push(data.code);
-    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => this.onmessage?.({ data: { id: data.id, done } }));
+    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => {
+      finished.push(data.path);
+      if (!dropDone) this.onmessage?.({ data: { id: data.id, done } });
+    });
   }
   terminate() {}
 }
@@ -842,8 +847,7 @@ it("colors code like VS Code's light theme on a light skin", async () => {
 
 it("leaves a file in an unknown language as plain text", async () => {
   await openSource("notes.zzz");
-  await until(() => posts.some(code => code.includes("// sum two numbers")) && !!host.querySelector(".map-code-row"));
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  await until(() => finished.includes("notes.zzz") && !!host.querySelector(".map-code-row"));
   expect(host.querySelector(".map-code-row code span")).toBeNull();
   expect(host.querySelector('.map-code-row[data-kind="add"] code')?.textContent).toBe('const total = "two";');
 });
@@ -857,6 +861,20 @@ it("draws an already colored file at once from the cache without tokenizing it a
   await openSource("src/again.ts");
   expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
   expect(posts.length).toBe(sent);
+});
+
+it("keeps a file colored by its last slice even when it closes before the worker says done", async () => {
+  dropDone = true;
+  try {
+    await openSource("src/closed.ts");
+    await until(() => colors()["const"] !== undefined);
+    const sent = posts.length;
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await openSource("src/closed.ts");
+    expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+    expect(posts.length).toBe(sent);
+  } finally { dropDone = false; }
 });
 
 it("colors a removed line inside an unchanged comment as a comment", async () => {

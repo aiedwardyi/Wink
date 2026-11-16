@@ -12,6 +12,7 @@ import { z } from "zod";
 import * as atomic from "./atomic.ts";
 import { createDriveClient } from "./drive-client.ts";
 import { createDriveMirror, decodeDrivePath, drivePathHash, drivePathRule, encodeDrivePath, renameDriveFile, DriveMirrorError, type DriveHashes, type DriveOwner } from "./drive-mirror.ts";
+import { BOARD_DIR, createBoard } from "./board.ts";
 import { DriveIdentityError, readDriveOwnIds, type DriveOwnIds } from "./drive-own-ids.ts";
 import { GoogleAccount } from "./google-account.ts";
 import { GOOGLE_BINDING_FILE, GOOGLE_MIRROR_DIR, GOOGLE_TABLE_FILE, createGoogleSync, type GoogleSync } from "./google-sync.ts";
@@ -97,6 +98,8 @@ describe("Drive mirror", () => {
     ["threads-v2/bot/thread/writer-home/head.json", "own"], ["threads-v2 (1)/bot/thread/writer-home/head.json", "own"], ["threads-v2 (2)/bot/thread/writer-work/head.json", "peer"],
     ["threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "once"], ["assets/a.png", "once"], ["pictures/a.png", "once"], ["workspace.json", "once"],
     ["threads/bot/thread.conflict-work-1.json", "once"], ["threads/bot/thread.deleted.json", "once"], ["memory/bot/.ancestry/MEMORY.md.json", "once"],
+    ["board/device-home/p0123456789abcdef01234567.json", "own"], ["board/device-work/p0123456789abcdef01234567.json", "peer"],
+    ["board/device-work/notes.json", "unknown"], ["board/p0123456789abcdef01234567.json", "unknown"],
     ["devices/device-home.json.1.tmp", "ignore"], ["notes.txt", "unknown"], ["memory-v2 (0)/bot/aaaaaaaaaaaa.json", "unknown"],
   ])("classifies %s as %s", (path, rule) => {
     expect(drivePathRule(path, pcs[0].ids)).toBe(rule);
@@ -118,6 +121,25 @@ describe("Drive mirror", () => {
       expect(read.operations).toEqual([record]);
       expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots.tutor).toMatchObject(changes);
     }
+  });
+
+  it("carries Board posts and their fixes to the other PC", async () => {
+    const [home, work] = pcs.map((pc) => ({ pc, board: createBoard({ dir: join(pc.folder, "..", BOARD_DIR), pcId: () => pc.ids.profileDeviceId }) }));
+    const same = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = home!.board.post({ author_bot_id: "astra", kind: "stuck", title: "Codex usage limit", body: "Codex usage limit", source_ref: "call:ta:0:engine:limit" });
+    home!.board.sync(home!.pc.folder, same);
+    const path = `board/${home!.pc.ids.profileDeviceId}/${stuck.id}.json`;
+    expect((await home!.pc.mirror.syncOnce()).uploaded).toEqual([path]);
+    expect((await work!.pc.mirror.syncOnce()).downloaded).toEqual([path]);
+    expect(work!.board.sync(work!.pc.folder, same).pulled).toBe(1);
+    expect(work!.board.get(stuck.id)).toMatchObject({ status: "open" });
+
+    home!.board.solve(stuck.id, "Use Claude.");
+    home!.board.sync(home!.pc.folder, same);
+    expect((await home!.pc.mirror.syncOnce()).uploaded).toEqual([path]);
+    expect((await work!.pc.mirror.syncOnce()).downloaded).toEqual([path]);
+    work!.board.sync(work!.pc.folder, same);
+    expect(work!.board.get(stuck.id)).toMatchObject({ status: "solved", fix: "Use Claude." });
   });
 
   it("keeps each PC's own files authoritative across three PCs", async () => {

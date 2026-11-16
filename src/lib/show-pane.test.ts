@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, PANE_TAB_KEY, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -100,14 +100,18 @@ function Probe({ thread, messages, free }: { thread: string; messages: Message[]
 
 const render = (thread: string, messages: Message[], free = true) => act(async () => root.render(createElement(Probe, { thread, messages, free })));
 
+let served = 206;
+
 beforeEach(() => {
+  served = 206;
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: served })));
   host = document.createElement("div");
   root = createRoot(host);
   shown = null;
   media = null;
   map = null;
 });
-afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); });
+afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); vi.unstubAllGlobals(); });
 
 it("opens a new file in the open chat, and stays shut after the user closes it this turn", async () => {
   const turn = [user("u1")];
@@ -117,6 +121,38 @@ it("opens a new file in the open chat, and stays shut after the user closes it t
   await act(async () => closeShow());
   await render("t1", [...turn, deck, page]);
   expect(shown).toBeNull();
+});
+
+it("stays shut for a new page this PC cannot serve", async () => {
+  served = 404;
+  await render("t1", [user("u1")]);
+  await render("t1", [user("u1"), page]);
+  expect(shown).toBeNull();
+});
+
+function heldProbes() {
+  const replies: Array<() => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((done) => replies.push(() => done(new Response(null, { status: 206 }))))));
+  return replies;
+}
+
+it("drops a pending probe once the user opens another tab", async () => {
+  const replies = heldProbes();
+  await render("t1", [user("u1")]);
+  await render("t1", [user("u1"), page]);
+  await act(async () => showMedia("t1"));
+  await act(async () => { for (const reply of replies) reply(); });
+  expect([shown, media]).toEqual([null, "t1"]);
+});
+
+it("never lets an older probe replace a newer file", async () => {
+  const replies = heldProbes();
+  await render("t1", [user("u1")]);
+  await render("t1", [user("u1"), page]);
+  await render("t1", [user("u1"), page, deck]);
+  await act(async () => { replies[1]!(); });
+  await act(async () => { replies[0]!(); });
+  expect(shown?.path).toBe("C:\\work\\launch-deck.pdf");
 });
 
 it("leaves the slot alone while something else holds it", async () => {
@@ -173,23 +209,35 @@ it("the header button opens the tab last picked in each chat", async () => {
   await act(async () => showMap("t7"));
   await act(async () => showMedia("t8"));
   await act(async () => closeShow());
-  await act(async () => togglePane("t7"));
+  await act(async () => togglePane("t7", "idle"));
   expect([shown, media, map]).toEqual([null, null, "t7"]);
-  await act(async () => togglePane("t7"));
-  await act(async () => togglePane("t8", true));
+  await act(async () => togglePane("t7", "idle"));
+  await act(async () => togglePane("t8", "live"));
   expect([shown, media, map]).toEqual([null, "t8", null]);
 });
 
 it("with no pick the header button opens Map while a worker is live, else Media, and neither counts as a pick", async () => {
   await render("t1", []);
-  await act(async () => togglePane("t10", true));
+  await act(async () => togglePane("t10", "live"));
   expect([media, map]).toEqual([null, "t10"]);
-  await act(async () => togglePane("t10", true));
-  await act(async () => togglePane("t10"));
+  await act(async () => togglePane("t10", "live"));
+  await act(async () => togglePane("t10", "idle"));
   expect([media, map]).toEqual(["t10", null]);
-  await act(async () => togglePane("t10"));
-  await act(async () => togglePane("t10", true));
+  await act(async () => togglePane("t10", "idle"));
+  await act(async () => togglePane("t10", "live"));
   expect([media, map]).toEqual([null, "t10"]);
+});
+
+it("a room opens Media where it remembered Map, and never Map on its own", async () => {
+  await render("t1", []);
+  localStorage.setItem(PANE_TAB_KEY, JSON.stringify({ r1: "map" }));
+  await act(async () => togglePane("r1"));
+  expect([media, map]).toEqual(["r1", null]);
+  await act(async () => closeShow());
+  await act(async () => showMap("r2"));
+  await act(async () => closeShow());
+  await act(async () => togglePane("r2"));
+  expect([media, map]).toEqual(["r2", null]);
 });
 
 it("a file that opens on its own is not a pick", async () => {
@@ -197,7 +245,7 @@ it("a file that opens on its own is not a pick", async () => {
   await render("t9", [user("u1"), deck]);
   expect(shown?.path).toBe(pdf.path);
   await act(async () => closeShow());
-  await act(async () => togglePane("t9", true));
+  await act(async () => togglePane("t9", "live"));
   expect([shown, map]).toEqual([null, "t9"]);
 });
 
@@ -211,9 +259,9 @@ it("keeps each chat's pick across a restart", async () => {
   let seen: unknown[] = [];
   const After = () => { seen = [restarted.useShowItem(), restarted.useMapThread()]; return null; };
   await act(async () => root.render(createElement(After)));
-  await act(async () => restarted.togglePane("t11"));
+  await act(async () => restarted.togglePane("t11", "idle"));
   expect(seen).toEqual([null, "t11"]);
-  await act(async () => restarted.togglePane("t12", true));
+  await act(async () => restarted.togglePane("t12", "live"));
   expect(seen).toEqual([{ ...pdf, threadId: "t12" }, null]);
 });
 
@@ -222,7 +270,7 @@ it("keeps the pick for the session when storage refuses it", async () => {
   await render("t1", []);
   await act(async () => showMap("t13"));
   await act(async () => closeShow());
-  await act(async () => togglePane("t13"));
+  await act(async () => togglePane("t13", "idle"));
   expect(map).toBe("t13");
   refuse.mockRestore();
 });
