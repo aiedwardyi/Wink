@@ -79,6 +79,15 @@ describe("harness playbook", () => {
     expect(gate.hold("s1", `type ${empty}`)).toBeUndefined();
   });
 
+  it("finds a relative card in the spawn's cwd and skips it without one", () => {
+    const cwd = String.raw`D:\wt\site`;
+    const gate = createPlaybookGate("BODY", (path) => (path === join(cwd, "CARD.md") ? "# CARD\n## Already built\n" : undefined));
+    gate.read("s1");
+    const launch = "claude --model x 'Read CARD.md and do it.'";
+    expect(gate.hold("s1", launch, cwd)).toContain(`Held: ${join(cwd, "CARD.md")} has no prior-work search.`);
+    expect(gate.hold("s1", launch)).toBeUndefined();
+  });
+
   it("is wired ahead of the usage check on the spawn route", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const route = source.slice(source.indexOf('path === "/api/internal/spawn-usage"'));

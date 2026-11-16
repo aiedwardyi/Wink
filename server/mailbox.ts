@@ -147,7 +147,7 @@ export function mailboxNoteText(pane: string, from: string, botId: string, text:
   if (!clean) return null;
   const cut = clean.length > MAILBOX_NOTE_MAX_CHARS;
   const done = parsePaneNote(clean).status === "done" ? `\n${BUILT_REMINDER}` : "";
-  // The reminder sits before [truncated] so parsePaneNote still sees the cut.
+  // [truncated] stays last: parsePaneNote only spots a cut at the very end.
   const capped = `${cut ? clean.slice(0, MAILBOX_NOTE_MAX_CHARS) : clean}${done}${cut ? "\n[truncated]" : ""}`;
   const who = sanitizeMailboxName(from);
   const pane8 = `[pane ${pane.slice(0, 8)}]`;
