@@ -299,6 +299,15 @@ describe("phone sign-in page", () => {
     expect(rows).toEqual([["Ada", false], ["Mid", false], ["Zed", true]]);
   });
 
+  it("draws the last-used arcs in Wink's blue accent, not pink, in light and dark", () => {
+    const precision = readFileSync(join(ROOT, "src/styles.css"), "utf8").match(/\[data-skin="precision"\] \{([^}]+)\}/)![1]!;
+    const accent = precision.match(/--color-accent: ([^;]+);/)![1]!;
+    expect(CSS.match(/:root \{([^}]+)\}/)![1]).toContain(`--edge: ${accent};`);
+    expect([...CSS.matchAll(/--edge(-glow)?: ([^;]+);/g)].map((each) => each[2]!.slice(0, 7))).toEqual([accent, accent, accent]);
+    expect(CSS.toLowerCase()).not.toContain("#ff4d9d");
+    expect(CSS).toMatch(/\.last::after \{[^}]*border-color: var\(--edge\);/);
+  });
+
   it.each([[LABEL_B, true], ["", false], ["short", false]])("rings Google's button only for a remembered PC (%s)", (label, ringed) => {
     if (label) localStorage.setItem(LAST_PC, label);
     open("/?pick=1", []);

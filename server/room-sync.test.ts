@@ -216,6 +216,26 @@ describe("room records over profile sync", () => {
     expect(publishRooms(host(), folder)).toBe(0);
   });
 
+  it("drops the other PCs' copy of a room that turns into a team room", () => {
+    const atlas = bot("Atlas", "sync-atlas");
+    const group = store.createGroup("Plans", [atlas.id]);
+    publishRooms(host(), folder);
+    store.patchGroup(group.id, { hosted: { roomId: "hosted-1" } });
+    expect(publishRooms(host(), folder)).toBe(1);
+    expect(state().rooms[group.id]!.hosted).toBe(true);
+    expect(sync()).toBe(0);
+    expect(store.group(group.id)!.hosted).toEqual({ roomId: "hosted-1" });
+    remote("room-1", created("room-1"), T0);
+    sync();
+    remote("room-1", { hosted: true }, T0 + 1_000);
+    expect(importRooms(host(true), state(), folder)).toEqual({ deferred: true });
+    expect(store.group("room-1")).toBeTruthy();
+    sync();
+    expect(store.group("room-1")).toBeFalsy();
+    sync();
+    expect(store.groups.map((other) => other.id)).toEqual([group.id]);
+  });
+
   it("publishes a route edit as only the fields it changed", async () => {
     const atlas = bot("Atlas", "sync-atlas");
     const nova = bot("Nova", "sync-nova");

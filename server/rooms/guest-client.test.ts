@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
@@ -22,6 +22,7 @@ const PC = "pc-mina-0123456789abcdef";
 const STATE = { version: 1, roomName: "Team", instructions: "", host: "Edward", me: { id: "p1", name: "Mina" }, people: [{ id: "p1", name: "Mina" }], bots: [], myAsks: [] };
 
 let server: Server;
+let tls: { key: string; cert: string; ca: string };
 let https: GuestClientDeps["https"];
 let seen: Array<{ method: string; url: string; headers: IncomingMessage["headers"]; body: string }> = [];
 let route: (req: IncomingMessage, res: ServerResponse, body: string) => void;
@@ -30,7 +31,14 @@ let client: GuestClient | null = null;
 beforeAll(async () => {
   const ca = await TestCa.create();
   const { keyPem, certPem } = await ca.issue(HOST);
-  server = createServer({ key: keyPem, cert: certPem }, (req, res) => {
+  tls = { key: keyPem, cert: certPem, ca: ca.certPem };
+});
+
+// A server per test: a stopped client's request still in flight meets a closed port, not the next test's `seen`.
+beforeEach(async () => {
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  mkdirSync(DATA_DIR, { recursive: true });
+  server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
     let body = "";
     req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
     req.on("end", () => {
@@ -38,25 +46,16 @@ beforeAll(async () => {
       route(req, res, body);
     });
   });
-  https = { ca: ca.certPem, lookup: loopbackLookup, port: await listenLocal(server) };
+  https = { ca: tls.ca, lookup: loopbackLookup, port: await listenLocal(server) };
 });
 
-afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
-});
-
-beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
-  mkdirSync(DATA_DIR, { recursive: true });
-});
-
-afterEach(() => {
+afterEach(async () => {
   client?.stop();
   client = null;
   seen = [];
   server.closeAllConnections();
   closeJoinedDb();
+  await new Promise((resolve) => server.close(resolve));
 });
 
 const reply = (res: ServerResponse, status: number, body: unknown) => {

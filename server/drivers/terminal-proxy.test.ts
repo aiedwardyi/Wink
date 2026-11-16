@@ -263,7 +263,7 @@ describe("terminal proxy", () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) =>
       new Response(JSON.stringify(String(url).includes("/spawn-usage") ? { hold } : { sessionId: "p1", generation: 1 }), { status: 200 }));
     const config = { ...CONFIG, harness: "http://127.0.0.1:2", commsToken: "comms" };
-    const args = { label: "CAREER | gpt-6-astra | high", command: "codex --model gpt-6-astra 'Do it.'" };
+    const args = { label: "CAREER | gpt-6-astra | high", cwd: "D:/wt/career", command: "codex --model gpt-6-astra 'Do it.'" };
     expect(await callTool("terminal_spawn", fetchImpl, config, args)).toEqual({ content: [{ type: "text", text: hold }] });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0];
