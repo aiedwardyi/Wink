@@ -295,7 +295,7 @@ test("an adopting app finds its pane again and replays the ring from a seq", { .
   await until(() => !alive(pane.pid));
 });
 
-test("a pane that ends before its app attaches tells the end only after its old output", { ...windows, timeout: 120_000 }, async (t) => {
+test("a pane that ended is told as gone to a controller, and an attach hands on its old output before its end", { ...windows, timeout: 120_000 }, async (t) => {
   const f = fixture(t);
   const before = f.make({ adopt: true });
   assert.equal(await before.prewarm(), true);
@@ -318,8 +318,9 @@ test("a pane that ends before its app attaches tells the end only after its old 
     },
   });
   await after.peer.write("ending", "exit 3\r");
-  await until(async () => (await after.peer.request("list"))[0]?.exit === 3);
-  assert.deepEqual(order, []);
+  // A dropped pane is forgotten on this gone, so it reaches a controller that never attached.
+  await until(() => order.at(-1) === "gone");
+  assert.deepEqual(order.splice(0), ["exit", "gone"]);
   await after.peer.request("attach", [{ id: "ending" }]);
   await until(() => order.at(-1) === "gone");
   assert.deepEqual(order, ["data", "exit", "gone"]);

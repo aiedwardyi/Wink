@@ -148,7 +148,7 @@ const commands = {
   spawn({ id, shell, args, cwd, env, cols, rows, tag = null }) {
     if (!/^[\w-]{1,64}$/.test(String(id)) || panes.has(id)) throw new Error("Invalid pane id");
     if ([...panes.values()].filter((pane) => !pane.gone).length >= MAX_PANES) throw new Error("Worker host is full");
-    const pane = { id, tag: tag === null ? null : String(tag).slice(0, 256), pid: null, start: Date.now(), ready: null, cols, rows, seq: 0, ring: [], head: 0, bytes: 0, exit: null, error: null, gone: false, doomed: false, mark: null, carry: "", input: 0, output: 0, attached: true };
+    const pane = { id, tag: tag === null ? null : String(tag).slice(0, 256), pid: null, start: Date.now(), ready: null, cols, rows, seq: 0, ring: [], head: 0, bytes: 0, exit: null, error: null, gone: false, doomed: false, mark: null, carry: "", input: 0, output: 0, attached: true, attaching: 0 };
     pane.pty = spawnTerminalPty(config.ptyModule, shell, args, { name: "xterm-256color", cols, rows, cwd, env, useConptyDll: process.platform === "win32" });
     panes.set(id, pane);
     settle();
@@ -158,7 +158,7 @@ const commands = {
       pane.exit = exitCode;
       persist();
       // An attach that has not sent the ring yet tells the end after it.
-      if (!pane.doomed && pane.attached) notify("exit", { id, exitCode, error: pane.error });
+      if (!pane.doomed && !pane.attaching) notify("exit", { id, exitCode, error: pane.error });
     });
     void pane.pty.exited.then(() => {
       pane.gone = true;
@@ -167,7 +167,7 @@ const commands = {
         panes.delete(id);
         persist();
       }
-      if (!pane.doomed && pane.attached) notify("gone", { id });
+      if (!pane.doomed && !pane.attaching) notify("gone", { id });
       settle();
     });
     // The reply does not wait for ConPTY, so a slow shell start never looks like a silent host.
@@ -183,8 +183,10 @@ const commands = {
     const pane = find(id);
     const first = pane.ring[pane.head]?.seq ?? pane.seq + 1;
     pane.attached = false;
+    pane.attaching++;
     // The reply goes out first, then the ring, then live output, all in order.
     setImmediate(() => {
+      pane.attaching--;
       if (controller !== connection || pane.doomed) return;
       for (let index = pane.head; index < pane.ring.length; index++) {
         if (pane.ring[index].seq > fromSeq) send(pane, pane.ring[index].seq, pane.ring[index].bytes);
