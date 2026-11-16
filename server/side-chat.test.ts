@@ -526,6 +526,19 @@ describe("Claude fork (fake CLI)", () => {
     expect(prompts().find((line) => line.argv.includes("--fork-session"))!.text).toBe("[LIVE]\n\nq");
   });
 
+  it("runs the fork with Code Mode on", async () => {
+    process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Port 8080.");
+    const dump = join(scratch, "fork-env.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await mainTurn("t-code-mode");
+    const handle = instance.fork!({ threadId: "t-code-mode", text: "q" })!;
+    await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
+    await handle.close(5_000);
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain("--fork-session");
+    expect(seen.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("1");
+  });
+
   const forkOf = (settings: object, policy: Parameters<typeof forkClaude>[0]["policy"] = {}) => {
     process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
     process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Port 8080.");

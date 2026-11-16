@@ -67,6 +67,7 @@ import { switchEffort, type EffortRequest } from "./claude-effort.ts";
 import { forkClaude, type ClaudeSpawn } from "./claude-fork.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { claudeUserSettingsEnv, withClaudeLaunchEnv } from "../../shared/claude-launch-env.mjs";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { isSignOut } from "./signout.ts";
@@ -138,7 +139,8 @@ function claudeEnvironment(
   // workspace secrets, whatever key ships next — is someone else's.
   const applied = account ? { injected: false } : applyClaudeInject(env, model);
   applyCredentialAllowlist(env, applied.injected ? ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] : []);
-  return account ? accountLaunch(account, "claudeAgent", [], env).env : env;
+  const launched = account ? accountLaunch(account, "claudeAgent", [], env).env : env;
+  return withClaudeLaunchEnv(launched, claudeUserSettingsEnv(launched));
 }
 
 const DRIVER_KIND = "claudeAgent";

@@ -70,6 +70,7 @@ test("the launch line splices the pane's env at run time and never types a grant
     "Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue",
     "$env:ORBIT_URL = 'http://localhost:40123'",
     "$env:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = 'false'",
+    "if (-not $env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE) { $env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = '1' }",
     "$env:PATH = 'D:\\wink-remote\\bin;' + $env:PATH",
     "$env:ORBIT_SCRATCH = 'D:\\wink-remote\\scratch\\' + $env:ORBIT_PANE",
     "New-Item -ItemType Directory -Force $env:ORBIT_SCRATCH | Out-Null",

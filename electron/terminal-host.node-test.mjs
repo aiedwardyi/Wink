@@ -1016,6 +1016,20 @@ test("only bot-spawned panes turn off Claude prompt suggestions", async () => {
   assert.equal(f.children[1].options.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, "false");
 });
 
+test("bot-spawned panes start Claude with Code Mode on unless the pane env sets it", async (t) => {
+  let owner;
+  let environment = {};
+  const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 0 }, environment }) });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  await f.host.open(f.event, f.input);
+  await f.host.openForBot("bot-1", { label: "worker" });
+  await f.host.openForBot("bot-1", { label: "managed", command: "claude" });
+  environment = { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" };
+  await f.host.openForBot("bot-1", { label: "own", command: "claude" });
+  assert.deepEqual(f.children.map((child) => child.options.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE), [undefined, "1", "1", "0"]);
+});
+
 test("openForBot opens a bot's 129th pane and rejects bad input", async () => {
   let owner;
   const f = fixture({ owner: () => owner });

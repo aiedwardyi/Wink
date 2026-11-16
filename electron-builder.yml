@@ -28,6 +28,7 @@ afterPack: ./scripts/after-pack.mjs
 # ELECTRON_RUN_AS_NODE (the agentcal-hq pattern).
 files:
   - electron/**
+  - shared/claude-launch-env.mjs
   - shared/error-report.mjs
   - shared/update-error.mjs
   - "!electron/**/*.test.*"

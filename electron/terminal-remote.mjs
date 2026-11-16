@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomInt } from "node:crypto";
 import { orbitBinFiles } from "./terminal-mailbox.mjs";
 import { quoteWindows } from "./terminal-worker.mjs";
+import { CLAUDE_LAUNCH_ENV } from "../shared/claude-launch-env.mjs";
 
 const GB = 1024 ** 3;
 const RESERVE = 1.5 * GB;
@@ -65,6 +66,7 @@ export function remoteLaunchLine({ host, port, cwd, args }) {
     // localhost skips orbit-msg's 127.0.0.1 fallback ports, which belong to the host's own Wink.
     `$env:ORBIT_URL = 'http://localhost:${port}'`,
     "$env:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = 'false'",
+    ...Object.entries(CLAUDE_LAUNCH_ENV).map(([name, value]) => `if (-not $env:${name}) { $env:${name} = ${quoteWindows(value)} }`),
     `$env:PATH = ${quoteWindows(`${host.root}\\bin;`)} + $env:PATH`,
     `$env:ORBIT_SCRATCH = ${quoteWindows(`${host.root}\\scratch\\`)} + $env:ORBIT_PANE`,
     "New-Item -ItemType Directory -Force $env:ORBIT_SCRATCH | Out-Null",

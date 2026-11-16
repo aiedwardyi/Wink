@@ -12,6 +12,7 @@ import { applyCredentialAllowlist } from "./config.ts";
 import { workerSession } from "./worker-session.ts";
 import { baseAccount, resumeArgs, type WorkerResume } from "./worker-resume.ts";
 import { requireCodexPromoAccount } from "../electron/codex-promo.mjs";
+import { claudeUserSettingsEnv, withClaudeLaunchEnv } from "../shared/claude-launch-env.mjs";
 
 const ENGINES = new Map([
   ["claude", { driver: "claudeAgent", base: "claude", name: "Claude" }],
@@ -215,6 +216,7 @@ export function createWorkerLaunch(options: {
       // Setting the default directory moves Claude's config from ~/.claude.json to ~/.claude/.claude.json.
       delete policy.env.CLAUDE_CONFIG_DIR;
     }
+    if (command.driver === "claudeAgent") withClaudeLaunchEnv(policy.env, claudeUserSettingsEnv(policy.env));
     if (command.driver === "codex" && !policy.args.includes("--no-daemon")) policy.args.push("--no-daemon");
     if (!managedEngine) {
       applyCredentialAllowlist(policy.env, []);
