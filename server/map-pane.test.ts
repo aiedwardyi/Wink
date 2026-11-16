@@ -340,6 +340,47 @@ async function open(workers: MapPaneRecord[]) {
   return { url, seen, until, chat: () => listener(), close: () => abort.abort() };
 }
 
+it("reopens on the last snapshot and file list at once, then sends the fresh read", async () => {
+  const { root, base } = repo();
+  writeFileSync(join(root, "file.ts"), "const first = 2;\n");
+  const feature = createMapPane({ panes: async () => [{ sessionId: "pane-a", cwd: root, label: "ALPHA", baseHead: base }], subscribe: () => () => {} });
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    if (url.pathname === "/live") streams.push(res);
+    void feature.handle(req, res, "bot", url.pathname.slice(1), url);
+  });
+  servers.push(server);
+  const url = `http://127.0.0.1:${await listenLocal(server)}`;
+  const live = async () => {
+    const abort = new AbortController();
+    const reader = (await fetch(`${url}/live`, { signal: abort.signal })).body!.getReader();
+    let buffered = "";
+    const next = async (): Promise<MapSnapshot> => {
+      while (!buffered.includes("\n\n")) buffered += new TextDecoder().decode((await reader.read()).value);
+      const end = buffered.indexOf("\n\n");
+      const data = JSON.parse(buffered.slice(6, end));
+      buffered = buffered.slice(end + 2);
+      return data;
+    };
+    return { next, close: () => abort.abort() };
+  };
+  const paths = (data: MapSnapshot) => data.workers[0].files.map(file => file.path);
+  const listed = () => fetch(`${url}/repo?worker=pane-a`).then(res => res.json());
+  const first = await live();
+  expect(paths(await first.next())).toEqual(["file.ts"]);
+  expect(await listed()).toMatchObject({ paths: ["file.ts"] });
+  first.close();
+  await vi.waitFor(async () => expect((await fetch(`${url}/repo?worker=pane-a`)).status).toBe(404));
+  writeFileSync(join(root, "added.ts"), "const added = 1;\n");
+  const again = await live();
+  expect(paths(await again.next())).toEqual(["file.ts"]);
+  expect(await listed()).toMatchObject({ paths: ["file.ts"] });
+  expect((await fetch(`${url}/file?worker=pane-a&path=file.ts`)).status).toBe(200);
+  expect(paths(await again.next())).toEqual(["file.ts", "added.ts"]);
+  await vi.waitFor(async () => expect(await listed()).toMatchObject({ paths: ["added.ts", "file.ts"] }));
+  again.close();
+});
+
 it("marks only the worker whose folder is gone and still opens the others", async () => {
   const { root, base } = repo();
   writeFileSync(join(root, "file.ts"), "const kept = 2;\n");
