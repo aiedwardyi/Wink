@@ -290,7 +290,8 @@ export function queueRoomParticipation(
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && item.hands === (options.hands || undefined));
+  // a chain hop folds only into its own ask's chain: a teammate's limits never ride on another's
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && item.hands === (options.hands || undefined) && item.chainAsk === options.chainAsk);
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
@@ -302,7 +303,6 @@ export function queueRoomParticipation(
     }
     existing.onDispatchError ??= options.onDispatchError;
     existing.instructionId ??= options.instructionId;
-    existing.chainAsk ??= options.chainAsk;
     // a recovery's recheck and answered set only hold when every participation folded in here carries them
     const [held, added] = [existing.ready, options.ready];
     existing.ready = held && added ? async () => (await held()) || (await added()) : undefined;

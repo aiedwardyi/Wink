@@ -493,20 +493,19 @@ describe("the answer", () => {
     return drained[0]!;
   }
 
-  it("keeps the teammate's ask on a chain hop that waits behind a busy bot, folded or not", async () => {
+  it("keeps the teammate's ask on a chain hop that waits behind a busy bot, apart from the host's own line", async () => {
     const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation, store, broadcast: vi.fn(), publicGroupState: (value: HostedGroup) => value });
     const run = load("runGroupMemberTurn", {
       store, cfg: { profile: {} }, hostedTurnRefused, botHasActiveTurn: () => true, tryClaimTurnStart: vi.fn(), queueBusyRoomMember,
       threadHasLiveTurn: () => false, roomLanes: { claim: () => false }, laneKey: (id: string) => id, botAccounts: { instance: () => undefined },
       runClaimedGroupMemberTurn: vi.fn(), takeStartingHold: vi.fn(), turnStartClaims: new Map(), continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {},
     });
-    // the host's own line already waits for Wink; the chain hop folds into it
+    // the host's own line already waits for Wink; the chain hop queues on its own
     queueRoomParticipation(wink, group.threadId, { groupId: group.id, hop: 0 });
     expect(await run(group.id, group.threadId, wink, 1, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, undefined, undefined, "ask-from-sora")).toBe(true);
     const drained: RoomDrain[] = [];
-    drainSteeredMessages({ bot: (id: string) => store.bot(id), messagesFor: () => [], appendMessage: vi.fn(), patchMessage: vi.fn() } as never, (_bot, _thread, _prompt, _user, _ex, room) => { drained.push(room!); });
-    expect(drained).toEqual([expect.objectContaining({ hop: 0, chainAsk: "ask-from-sora" })]);
-    expect(drained[0]!.askId).toBeUndefined();
+    for (let i = 0; i < 2; i++) drainSteeredMessages({ bot: (id: string) => store.bot(id), messagesFor: () => [], appendMessage: vi.fn(), patchMessage: vi.fn() } as never, (_bot, _thread, _prompt, _user, _ex, room) => { drained.push(room!); });
+    expect(drained.map((room) => [room.hop, room.chainAsk, room.askId])).toEqual([[0, undefined, undefined], [1, "ask-from-sora", undefined]]);
   });
 
   function viewer(bots: boolean) {
