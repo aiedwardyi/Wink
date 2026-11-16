@@ -44,6 +44,17 @@ describe("usage_status text", () => {
     ]);
   });
 
+  it("never offers an account whose sign-in is unconfirmed or whose CLI is missing", () => {
+    const unchecked: UsageBoard = { ...board, engines: [{ ...board.engines[0], accounts: [
+      account("Claude 2", { signIn: "unknown", windows: [window("session", 10, now + HOUR)] }),
+      account("Claude 5", { signIn: "cli-missing", windows: [window("session", 10, now + HOUR)] }),
+    ] }] };
+    expect(usageStatusText(unchecked, "UTC").split("\n").slice(2, 4)).toEqual([
+      "- Claude 2: unavailable: sign-in not confirmed yet",
+      "- Claude 5: unavailable: engine CLI not installed or not answering",
+    ]);
+  });
+
   it("gives reset clocks in the PC's time zone", () => {
     expect(usageStatusText(board, "Asia/Seoul")).toContain("- Claude 1 (Main): 5h 34% left, resets Mon, Nov 16, 16:25 (in 2h 25m)");
   });
