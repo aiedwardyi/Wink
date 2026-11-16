@@ -5922,7 +5922,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           DEFAULT_RULES +
           accessRules(live.adapter.access?.({ approval, cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
-          tracePart("memory", aboutYouPrompt()) +
+          // a joined room's session answers everyone there, so it never carries the owner's About You
+          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt()) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
           tracePart("playbook", packagePlaybooks) +
@@ -6467,6 +6468,7 @@ function queueBusyRoomMember(
   instructionId?: string,
   rootId?: string | null,
   askId?: string,
+  chainAsk?: string,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
@@ -6478,6 +6480,7 @@ function queueBusyRoomMember(
     onDispatchError,
     instructionId,
     askId,
+    chainAsk,
   });
   const group = store.group(groupId);
   if (group?.hosted) broadcast({ kind: "group", group: publicGroupState(group) });
@@ -6495,7 +6498,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; spoken?: Set<string> },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; chainAsk?: string; spoken?: Set<string> },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (hostedTurnRefused(store.group(room.groupId), threadId, botId, room.askId) || !roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6532,6 +6535,7 @@ function enqueueDrainedRoomTurn(
       undefined,
       room.rootId ?? null,
       room.askId,
+      room.chainAsk,
     );
   });
   const tracked = next.finally(() => finishGroupTurnOperation(room.groupId, operation));
@@ -6651,6 +6655,7 @@ async function runGroupMemberTurn(
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
   authority?: string,
+  chainAsk?: string,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6663,7 +6668,7 @@ async function runGroupMemberTurn(
   const lane = botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
     botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
   if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, chainAsk);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
@@ -6688,6 +6693,7 @@ async function runGroupMemberTurn(
       rootId,
       authority,
       lane,
+      chainAsk,
     );
   } finally {
     releaseTurnStart();
@@ -6721,6 +6727,8 @@ async function runClaimedGroupMemberTurn(
   authority?: string,
   // the bot's second lane: no busy flag, no hands, and a Stop keyed apart from the 1:1
   lane = false,
+  // the ask that started the chain this hop is part of
+  chainAsk?: string,
 ): Promise<boolean> {
   const turnKey = lane ? laneKey(botId) : botId;
   const epoch = currentTurnEpoch(turnKey);
@@ -6734,7 +6742,7 @@ async function runClaimedGroupMemberTurn(
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy && !lane) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, chainAsk);
   }
   // Capture before any await. startGroupTurn persists the next instruction
   // on arrival, so a re-read after setup binds this turn to a later message.
@@ -6902,7 +6910,7 @@ async function runClaimedGroupMemberTurn(
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   // automatic routing can resolve to an engine that cannot run read-only
   if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority, chainAsk);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
   if (!lane) {
@@ -6986,8 +6994,8 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
-    // a teammate's ask answers the whole room: the owner's private facts stay out
-    (authority ? "" : aboutYouPrompt()) +
+    // a teammate's ask, or a chain one started, answers the whole room: the owner's private facts stay out
+    (authority || chainAsk ? "" : aboutYouPrompt()) +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7131,7 +7139,7 @@ async function runClaimedGroupMemberTurn(
       if (isCancelled?.()) return false;
       if (spoken.has(chainEdge(bot.id, next.id))) continue;
       spoken.add(chainEdge(bot.id, next.id));
-      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId))) {
+      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId, undefined, authority ?? chainAsk))) {
         return false;
       }
     }

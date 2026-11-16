@@ -121,28 +121,51 @@ describe("every bot reads About You", () => {
     expect(prompt).not.toContain("from ChatGPT");
   });
 
-  it("goes into every 1:1 system text, whatever the bot or its engine", () => {
-    expect(source).toContain('tracePart("memory", aboutYouPrompt()) +\n          tracePart("memory", privateWorkspace');
+  const fn = (name: string) => index.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === name)!;
+  const inside = <T extends ts.Node>(node: ts.Node, hit: (node: ts.Node) => node is T): T | undefined => (hit(node) ? node : ts.forEachChild(node, (child) => inside(child, hit)));
+  const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+  // a name the scope lacks reads as undefined, so a turn's other parameters need no stubs
+  const evaluate = (code: string, scope: Record<string, unknown>): unknown =>
+    new Function("scope", `with (scope) { ${code} }`)(new Proxy(scope, { has: () => true, get: (target, key) => (key in target ? target[key as string] : Reflect.get(globalThis, key)) }));
+  const roomSystem = (turn: Record<string, unknown>) => {
+    const statement = inside(fn("runClaimedGroupMemberTurn"), (node): node is ts.VariableStatement => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === "roomSystem"))!;
+    return evaluate(`${js(statement.getText(index))}
+return roomSystem;`, {
+      system: "", projectFolderPrompt: () => "", cwd: ".", detailedRepliesEnabled: () => false, cfg: {},
+      DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", aboutYouPrompt, memorySystemPrompt: () => "",
+      memoryNotesEnabled: () => false, bot: { id: "bot", playbooks: [] }, lane: false, renderSkillInstructions: () => "", selectedSkills: [],
+      installedPlaybookInstructions: () => "", text: "", harnessPlaybookPrompt: () => "", integrations: {}, accessRules: () => "",
+      instance: { adapter: {} }, access: {}, memberTurnSelection: () => ({}), selection: {}, ...turn,
+    }) as string;
+  };
+
+  it("goes into 1:1 sessions, never a joined room's session, whoever asked there", () => {
+    const block = inside(fn("startClaimedTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "tracePart" && node.arguments[1]?.getText(index).includes("aboutYouPrompt") === true)!;
+    const aboutYou = (threadId: string) => evaluate(`return ${js(`(${block.arguments[1]!.getText(index)})`)}`, { threadId, aboutYouPrompt, roomTaskThreads: () => new Set(["joined-room-task"]) });
+    addToAboutYou(paste, "2026-11-16");
+    expect(aboutYou("own-chat")).toContain("- The user is Dana Park; call her Dana. (noted 2026-11-16)");
+    expect(aboutYou("joined-room-task")).toBe("");
   });
 
   it("goes into the owner's own room turns, never a turn a teammate asked for", () => {
-    const run = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
-    const find = (node: ts.Node): ts.VariableStatement | undefined => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === "roomSystem") ? node : ts.forEachChild(node, find);
-    const code = ts.transpileModule(find(run)!.getText(index), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    const roomSystem = (authority?: string): string => {
-      const deps = {
-        system: "", projectFolderPrompt: () => "", cwd: ".", workspace: undefined, detailedRepliesEnabled: () => false, cfg: {},
-        DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", aboutYouPrompt, memorySystemPrompt: () => "",
-        memoryNotesEnabled: () => false, bot: { id: "bot", playbooks: [] }, lane: false, renderSkillInstructions: () => "", selectedSkills: [],
-        installedPlaybookInstructions: () => "", text: "", harnessPlaybookPrompt: () => "", integrations: {}, accessRules: () => "",
-        instance: { adapter: {} }, access: {}, memberTurnSelection: () => ({}), selection: {}, authority,
-      };
-      return new Function(...Object.keys(deps), `${code}\nreturn roomSystem;`)(...Object.values(deps));
-    };
     addToAboutYou(paste, "2026-11-16");
-    expect(roomSystem()).toContain("- The user is Dana Park; call her Dana. (noted 2026-11-16)");
-    expect(roomSystem("ask-from-sora")).not.toContain("Dana Park");
-    expect(roomSystem("ask-from-sora")).not.toContain("About the user");
+    expect(roomSystem({})).toContain("- The user is Dana Park; call her Dana. (noted 2026-11-16)");
+    expect(roomSystem({ authority: "ask-from-sora" })).not.toContain("Dana Park");
+    expect(roomSystem({ authority: "ask-from-sora" })).not.toContain("About the user");
+  });
+
+  it("stays out of every hop of an @mention chain a teammate's ask started", () => {
+    const names = (node: ts.FunctionDeclaration) => node.parameters.map((parameter) => parameter.name.getText(index));
+    const hop = inside(fn("runClaimedGroupMemberTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "runGroupMemberTurn" && node.arguments[2]?.getText(index) === "next.id")!;
+    const handoff = inside(fn("runGroupMemberTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "runClaimedGroupMemberTurn")!;
+    // the chain's call, then runGroupMemberTurn's hand-off, name for name
+    const args = evaluate(`return [${hop.arguments.map((arg) => arg.getText(index)).join(", ")}];`, { authority: "ask-from-sora", next: { id: "pixel" }, hop: 0 }) as unknown[];
+    const outer = Object.fromEntries(names(fn("runGroupMemberTurn")).map((name, i) => [name, args[i]]));
+    const turn = Object.fromEntries(names(fn("runClaimedGroupMemberTurn")).map((name, i) => [name, outer[handoff.arguments[i]?.getText(index) ?? ""]]));
+    addToAboutYou(paste, "2026-11-16");
+    expect(turn).toMatchObject({ botId: "pixel", hop: 1 });
+    expect(roomSystem({ ...turn, lane: false })).not.toContain("Dana Park");
+    expect(roomSystem({ ...turn, lane: false })).not.toContain("About the user");
   });
 
   it("goes into every bot's call brief", async () => {

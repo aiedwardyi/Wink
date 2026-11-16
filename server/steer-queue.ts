@@ -46,6 +46,7 @@ interface RoomItem {
   onDispatchError?: (message: string) => void;
   instructionId?: string;
   askId?: string;
+  chainAsk?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
 }
@@ -198,6 +199,7 @@ export interface RoomDrain {
   onDispatchError?: (message: string) => void;
   instructionId?: string;
   askId?: string;
+  chainAsk?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
 }
@@ -276,6 +278,7 @@ export function queueRoomParticipation(
     onDispatchError?: (message: string) => void;
     instructionId?: string;
     askId?: string;
+    chainAsk?: string;
     ready?: () => Promise<boolean>;
     spoken?: Set<string>;
   },
@@ -291,6 +294,7 @@ export function queueRoomParticipation(
     }
     existing.onDispatchError ??= options.onDispatchError;
     existing.instructionId ??= options.instructionId;
+    existing.chainAsk ??= options.chainAsk;
     // a recovery's recheck and answered set only hold when every participation folded in here carries them
     const [held, added] = [existing.ready, options.ready];
     existing.ready = held && added ? async () => (await held()) || (await added()) : undefined;
@@ -310,6 +314,7 @@ export function queueRoomParticipation(
     ready: options.ready,
     spoken: options.spoken,
     ...(options.askId ? { askId: options.askId } : {}),
+    ...(options.chainAsk ? { chainAsk: options.chainAsk } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
   return { id };
@@ -418,6 +423,7 @@ export function drainSteeredMessages(
     if (room.onDispatchError) roomDrain.onDispatchError = room.onDispatchError;
     if (room.instructionId) roomDrain.instructionId = room.instructionId;
     if (room.askId) roomDrain.askId = room.askId;
+    if (room.chainAsk) roomDrain.chainAsk = room.chainAsk;
     if (room.ready) roomDrain.ready = room.ready;
     if (room.spoken) roomDrain.spoken = room.spoken;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
