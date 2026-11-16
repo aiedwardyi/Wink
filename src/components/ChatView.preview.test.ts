@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
 import { ChatPeekParts, ChatPreviewContext } from "@/lib/chat-preview";
+import { setRoomHolds, takeClosedRoomHold } from "@/lib/drafts";
 import { PHONE_QUERY, swipeBlocked } from "@/lib/phone-swipe";
 import { TRANSCRIPT_TAIL_SIZE } from "@/lib/transcript-window";
 import { ChatView, clearLivePaneCache } from "./ChatView";
@@ -415,6 +416,18 @@ describe("cached room preview", () => {
     expect(requests.some((url) => url.includes("/api/rooms/peek"))).toBe(false);
     await transcript(false);
     expect(host.querySelector("[data-room-empty]")?.textContent).toContain("Room Neighbor");
+  });
+
+  it("leaves a previewed room's queued sends to the background drain until it is promoted", async () => {
+    const group = { ...room, id: "hold-room", threadId: "thread-hold-room", messages: [], hasMore: false, pinnedMessageId: undefined };
+    const id = `group:${group.id}:${group.threadId}`;
+    const hold = { text: "Queued", requestText: "Queued", sendId: "queued-send", threadId: group.threadId, revision: 0, attachments: [] };
+    await renderRoom(true, group);
+    setRoomHolds(localStorage, id, [hold]);
+    expect(takeClosedRoomHold(id)?.sendId).toBe("queued-send");
+    await renderRoom(false, group);
+    setRoomHolds(localStorage, id, [hold]);
+    expect(takeClosedRoomHold(id)).toBeUndefined();
   });
 
   it("renders the real room header and cached messages without paging or quote reads", async () => {
