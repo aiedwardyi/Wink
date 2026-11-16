@@ -163,6 +163,7 @@ describe("POST /v1/enroll/google", () => {
     await ok();
     const third = await enroll(h, makePc(), token(s, "busy-sub"));
     expect(third).toMatchObject({ status: 403, body: { error: "account-full", retryAfter: 86_400 } });
+    expect(third.headers["retry-after"]).toBe("86400");
     s.clock.advance(DAY);
     await ok();
     await ok();

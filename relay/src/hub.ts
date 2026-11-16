@@ -374,9 +374,9 @@ export class Hub {
   }
 
   private forwardPoke(sender: Session): void {
-    sender.lastPoke = this.now();
     const subHash = sender.account?.subHash;
     if (!sender.live || !subHash) return;
+    sender.lastPoke = this.now();
     let count = 0;
     for (const label of this.bySub.get(subHash)?.keys() ?? []) {
       const peer = this.byLabel.get(label);
