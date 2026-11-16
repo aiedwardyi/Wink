@@ -123,7 +123,7 @@ describe("whats new card", () => {
     const [memory, verify] = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
     act(() => verify.click());
     expect(verify.getAttribute("aria-expanded")).toBe("true");
-    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1].show as { en: string }).en);
+    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1]!.show as { en: string }).en);
     expect(onClose).not.toHaveBeenCalled();
     act(() => memory.click());
     expect(dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "" } });
@@ -173,9 +173,29 @@ describe("whats new card", () => {
     }
     expect(entry.tiles[0].title.en).toContain("Map");
     for (const locale of ["en", "ko"] as const) {
-      expect(entry.tiles[1].title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
-      expect((entry.tiles[1].show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
+      expect(entry.tiles[1]!.title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
+      expect((entry.tiles[1]!.show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
     }
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("shows the four new themes as one tile in 1.0.273, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.273"];
+    expect(entry.tiles).toHaveLength(1);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.273");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(1);
+      expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
+      expect(tiles[0].textContent).toContain(entry.tiles[0].line[locale]);
+      act(() => tiles[0].querySelector<HTMLButtonElement>(".whats-new-show")!.click());
+      expect(tiles[0].textContent).toContain((entry.tiles[0].show as Record<typeof locale, string>)[locale]);
+    }
+    for (const name of ["Samurai Ink", "Night Rain", "Warp", "Circuit"]) expect(entry.tiles[0].line.en).toContain(name);
+    for (const name of ["사무라이 잉크", "나이트 레인", "워프", "서킷"]) expect(entry.tiles[0].line.ko).toContain(name);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -183,9 +203,17 @@ describe("whats new card", () => {
     ["en", "lagoon", "Lagoon moves while your bot works. It costs 0 tokens."],
     ["en", "snow", "Snow moves while your bot works. It costs 0 tokens."],
     ["en", "neon-grid", "Neon Grid moves while your bot works. It costs 0 tokens."],
+    ["en", "samurai-ink", "Samurai Ink moves while your bot works. It costs 0 tokens."],
+    ["en", "night-rain", "Night Rain moves while your bot works. It costs 0 tokens."],
+    ["en", "warp", "Warp moves while your bot works. It costs 0 tokens."],
+    ["en", "circuit", "Circuit moves while your bot works. It costs 0 tokens."],
     ["ko", "lagoon", "라군 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
     ["ko", "snow", "스노우 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
     ["ko", "neon-grid", "네온 그리드 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "samurai-ink", "사무라이 잉크 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "night-rain", "나이트 레인 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "warp", "워프 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "circuit", "서킷 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
   ] as const)("shows an animated theme as one row in %s (%s), closed by its X", (locale, theme, line) => {
     applyLocale(locale);
     act(() => root.render(createElement(WhatsNewCard, { theme, closing: false, onClose })));

@@ -201,6 +201,31 @@ describe("Drive mirror", () => {
     expect(drive.downloads.map((id) => decodeDrivePath(drive.records.get(id)!.file.name))).toEqual(paths);
   });
 
+  it("lands chats one by one on a chat-first pass, open chat then the most recent, each head after its own segments", async () => {
+    const dir = (chat: number) => `threads-v2/bot/chat-${chat}/writer-home`;
+    const segments = (chat: number) => [1, 2, 3].map((seg) => `${dir(chat)}/seg-${seg}-${seg}.json.gz`);
+    for (let chat = 0; chat < 10; chat++) {
+      for (const path of segments(chat)) seed(path, path);
+      seed(`${dir(chat)}/head.json`, `head ${chat}`);
+    }
+    const heads: number[] = [];
+    const readyAtHead: boolean[] = [];
+    drive.onDownload = async (file) => {
+      const path = decodeDrivePath(file.name)!;
+      const chat = Number(/chat-(\d+)/.exec(path)![1]);
+      if (path.endsWith("/head.json")) {
+        heads.push(chat);
+        readyAtHead.push(segments(chat).every((segment) => existsSync(join(pcs[1].folder, segment))));
+      } else await delay(5);
+    };
+    const summary = await mirrorFor(pcs[1], { chatFirst: true, openThread: "chat-3" }).syncOnce();
+    expect(summary.downloaded).toHaveLength(40);
+    expect(heads).toEqual([3, 9, 8, 7, 6, 5, 4, 2, 1, 0]);
+    expect(readyAtHead).toEqual(Array(10).fill(true));
+    const paths = drive.downloads.map((id) => decodeDrivePath(drive.records.get(id)!.file.name)!);
+    expect(paths.indexOf(`${dir(9)}/head.json`)).toBeLessThan(paths.indexOf(segments(0)[0]));
+  });
+
   describe("boot and wake catch-up", () => {
     let sync: GoogleSync | undefined;
     const open = "threads-v2/bot/z-open/writer-home";
@@ -254,7 +279,7 @@ describe("Drive mirror", () => {
       const readyAtHead: boolean[] = [];
       drive.onDownload = async (file) => {
         if (decodeDrivePath(file.name)!.endsWith("/head.json")) {
-          readyAtHead.push([...segments, `${other}/seg-1-2.json.gz`].every((path) => existsSync(join(pcs[1].folder, path))));
+          readyAtHead.push((decodeDrivePath(file.name)!.startsWith(open) ? segments : [`${other}/seg-1-2.json.gz`]).every((path) => existsSync(join(pcs[1].folder, path))));
         }
       };
       google.resume();
@@ -317,6 +342,9 @@ describe("Drive mirror", () => {
       const google = await boot(clock, () => "z-open", () => {});
       google.resume();
       await google.kick();
+      // The kick landed mid-pass, so its one queued pass runs on time before the clock jumps.
+      await vi.advanceTimersByTimeAsync(0);
+      await google.idle();
       const { head } = backlog("boundary");
       clock.now += 30_000 + 60_000;
       await vi.advanceTimersByTimeAsync(30_000);

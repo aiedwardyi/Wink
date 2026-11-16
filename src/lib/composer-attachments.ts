@@ -41,6 +41,8 @@ export type UploadAttachment = {
   shrink?: boolean;
   /** A picture sent whole to the image route; the chip it becomes. */
   picture?: "image" | "file";
+  /** A document sent whole to the route that keeps its name. */
+  document?: true;
 };
 
 export type ImageAttachment = {
@@ -80,7 +82,8 @@ export function imageSupportForTargets(
   instances: readonly { instanceId: string; capabilities?: { images?: boolean } }[],
   targets: readonly { modelSelection: { instanceId: string } }[],
 ): ImageSupport {
-  if (!targets.length) return "unsupported";
+  // no bot answers, so no engine reads the picture
+  if (!targets.length) return "supported";
   let unknown = false;
   for (const target of targets) {
     const instance = instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId);
@@ -516,11 +519,10 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   },
 ): Promise<{ attachments: Attachment[]; uploads: { id: string; file: T }[]; notice: string | null }> {
   const files = [..._files];
-  const { allowImages, getPath, t } = _opts;
+  const { allowImages, getPath } = _opts;
   const shrunkPath = _opts.shrunkPath ?? (async () => undefined);
   const attachments: Attachment[] = [];
   const uploads: { id: string; file: T }[] = [];
-  const uploadErrors: string[] = [];
   const bigUpload = (file: T, shrink = false) => {
     const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 }, shrink);
     attachments.push(chip);
@@ -554,12 +556,11 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
     if (path) {
       attachments.push(fileAttachment(file.name, path, file.size, file.type));
     } else if (DOCUMENT_EXTENSION.test(file.name) && file.size <= DOCUMENT_MAX_BYTES) {
-      try {
-        const saved = await uploadAttachmentFile(file, true);
-        attachments.push(fileAttachment(saved.name ?? attachmentBasename(file.name), saved.path, saved.bytes, file.type));
-      } catch {
-        uploadErrors.push(`${file.name}: ${t("composer.uploadFailed")}`);
-      }
+      // Its chip shows at once, so Send waits for it.
+      const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 });
+      chip.document = true;
+      attachments.push(chip);
+      uploads.push({ id: chip.id, file });
     } else if (file.type === "text/plain") {
       const result = await attachmentsFromDroppedFiles([file], getPath);
       attachments.push(...result.attachments);
@@ -568,5 +569,5 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       bigUpload(file);
     }
   }
-  return { attachments, uploads, notice: uploadErrors.length ? uploadErrors.join(" ") : null };
+  return { attachments, uploads, notice: null };
 }

@@ -47,7 +47,8 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushSupported, webPushTarget } from "@/lib/web-push";
+import { answerOnThread } from "@/lib/live-call/active";
+import { webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { isPhone, swipeBotIds } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
@@ -465,6 +466,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
 
   // A tapped push notification: its /?bot=&thread= url on a cold open, or a worker message when already open.
   const pushOpenTarget = useRef(webPushTarget(window.location.search));
+  const pushOpenCall = useRef(webPushCall(window.location.search));
   const hydratedBots = state.bots.length > 0;
   useEffect(() => {
     const target = pushOpenTarget.current;
@@ -472,7 +474,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
+    answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
   }, [dispatch, hydratedBots]);
+  useEffect(() => void answerOnThread(state.bots), [state.bots]);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
@@ -487,6 +491,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
+      answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);

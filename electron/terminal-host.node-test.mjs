@@ -1016,6 +1016,38 @@ test("only bot-spawned panes turn off Claude prompt suggestions", async () => {
   assert.equal(f.children[1].options.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, "false");
 });
 
+test("bot-spawned panes turn Code Mode on only with its caveats saved in the pane's Claude config", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-code-mode-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = (name, text) => {
+    fs.mkdirSync(path.join(root, name));
+    if (text !== undefined) fs.writeFileSync(path.join(root, name, ".claude.json"), text);
+    return path.join(root, name, ".claude.json");
+  };
+  const asked = config("asked", JSON.stringify({ numStartups: 3, codeModeCaveatsAcceptedV1: false }));
+  const saved = config("saved", JSON.stringify({ codeModeCaveatsAcceptedV1: true, codeModeAutoModeCaveatAcceptedV1: true }));
+  const broken = config("broken", "{ not json");
+  const own = config("own", JSON.stringify({ numStartups: 1 }));
+  const missing = config("missing");
+  let owner;
+  let environment;
+  const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 0 }, environment }) });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  await f.host.open(f.event, f.input);
+  const seen = [];
+  for (const [file, extra] of [[asked], [saved], [broken], [missing], [own, { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" }]]) {
+    environment = { CLAUDE_CONFIG_DIR: path.dirname(file), ...extra };
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+    await f.host.openForBot("bot-1", { label: path.basename(path.dirname(file)), command: "claude" });
+    seen.push([f.children.at(-1).options.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE, file === asked ? null : (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null) === before]);
+  }
+  assert.equal(f.children[0].options.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE, undefined);
+  assert.deepEqual(seen, [["1", null], ["1", true], [undefined, true], [undefined, true], ["0", true]]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(asked, "utf8")), { numStartups: 3, codeModeCaveatsAcceptedV1: true, codeModeAutoModeCaveatAcceptedV1: true });
+  assert.deepEqual(fs.readdirSync(path.dirname(asked)), [".claude.json"]);
+});
+
 test("openForBot opens a bot's 129th pane and rejects bad input", async () => {
   let owner;
   const f = fixture({ owner: () => owner });
@@ -1963,6 +1995,21 @@ test("Antigravity folder trust stops scanning once agy is working and re-arms on
   child.data(AGY_TRUST_MENU);
   await f.settle();
   assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", AGY_TRUST_COMMAND + "\r", "\r"]);
+});
+
+test("a relaunch sent as its line then Enter re-arms folder trust", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  await f.advance(2_000);
+  child.data("\x1b[2J\x1b[H  ⣽  Reading file...\r\n");
+  child.data("\x1b[2J\x1b[HPS C:\\repo> ");
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: AGY_TRUST_COMMAND });
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "\r" });
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", AGY_TRUST_COMMAND, "\r", "\r"]);
 });
 
 test("keeps folder trust gated on bypass mode", async (t) => {

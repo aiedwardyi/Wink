@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { z } from "zod";
 import type { MapDiff, MapDiffLine, MapFile } from "../shared/map-pane.ts";
+import { mapEmptyTree } from "../shared/map-empty-tree.mjs";
 
 const LIMIT = 512 * 1024;
 export const MAP_LINE_LIMIT = 500;
@@ -27,7 +28,7 @@ export async function mapHead(cwd: string): Promise<string | null> {
   try {
     const head = (await mapGit(cwd, ["rev-parse", "HEAD"])).trim();
     return /^[a-f0-9]{40,64}$/.test(head) ? head : null;
-  } catch { return null; }
+  } catch { return mapEmptyTree((await mapGit(cwd, ["rev-parse", "--show-object-format"]).catch(() => "")).trim()); }
 }
 
 async function fileText(cwd: string, path: string): Promise<{ text: string; capped: boolean; binary: boolean }> {

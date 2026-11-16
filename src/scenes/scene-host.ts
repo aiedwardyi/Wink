@@ -1,7 +1,7 @@
 // A chat scene draws behind the transcript only on events (send, busy, reply)
 // and stops itself; a theme tile asks it to loop. The host owns the frame loop
 // so no scene can run while the window is hidden, or blurred for scenes that
-// ask, or under reduced motion.
+// ask, or its layer is scrolled out of view, or under reduced motion.
 import { reducedMotion } from "@/lib/phone-swipe";
 
 export type SceneRect = { x: number; y: number; w: number; h: number; cx: number; cy: number };
@@ -29,6 +29,8 @@ export type SceneApi = {
 export type Scene = {
   /** False ends the loop; the last frame stays up as a still. */
   frame(t: number, dt: number): boolean;
+  /** Ms to wait before asking for the next frame; none or 0 asks at once. */
+  idle?(): number;
   event(event: SceneEvent): void;
   dispose(): void;
 };
@@ -42,17 +44,20 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
   let on = false;
   let want = false;
   let raf = 0;
+  let idling: ReturnType<typeof setTimeout> | undefined;
   let last = 0;
   let clock = 0;
+  let offscreen = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const paused = () => {
     const idle = root.getAttribute("data-orbit-idle");
-    return idle === "hidden" || (module.pauseOnBlur && idle === "blur");
+    return offscreen || idle === "hidden" || (module.pauseOnBlur && idle === "blur");
   };
   const halt = () => {
     if (!on) return;
     on = false;
     cancelAnimationFrame(raf);
+    clearTimeout(idling);
   };
   const tick = (now: number) => {
     if (!on) return;
@@ -65,7 +70,10 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
       want = false;
       return;
     }
-    raf = requestAnimationFrame(tick);
+    // Every frame the page wakes for costs the renderer and GPU process, drawn or not; idling is what saves.
+    const wait = scene.idle?.() ?? 0;
+    if (wait > 0) idling = setTimeout(() => (raf = requestAnimationFrame(tick)), wait);
+    else raf = requestAnimationFrame(tick);
   };
   const wake = () => {
     if (reducedMotion()) return;
@@ -103,12 +111,19 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
   };
   const scene = module.create(api);
 
-  // Same frame as idle-motion's attribute write: the observer runs before the next paint.
-  const idle = new MutationObserver(() => {
+  const recheck = () => {
     if (paused()) halt();
     else if (want) wake();
-  });
+  };
+  // Same frame as idle-motion's attribute write: the observer runs before the next paint.
+  const idle = new MutationObserver(recheck);
   idle.observe(root, { attributes: true, attributeFilter: ["data-orbit-idle"] });
+  // A theme tile scrolled out of view draws nothing until it is back.
+  const view = "IntersectionObserver" in globalThis ? new IntersectionObserver((entries) => {
+    offscreen = !entries[entries.length - 1]!.isIntersecting;
+    recheck();
+  }) : undefined;
+  view?.observe(layer);
   const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   const onMotion = () => {
     if (reducedMotion()) {
@@ -126,6 +141,7 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
       halt();
       want = false;
       idle.disconnect();
+      view?.disconnect();
       motion?.removeEventListener?.("change", onMotion);
       for (const id of timers) clearTimeout(id);
       scene.dispose();

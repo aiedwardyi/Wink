@@ -296,7 +296,7 @@ describe("hang-up keeps his words, review cases", () => {
     engine().events.heard("Rename the logo file.");
     call.end();
     await tick(1_100);
-    expect(linesOf(posts)).toEqual(["user: Rename the logo file.", "voice: Not sent: Rename the logo file. (switched tasks)"]);
+    expect(linesOf(posts)).toEqual(["user: Rename the logo file.", "notice: Not sent: Rename the logo file. (switched tasks)"]);
     expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines", "messages", "lines", "end"]);
   });
 

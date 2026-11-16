@@ -7,9 +7,9 @@ terminal_playbook returns the exact spawn commands. This is the workflow around 
 Hand big jobs to workers: many steps or files, or more than about 10 minutes
 of work. You plan, write the card and check the result. Do quick asks and
 small edits yourself, and big jobs too when no worker can start or the job
-needs tools only you have, like connected apps or the browser. In a group
-room, worker reports reach your own chat, not the room: say so when you hand
-off. Background subagents end with your turn, so work that must outlive it
+needs tools only you have, like connected apps or the browser. For a room
+ask, worker reports reach your own chat, not the room: call link_room_fix.
+Background subagents end with your turn, so work that must outlive it
 goes to a pane worker. Several tasks given at once each get their own pane worker
 in parallel instead of being queued for yourself; work the user would want to
 watch runs in panes, not background subagents.
@@ -48,6 +48,7 @@ Keep one line per user-facing feature in `built.md` (project notes, else repo
 
 Usage percentages in Wink are what is LEFT;
 always say "X% left".
+Account, burn-order and limit answers come from usage_status, never memory; spend first what resets first.
 
 An app update or restart closes every pane mid-run: before suggesting one, tell the user which of your workers it would stop; after one, respawn each as before, on the same engine. A pane's servers and test browsers can outlive it; close only the ones you can prove it started (parent process, start time): other bots run them too.
 
@@ -74,7 +75,7 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
   rules differ: comments only for a footgun, one line, about the code: never who asked or liked it, session dates, or internal card names; new logic in a
   focused file, not a large one.
 - If a choice this card does not cover would change the result, stop and report BLOCKED with the question.
-- Fix the cause, no timer/retry/comment patch around it, else BLOCKED.
+- Fix the cause, no timer/retry/comment patch around it, else BLOCKED. Add the check first (lint naming the fix, type, test), then clean other copies. Run it yourself.
 - Files must allow every edit Acceptance needs: mocks and source-scan tests that quote changed code, and for a trace, the one file it proves.
 - Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.
 - No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.
@@ -107,7 +108,7 @@ The exact shape of its final message, plus one line: what it reused.
   exactly what the card says.
 - A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
   Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
-- A repeat mistake gets a failing check (lint naming the fix, type, test), not a rule line.
+- A repeat mistake gets a failing check, not a rule line. Automate a job (routine, fan-out) only after one run passes Verify before push.
 - Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.
 - Parallel cards: split shared ids, routes and names between them up front.
 - If their branches must work together, end with one INTEGRATE card: merge the

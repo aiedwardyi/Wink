@@ -667,6 +667,10 @@ export const grokSupport: AcpSupport = {
   authFailure: "fail",
   isAuthenticated: grokIsAuthenticated,
   account: grokAccount,
+  accountIdentity: (env) => {
+    const label = grokAccount(env);
+    return label ? createHash("sha256").update(label.toLowerCase()).digest("hex") : undefined;
+  },
 
   // `--append-system-prompt`/`--rules` are accepted by the CLI but do NOT
   // reach the agent-stdio system prompt (verified against 1.0.0), so the

@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import lagoon from "./lagoon";
 import type { SceneApi } from "./scene-host";
 
-// Every WebGL call is a no-op; only the link check has to pass.
-const gl = new Proxy({}, { get: (_, key) => (key === "getProgramParameter" ? () => true : () => null) });
+// Every WebGL call is a no-op but the link check, and the ripple uniform is kept to count live ripples.
+let uR: Float32Array = new Float32Array(16);
+const gl = new Proxy({}, { get: (_, key) => (key === "getProgramParameter" ? () => true : key === "uniform4fv" ? (_at: unknown, v: Float32Array) => (uR = v) : () => null) });
+const live = () => [3, 7, 11, 15].filter((i) => uR[i] > 0).length;
 const getContext = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "getContext");
 
 let now = 0;
@@ -23,6 +25,7 @@ const run = (scene: ReturnType<typeof start>, ms: number) => {
 
 beforeEach(() => {
   now = 0;
+  uR = new Float32Array(16);
   wake.mockClear();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: () => gl });
@@ -53,6 +56,39 @@ describe("lagoon", () => {
     expect(run(scene, 2000)).toBe(true);
     expect(run(scene, 20_000)).toBe(false);
     expect(now).toBeLessThan(12_000);
+    scene.dispose();
+  });
+
+  it("keeps rippling through a busy turn and rests once the reply's ripples fade", () => {
+    const scene = start();
+    scene.event({ name: "busy" });
+    expect(scene.frame(0, 0)).toBe(true);
+    expect(run(scene, 2500)).toBe(true);
+    const early = live();
+    expect(run(scene, 2500)).toBe(true);
+    expect(live()).toBeGreaterThan(early);
+    expect(run(scene, 15_000)).toBe(true);
+    expect(live()).toBeGreaterThanOrEqual(2);
+    scene.event({ name: "reply", at: layer });
+    const end = now;
+    expect(run(scene, 20_000)).toBe(false);
+    expect(now - end).toBeLessThan(8000);
+    expect(live()).toBe(0);
+    scene.dispose();
+  });
+
+  it("idles between frames of a busy turn once the send ripple is gone, and plays send and reply at full rate", () => {
+    const scene = start();
+    scene.event({ name: "send", at: layer });
+    scene.event({ name: "busy" });
+    expect(run(scene, 4000)).toBe(true);
+    expect(scene.idle?.()).toBe(0);
+    expect(run(scene, 1000)).toBe(true);
+    expect(scene.idle?.()).toBe(17);
+    expect(run(scene, 10_000)).toBe(true);
+    expect(scene.idle?.()).toBe(17);
+    scene.event({ name: "reply", at: layer });
+    expect(scene.idle?.()).toBe(0);
     scene.dispose();
   });
 });

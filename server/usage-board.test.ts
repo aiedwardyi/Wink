@@ -101,7 +101,7 @@ describe("usage board", () => {
     expect(account(await s.board.read())).toMatchObject({ windows: [], history: { fine: [], coarse: [] } });
   });
 
-  it.each(["claudeAgent", "codex", "grok", "muse", "gemini"])("drops %s windows and history on an identity swap", async (driverKind) => {
+  it.each(["claudeAgent", "codex", "grokAgent", "muse", "gemini"])("drops %s windows and history on an identity swap", async (driverKind) => {
     const s = setup();
     s.setRows([{ ...s.rows()[0], driverKind, status: { state: "available", authenticated: true, account: "old@example.test" } }]);
     s.accept("claude", report(100));
@@ -142,7 +142,7 @@ describe("usage board", () => {
     const s = setup();
     s.rateLimits.set("claude", report());
     const extra = ["codex", "grok", "gemini", "muse"] as const;
-    s.setRows([...s.rows(), ...extra.map((engine) => ({ id: engine, of: engine, driverKind: engine, generation: 0, existing: true, state: "ready" as const }))]);
+    s.setRows([...s.rows(), ...extra.map((engine) => ({ id: engine, of: engine, driverKind: engine === "grok" ? "grokAgent" : engine, generation: 0, existing: true, state: "ready" as const }))]);
     const value = await s.board.read();
     expect(Object.keys(value).sort()).toEqual(["at", "cursor", "engines", "full", "revision", "runs", "version"]);
     expect(value).toMatchObject({ version: 1, full: true, runs: "known", at: origin, revision: expect.any(Number), cursor: expect.any(String) });
@@ -157,7 +157,8 @@ describe("usage board", () => {
       windows: [{ id: "five_hour", kind: "session", usedPercent: 20, resetsAt: origin + 60_000, windowMinutes: 300 },
         { id: "seven_day", kind: "week", usedPercent: 40, resetsAt: origin + 7 * 86_400_000, windowMinutes: 10080 }] });
     expect(account(value, added)).toMatchObject({ number: 2, name: "Studio", nickname: "Studio", main: false, signIn: "ready", observedAt: null, bots: [] });
-    for (const engine of extra.slice(1)) expect(account(value, engine)).toMatchObject({ number: 1, name: engine[0].toUpperCase() + engine.slice(1), nickname: null });
+    expect(account(value, "grok")).toMatchObject({ number: 1, name: "Grok 1", nickname: null });
+    for (const engine of extra.slice(2)) expect(account(value, engine)).toMatchObject({ number: 1, name: engine[0].toUpperCase() + engine.slice(1), nickname: null });
     expect(s.runs).toHaveBeenCalledExactlyOnceWith(300);
     expect(value.engines.every((engine) => !("stayOn" in engine))).toBe(true);
   });
@@ -478,13 +479,32 @@ describe("usage board", () => {
     expect(account(await s.board.read(), added).signIn).toBe("signed-out");
     s.rows()[1].state = "ready";
     s.rows()[1].blocked = true;
-    expect(account(await s.board.read(), added).signIn).toBe("signed-out");
+    expect(account(await s.board.read(), added).signIn).toBe("unknown");
     s.rows()[0].status = undefined;
     expect(account(await s.board.read()).signIn).toBe("unknown");
     s.rows()[0].status = { state: "available", authenticated: false };
     expect(account(await s.board.read()).signIn).toBe("signed-out");
     s.drains.claude = { destinationId: added, phase: "draining" };
     expect(account(await s.board.read()).signIn).toBe("draining");
+  });
+
+  it("reads a missing CLI as not installed and an unchecked account as unknown, never as signed out", async () => {
+    const s = setup();
+    const missing = { state: "unavailable" as const, reason: "`claude` CLI not found", cliMissing: true };
+    s.setRows([
+      { ...s.rows()[0], status: missing },
+      { ...s.rows()[1], blocked: true, status: missing },
+      { id: second, of: "claude", driverKind: "claudeAgent", generation: 1, existing: false, state: "ready", blocked: true, status: { state: "unavailable" } },
+    ]);
+    s.accept(added, report(88));
+    const signIns = async () => (await s.board.read()).engines[0].accounts.map((row) => row.signIn);
+    expect(await signIns()).toEqual(["cli-missing", "cli-missing", "cli-missing"]);
+    s.rows()[0].status = { state: "available", authenticated: true };
+    s.rows()[1].status = undefined;
+    expect(await signIns()).toEqual(["ready", "unknown", "unknown"]);
+    s.rows()[0].blocked = true;
+    s.rows()[2].state = "stopped";
+    expect(await signIns()).toEqual(["signed-out", "unknown", "signed-out"]);
   });
 
   it("commits monotonic revisions even when time stays still or moves backwards", async () => {

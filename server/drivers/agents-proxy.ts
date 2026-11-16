@@ -21,6 +21,7 @@
 //   generate_image(prompt, …)             → create a PNG with the saved image key
 //   call_api(credential_id, method, url)  → call a service with its saved key
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
+//   usage_status()                        → the Usage page's % left and resets, read-only
 //   list_routines()                       → inspect this bot's scheduled work
 //   propose_routine(...)                  → show a confirmation card for a new routine
 //   propose_routine_action(...)           → show a confirmation card for a routine change
@@ -43,7 +44,7 @@ import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCusto
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
-import { createToolCatalog } from "./tool-catalog.ts";
+import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -532,6 +533,11 @@ const TOOLS = [
     },
   },
   {
+    name: "usage_status",
+    description: "Read-only live Usage page: % left, reset, Main and limit per engine account. Call before any account, burn order or limit answer.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "list_routines",
     description:
       "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's record, with up to 2,000 characters of its instructions and its latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
@@ -596,6 +602,20 @@ const TOOLS = [
     name: "no_reply_needed",
     description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "link_room_fix",
+    description: "Call right after terminal_spawn starts work on a group room's report. Wink posts \"Fix started: <title>\" in the room as you now, and \"Fixed in <version>: <title>\" once an offered update holds the merged work. Never post these yourself.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        sessionId: { type: "string", description: "From terminal_spawn." },
+        title: { type: "string", description: "A few words, in the room's language." },
+        room: { type: "string", description: "Room name; omit in that room." },
+      },
+      required: ["sessionId", "title"],
+    },
   },
 ];
 
@@ -999,6 +1019,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       text: `A secure ${r.label ?? label} card is now visible to the user. End this turn; Wink will resume the task after they save or decline. Never ask them to paste the key into chat.`,
     };
   }
+  if (name === "usage_status") {
+    const r = await api(`/api/internal/usage?self=${encodeURIComponent(BOT_ID)}`);
+    return { text: String(r.text ?? "") };
+  }
   if (name === "list_routines") {
     const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID });
     const r = await api(`/api/internal/routines?${query.toString()}`);
@@ -1089,11 +1113,16 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
+  if (name === "link_room_fix") {
+    const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
+    return { text: String(r.text ?? "Linked.") };
+  }
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
 const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
+const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
 export async function handle(msg: Json) {
   const id = msg.id;
@@ -1117,8 +1146,8 @@ export async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      recordToolSchemas(() => catalog?.tools ?? eligibleTools);
-      ok(id, { tools: catalog?.tools ?? eligibleTools });
+      recordToolSchemas(() => listedTools);
+      ok(id, { tools: listedTools });
       return;
     case "tools/call": {
       if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);

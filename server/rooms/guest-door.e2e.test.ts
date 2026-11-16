@@ -598,7 +598,7 @@ describe("a shared bot group", () => {
       ["@Wink what's left?", "person", "Mina"],
       ["Two cards left.", "bot", "Wink"],
     ]);
-    expect(joinedRoom(roomId)!.state!.bots).toEqual([{ id: wink.id, name: "Wink", color: wink.color }]);
+    expect(joinedRoom(roomId)!.state!.bots).toEqual([{ id: wink.id, name: "Wink", color: wink.color, mascotStyle: wink.mascotStyle }]);
     const answer = older.frames.filter((frame) => frame.kind === "entry").at(-1)!.entry;
     expect(olderEntry.safeParse(answer).success).toBe(true);
     expect(answer).toMatchObject({ text: "Two cards left.", author: { kind: "person", id: `bot-${wink.id}`, name: "Wink" } });

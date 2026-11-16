@@ -107,7 +107,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
       commsDepth: 0, MAX_COMMS_DEPTH: 1,
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
-      ALWAYS_REPLY_INSTRUCTIONS: "", CORPUS_SEARCH_INSTRUCTIONS: "", keepGoing: { rules: () => "" },
+      ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", keepGoing: { rules: () => "" },
       skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", tagged: [],
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },

@@ -229,7 +229,8 @@ describe("room lane", () => {
     await poll(async () => replies((await groupOf(idleRoom.id)).messages)).toBe(1);
     await settled(bot.id, idleRoom.id);
     expect(servers("idle-turn-five").terminal).toBeDefined();
-    expect(JSON.parse(readFileSync(dump, "utf8")).argv).not.toContain("--disallowedTools");
+    const idle = JSON.parse(readFileSync(dump, "utf8")).argv;
+    expect(idle[idle.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion");
     await say(bot.id, "first");
     await poll(async () => replies((await botOf(bot.id)).messages)).toBe(1);
     await settled(bot.id);
@@ -250,7 +251,7 @@ describe("room lane", () => {
     expect(readFileSync(memory, "utf8")).toBe("- Dee prefers short answers\n");
     const lane = servers("lane-turn-five");
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
-    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
     expect(lane.terminal).toBeUndefined();
     expect(lane.phone).toBeUndefined();
     expect(lane.agents).toBeDefined();

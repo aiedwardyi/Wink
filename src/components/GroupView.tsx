@@ -22,8 +22,8 @@ import {
   type GroupDefaultResponder,
   type Message,
 } from "@/state/store";
-import type { RoomJoin } from "@/state/store-types";
-import { BotAvatar } from "./Avatar";
+import type { RoomJoin, TeamBot } from "@/state/store-types";
+import { BotAvatar, RoomBotAvatar } from "./Avatar";
 import { CallWidgetSlot } from "./CallSlots";
 import { DockedPresence, MessageBoundary, TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -61,7 +61,7 @@ import { FileAttachmentRows } from "./FileAttachmentRow";
 import { RoomFileRows, RoomLineTranslation, RoomTranslateButton, RoomTranslationText, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { RoomTitle } from "./RoomTitle";
 import { RoomAlertsBell } from "./RoomAlertsBell";
@@ -72,7 +72,7 @@ import { GroupArchiveBar } from "./GroupArchiveBar";
 import { PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
-import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, setHostNotice } from "@/lib/team-rooms";
+import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice } from "@/lib/team-rooms";
 import { groupActivityRuns, itemMatchesFind, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -113,11 +113,13 @@ export function RoomToolChip({
   notices,
   onRetry,
   group,
+  onMessageMenu,
 }: {
   message: Message;
   notices?: LinkedApproval[];
   onRetry?: (callbacks?: { onError?: () => void }) => void;
   group?: Group;
+  onMessageMenu?: (menu: MessageMenuRequest) => void;
 }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
@@ -144,17 +146,21 @@ export function RoomToolChip({
           title={t("chat.openConversation", { name: comm.withName })}
           className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
         >
-          <BotAvatar bot={peer ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} animated={false} />
+          <RoomBotAvatar bot={peer ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} animated={false} />
           <span className="min-w-0 max-w-[480px] truncate">{commLabel(message, t)}</span>
           <ChevronRight size={13} className="shrink-0" />
         </button>
       </div>
     );
     if (!message.text) return chip;
+    const menuProps = group && onMessageMenu
+      ? messageMenuProps({ threadId: group.threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
+      : {};
     return (
-      <div>
+      <div {...menuProps} tabIndex={-1}>
         {chip}
         <PeerMessageBody text={message.text} />
+        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" readOnly={!onMessageMenu} />}
       </div>
     );
   }
@@ -180,11 +186,11 @@ export function RoomToolChip({
 }
 
 /** 16px maus + name, shown once per sender cluster. */
-function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: Bot["color"] }) {
+function ClusterLabel({ bot, teamBot, name, color }: { bot?: Bot; teamBot?: TeamBot; name: string; color: Bot["color"] }) {
   return (
     <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-      <BotAvatar
-        bot={bot ?? { name, color }}
+      <RoomBotAvatar
+        bot={bot ?? teamBot ?? { name, color }}
         state={normalizeState(bot?.mascotExpression) ?? "happy"}
         size={16}
         motion="none"
@@ -254,6 +260,7 @@ export const Transcript = memo(function Transcript({
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
+  const teamBotOf = (id?: string) => roomTeamBots(group).find((b) => b.id === id);
   const people = useMemo(() => {
     if (!group.hosted) return undefined;
     const names = reactionNames(roomPeople(group));
@@ -330,7 +337,7 @@ export const Transcript = memo(function Transcript({
               {newDay && <DaySeparator at={first.at} />}
               {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
               {first.from && cluster && (
-                <ClusterLabel bot={memberOf(first.from.botId)} name={first.from.name} color={first.from.color} />
+                <ClusterLabel bot={memberOf(first.from.botId)} teamBot={teamBotOf(first.from.botId)} name={first.from.name} color={first.from.color} />
               )}
               {item.kind === "memory" ? (
                 <MemorySaveRun messages={item.messages} forceOpen={forceOpen}>
@@ -351,6 +358,7 @@ export const Transcript = memo(function Transcript({
                         message={step}
                         notices={item.notices?.get(step.id)}
                         onRetry={onRetryFor(step.id)}
+                        onMessageMenu={readOnly ? undefined : onMessageMenu}
                       />
                     </div>
                   ))}
@@ -451,6 +459,7 @@ export const Transcript = memo(function Transcript({
               message={m}
               notices={item.notices}
               onRetry={onRetryFor(m.id)}
+              onMessageMenu={readOnly ? undefined : onMessageMenu}
             />
           ) : m.kind === "screen" && m.image ? (
             <ShownImage name={m.image} caption={m.text} />
@@ -469,30 +478,7 @@ export const Transcript = memo(function Transcript({
               data-orbit-message={user ? "user" : "bot"}
               className={cn("group flex w-full flex-col outline-none", mine ? "animate-msg-in items-end" : "items-start")}
               tabIndex={-1}
-              {...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget })))}
-              onContextMenu={menuTarget ? (e) => {
-                if (isTouchPrimary() || !(e.target instanceof Element)) return;
-                const kind = contextClickKind(e.target, e.clientX, e.clientY);
-                if (kind === "native") return;
-                e.preventDefault();
-                e.stopPropagation();
-                onMessageMenu(kind === "selection"
-                  ? { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" }
-                  : { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, target: menuTarget });
-              } : undefined}
-              onKeyDown={menuTarget ? (e) => {
-                if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
-                if (e.target instanceof Element && keepsNativeMenu(e.target)) return;
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                onMessageMenu({
-                  kind: "message",
-                  x: rect.left + rect.width / 2,
-                  y: rect.top + rect.height / 2,
-                  opener: e.currentTarget,
-                  target: menuTarget,
-                });
-              } : undefined}
+              {...messageMenuProps(menuTarget, onMessageMenu)}
             >
               <RoomLineTranslation base={roomBase ?? ""} entryId={translateId} text={translateText} canTranslate={canTranslate && !streaming}>{(translation) => (
               <div
@@ -535,7 +521,7 @@ export const Transcript = memo(function Transcript({
                       {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
                       <div className={cn(folded && USER_FOLD_CLASS)}>
                         <LinkedText text={translateText} />
-                        {translation && <RoomTranslationText translation={translation} />}
+                        {translation && <RoomTranslationText translation={translation} markdown={false} />}
                       </div>
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={group.threadId} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
@@ -544,7 +530,7 @@ export const Transcript = memo(function Transcript({
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
                       <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={pictured.has(m.id)} />
-                      {translation && <RoomTranslationText translation={translation} />}
+                      {translation && <RoomTranslationText translation={translation} markdown />}
                     </MessageBoundary>
                   ) : null}
                 </div>
@@ -575,7 +561,8 @@ export const Transcript = memo(function Transcript({
                   members={members}
                   names={people}
                   corner={mine ? "left" : "right"}
-                  className={cn("bottom-3.5", readOnly && "pointer-events-none")}
+                  className="bottom-3.5"
+                  readOnly={readOnly}
                 />
               </div>
               )}</RoomLineTranslation>
@@ -600,7 +587,7 @@ export const Transcript = memo(function Transcript({
             {newDay && <DaySeparator at={m.at} />}
             {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
             {!user && m.from && cluster && (
-              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} />
+              <ClusterLabel bot={memberOf(m.from.botId)} teamBot={teamBotOf(m.from.botId)} name={m.from.name} color={m.from.color} />
             )}
             {person && cluster && <PersonLabel name={person.name} />}
             {row}
@@ -1001,6 +988,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     });
   };
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const [heldSlot, setHeldSlot] = useState<HTMLDivElement | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   // Same instance can show another thread without a click outside the menu.
   const [menuThread, setMenuThread] = useState(group.threadId);
@@ -1159,7 +1147,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     avatar: (
-      <BotAvatar
+      <RoomBotAvatar
         bot={presenceSpeaker ?? { name: group.name, color: DEFAULT_MAUS_COLOR }}
         state={toolInFlight ? "working" : "thinking"}
         size={16}
@@ -1523,7 +1511,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
           {(speaker || waiting) && !jump.messages && (
             <TurnPresence
               avatar={
-                <BotAvatar
+                <RoomBotAvatar
                   bot={presenceSpeaker ?? { name: group.name, color: DEFAULT_MAUS_COLOR }}
                   state={toolInFlight ? "working" : "thinking"}
                   size={36}
@@ -1541,6 +1529,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
               since={noReply ? undefined : lastUserAt}
             />
           )}
+          <div ref={setHeldSlot} className="contents" />
         </div>
         )}
       </div>
@@ -1584,6 +1573,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
             onClearReply={clearReply}
             onConsumeReply={consumeReply}
             onRestoreReply={restoreReply}
+            heldSlot={heldSlot}
           />
         </>
       )}

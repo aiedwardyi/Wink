@@ -482,18 +482,25 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(threadStart.params.config).toMatchObject({ web_search: "live" });
   });
 
-  it("asks before workspace edits and commands in Ask mode, and keeps on-request in Auto", async () => {
+  it("asks before workspace edits and commands in Ask mode, and leaves Auto to the user's codex config", async () => {
     await create();
-    const policyFor = async (approval: "ask" | "auto") => {
-      const dump = join(scratch, `policy-${approval}.json`);
+    const policyFor = async (approval?: "ask" | "auto") => {
+      const dump = join(scratch, `policy-${approval ?? "none"}.json`);
       process.env.FAKE_CODEX_DUMP = dump;
-      const { turnId } = await instance.adapter.sendTurn({ threadId: `t-policy-${approval}`, text: "hi", approval });
+      const { turnId } = await instance.adapter.sendTurn({ threadId: `t-policy-${approval ?? "none"}`, text: "hi", approval });
       await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
       const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.argv.join(" ")).not.toMatch(/sandbox|approval_policy/);
       return seen.calls.find((c: { method: string }) => c.method === "thread/start").params;
     };
-    expect(await policyFor("ask")).toMatchObject({ approvalPolicy: "untrusted", sandbox: "workspace-write" });
-    expect(await policyFor("auto")).toMatchObject({ approvalPolicy: "on-request", sandbox: "workspace-write" });
+    const ask = await policyFor("ask");
+    expect(ask.approvalPolicy).toBe("untrusted");
+    expect(ask).not.toHaveProperty("sandbox");
+    for (const approval of ["auto", undefined] as const) {
+      const params = await policyFor(approval);
+      expect(params).not.toHaveProperty("approvalPolicy");
+      expect(params).not.toHaveProperty("sandbox");
+    }
   });
 
   it("routes approvals to Orbit even when the user's codex config sets an auto reviewer", async () => {
@@ -517,7 +524,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const resume = seen.calls.find((c: { method: string }) => c.method === "thread/resume");
-    expect(resume.params).toEqual({ threadId: "codex-thread-9", approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: "workspace-write" });
+    expect(resume.params).toStrictEqual({ threadId: "codex-thread-9", approvalPolicy: "untrusted", approvalsReviewer: "user" });
   });
 
   it.each([false, true])("gives a resumed thread the sandbox a fresh one gets (fullAuto %s)", async (fullAuto) => {
@@ -530,7 +537,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       return JSON.parse(readFileSync(dump, "utf8")).calls.find((c: { method: string }) => c.method === method).params.sandbox;
     };
     const fresh = await sandboxOf("thread/start");
-    expect(fresh).toBe(fullAuto ? "danger-full-access" : "workspace-write");
+    expect(fresh).toBe(fullAuto ? "danger-full-access" : undefined);
     expect(await sandboxOf("thread/resume", "codex-thread-9")).toBe(fresh);
   });
 

@@ -29,7 +29,8 @@ export const pushTestSchema = pushEndpointSchema.extend({ botId: z.string().opti
 
 export type VapidKeys = z.infer<typeof vapidKeysSchema>;
 export type PushSubscriptionRecord = z.infer<typeof pushSubscriptionSchema>;
-export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string; at?: number };
+/** `call` marks a ringing call alert by its call id. */
+export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string; at?: number; call?: string };
 export type PushTarget = { botId: string; threadId: string };
 export type WebPushResult = { ok: true } | { ok: false; gone: boolean; error: string };
 

@@ -300,8 +300,8 @@ describe("imageSupportForTargets", () => {
     expect(imageSupportForTargets(instances, [imageBot, textBot])).toBe("unsupported");
   });
 
-  it("reports unsupported when no responder is selected", () => {
-    expect(imageSupportForTargets([], [])).toBe("unsupported");
+  it("lets a picture no bot answers through", () => {
+    expect(imageSupportForTargets([], [])).toBe("supported");
   });
 });
 

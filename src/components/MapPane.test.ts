@@ -6,6 +6,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MapPane } from "./MapPane";
+import { tokenize } from "@/lib/map-highlight.worker";
 import { applyLocale } from "@/lib/i18n";
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 
@@ -40,6 +41,7 @@ beforeEach(() => {
   root = createRoot(host);
   vi.stubGlobal("EventSource", vi.fn(function () { stream = { close }; return stream; }));
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.stubGlobal("Worker", Tokenizer);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] })));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); applyLocale("en"); });
@@ -95,6 +97,18 @@ it("uses plain empty and non-git lines in both languages", async () => {
   expect([...host.querySelectorAll(".map-tree-file")].map(row => row.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts", "README.md", "b.ts"]);
 });
 
+it("lists a folder without git again each time its worker writes in it", async () => {
+  const paths = ["01.md"];
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "notes", paths: [...paths] }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  const plain = { id: "p", nick: "PLAIN", git: false, files: [], editedAt: 0 };
+  await emit([plain]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("1 files · Not a git foldernotes / PLAIN");
+  paths.push("02.md");
+  await emit([{ ...plain, editedAt: 5 }]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("2 files · Not a git foldernotes / PLAIN");
+});
+
 it("requests only the selected file and recovers from a failed diff", async () => {
   const read = vi.mocked(fetch);
   const reply = read.getMockImplementation()!;
@@ -123,6 +137,24 @@ it("pauses hidden views without losing the user's manual selection", async () =>
   await emit([{ ...workers[0], editedAt: 8 }, workers[1]]);
   expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("b");
   expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("asks for Git rows only once the tree and the code have landed", async () => {
+  const held: Record<string, (body: object) => void> = {};
+  vi.mocked(fetch).mockImplementation(url => {
+    const kind = /\/(repo|file|flow)\?/.exec(String(url))![1];
+    return kind === "flow" ? Promise.resolve(Response.json({ commits: [] })) : new Promise(done => { held[kind] = body => done(Response.json(body)); });
+  });
+  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => /\/(repo|file|flow)\?/.exec(String(url))![1]);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  expect(asked().toSorted()).toEqual(["file", "repo"]);
+  await act(async () => held.repo(repo));
+  expect(asked()).not.toContain("flow");
+  await act(async () => held.file({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] }));
+  expect(asked().filter(kind => kind === "flow")).toHaveLength(2);
+  expect(host.querySelector(".map-tree-file")).not.toBeNull();
+  expect(host.textContent).toContain("const edited = true;");
 });
 
 it("waits for the renewed snapshot before requesting an unchanged selected file", async () => {
@@ -596,14 +628,16 @@ it("expands the file over the tree and brings the tree back with the same file, 
   expect(expand()?.getAttribute("aria-label")).toBe("트리 보기");
 });
 
-it("shows one line and a labeled example on an empty Map, with no calls, until a worker starts", async () => {
+it("shows one line and a Demo-chipped example on an empty Map, with no calls, until a worker starts", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   expect(host.querySelector(".map-example")).toBeNull();
   await emit([]);
   expect(host.querySelector(".map-empty")?.textContent).toBe("No live workers");
   expect(host.querySelector(".map-example > p")?.textContent).toBe("Your workers' changes show here live");
-  expect(host.querySelector(".map-example small")?.textContent).toBe("Example");
+  const chip = host.querySelector(".map-example small");
+  expect(chip?.textContent).toBe("Demo");
+  expect([...chip?.classList ?? []]).toEqual(expect.arrayContaining(["bg-accent", "text-accent-ink"]));
   expect(host.querySelector(".map-example > div")?.hasAttribute("inert")).toBe(true);
   const file = () => host.querySelector(".map-example .map-code")?.textContent;
   const first = file();
@@ -617,7 +651,7 @@ it("shows one line and a labeled example on an empty Map, with no calls, until a
   vi.useRealTimers();
   await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "other" })); });
   await emit([]);
-  expect(host.querySelector(".map-example")?.textContent).toContain("예시");
+  expect(host.querySelector(".map-example small")?.textContent).toBe("데모");
 });
 
 it("keeps the last tree and diff up, with no loading line, while a picked worker's own load", async () => {
@@ -757,4 +791,104 @@ it("says how many new files a capped worker left out", async () => {
   await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
   await emit([{ ...workers[0], more: 4800 }]);
   expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 중 2개 변경 · 외 파일 4,800개wink / ALPHA");
+});
+
+const posts: string[][] = [];
+let dropDone = false;
+class Tokenizer {
+  onmessage?: (event: { data: object }) => void;
+  postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[]; removed: boolean[] }) {
+    if (data.stop) return;
+    posts.push(data.code);
+    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => dropDone || this.onmessage?.({ data: { id: data.id, done } }));
+  }
+  terminate() {}
+}
+const until = async (check: () => boolean) => {
+  for (let i = 0; i < 300 && !check(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(check()).toBe(true);
+};
+const source = [
+  { kind: "context", text: "// sum two numbers", line: 1 },
+  { kind: "remove", text: "const total = 1;", line: 2 },
+  { kind: "add", text: 'const total = "two";', line: 2 },
+  { kind: "context", text: "export type Total = number;", line: 3 },
+];
+const colors = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>(".map-code-row code span")].map(span => [span.textContent, span.style.color.toUpperCase()]));
+const openSource = async (path: string, lines: object[] = source) => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path, files: [{ path, added: 1, removed: 1 }] }]);
+};
+
+it("colors code like VS Code's dark theme in both views and keeps the diff marks", async () => {
+  await openSource("src/a.ts");
+  await until(() => colors()["const"] !== undefined);
+  expect(colors()).toMatchObject({ "// sum two numbers": "#6A9955", const: "#569CD6", '"two"': "#CE9178", "1": "#B5CEA8", Total: "#4EC9B0" });
+  expect([...host.querySelectorAll(".map-code-row")].map(row => [row.getAttribute("data-kind"), row.querySelector("b")?.textContent, row.querySelector("code")?.textContent])).toEqual([["context", "", "// sum two numbers"], ["remove", "-", "const total = 1;"], ["add", "+", 'const total = "two";'], ["context", "", "export type Total = number;"]]);
+  await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Changes only")!.click(); });
+  expect(reads().at(-1)?.[0]).not.toContain("whole=1");
+  expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+  expect(host.querySelector('.map-code-row[data-kind="add"] b')?.textContent).toBe("+");
+});
+
+it("colors code like VS Code's light theme on a light skin", async () => {
+  document.documentElement.dataset.skin = "atelier";
+  try {
+    await openSource("src/light.ts");
+    await until(() => colors()["const"] !== undefined);
+    expect(colors()).toMatchObject({ "// sum two numbers": "#008000", const: "#0000FF", '"two"': "#A31515", Total: "#267F99" });
+  } finally { delete document.documentElement.dataset.skin; }
+});
+
+it("leaves a file in an unknown language as plain text", async () => {
+  await openSource("notes.zzz");
+  await until(() => posts.some(code => code.includes("// sum two numbers")) && !!host.querySelector(".map-code-row"));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(host.querySelector(".map-code-row code span")).toBeNull();
+  expect(host.querySelector('.map-code-row[data-kind="add"] code')?.textContent).toBe('const total = "two";');
+});
+
+it("draws an already colored file at once from the cache without tokenizing it again", async () => {
+  await openSource("src/again.ts");
+  await until(() => colors()["const"] !== undefined);
+  const sent = posts.length;
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await openSource("src/again.ts");
+  expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+  expect(posts.length).toBe(sent);
+});
+
+it("keeps a file colored by its last slice even when it closes before the worker says done", async () => {
+  dropDone = true;
+  try {
+    await openSource("src/closed.ts");
+    await until(() => colors()["const"] !== undefined);
+    const sent = posts.length;
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await openSource("src/closed.ts");
+    expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+    expect(posts.length).toBe(sent);
+  } finally { dropDone = false; }
+});
+
+it("colors a removed line inside an unchanged comment as a comment", async () => {
+  await openSource("src/inside.ts", [{ kind: "context", text: "/* notes", line: 1 }, { kind: "remove", text: "old note", line: 2 }, { kind: "add", text: "new note", line: 2 }, { kind: "context", text: "*/", line: 3 }]);
+  await until(() => !!host.querySelector('.map-code-row[data-kind="remove"] code span'));
+  const color = (kind: string) => host.querySelector<HTMLElement>(`.map-code-row[data-kind="${kind}"] code span`)?.style.color.toUpperCase();
+  expect([color("remove"), color("add")]).toEqual(["#6A9955", "#6A9955"]);
+});
+
+it("puts a second drag line between the tree and the Git rows, hidden when no Git rows follow", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ commits: [] }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await act(async () => {});
+  const order = [...host.querySelector(".map-pane")!.children].map(part => part.matches(".map-split") ? part.getAttribute("aria-label") : part.className);
+  expect(order.slice(0, 6)).toEqual(["map-head", "map-top", "Resize the file tree", "map-flow-rows", "Resize the code view", "map-crumbs"]);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toContain(".map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }");
+  expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
 });

@@ -296,7 +296,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     </form>
   );
 
-  const signedOut = known && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  // Without a relay a sign-in cannot turn this on: the switch opens the other ways instead.
+  const signedOut = known && configured && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
   const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
   const toggle = (
     <button
@@ -325,7 +326,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const control = !known
     ? <span data-switch-pending="" aria-hidden="true" className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-control motion-reduce:animate-none" />
     : enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
-  const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
+  const sub = enabled ? google?.email : unavailable || (known && !configured) ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);
   const day = (ms: number) => new Date(ms).toLocaleDateString(tag, { month: "short", day: "numeric" });

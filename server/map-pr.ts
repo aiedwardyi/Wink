@@ -73,7 +73,11 @@ async function gitFlow(root: string, base: string) {
     mapGit(root, ["log", "--no-color", "-n", "30", "--format=%H%x1f%s", range, "--"]),
     mapGit(root, ["rev-list", "--count", range, "--"]),
     mapGit(root, ["rev-list", "--count", "HEAD", "--not", base, "--remotes", "--"]),
-  ]);
+  ]).catch(async error => {
+    // A repo with no commits yet has no HEAD: its flow is empty, not broken.
+    if (await mapGit(root, ["rev-parse", "--verify", "-q", "HEAD"]).then(() => true, () => false)) throw error;
+    return [await mapGit(root, ["symbolic-ref", "--short", "HEAD"]), "", "", "0", "0"];
+  });
   const name = branch.trim();
   const refs = name === "HEAD" ? "" : await mapGit(root, ["for-each-ref", "--format=%(refname)%00%(objectname)", `refs/remotes/*/${name}`]);
   const remotes = refs.split("\n").filter(Boolean).map(line => line.split("\0"));

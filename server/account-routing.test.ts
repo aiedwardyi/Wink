@@ -314,6 +314,17 @@ describe("engine default account routing", () => {
     expect(f.accounts.defaultFor("claude")).toBeUndefined();
   });
 
+  it("does not let a hidden bot block a Main switch or removal, and refuses its send once un-hidden", async () => {
+    const f = await fixture();
+    const hidden = f.store.createBot({ name: "Momo" });
+    f.store.patchBot(hidden.id, { hidden: true, modelSelection: { ...hidden.modelSelection, model: "claudeAgent-retired" } });
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    expect(f.accounts.isDefault(f.added[2].id)).toBe(true);
+    f.store.patchBot(hidden.id, { hidden: false });
+    expect(() => f.controller.bots!.resolve(f.store.bot(hidden.id)!)).toThrow("does not offer the selected model");
+  });
+
   it("validates HTTP model picks against the default catalog and keeps portable ids", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[2].id)).status).toBe(200);

@@ -1051,11 +1051,21 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
     expect(await turn({ threadId: "t-checkpoint", text: "four", system: persona, resumeCursor: CONV })).toBe("four");
   });
 
-  it("sends it once when a new driver instance resumes an existing conversation", async () => {
+  it("does not re-send it after a restart into a conversation that holds it", async () => {
     await (await start())({ threadId: "t-restart", text: "one", system: persona });
     const restarted = await start();
-    expect(await restarted({ threadId: "t-restart", text: "two", system: persona, resumeCursor: CONV })).toBe(`${persona}\n\ntwo`);
-    expect(await restarted({ threadId: "t-restart", text: "three", system: persona, resumeCursor: CONV })).toBe("three");
+    expect(await restarted({ threadId: "t-restart", text: "two", system: persona, resumeCursor: CONV })).toBe("two");
+    const changed = `${persona} Memory: likes tea.`;
+    expect(await (await start())({ threadId: "t-restart", text: "three", system: changed, resumeCursor: CONV })).toBe(`${changed}\n\nthree`);
+  });
+
+  it("re-sends it after a restart when the conversation checkpointed in its last turn", async () => {
+    const checkpoint = join(scratch, "checkpoint-restart");
+    await (await start())({ threadId: "t-restart-checkpoint", text: "one", system: persona });
+    writeFileSync(checkpoint, "");
+    await (await start({ FAKE_AGY_CHECKPOINT_FILE: checkpoint }))({ threadId: "t-restart-checkpoint", text: "two", system: persona, resumeCursor: CONV });
+    rmSync(checkpoint);
+    expect(await (await start())({ threadId: "t-restart-checkpoint", text: "three", system: persona, resumeCursor: CONV })).toBe(`${persona}\n\nthree`);
   });
 });
 

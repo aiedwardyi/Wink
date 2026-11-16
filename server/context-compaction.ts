@@ -569,11 +569,13 @@ function replayUnits(
   return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = from + index;
     if (pathIndex < offset && !pending.has(message.id)) return [];
-    if (excludeIds.has(message.id)) return [];
+    if (excludeIds.has(message.id) || message.restated) return [];
     const mail = mailReplayText(message, pending.get(message.id) ?? 0, through.get(message.id));
     if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "", mailUpto: through.get(message.id) ?? message.comm?.read?.upto ?? message.text?.length ?? 0 }] : [];
     // a queued handoff's drained line carries the same words
     if (message.quick?.state === "handoff" && message.queueId) return [];
+    // the app's own call notice: the bot never said it and never got the send
+    if (message.call?.notice) return [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${VOICE_SAID} ${body}` : body;

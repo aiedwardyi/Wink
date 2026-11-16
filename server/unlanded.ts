@@ -11,7 +11,7 @@ const REPORTS_READ = 40;
 const TITLE_MAX = 40;
 const HOUR = 60 * 60_000;
 // Only Wink's own repo has a provable installed version: the v<app version> tag.
-const APP_REPO = "aiedwardyi/wink";
+export const APP_REPO = "aiedwardyi/wink";
 
 const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;

@@ -49,6 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { antigravitySignIn } from "./antigravity-auth.ts";
+import { unrestated } from "../turn-reply.ts";
 
 const DRIVER_KIND = "antigravityAgent";
 const AGY_STOPPED_NOTE = "The bot stopped before finishing.";
@@ -542,7 +543,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // one active turn per thread; a second send while busy is a caller bug
     const active = new Map<string, { stop: () => void; interrupt: () => void; turnId: string }>();
     let disposed = false;
-    const systemHeld = systemLedger(true);
+    const systemHeld = systemLedger(true, instanceId);
     // every live agy child, tracked independently of `active`: a child can
     // hang AFTER emitting `result` (so it's already removed from `active`), and
     // dispose()/stopAll() must still be able to reap it. Removed on process exit.
@@ -605,6 +606,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       const resumeCursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const system = systemHeld.prompt(resumeCursor, turn.system);
       if (system && resumeCursor) systemHeld.forget(resumeCursor);
+      else if (resumeCursor) systemHeld.begin(resumeCursor);
       const prompt = composeAntigravityPrompt(system, turn.text);
 
       let settled = false;
@@ -629,6 +631,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         const conversation = conversationId ?? resumeCursor;
         if (conversation && checkpointed) systemHeld.forget(conversation);
         else if (conversation && system && promptAccepted) systemHeld.record(conversation, turn.system!);
+        else if (conversation) systemHeld.keep(conversation);
         clearTimeout(watchdog);
         armPostSettleCleanup();
         return true;
@@ -851,6 +854,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // every text_delta so far, and the shown text already streamed from it
       let deltaText = "";
       let streamed = "";
+      const steps = new Map<number, string>();
       const streamDelta = (delta: string) => {
         deltaText += delta;
         if (cancelledTool) return;
@@ -934,15 +938,20 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
                 emit({ ...base(threadId, turnId), type: "item.completed", itemType: "tool", itemId, ok: false });
               }
             } else if (payload.step_type === "agent_response") {
-              if (typeof payload.text_delta === "string") streamDelta(payload.text_delta);
+              if (typeof payload.text_delta === "string") {
+                steps.set(payload.step_index, (steps.get(payload.step_index) ?? "") + payload.text_delta);
+                streamDelta(payload.text_delta);
+              }
               if (payload.usage) emit({ ...base(threadId, turnId), type: "thread.token-usage.updated", ...withPriorUsage(payload.usage) });
             }
             break;
           }
           case "result": {
             promptAccepted = true;
-            // result.response is every text_delta joined
-            const response = stripAntigravitySystemNotices(typeof payload.response === "string" ? payload.response : "");
+            // result.response is every text_delta joined; a later step restating an earlier one drops it
+            const joined = typeof payload.response === "string" ? payload.response : "";
+            const parts = [...steps.values()];
+            const response = stripAntigravitySystemNotices(parts.join("") === joined ? unrestated(parts).join("") : joined);
             const realResponse = Boolean(response.trim()) && !cancelledTool;
             const parsedError = z.string().safeParse(payload.error);
             const agyError = parsedError.success ? parsedError.data : "";

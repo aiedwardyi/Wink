@@ -882,6 +882,22 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("reads the Usage page's accounts through the usage_status route", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const headers = await agentsHeaders(api, fakeClaudeDump, bot.id, bot.threadId);
+      expect((await fetch(`${BASE}/api/internal/usage?self=nobody`, { headers })).status).toBe(403);
+      const res = await fetch(`${BASE}/api/internal/usage?self=${encodeURIComponent(bot.id)}`, { headers });
+      expect(res.status).toBe(200);
+      const { text } = z.object({ text: z.string() }).parse(await res.json());
+      const board = z.object({ engines: z.array(z.object({ accounts: z.array(z.object({ name: z.string() })) })).min(1) }).parse((await api("GET", "/api/usage/board")).body);
+      expect(text).toContain("Percent is what is LEFT.");
+      for (const account of board.engines.flatMap((engine) => engine.accounts)) expect(text).toContain(`- ${account.name}`);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("lets a bot with agents tools create a two-bot channel that mirrors UI group constraints", async () => {
     const chief = (await api("POST", "/api/bots")).body.bot;
     const peer = (await api("POST", "/api/bots")).body.bot;

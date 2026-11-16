@@ -95,8 +95,8 @@ const stateSchema = z.object({
   host: name,
   me: personSchema,
   people: z.array(personSchema).max(100),
-  bots: z.array(z.object({ id, name, color: z.string().max(64) })).max(100).default([]),
-  teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id })).max(200).optional(),
+  bots: z.array(z.object({ id, name, color: z.string().max(64), mascotStyle: z.string().max(64).optional() })).max(100).default([]),
+  teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id, mascotStyle: z.string().max(64).optional() })).max(200).optional(),
 });
 const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
@@ -434,10 +434,10 @@ export class GuestClient {
   }
 
   /** Adds one of this PC's bots to the room; the host mints its room id. */
-  async addBot(roomId: string, botId: string, name: string, color: string): Promise<GuestResult<{ id: string }>> {
+  async addBot(roomId: string, botId: string, name: string, color: string, mascotStyle?: string | null): Promise<GuestResult<{ id: string }>> {
     const creds = joinedKey(roomId);
     if (!creds) return failed(joinedRoom(roomId) ? 409 : 404, joinedRoom(roomId) ? "this room is read-only" : "not found");
-    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bots`, creds.key, JSON.stringify({ name: [...name].slice(0, NAME_MAX).join(""), color }));
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bots`, creds.key, JSON.stringify({ name: [...name].slice(0, NAME_MAX).join(""), color, ...(mascotStyle ? { mascotStyle } : {}) }));
     if (!reply.ok) {
       if (reply.status === 401) this.end(roomId, creds.key);
       return reply;

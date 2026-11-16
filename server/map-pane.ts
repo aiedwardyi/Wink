@@ -46,6 +46,9 @@ export interface MapPaneDeps {
 export function createMapPane(deps: MapPaneDeps) {
   const fallback = new Map<string, string | null>();
   const readers = new Map<string, Set<Map<string, WatchedPane>>>();
+  // The workers each bot's Map last saw, so a reopen paints before git has read them again.
+  const known = new Map<string, Map<string, WatchedPane>>();
+  const lists = new Map<string, string[]>();
   const flows = createMapFlow(deps.gh);
 
   function live(res: ServerResponse, botId: string) {
@@ -64,14 +67,32 @@ export function createMapPane(deps: MapPaneDeps) {
       resend = error;
       const snapshot: MapSnapshot = { workers: [...panes.values()].map(value => value.worker) };
       if (error) snapshot.error = true;
+      else {
+        known.set(botId, panes);
+        const roots = new Set([...known.values()].flatMap(seen => [...seen.values()].map(record => record.root)));
+        for (const root of lists.keys()) if (!roots.has(root)) lists.delete(root);
+      }
+      write(snapshot);
+    };
+    const write = (snapshot: MapSnapshot) => {
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
       if (res.writableLength > 1024 * 1024) res.destroy();
     };
     const refresh = async (record: WatchedPane, quiet = false) => {
-      if (closed || !record.base || !record.watcher || panes.get(record.pane.sessionId) !== record) return;
+      if (closed || !record.watcher || panes.get(record.pane.sessionId) !== record) return;
       if (record.running) { record.dirty = true; return; }
       record.running = true;
       try {
+        if (!record.base) {
+          // A folder that becomes a repo later turns to git here; until then Map lists the folder again on each edit.
+          const base = existsSync(resolve(record.pane.cwd, ".git")) ? await mapHead(record.pane.cwd) : null;
+          if (closed || !record.watcher) return;
+          if (!base) { record.worker = { ...record.worker, editedAt: Date.now() }; if (!quiet) send(); return; }
+          record.root = (await mapGit(record.pane.cwd, ["rev-parse", "--show-toplevel"])).trim();
+          record.base = base;
+          fallback.set(`${botId}:${record.pane.sessionId}`, base);
+          record.worker = { ...record.worker, git: true };
+        }
         const fork = await mapFork(record.root, record.base);
         const { files, more } = await mapFiles(record.root, fork, [...panes.values()].find(value => value.base)?.base ?? undefined);
         if (closed || !record.watcher) return;
@@ -120,6 +141,8 @@ export function createMapPane(deps: MapPaneDeps) {
           const reason = deps.reason?.(botId, existing.pane, existing.worker.editedAt);
           if (reason !== existing.worker.reason) { existing.worker = { ...existing.worker, reason }; changed = true; }
         }
+        const last = known.get(botId);
+        if (!panes.size && fresh.length && last && fresh.every(pane => last.has(pane.sessionId))) write({ workers: fresh.map(pane => last.get(pane.sessionId)!.worker) });
         // New workers are read together and sent once: sent one by one, Map rebuilt its tree per worker as it opened.
         const records = await Promise.all(fresh.map(async (pane): Promise<WatchedPane> => {
           const key = `${botId}:${pane.sessionId}`;
@@ -136,20 +159,21 @@ export function createMapPane(deps: MapPaneDeps) {
         if (closed) return;
         for (const record of records) {
           panes.set(record.pane.sessionId, record);
-          if (!record.base) continue;
+          if (!record.root) continue;
           try {
             record.watcher = watch(record.root, { recursive: true }, (event, name) => {
               // Windows repeats this event without end once the folder is gone.
               if (event === "rename" && !existsSync(record.root)) { fail(record); return send(); }
               if (!name) return schedule(record);
               const path = name.toString().replaceAll("\\", "/");
-              if (path.split("/").some(part => part === ".git" || part === "node_modules")) return;
+              // A folder without git yet still hears its .git: that is how it becomes a repo.
+              if (path.split("/").some(part => (part === ".git" && record.base) || part === "node_modules")) return;
               schedule(record, path);
             });
             record.watcher.on("error", () => { fail(record); send(); });
           } catch { fail(record); }
         }
-        await Promise.all(records.map(record => refresh(record, true)));
+        await Promise.all(records.filter(record => record.base).map(record => refresh(record, true)));
         if (changed || records.length) send();
       } catch { send(true); }
       finally {
@@ -173,10 +197,17 @@ export function createMapPane(deps: MapPaneDeps) {
     if (route === "live") return live(res, botId);
     const sessionId = url.searchParams.get("worker") ?? "";
     const path = url.searchParams.get("path") ?? "";
-    const record = [...(readers.get(botId) ?? [])].map(panes => panes.get(sessionId)).find(Boolean);
+    const open = readers.get(botId);
+    // What Map was last sent, not a worker still in its first read: a reopen shows the last snapshot until its own read is done.
+    const record = open && (known.get(botId)?.get(sessionId) ?? [...open].map(panes => panes.get(sessionId)).find(Boolean));
     if (route === "repo") {
       if (!record) return json(res, 404, { error: "No such worker" });
-      try { return json(res, 200, { name: basename(record.root), paths: record.base ? await mapRepoFiles(record.root) : record.root ? await mapWalkFiles(record.root) : [] }); }
+      const { root } = record;
+      const read = (record.base ? mapRepoFiles(root) : root ? mapWalkFiles(root) : Promise.resolve([])).then(paths => { if (record.base) lists.set(root, paths); return paths; });
+      // A Git list drifts mostly by the worker's own edits, which Map adds from the snapshot: the last list paints at once, this read serves the next open.
+      const last = lists.get(root);
+      if (last) { read.catch(() => lists.delete(root)); return json(res, 200, { name: basename(root), paths: last }); }
+      try { return json(res, 200, { name: basename(root), paths: await read }); }
       catch { return json(res, 503, { error: "Could not list the files" }); }
     }
     if (route === "flow") {

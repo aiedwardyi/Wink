@@ -117,6 +117,7 @@ export const KEPT_LIMITS: Limits = {
   "src/lib/chat-options.ts": { MAX_OPTIONS: DISPLAY, MAX_OPTION_LEN: DISPLAY },
   "src/lib/companion-pairing.ts": { MAX_HOSTS: "Crash: the pairing QR code overflows." },
   "src/lib/live-call/controller.ts": { MAX_RECONNECTS: "Runaway loop: reconnecting a call that keeps dropping.", MAX_NUDGES: AUTO },
+  "src/lib/map-highlight.ts": { MAX_LINES: DISPLAY, MAX_CHARS: DISPLAY },
   "src/lib/room-turn-timeout.ts": { MAX_ROOM_TURN_TIMEOUT_MINUTES: "Crash: setTimeout overflows past 24.8 days and fires at once." },
   "src/lib/verify-replay.ts": { MAX_CHUNK: FILE },
   "src/state/store-transforms.ts": { MAX_CONSUMED_QUEUE_IDS: STATE, MAX_KEPT_SCREEN_FRAMES: "Crash: screenshots held in browser memory." },
@@ -165,6 +166,7 @@ export const PENDING_LIMITS: Limits = {
     "instructions must be at most 1000": "Owned by CREATE-BOT-OPEN (create-bot route).",
   },
   "server/rooms/files.ts": { MAX_MESSAGE_FILES: "Follow-up after ROOM-COLLAB-OPEN: 50 files per room message.", "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal." },
+  "server/rooms/send.ts": { "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal for the host's attached files." },
   "server/rooms/guest-client.ts": { MAX_VIEW_ENTRIES: "Parked for Edward: caps the user's own view of a joined room at 10,000 local rows; not host input." },
   "server/rooms/upload-timeouts.ts": { MAX_UPLOAD_BYTES: "Follow-up after ROOM-COLLAB-OPEN: mirrors the 1 GB room file cap." },
   "server/team-manifest.ts": {

@@ -412,11 +412,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
 
         const cwd = turn.cwd ?? homedir();
-        // on-request never asks inside the workspace; untrusted asks before
-        // any edit or command that is not read-only
-        const approvalPolicy = config.fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : "on-request";
-        // a resume without it falls back to the config default, often read-only
-        const sandbox = config.fullAuto ? "danger-full-access" : "workspace-write";
+        // Only a Wink setting overrides; otherwise the user's own codex config decides.
+        // untrusted asks before any edit or command that is not read-only.
+        const approvalPolicy = config.fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : undefined;
+        const sandbox = config.fullAuto ? "danger-full-access" : undefined;
         // Everything fixed at spawn or thread/resume; the mounts' tokens live per boot, bot and thread.
         const fingerprint = createHash("sha256")
           .update(JSON.stringify([config.cli, appServerArgs, cwd, Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)), approvalPolicy, sandbox, turn.model ?? "", turn.effort ?? ""]))
@@ -1097,7 +1096,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         resolve(err ? null : stdout.trim()),
       );
     });
-    if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
+    if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
     const force = opts?.rescan || opts?.refresh;
     const authenticated = input.account ? (await accountStatus(force)).authenticated && engineAccount.type === "chatgpt" : await signedIn(force);
     if (input.account) admitted = authenticated === true;

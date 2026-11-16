@@ -2,7 +2,6 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
@@ -19,6 +18,7 @@ import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
+import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { applyPendingModel } from "./pending-model.ts";
@@ -179,6 +179,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Hidden: a later text of its turn says the same, so replay skips it. */
+  restated?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */
   engine?: string;
   call?: import("../shared/live-call.ts").CallTag;
@@ -656,10 +658,6 @@ const BOTS_FILE = join(DATA_DIR, "bots.json");
 const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const fileMissing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
-// One file per resume cursor, so bots.json never carries a prompt copy.
-const SESSION_SYSTEM_DIR = join(DATA_DIR, "session-system");
-const sessionSystemFile = (instanceId: string, cursor: ResumeSeed["cursor"]) =>
-  `${createHash("sha256").update(`${instanceId}\n${JSON.stringify(cursor)}`).digest("hex").slice(0, 32)}.txt`;
 
 /** Sections are persisted as display labels, so exact trimmed labels are
  * their identity. Missing/blank means the unsectioned (General) team. */
@@ -723,17 +721,21 @@ export function normalizeGroupDefaultResponder(
   return { kind: "member", botId: memberIds[0] };
 }
 
-/** Resolve the bots invoked by a human room message. Explicit targets win;
- * otherwise the room policy chooses one member, everyone, or nobody. */
+/** Resolve the bots invoked by a human room message. Explicit targets win,
+ * then the member it replies to; otherwise the room policy chooses one
+ * member, everyone, or nobody. */
 export function roomResponders<T extends { id: string; name: string; hidden?: boolean }>(
   text: string,
   members: T[],
   defaultResponder: GroupDefaultResponder,
+  replyTo?: Pick<Message, "from">,
 ): T[] {
   const available = members.filter((member) => !member.hidden);
   if (/(?:^|\s)@everyone\b/i.test(text)) return available;
   const mentioned = mentionedBots(text, available);
   if (mentioned.length) return mentioned;
+  const replied = available.find((member) => member.id === replyTo?.from?.botId);
+  if (replied) return [replied];
   if (defaultResponder.kind === "everyone") return available;
   if (defaultResponder.kind === "member") {
     const lead = available.find((member) => member.id === defaultResponder.botId);
@@ -1710,17 +1712,12 @@ export class Store {
   /** The system text a resumed session holds: what it started with, plus
    * every change a reminder already brought it. Undefined when unknown. */
   sessionSystem(instanceId: string, cursor: ResumeSeed["cursor"]): string | undefined {
-    try {
-      return readFileSync(join(SESSION_SYSTEM_DIR, sessionSystemFile(instanceId, cursor)), "utf8");
-    } catch {
-      return undefined;
-    }
+    return readSessionSystem(instanceId, cursor);
   }
 
   recordSessionSystem(instanceId: string, cursor: ResumeSeed["cursor"], text: string) {
     if (cursor === undefined || this.sessionSystem(instanceId, cursor) === text) return;
-    mkdirSync(SESSION_SYSTEM_DIR, { recursive: true, mode: 0o700 });
-    writeFileAtomic(join(SESSION_SYSTEM_DIR, sessionSystemFile(instanceId, cursor)), text, { mode: 0o600 });
+    writeSessionSystem(instanceId, cursor, text);
   }
 
   /** Mark the user send that recycled the provider session so later

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import type { MapDiff, MapDiffLine, MapRepo, MapSnapshot } from "../../shared/map-pane";
 import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
 import { mapFollow, type MapSelection } from "@/lib/map-follow";
+import { useLineTokens, useMapTokens, type MapTokens } from "@/lib/map-highlight";
 import { EASE_STANDARD, MOTION_MODERATE_MS } from "@/lib/motion";
 import { mapClashes, treeIndex, treeOrder } from "@/lib/map-tree";
 import { mapWorkerSlots } from "@/lib/map-worker-colors";
@@ -29,6 +30,10 @@ type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
 const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
 const fade = (part?: Element | null) => ease(part, [{ opacity: 0.5 }, { opacity: 1 }]);
+const CodeRow = memo(function CodeRow({ line, source }: { line: MapDiffLine; source: MapTokens }) {
+  const tokens = useLineTokens(source, line);
+  return <div className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{tokens?.length ? tokens.map((token, i) => token.color ? <span key={i} style={{ color: token.color }}>{token.content}</span> : token.content) : line.text || " "}</code></div>;
+});
 
 export function MapPane({ botId, maximized = false, active = true }: { botId?: string; maximized?: boolean; active?: boolean }) {
   const { locale } = useI18n();
@@ -68,6 +73,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   // A team's tree never hangs off a folder without git.
   const source = team ? snapshot.workers.find(item => item.git) ?? worker : worker;
   const repoWorker = source?.id;
+  // A git tree takes new files from the snapshot; a folder without git is listed again whenever it changes.
+  const walked = source?.git ? 0 : source?.editedAt;
   const more = onTree.reduce((sum, item) => sum + (item.more ?? 0), 0);
   const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
   const lost = !paths && !!repoWorker && repoFailed === repoWorker;
@@ -129,7 +136,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       if (!controller.signal.aborted && Array.isArray(data?.paths)) { setRepo({ worker: id, name: String(data.name ?? ""), paths: data.paths }); setRepoFailed(null); }
     }, () => { if (!controller.signal.aborted) setRepoFailed(id); });
     return () => controller.abort();
-  }, [base, repoWorker, active, connection, repoRetry]);
+  }, [base, repoWorker, walked, active, connection, repoRetry]);
 
   useEffect(() => {
     if (!active || !liveReady.current) return;
@@ -166,6 +173,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const held = !!diff && !!worker?.git && !!chosen.path && diff.worker !== worker.id;
   const loaded = !failed && diff && (held || diff.worker === worker?.id) ? diff : null;
   const shown = loaded ? loaded.path : chosen.path;
+  const tokens = useMapTokens(loaded?.path, loaded?.data);
+  const fullTokens = useMapTokens(loaded?.path, loaded?.full);
   const fills = expanded && !!shown && !!worker?.git && files.length > 0;
   useLayoutEffect(() => {
     const code = codeRef.current;
@@ -193,6 +202,9 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     slid.current = repo?.held || held ? to : null;
     if (from !== to) for (let part: Element | null = barRef.current; part; part = part.nextElementSibling) ease(part, [{ transform: `translateY(${from - to}px)` }, { transform: "none" }]);
   });
+  // Git rows ask after the tree and the code: each row runs git and gh, and asked together they held both back by seconds.
+  const [rows, setRows] = useState(false);
+  if (!rows && worker && (paths || lost || !repoWorker) && (loaded || failed || !worker.git || !chosen.path)) setRows(true);
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
     if (!base || !loaded || held) return;
@@ -227,7 +239,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     const focus = event.target instanceof Element && event.target.matches("[data-map-file]");
     pending.current = reach(next, focus) ? null : { path: next, focus };
   };
-  const codeRow = (line: MapDiffLine, key: React.Key) => <div key={key} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text || " "}</code></div>;
+  const codeRow = (line: MapDiffLine, key: React.Key, of = tokens) => <CodeRow key={key} line={line} source={of} />;
   const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
   return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
@@ -250,7 +262,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         {worker.error && !(worker.git && files.length > 0) && <p className="map-empty" role="status">{failure}</p>}
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
-      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />
+      <MapSplit target={topRef} rows />
+      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active && rows} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
         <div ref={barRef} className="map-crumbs">
@@ -272,7 +285,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
               const start = line.line ?? 1;
               if (!loaded.full || !loaded.opened?.includes(start)) return <button key={index} type="button" className="map-gap" onClick={() => unfold(start)}>{c.unchanged(line.count ?? 0)}</button>;
               const opened = loaded.full.lines.filter(full => full.kind === "context" && full.line! >= start && full.line! < start + (line.count ?? 0));
-              return [...opened.map(full => codeRow(full, `${index}:${full.line}`)), opened.length < (line.count ?? 0) && <div key={`${index}:capped`} className="map-gap">{c.capped}</div>];
+              return [...opened.map(full => codeRow(full, `${index}:${full.line}`, fullTokens)), opened.length < (line.count ?? 0) && <div key={`${index}:capped`} className="map-gap">{c.capped}</div>];
             })}
             {loaded.data.capped && <div className="map-gap">{c.capped}</div>}
           </>}
