@@ -205,6 +205,6 @@ describe("room header on a phone", () => {
     const name = tokensAfter(header, '<div className="flex min-w-[4.5rem]');
     expect(name.has("flex-1")).toBe(true);
     expect(name.has("min-w-[4.5rem]")).toBe(true);
-    expect(tokensAfter(header, '<div className="flex min-w-0 items-center gap-1.5').has("min-w-0")).toBe(true);
+    expect(tokensAfter(header, '<div data-no-swipe className="flex min-w-0 items-center gap-1.5').has("min-w-0")).toBe(true);
   });
 });

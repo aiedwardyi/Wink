@@ -65,6 +65,10 @@ beforeEach(() => {
     } else if (this.hasAttribute("data-model-effort")) { left = 370; width = this.style.display === "none" ? 0 : 30; }
     return { x: left, y: 0, left, right: left + width, top: 0, bottom: 30, width, height: 30, toJSON() {} };
   });
+  vi.spyOn(Range.prototype, "getBoundingClientRect").mockImplementation(function (this: Range) {
+    const width = this.startContainer instanceof HTMLElement && this.startContainer.hasAttribute("data-name") ? nameWidth : 0;
+    return { x: 0, y: 0, left: 0, right: width, top: 0, bottom: 30, width, height: 30, toJSON() {} } as DOMRect;
+  });
   vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) { return this.hasAttribute("data-model-label") ? 80 : 0; });
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.hasAttribute("data-model-label") ? this.getBoundingClientRect().width : 0; });
   host = document.body.appendChild(document.createElement("div"));

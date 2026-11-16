@@ -217,7 +217,7 @@ export function requestFind(): void {
   for (const open of [...findRequests]) open();
 }
 
-export function useSearchFindSeed(threadId: string) {
+export function useSearchFindSeed(threadId: string, enabled = true) {
   const { state } = useStore();
   const [findOpen, setFindOpen] = useState(false);
   const [findSeed, setFindSeed] = useState<{ query: string; messageId: string; nonce: number } | null>(null);
@@ -229,10 +229,10 @@ export function useSearchFindSeed(threadId: string) {
 
   useEffect(() => {
     const seed = findSeedFor(state.focusMessage, threadId);
-    if (!seed) return;
+    if (!enabled || !seed) return;
     setFindSeed(seed);
     setFindOpen(true);
-  }, [state.focusMessage, threadId]);
+  }, [state.focusMessage, threadId, enabled]);
 
   const closeFind = useCallback(() => {
     setFindOpen(false);
@@ -246,9 +246,10 @@ export function useSearchFindSeed(threadId: string) {
   }, []);
   const openFind = useCallback(() => setFindOpen(true), []);
   useEffect(() => {
+    if (!enabled) return;
     findRequests.add(openFind);
     return () => void findRequests.delete(openFind);
-  }, [openFind]);
+  }, [openFind, enabled]);
   useEffect(() => { if (findOpen) trackScreen("find"); }, [findOpen]);
 
   return { findOpen, findSeed, closeFind, toggleFind, openFind };

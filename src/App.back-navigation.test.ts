@@ -16,6 +16,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 
 import App from "./App";
+import { FORUM_SELECTION } from "@/lib/board";
 import { closeShow, showItem } from "@/lib/show-pane";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
@@ -99,6 +100,55 @@ describe("Back with the pane open on a phone", () => {
     } finally {
       await act(async () => root.unmount());
       closeShow();
+      host.remove();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      localStorage.clear();
+      store.dispatch = null;
+    }
+  });
+});
+
+describe("Back inside a Forum post on a phone", () => {
+  it("returns to the Forum list, then closes the Forum", async () => {
+    localStorage.setItem("omb-onboarding-done", "true");
+    localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+      bots: [{ id: "b1", threadId: "t1", name: "b1", messages: [], modelSelection: { instanceId: "inst", model: "m" } }],
+      groups: [],
+      selectedId: "b1",
+    }));
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") || query.includes("reduce"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const posts = ["pold", "pnew"].map((id, at) => ({
+      id, parent_id: null, author_bot_id: "b1", project_id: "wink", kind: "stuck", title: id, body: id, error_sig: "", status: "open",
+      fix: "", source_ref: id, helped_bot_ids: [], created_at: at + 1, updated_at: at + 1, pc_id: "home",
+    }));
+    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).includes("/api/board")
+      ? Promise.resolve(new Response(JSON.stringify({ posts }), { headers: { "content-type": "application/json" } }))
+      : new Promise<Response>(() => {})));
+    vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
+    const entries: unknown[] = [];
+    vi.spyOn(window.history, "pushState").mockImplementation((state) => { entries.push(state); });
+    const back = () => act(async () => {
+      entries.pop();
+      window.dispatchEvent(new PopStateEvent("popstate", { state: entries.at(-1) ?? null }));
+    });
+    const rows = () => [...document.querySelectorAll("[data-board-post]")].map((row) => row.getAttribute("data-board-post"));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(App)));
+      await act(async () => store.dispatch!({ type: "select", id: FORUM_SELECTION }));
+      await vi.waitFor(() => expect(rows()).toEqual(["pnew", "pold"]));
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-board-post="pold"] button')!.click());
+      expect(rows()).toEqual(["pold"]);
+      await back();
+      expect(store.state!.selectedId).toBe(FORUM_SELECTION);
+      expect(rows()).toEqual(["pnew", "pold"]);
+      await back();
+      expect(store.state!.selectedId).toBe("b1");
+    } finally {
+      await act(async () => root.unmount());
       host.remove();
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

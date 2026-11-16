@@ -1912,6 +1912,9 @@ describe("phone header name floor", () => {
       return computed(el, pseudo);
     });
     installRects(false);
+    const range = document.createRange();
+    vi.spyOn(range, "getBoundingClientRect").mockReturnValue(box(0, 80, 0, 20));
+    const measurements = vi.spyOn(document, "createRange").mockReturnValue(range);
     const rect = HTMLElement.prototype.getBoundingClientRect;
     HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
       if (this.style.left === "-9999px") clones += 1;
@@ -1926,14 +1929,18 @@ describe("phone header name floor", () => {
       await act(async () => { await Promise.resolve(); });
       await act(async () => { window.dispatchEvent(new Event("resize")); });
       expect(clones).toBe(0);
+      expect(measurements).not.toHaveBeenCalled();
       expect(rootStyles).toBe(0);
       const nameButton = [...host.querySelectorAll("button")].find((el) => el.textContent === "Bounty-Watch" && el.className.includes("md:hidden"));
       expect(nameButton?.style.minWidth).toBe("");
       phone = true;
       await act(async () => { window.dispatchEvent(new Event("resize")); });
-      expect(clones).toBe(1);
+      expect(clones).toBe(0);
+      expect(measurements).toHaveBeenCalledTimes(1);
       expect(rootStyles).toBe(1);
-      expect(nameButton?.style.minWidth).not.toBe("");
+      expect(nameButton?.style.minWidth).toBe("80px");
+      await act(async () => { window.dispatchEvent(new Event("resize")); });
+      expect(measurements).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -1943,7 +1950,6 @@ describe("phone header name floor", () => {
 
   it("never reads fonts.ready on a chat switch and refits when a font finishes loading", async () => {
     let readyReads = 0;
-    let clones = 0;
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
     vi.stubGlobal("ResizeObserver", class {
@@ -1957,11 +1963,7 @@ describe("phone header name floor", () => {
     const fonts = Object.defineProperty(new EventTarget(), "ready", { get: () => { readyReads += 1; return Promise.resolve(); } });
     Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
     installRects(false);
-    const rect = HTMLElement.prototype.getBoundingClientRect;
-    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-      if (this.style.left === "-9999px") clones += 1;
-      return rect.call(this);
-    };
+    const measurements = vi.spyOn(document, "createRange");
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
@@ -1970,11 +1972,11 @@ describe("phone header name floor", () => {
       await act(async () => switchBot("b"));
       await act(async () => switchBot("a"));
       expect(readyReads).toBe(0);
-      const before = clones;
+      const before = measurements.mock.calls.length;
       await act(async () => { fonts.dispatchEvent(new Event("loadingdone")); });
-      expect(clones).toBeGreaterThan(before);
+      expect(measurements.mock.calls.length).toBeGreaterThan(before);
     } finally {
-      HTMLElement.prototype.getBoundingClientRect = rect;
+      measurements.mockRestore();
       await act(async () => root.unmount());
       host.remove();
       Reflect.deleteProperty(document, "fonts");

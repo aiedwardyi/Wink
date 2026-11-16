@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, useStore, type Bot } from "@/state/store";
-import { applyLocale } from "@/lib/i18n";
+import { I18nProvider, useI18n, type LocaleId } from "@/lib/i18n";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { CallHostSlot, CallWidgetSlot } from "./CallSlots";
@@ -78,13 +78,19 @@ function Selected() {
 
 let root: Root;
 let host: HTMLElement;
-const render = (chat: Bot | null) => act(async () => root.render(createElement(StoreProvider, null,
+let changeLocale: (locale: LocaleId) => void;
+function Locale() {
+  changeLocale = useI18n().setPreference;
+  return null;
+}
+const render = (chat: Bot | null) => act(async () => root.render(createElement(I18nProvider, null, createElement(StoreProvider, null,
+  createElement(Locale),
   chat ? createElement(ChatView, { bot: chat }) : null,
   createElement("aside", { "data-test-sidebar": true }, createElement(CallWidgetSlot as (props: object) => ReactNode, {})),
   createElement("section", { "data-test-settings": true }, createElement(CallVoicePicker)),
   createElement(CallHostSlot),
   createElement(Selected),
-)));
+))));
 
 async function mount(chat: Bot) {
   localStorage.setItem("wink.liveCall.intro", "1");
@@ -289,7 +295,7 @@ describe("call voice in Settings", () => {
 
   it("labels the card in Korean", async () => {
     await mount(atlas);
-    applyLocale("ko");
+    await act(async () => changeLocale("ko"));
     try {
       await render(atlas);
       const text = settings().textContent!;
@@ -300,13 +306,13 @@ describe("call voice in Settings", () => {
       await act(async () => button(settings(), "아델 들어보기")!.click());
       expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3", "/voice-preview/Erinome-ko.mp3"]);
     } finally {
-      applyLocale("en");
+      await act(async () => changeLocale("en"));
     }
   });
 
   it("labels the composer call button in Korean", async () => {
     await mount(atlas);
-    applyLocale("ko");
+    await act(async () => changeLocale("ko"));
     try {
       await render(atlas);
       const frame = host.querySelector<HTMLElement>("[data-orbit-composer-frame]")!;
@@ -317,7 +323,7 @@ describe("call voice in Settings", () => {
       await vi.waitFor(() => expect(button(frame, "종료")).not.toBeNull());
       expect(button(host, "Atlas 통화 끊기")).toBeNull();
     } finally {
-      applyLocale("en");
+      await act(async () => changeLocale("en"));
     }
   });
 
