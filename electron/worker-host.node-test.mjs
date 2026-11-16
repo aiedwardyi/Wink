@@ -295,6 +295,37 @@ test("an adopting app finds its pane again and replays the ring from a seq", { .
   await until(() => !alive(pane.pid));
 });
 
+test("a pane that ends before its app attaches tells the end only after its old output", { ...windows, timeout: 120_000 }, async (t) => {
+  const f = fixture(t);
+  const before = f.make({ adopt: true });
+  assert.equal(await before.prewarm(), true);
+  const pane = before.spawn(f.pane("ending"), noLocal);
+  const seen = watch(pane);
+  await pane.ready;
+  await pane.write('Write-Output ("END=" + (5 + 5))');
+  await until(() => seen.text.includes("END=10"));
+  assert.equal(pane.detach(), true);
+  before.close();
+
+  const order = [];
+  let output = "";
+  const after = await greet(f, {
+    capabilities: ["adopt"],
+    event: (name, value) => { if (value?.id === "ending") order.push(name); },
+    data: (_id, _seq, text) => {
+      output += text;
+      if (order.at(-1) !== "data") order.push("data");
+    },
+  });
+  await after.peer.write("ending", "exit 3");
+  await until(async () => (await after.peer.request("list"))[0]?.exit === 3);
+  assert.deepEqual(order, []);
+  await after.peer.request("attach", [{ id: "ending" }]);
+  await until(() => order.at(-1) === "gone");
+  assert.deepEqual(order, ["data", "exit", "gone"]);
+  assert.ok(output.includes("END=10"));
+});
+
 test("a second controller fences the first", { ...windows, timeout: 120_000 }, async (t) => {
   const f = fixture(t);
   const starter = f.make({ adopt: true });
