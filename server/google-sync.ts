@@ -84,6 +84,8 @@ type Options = {
   kindsReady?: () => boolean;
   /** Pulls a chat whose peer head a pass just downloaded. */
   pull?: (threadId: string) => void | Promise<void>;
+  /** A pass just downloaded pictures/<name>. */
+  picture?: (name: string) => void;
   openThread?: () => string | null;
   ownIds?: () => DriveOwnIds;
   fetch?: typeof fetch;
@@ -386,6 +388,7 @@ export function createGoogleSync(options: Options) {
           syncHold.feed(bound.mirrorPath, runnable() ? files : null, ids);
         },
         downloaded: (path) => {
+          if (path.startsWith("pictures/")) options.picture?.(path.slice("pictures/".length));
           if (bound.phase !== "ready") return;
           for (const threadId of peerHead(path, ids)) {
             const pulled = options.pull?.(threadId);

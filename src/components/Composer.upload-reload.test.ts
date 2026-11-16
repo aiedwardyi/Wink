@@ -144,6 +144,23 @@ describe("picture still uploading", () => {
   });
 });
 
+describe("document still uploading", () => {
+  it("shows its chip at once and Send waits for it", async () => {
+    const { host, answer, uploads } = await mountComposer();
+    await act(async () => {
+      const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+      Object.defineProperty(input, "files", { value: [new File([new Uint8Array([1, 2, 3])], "plan.pdf", { type: "application/pdf" })], configurable: true });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    expect(host.querySelector<HTMLButtonElement>('button[title="Send after the upload finishes"]')?.disabled).toBe(true);
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/api/attachments"))!;
+    expect(new Headers(init?.headers).get("x-attachment-name")).toBe("plan.pdf");
+    await act(async () => answer());
+    await vi.waitFor(() => expect(getDraftAttachments(localStorage, "bot::")).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png", name: "plan.pdf" })]));
+  });
+});
+
 describe("big file upload", () => {
   it("blocks Send while the upload runs and allows it once the chip is a file", async () => {
     let finish!: () => void;

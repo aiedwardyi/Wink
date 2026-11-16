@@ -101,6 +101,40 @@ describe("a tapped question card in a group", () => {
   });
 });
 
+describe("a typed answer to an open question in a group", () => {
+  const post = async (body: Record<string, unknown>) => {
+    const startGroupTurn = vi.fn(() => ({ id: "m1" }));
+    const routes = createGroupRoutes({
+      store,
+      groupIsWorking: (value: GroupRecord) => Boolean(value.busyBotId),
+      instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer: vi.fn(async () => true) } }),
+      userName: () => "Edward",
+      sendSequencer: new SendSequencer(),
+      resolveReplyTarget: () => undefined,
+      startGroupTurn,
+    } as unknown as Parameters<typeof createGroupRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    await routes.postMessage(Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
+    expect(res.writeHead.mock.calls[0][0]).toBe(202);
+    return startGroupTurn;
+  };
+
+  it("goes to the member that asked, and stays a chat line", async () => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "member", botId: kai.id } });
+    store.appendMessage(group.threadId, {
+      role: "bot",
+      kind: "options",
+      from: { botId: ray.id, name: ray.name, color: ray.color },
+      card: { title: "Question", subtitle: "Which color?", options: [], askUser: true },
+    });
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, ray.id, undefined);
+  });
+
+  it("keeps the room's rule when no question is open", async () => {
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, undefined);
+  });
+});
+
 describe("trashing a bot that is answering in a room", () => {
   it("stops its room turn while the room still names it", () => {
     store.patchGroup(group.id, { busyBotId: kai.id });

@@ -96,6 +96,21 @@ describe("PhoneAccessSettings", () => {
     await act(async () => root.unmount());
   });
 
+  it("with no relay, never asks a signed-out user to sign in to turn it on", async () => {
+    const onNoRelay = vi.fn();
+    vi.stubGlobal("ogb", { googleAccount: { signIn: vi.fn(), cancel: vi.fn(), signOut: vi.fn() } });
+    serve({
+      "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }),
+      "GET /api/google-account": () => ({ state: "signed-out" }),
+    });
+    const { host, root } = await renderView({ onNoRelay });
+    expect(host.textContent).not.toContain("Sign in with Google to turn this on.");
+    expect(host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
+    await act(async () => click(host.querySelector<HTMLButtonElement>('[role="switch"]')!));
+    expect(onNoRelay).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
   it("says not available when the relay is forced off", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }) });
     const off = await renderView();

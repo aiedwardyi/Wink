@@ -29,6 +29,7 @@ import { BotAvatar } from "./Avatar";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
+  attachmentBasename,
   composeMessage,
   fileAttachment,
   imageSupportForTargets,
@@ -135,7 +136,10 @@ function uploadedFile(id: string, result: UploadDone, uploadId?: string, picture
 const saveUpload = (draftId: string, chipId: string) => (result: UploadDone, uploadId?: string) =>
   updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId, a.picture) : a));
 
-const sendPicture = (file: File, chip: UploadAttachment) => chip.picture ? async (signal: AbortSignal): Promise<UploadDone> => {
+const sendPicture = (file: File, chip: UploadAttachment) => chip.document ? async (signal: AbortSignal): Promise<UploadDone> => {
+  const saved = await uploadAttachmentFile(file, true, signal);
+  return { path: saved.path, name: saved.name ?? attachmentBasename(file.name), size: saved.bytes, type: file.type };
+} : chip.picture ? async (signal: AbortSignal): Promise<UploadDone> => {
   const saved = await uploadAttachmentFile(file, false, signal);
   return { path: saved.path, name: file.name || "pasted image", size: saved.bytes, type: saved.mime };
 } : undefined;
