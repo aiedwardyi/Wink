@@ -45,6 +45,8 @@ function fakeAudio(clock: () => number): Mic {
     async heal() { return true; },
     stopMic() { this.stops += 1; },
     play() {},
+    endTurn() {},
+    tune() {},
     flush() {},
     close() {},
     boop() {},
