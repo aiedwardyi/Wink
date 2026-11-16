@@ -46,10 +46,17 @@ export interface DeployOptions {
   gtsProject?: string;
   /** Written as gts.perHour: PCs an hour that get a Google Trust Services key. */
   gtsPerHour?: number;
+  /** Written as limits.googleEnrollPerWeek: new PCs a week through Google. Each one needs a certificate. */
+  enrollPerWeek?: number;
 }
 
 /** Under the 100 new orders an hour Google allows a project, leaving room for retries. */
 export const GTS_PER_HOUR = 60;
+
+/** Certificates a week: Let's Encrypt's 50 for the registered domain, plus Google Trust Services at its hourly rate when it is on. */
+export function certsPerWeek(opts: Pick<DeployOptions, "gtsProject" | "gtsPerHour">): number {
+  return 50 + (opts.gtsProject ? (opts.gtsPerHour ?? GTS_PER_HOUR) * 168 : 0);
+}
 
 export interface AddressState {
   name: string;
@@ -164,6 +171,13 @@ export function validate(opts: DeployOptions): void {
     if (opts.gtsProject === undefined) throw new PlanError("--gts-per-hour needs --gts-project");
     if (!Number.isInteger(opts.gtsPerHour) || opts.gtsPerHour < 1 || opts.gtsPerHour > 100) {
       throw new PlanError("--gts-per-hour is a whole number from 1 to 100");
+    }
+  }
+  if (opts.enrollPerWeek !== undefined) {
+    if (!opts.google) throw new PlanError("--enroll-per-week needs the Google flags");
+    const most = certsPerWeek(opts);
+    if (!Number.isInteger(opts.enrollPerWeek) || opts.enrollPerWeek < 1 || opts.enrollPerWeek > most) {
+      throw new PlanError(`--enroll-per-week is a whole number from 1 to ${most}, what the certificate providers issue in a week`);
     }
   }
 }

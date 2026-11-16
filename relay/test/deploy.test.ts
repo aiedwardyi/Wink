@@ -564,6 +564,33 @@ describe("domain move flags", () => {
     }
   });
 
+  it("sizes the weekly join cap to the certificate providers", async () => {
+    const google = ["--google-desktop-client-id", DESKTOP_CLIENT, "--google-web-client-id", WEB_CLIENT, "--google-signin-origin", SIGNIN_ORIGIN];
+    const gts = ["--gts-project", "wink-gts-proj"];
+    const opts = (extra: string[]) => parseOptions(argv("update", extra)).opts;
+    expect(() => validate(opts([...gts, "--enroll-per-week", "100"]))).toThrow(/--enroll-per-week needs the Google flags/);
+    expect(() => validate(opts([...google, "--enroll-per-week", "51"]))).toThrow(/from 1 to 50,/);
+    expect(() => validate(opts([...google, ...gts, "--gts-per-hour", "10", "--enroll-per-week", "1731"]))).toThrow(/from 1 to 1730,/);
+    for (const bad of ["0", "1.5", "many"]) expect(() => validate(opts([...google, ...gts, "--enroll-per-week", bad])), bad).toThrow(/--enroll-per-week is/);
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    const limits = async (extra: string[]) => {
+      const parsed = opts(extra);
+      validate(parsed);
+      await realLocal("/r", dir).writeConfig(parsed);
+      return configSchema.parse(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"))).limits;
+    };
+    try {
+      // Let's Encrypt alone: the relay keeps its own 35.
+      expect(await limits(google)).toBeUndefined();
+      expect(await limits([...google, ...gts])).toEqual({ googleEnrollPerWeek: 5065 });
+      expect(await limits([...google, ...gts, "--gts-per-hour", "100"])).toEqual({ googleEnrollPerWeek: 8425 });
+      expect(await limits([...google, ...gts, "--enroll-per-week", "9000"])).toEqual({ googleEnrollPerWeek: 9000 });
+      expect(await limits([...google, "--enroll-per-week", "20"])).toEqual({ googleEnrollPerWeek: 20 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("writes --gts-per-hour, inside Google's 100 orders an hour and only with --gts-project", async () => {
     const gts = (extra: string[]) => parseOptions(argv("update", ["--gts-project", "wink-gts-proj", ...extra])).opts;
     for (const bad of ["0", "101", "1.5", "many"]) expect(() => validate(gts(["--gts-per-hour", bad])), bad).toThrow(/--gts-per-hour is a whole number from 1 to 100/);
