@@ -38,7 +38,9 @@ function clean(text: string): string {
     .trim();
 }
 
-const keyOf = (fact: string) => fact.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+// trims only the punctuation around words, so "C++" and "C#" stay two facts
+const keyOf = (fact: string) => fact.normalize("NFKC").toLowerCase().split(/\s+/)
+  .map((word) => word.replace(/^[.,;:!?…"'“”‘’()[\]{}。、，！？]+|[.,;:!?…"'“”‘’()[\]{}。、，！？]+$/gu, "")).filter(Boolean).join(" ");
 
 // room for " (from <source>, YYYY-MM-DD)" on a line no longer than a memory line
 const FACT_MAX_BYTES = MEMORY_LINE_MAX_BYTES - 64;

@@ -49,6 +49,11 @@ describe("About You save", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("tells facts apart by the symbols in them, not by case, spacing or end punctuation", () => {
+    expect(addToAboutYou("- Prefers C++.\n- Prefers C#.\n- prefers  c#\n- Prefers \"C++\"!", "2026-11-16")).toMatchObject({ found: 4, added: 2, duplicates: 2 });
+    expect(aboutYouSources()[0]?.facts).toEqual(["Prefers C++.", "Prefers C#."]);
+  });
+
   it("keeps every word of a long line, split into facts that fit a memory line", () => {
     const long = Array.from({ length: 40 }, (_, i) => `Fact number ${i} about the user.`).join(" ");
     const { facts } = factsOf(`- ${long}`);
