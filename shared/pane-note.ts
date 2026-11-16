@@ -7,7 +7,7 @@ const snagHeaderSchema = z.object({
 
 // A stored pane note, split into what a person reads and what only the bot needs.
 export type PaneNoteStatus = "done" | "failed" | "blocked";
-export type PaneNoteAlert = { kind: "stalled"; minutes: number } | { kind: "waiting" } | { kind: "finished" } | { kind: "restarted"; panes: string[] } | { kind: "limit"; engine: string; reset: string };
+export type PaneNoteAlert = { kind: "stalled"; minutes: number } | { kind: "waiting" } | { kind: "finished" } | { kind: "restarted"; panes: string[] } | { kind: "kept"; panes: string[] } | { kind: "limit"; engine: string; reset: string };
 export type PaneNote = {
   pane8: string | null;
   label: string | null;
@@ -32,6 +32,9 @@ const FINISHED = /^FINISHED: command ended without a report\./;
 // electron/pane-runs.mjs restartNoteText
 const RESTARTED = /^RESTARTED: Wink restarted, so these panes you spawned closed mid-run:\n/;
 const RESTARTED_PANE = /^- (?:(.+) )?\[pane ([0-9a-f]{1,8})\] in /;
+// electron/worker-host-adopt.mjs keptNoteText, when that line is the whole note
+const KEPT = /^KEPT RUNNING: ([^\n]+)\.$/;
+const KEPT_PANE = /^(?:(.+) )?\[pane ([0-9a-f]{1,8})\] \(/;
 // the reset text may hold parens, e.g. "3pm (Asia/Seoul)"
 const LIMIT = /^LIMIT: (\S+) hit its usage limit \(resets (.+)\)\. Its work so far stays in /;
 const TRUNCATED = /\n\[truncated\]$/;
@@ -61,6 +64,14 @@ export function parsePaneNote(text: string): PaneNote {
       return pane ? [pane[1]?.split(" | ")[0] || pane[2]!] : [];
     });
     return { ...note, alert: { kind: "restarted", panes } };
+  }
+  const kept = KEPT.exec(rest);
+  if (kept) {
+    const panes = kept[1]!.split("; ").flatMap((item) => {
+      const pane = KEPT_PANE.exec(item);
+      return pane ? [pane[1]?.split(" | ")[0] || pane[2]!] : [];
+    });
+    return { ...note, alert: { kind: "kept", panes } };
   }
   const limit = LIMIT.exec(rest);
   if (limit) return { ...note, alert: { kind: "limit", engine: limit[1] ?? "", reset: limit[2] ?? "" } };

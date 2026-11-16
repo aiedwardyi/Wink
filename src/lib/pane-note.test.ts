@@ -69,6 +69,15 @@ describe("parsePaneNote", () => {
     expect(noteText(note, (key, vars) => translate("ko", key, vars))).toBe("Wink가 다시 시작되어 작업 중이던 작업자 창이 닫혔습니다: PR-FIX, 5e6f7a8b");
   });
 
+  it("turns a note that only lists kept panes into an alert", () => {
+    const note = parsePaneNote(stored("KEPT RUNNING: PR-FIX | Opus 5.5 [pane 1a2b3c4d] (claude) still working; [pane 5e6f7a8b] (script) still running.", null));
+    expect(note).toMatchObject({ status: null, alert: { kind: "kept", panes: ["PR-FIX", "5e6f7a8b"] }, body: "" });
+    expect(noteText(note, t)).toBe("Wink restarted and these worker panes kept running: PR-FIX, 5e6f7a8b");
+    expect(noteText(note, (key, vars) => translate("ko", key, vars))).toBe("Wink가 다시 시작되었고 다음 작업자 창은 계속 실행 중입니다: PR-FIX, 5e6f7a8b");
+    const mixed = "KEPT RUNNING: A [pane 1a2b3c4d] (claude) still working.\nFINISHED WHILE WINK WAS DOWN: B [pane 5e6f7a8b] exit 0, no report: read it, then close it.";
+    expect(parsePaneNote(stored(mixed, null))).toMatchObject({ alert: null, body: mixed });
+  });
+
   it("falls back to the free text minus the prefix", () => {
     expect(parsePaneNote(stored("halfway, tests running"))).toMatchObject({ status: null, alert: null, nick: null, body: "halfway, tests running" });
     expect(parsePaneNote(stored("WAITING: on CI")).body).toBe("WAITING: on CI");

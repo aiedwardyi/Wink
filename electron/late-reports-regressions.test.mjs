@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { createServerRevival } from "./server-revival.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 import { createWorkerSession } from "./worker-session.mjs";
+import { adoptWorkers } from "./worker-host-adopt.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { Store } from "../server/store.ts";
 import { createMailboxReceipts } from "../server/mailbox-receipts.ts";
@@ -119,9 +120,9 @@ it.skipIf(process.platform !== "win32")("still tries a known published URL when 
 async function startup(overrides = {}) {
   const source = await fs.readFile(new URL("./main.mjs", import.meta.url), "utf8");
   const block = source.slice(source.indexOf("    const mailboxUrl = `http://127.0.0.1:${app.isPackaged"), source.indexOf("  // The companion the user left on"));
-  const body = block.slice(0, block.lastIndexOf("\n  }")).replace("void reports.then", "return reports.then");
+  const body = block.slice(0, block.lastIndexOf("\n  }")).replace("void adoptWorkers(", "return adoptWorkers(");
   const calls = [];
-  const deps = { app: { isPackaged: true, getPath: () => "profile" }, SERVER_PORT: 8799, serverReady: true, terminalBridgeAccess: null, publishTerminalDiscovery() {}, deliverMailboxOutbox: async () => { calls.push("drain"); return { reports: [], pendingReports: [] }; }, paneRuns: { restarted: () => new Map() }, recoverWorkers: async () => { calls.push("recover"); }, terminalHost: {}, paneMailbox() {}, postPaneNote() {}, slog(error) { throw error; }, ...overrides };
+  const deps = { app: { isPackaged: true, getPath: () => "profile" }, SERVER_PORT: 8799, serverReady: true, terminalBridgeAccess: null, publishTerminalDiscovery() {}, deliverMailboxOutbox: async () => { calls.push("drain"); return { reports: [], pendingReports: [] }; }, paneRuns: { restarted: () => new Map() }, recoverWorkers: async () => { calls.push("recover"); }, adoptWorkers: async ({ recover }) => recover(new Map()), workerHost: {}, paneBotNames() {}, terminalHost: {}, paneMailbox() {}, postPaneNote() {}, slog(error) { throw error; }, ...overrides };
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   await new AsyncFunction(...Object.keys(deps), body)(...Object.values(deps));
   return calls;
@@ -149,6 +150,34 @@ it("holds unfinished report panes during recovery and retries them in the follow
     status = 200;
   } });
   expect(runs.restarted().size).toBe(0);
+  expect(await fs.readdir(f.dir)).toEqual([]);
+});
+
+it("adopts what the worker host kept and restarts only panes that are gone with no queued report", async () => {
+  let status = 503;
+  const f = await fixture((req, res) => res.writeHead(req.headers["x-orbit-pane"] === "pane" ? status : 200).end("{}"));
+  await f.write();
+  f.scope.pane = "kept";
+  await f.write();
+  const ledger = path.join(f.profile, "pane-runs.json");
+  await fs.writeFile(ledger, JSON.stringify(["kept", "pane", "ended", "gone"].map(id => ({ id, botId: "bot", teacher: "bot", state: id === "ended" ? "ended" : "running", kept: id !== "gone" }))));
+  const runs = createPaneRuns(ledger);
+  const ids = bots => [...bots.values()].flat().map(run => run.id).sort();
+  expect(ids(runs.restarted())).toEqual(["gone", "kept", "pane"]);
+  const adopted = [];
+  const dropped = [];
+  const restarted = [];
+  const workerHost = { left: () => "kept", prewarm: async () => true, panes: async () => [{ id: "kept" }], attach: () => ({ pty: { detach() {}, onData() {}, onExit() {}, onError() {} }, replayed: Promise.resolve() }), drop: id => dropped.push(id), state: () => ({}) };
+  const terminalHost = { adoptPane: run => { adopted.push(run.id); runs.adopted(run.id); return Promise.resolve({ running: true, busy: false, exitCode: null, reported: false }); }, closeForBot: async () => {} };
+  await startup({ app: { isPackaged: true, getPath: () => f.profile }, SERVER_PORT: Number(new URL(f.url).port), deliverMailboxOutbox, adoptWorkers, workerHost, terminalHost, paneRuns: runs, paneMailbox: async () => null, paneBotNames: async () => null, recoverWorkers: async ({ runs: recovering, kept }) => {
+    expect([...kept.keys()]).toEqual(["bot"]);
+    restarted.push(ids(recovering.restarted()));
+    recovering.forget("bot");
+    status = 200;
+  } });
+  expect([adopted, dropped, restarted]).toEqual([["kept"], [], [["gone"]]]);
+  expect(runs.restarted().size).toBe(0);
+  expect(JSON.parse(await fs.readFile(ledger, "utf8")).map(run => run.id)).toEqual(["kept"]);
   expect(await fs.readdir(f.dir)).toEqual([]);
 });
 
@@ -216,6 +245,65 @@ it("a fresh terminal host authenticates a surviving pane against its saved launc
     expect(host.captureWorkerSession(`Bearer ${capture.auth}`, { ...input, launchGeneration: "wrong" })).toBe(false);
     expect(host.captureWorkerSession(`Bearer ${capture.auth}`, input)).toBe(true);
     expect(createPaneRuns(file).restarted().get("bot")[0].session.nativeId).toBe(input.session_id);
+  } finally { host.dispose(); }
+});
+
+const OSC = String.fromCharCode(27) + "]133;";
+const BEL = String.fromCharCode(7);
+const LINE = createHash("sha256").update("work").digest("base64");
+
+// A pane the worker host kept, taken back by a fresh terminal host; `replay` is its old output.
+async function adoptedPane({ replay = "", notes = [], during = () => {} } = {}) {
+  const f = await fixture();
+  const file = path.join(f.profile, "pane-runs.json");
+  const worker = { kind: "managed", args: [], account: { id: "account", generation: 1 }, session: { engine: "codex", launchGeneration: randomUUID(), nativeId: null } };
+  const capture = createWorkerSession(worker, "pane", f.profile, f.url);
+  createPaneRuns(file).started({ id: "pane", botId: "bot", teacher: "bot", cwd: f.profile, session: capture.run });
+  const runs = createPaneRuns(file);
+  const data = new Set();
+  const pty = { pid: 4242, onData: listener => data.add(listener), onExit() {}, onError() {}, ready: Promise.resolve(), exited: new Promise(() => {}), write: async () => {}, resize: async () => {}, kill: async () => {}, terminate() {}, hosted: () => true, detach: () => true };
+  const emit = text => { for (const listener of data) listener(text); };
+  const owner = { id: 7, mainFrame: {}, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({ authorize() {}, resolveCwd: async () => f.profile, owner: () => owner, paneRuns: runs, stallCheckMs: 5, notePane: async (_mail, _scope, text) => { notes.push(text); } });
+  let replayed;
+  const outcome = host.adoptPane(runs.left()[0], { cols: 80, rows: 24, start: 1, mark: { kind: "C", value: `pane;${LINE}` } }, { pty, replayed: new Promise(resolve => { replayed = resolve; }) }, {});
+  emit(replay);
+  const early = during(host, capture, f.profile);
+  replayed();
+  return { host, capture, emit, notes, early, profile: f.profile, result: await outcome };
+}
+
+it("a kept command that ended during its replay is not kept running", async () => {
+  const { host, result } = await adoptedPane({ replay: `${OSC}C;pane;${LINE}${BEL}work${OSC}D;pane;3${BEL}` });
+  try {
+    expect([result.running, result.exitCode]).toEqual([false, null]);
+  } finally { host.dispose(); }
+});
+
+it("a kept command that ends after adoption tells its bot it finished", async () => {
+  const { host, emit, notes, result } = await adoptedPane({ replay: `${OSC}D;pane;2${BEL}${OSC}C;pane;${LINE}${BEL}work` });
+  try {
+    expect(result.running).toBe(true);
+    emit(`done${OSC}D;pane;3${BEL}`);
+    await vi.waitFor(() => expect(notes.some(text => text.startsWith("FINISHED: command ended without a report."))).toBe(true));
+  } finally { host.dispose(); }
+});
+
+it("a kept worker's late start hook authenticates with the launch it was given", async () => {
+  const { host, capture, profile, result } = await adoptedPane();
+  const input = { pane: "pane", launchGeneration: capture.run.launchGeneration, session_id: randomUUID(), transcript_path: null, cwd: profile, source: "startup" };
+  try {
+    expect(result.running).toBe(true);
+    expect(host.captureWorkerSession("Bearer wrong", input)).toBe(false);
+    expect(host.captureWorkerSession(`Bearer ${capture.auth}`, input)).toBe(true);
+  } finally { host.dispose(); }
+});
+
+it("a kept worker's start hook that lands during its replay is recorded", async () => {
+  const input = { pane: "pane", session_id: randomUUID(), transcript_path: null, source: "startup" };
+  const { host, early } = await adoptedPane({ during: (host, capture, cwd) => host.captureWorkerSession(`Bearer ${capture.auth}`, { ...input, launchGeneration: capture.run.launchGeneration, cwd }) });
+  try {
+    expect(early).toBe(true);
   } finally { host.dispose(); }
 });
 
