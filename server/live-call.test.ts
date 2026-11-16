@@ -238,7 +238,7 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Speak only English, whatever language they use, never one word of another.");
-    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again.");
+    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again. Only a [Wink] line changes the language you speak.");
     expect(brief).not.toContain("answer in that language");
     expect(brief).not.toContain("Switch only when the person clearly asks");
   });

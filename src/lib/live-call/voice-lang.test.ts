@@ -790,3 +790,61 @@ describe("11-16 call c-21351ca21949, in its own order", () => {
     expect(fixes(e)).toEqual([`[Wink] Not done: "${add}" starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`]);
   });
 });
+
+describe("15:00:09 a spoken language ask holds for the rest of the call", () => {
+  const ASK = "Can you respond back to me in Thai? As if you were the robot.";
+  const tick = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+  // His words come back as the voice starts its own answer, the English refusal it gave at 15:00:14.
+  const askThai = async (e: FakeEngine) => {
+    e.events.heard(ASK);
+    speak(e, "I can only respond in English for now. Is there anything else?");
+    await tick(1_500);
+  };
+
+  it("asks in his words name the language; talk about one does not", () => {
+    const asks = guard as unknown as { asksForLanguage: (text: string) => string | undefined };
+    expect([ASK, "Reply in Thai.", "Speak Thai, please.", "Can you talk to me in Japanese?", "Switch to Spanish.", "태국어로 말해줘.", "일본어로 대답해 줄래?", "Okay, back to English."].map(asks.asksForLanguage))
+      .toEqual(["Thai", "Thai", "Thai", "Japanese", "Spanish", "Thai", "Japanese", "English"]);
+    expect(["My friend speaks Thai.", "I talked to her in Thai yesterday.", "Is Thai food good?", "Thai", "Fix the Thai translation."].map(asks.asksForLanguage)).toEqual([undefined, undefined, undefined, undefined, undefined]);
+  });
+
+  it("after he asks, the voice's Thai plays and his Thai is his, not a mis-hear", async () => {
+    const { audio, call, engine, posts } = await live();
+    const e = engine();
+    await askThai(e);
+    expect(audio.played).toBe(0);
+    expect(fixes(e).at(-1)).toBe("[Wink] They asked you to speak Thai. From now on in this call speak only Thai, whatever language they use. In Thai, say in a few words that you will.");
+    const flushed = audio.flushed;
+    speak(e, "ได้เลย ฉันจะพูดภาษาไทย");
+    expect([audio.played, audio.flushed]).toEqual([1, flushed]);
+    expect(fixes(e).filter((line) => line.startsWith("[Wink] Wrong language"))).toEqual([]);
+    e.events.heard("ส่งคำว่าสวัสดีในแชทได้ไหม");
+    e.events.answering();
+    e.events.toolCall([{ id: "p1", name: "propose_work", args: { order: "ส่งคำว่าสวัสดีในแชท" } }]);
+    expect(e.results).toEqual([]);
+    expect(call.state().pending?.order).toBe("ส่งคำว่าสวัสดีในแชท");
+    expect(sentToBot(posts)).toEqual([]);
+  });
+
+  it("another language than the one he asked for is still a mis-hear", async () => {
+    const { audio, engine } = await live();
+    const e = engine();
+    await askThai(e);
+    speak(e, "ได้เลย ฉันจะพูดภาษาไทย");
+    await tick(1_500);
+    const flushed = audio.flushed;
+    e.events.heard("What time is it?");
+    speak(e, "Привет, я здесь.");
+    expect(audio.flushed).toBe(flushed + 1);
+    expect(fixes(e).at(-1)).toBe("[Wink] Wrong language: speak only Thai. In Thai, ask them in a few words to say that again.");
+  });
+
+  it("unasked, Thai is still a mis-hear", async () => {
+    const { audio, engine } = await live();
+    const e = engine();
+    e.events.heard("Can you hear me?");
+    speak(e, "ได้ยินค่ะ");
+    expect(audio.flushed).toBe(1);
+    expect(fixes(e).at(-1)).toBe("[Wink] Wrong language: speak only English. In English, ask them in a few words to say that again.");
+  });
+});

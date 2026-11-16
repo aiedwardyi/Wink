@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, asksForLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -114,8 +114,8 @@ const CLOSE_WAIT_MS = 10_000;
 // The voice is the bot calling, so it asks for itself: "I need you to...", never its own name.
 const openerLine = (note: string, app: "en" | "ko") =>
   `[Wink] You are the caller: you rang them because you are stuck until they act: "${note}". In ${TONGUE[app]}, in first person, say what you need them to do in one or two short, plain sentences, like "I need you to sign in on Home so tonight's run can go." Then wait for their answer. Nothing else.`;
-const wrongTongue = (app: "en" | "ko") => `[Wink] Wrong language: speak only ${TONGUE[app]}. In ${TONGUE[app]}, ask them in a few words to say that again.`;
-const misheardMsg = (app: "en" | "ko") => `not sent: that line was in another language, so it is likely a mis-hear. In ${TONGUE[app]}, ask them in one short line to say that again`;
+const wrongTongue = (tongue: string) => `[Wink] Wrong language: speak only ${tongue}. In ${tongue}, ask them in a few words to say that again.`;
+const misheardMsg = (tongue: string) => `not sent: that line was in another language, so it is likely a mis-hear. In ${tongue}, ask them in one short line to say that again`;
 // What the bot wrote after these answers them, not the person.
 const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
 // An order from a call this recent is still his when he calls back to hear how it went.
@@ -330,6 +330,8 @@ export class LiveCall {
   // The newest bot message in the chat, and the turn already answering a read-back ask from memory, which is thrown away.
   private newest?: string;
   private readNext = false;
+  // A language he asked for by name; the app's otherwise.
+  private tongue?: string;
   // A spoken yes or no gets one ack: Google also speaks after its tool result, sometimes with no words to compare.
   private acked?: "armed" | "spent";
   private reack = false;
@@ -521,7 +523,7 @@ export class LiveCall {
         if (this.snapshot.hushed || this.dropping) return;
         this.saidBuf += text;
         const words = spokenText(this.saidBuf);
-        if (offLanguage(words)) return this.drop(wrongTongue(this.app));
+        if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
         const ask = this.checkAsk && !offerFirst(words) ? reasks(words, this.closed) : "no";
         if (ask === "yes") return this.drop(this.askedLine());
         if (this.echo && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
@@ -714,7 +716,7 @@ export class LiveCall {
   propose(order: string, ids: string[]) {
     if (!order) return this.toolResult(ids, "propose_work", order, "not sent: no order given");
     order = asRequest(order);
-    if (this.req.misheard) return this.toolResult(ids, "propose_work", order, misheardMsg(this.app));
+    if (this.req.misheard) return this.toolResult(ids, "propose_work", order, misheardMsg(this.speaking));
     if (this.req.read) return this.toolResult(ids, "propose_work", "", READ_NEXT);
     // The bot's own question already takes the spoken answer; an order would ask twice.
     if (this.cardTakes) return this.toolResult(ids, "propose_work", order, this.notNeeded);
@@ -820,7 +822,7 @@ export class LiveCall {
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
   query(question: string, ids: string[], tool = "ask") {
     if (!question) return this.toolResult(ids, tool, question, "not sent: no question");
-    if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.app));
+    if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.speaking));
     if (this.req.read) return this.toolResult(ids, tool, "", READ_NEXT);
     if (this.cardTakes) return this.toolResult(ids, tool, question, this.notNeeded);
     if (ordersChange(question, [this.deps.botName, ...this.aliases])) return this.toolResult(ids, tool, question, CHANGE_ASK);
@@ -1018,8 +1020,10 @@ export class LiveCall {
     this.justAnswered = false;
     const card = this.card;
     // A mis-hear is shown, never sent: no order, ask, card answer or yes comes from it.
-    const offTongue = offLanguage(text);
-    const unsure = offTongue || misheard(text);
+    const asked = asksForLanguage(text);
+    if (asked) this.speakIn(asked);
+    const offTongue = offLanguage(text, this.tongue);
+    const unsure = offTongue || misheard(text, this.tongue);
     this.offTongue = offTongue;
     // A hello or a question back answers nothing, and the question stays open.
     const answers = card?.armed && card.options.length ? answersCard(text, card.options) : !/\?\s*$/.test(text) && !asksToRepeat(text) && !greets(text);
@@ -1295,6 +1299,18 @@ export class LiveCall {
     const question = this.card && this.toldCards.has(this.card.id) ? this.question?.card : undefined;
     const card = question && repeatsAsk(text, question.subtitle?.trim() || question.title?.trim() || "") ? " Its question was already read out to them: never ask it again." : "";
     this.held.push({ text: `[Wink] ${this.deps.botName} replied: ${speakable}${card}`, update: text });
+    this.release();
+  }
+
+  private get speaking() {
+    return this.tongue ?? TONGUE[this.app];
+  }
+
+  private speakIn(tongue: string) {
+    this.tongue = tongue === TONGUE[this.app] ? undefined : tongue;
+    this.readNext = true;
+    if (this.generating) this.discard();
+    this.held.unshift({ text: `[Wink] They asked you to speak ${tongue}. From now on in this call speak only ${tongue}, whatever language they use. In ${tongue}, say in a few words that you will.`, fix: true });
     this.release();
   }
 
