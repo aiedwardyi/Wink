@@ -107,6 +107,11 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
         if (group) broadcastDoorReactions(group.hosted.roomId, [lineReactions(change.message)]);
         return;
       }
+      if (change.type === "bot") {
+        if (!anyDoorStreams()) return;
+        for (const roomId of new Set(door!.watched.values())) if (doorGroup(roomId)?.memberIds.includes(change.botId)) pushRoomState(roomId);
+        return;
+      }
       const roomId = (change.type === "group" || change.type === "group.deleted") && door?.watched.get(change.groupId);
       if (!roomId || !anyDoorStreams()) return;
       if (doorGroup(roomId)) return pushRoomState(roomId);
@@ -138,9 +143,9 @@ function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
   const bots = group.memberIds.flatMap((id) => {
     const bot = door!.deps.store.bot(id);
-    return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
+    return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color, ...(bot.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) }] : [];
   });
-  const teamBotList = teamBots(group.hosted.roomId).map(({ id, name, color, owner }) => ({ id, name, color, owner }));
+  const teamBotList = teamBots(group.hosted.roomId).map(({ id, name, color, owner, mascotStyle }) => ({ id, name, color, owner, ...(mascotStyle ? { mascotStyle } : {}) }));
   return {
     roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, teamBots: teamBotList,
     ...(group.picture ? { picture: group.picture } : {}),
@@ -267,7 +272,7 @@ async function addBot(req: IncomingMessage, res: ServerResponse, roomId: string,
   if (!call) return;
   try {
     const people = roomPeople(roomId).map((candidate) => candidate.name);
-    const bot = addTeamBot(roomId, person.id, call.fields.name, call.fields.color, [...takenNames(call.group), ...people]);
+    const bot = addTeamBot(roomId, person.id, call.fields.name, call.fields.color, [...takenNames(call.group), ...people], call.fields.mascotStyle);
     pushRoomState(roomId);
     tellHost(roomId);
     send(res, 200, { bot });

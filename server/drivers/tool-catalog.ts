@@ -1,8 +1,8 @@
 export type CatalogTool = { name: string; description: string; inputSchema: object };
 type Integration = { command: string; args: string[]; env: Record<string, string> };
 
-// Only tools a user asks for by name: a lookup is one more model call, and reactions, images and routines (reminders) must stay one call away.
-const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential"]);
+// Only tools a user or the worker playbook asks for by name: a lookup is one more model call, and reactions, images and routines (reminders) must stay one call away.
+const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "board_search", "board_post"]);
 
 export const CATALOG_TOOLS = [
   {
@@ -28,6 +28,11 @@ export function experimentalAgents(integration: Integration, byDefault = false):
 export function slimStaticText(text: string, driverKind: string): string {
   if (process.env.ORBIT_WINK_STATIC_SLIM !== "1" || !["claudeAgent", "codex"].includes(driverKind)) return text;
   return text.replace(" To create a new image, call generate_image.", "");
+}
+
+/** Claude's ToolSearch lists these by name only and loads a schema when the model selects it. */
+export function deferOptional<T extends CatalogTool>(tools: readonly T[]): T[] {
+  return tools.map((tool) => (OPTIONAL.has(tool.name) ? { ...tool, _meta: { "anthropic/alwaysLoad": false } } : tool));
 }
 
 function record(value: unknown): value is Record<string, unknown> {

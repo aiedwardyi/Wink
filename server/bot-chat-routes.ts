@@ -8,7 +8,7 @@ import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
-import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
+import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
@@ -40,6 +40,7 @@ type BotChatRouteDeps = {
   threadSyncGate: ReturnType<typeof createThreadSyncV2Gate>;
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
+  firstTurnLaunch?: (bot: BotRecord, instance: ProviderInstance) => PrepareFocus["fresh"] | null;
   store: Store;
   clientMessage: (message: Message) => Message;
   sendSequencer: SendSequencer;
@@ -378,7 +379,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             // a call order waited for a yes; it goes to the bot, never to Quick answers
             if (!call?.order && quick && !switchHeld(currentAtStart) && routesQuick({
               bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
-              deliverAfter: after, replyTo, queueId, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
+              deliverAfter: after, replyTo, queueId, answersCard, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             })) {
               const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call, answersCard });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
@@ -511,7 +512,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 200, { ok: true, prepared: false, reason: "driver has no prepare" });
       }
       const { model, effort } = bot.modelSelection;
-      void instance.prepare(undefined, { threadId: bot.threadId, model, effort, approval: bot.autoApprove ? "auto" : "ask" }).catch(() => {});
+      const fresh = deps.firstTurnLaunch?.(bot, instance) ?? undefined;
+      void instance.prepare(undefined, { threadId: bot.threadId, model, effort, approval: bot.autoApprove ? "auto" : "ask", fresh }).catch(() => {});
       return json(res, 200, { ok: true, prepared: true });
     },
     interrupt: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {

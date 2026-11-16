@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import typedPastRows from "../../test/fixtures/ask-typed-past.json?raw";
 import { openQuestion } from "@/lib/open-question";
 import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
@@ -686,30 +687,37 @@ describe("typing while a question is open", () => {
   const ask = (options: string[]): Message => ({ id: "m-card", at: 1, role: "bot", kind: "options", card: card(options) });
   const patches = (fetch: ReturnType<typeof vi.fn>) =>
     fetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH").map(([url, init]) => [url, JSON.parse(String((init as RequestInit).body))]);
+  const typedPast: Message[] = JSON.parse(typedPastRows);
 
-  it.each([
-    { name: "with choices", options: ["Can't tonight", "Sure"], answered: "Answered in chat" },
-    { name: "without choices", options: [], answered: "maybe at 8" },
-  ])("folds a 1:1 question $name at once, before any bot turn", async ({ options, answered }) => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(options)] } as Bot;
+  it("keeps a card with choices open when the person types something else", async () => {
+    const [before, line] = [typedPast.slice(0, 5), typedPast[5]!];
+    const asked = before.find((message) => message.card?.askUser)!;
+    const idle: Bot = { ...bot, busy: false, activity: "idle", messages: before };
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: idle.threadId, message: line }), [idle]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: line.text!, threadId: idle.threadId, sendId: line.sendId }));
+    await vi.waitFor(() => expect(store.state.bots[0]!.messages.some((message) => message.id === line.id)).toBe(true));
+    expect(store.state.bots[0]!.messages.find((message) => message.id === asked.id)?.card?.answered).toBeUndefined();
+    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe(asked.id);
+    expect(patches(fetch)).toEqual([]);
+  });
+
+  it("folds a 1:1 question without choices at once, before any bot turn", async () => {
+    const idle = { ...bot, busy: false, activity: "idle", messages: [ask([])] } as Bot;
     let accept!: (response: Response) => void;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>((resolve) => { accept = resolve; }), [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe(answered);
+    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("maybe at 8");
     await act(async () => accept(Response.json({ ok: true, threadId: idle.threadId })));
-    expect(patches(fetch)).toEqual(options.length ? [["/api/bots/b1/cards/m-card", { answered }]] : []);
+    expect(patches(fetch)).toEqual([]);
   });
 
-  it("a busy bot's server routes the typed reply while its question is still open", async () => {
+  it("a busy bot's question with choices stays open through a steered line", async () => {
     const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
-    let patchedBeforePost: unknown[] | undefined;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => {
-      patchedBeforePost = patches(fetch);
-      return Response.json({ ok: true, steered: true, threadId: busy.threadId });
-    }, [busy]);
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, steered: true, threadId: busy.threadId }), [busy]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "What happens to the existing data?", threadId: busy.threadId }));
-    expect(patchedBeforePost).toEqual([]);
-    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Answered in chat" }]]);
+    await act(async () => {});
+    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-card");
+    expect(patches(fetch)).toEqual([]);
   });
 
   it.each([
@@ -721,6 +729,17 @@ describe("typing while a question is open", () => {
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "Polaris", threadId: chat.threadId }));
     expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Polaris");
     expect(patches(fetch)).toEqual([]);
+  });
+
+  it("a tap after typing past a busy bot's choices still answers the card", async () => {
+    const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: busy.threadId }));
+    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Sure" }));
+    await act(async () => {});
+    const posts = fetch.mock.calls.filter(([url, init]) => url === "/api/bots/b1/messages" && (init as RequestInit | undefined)?.method === "POST");
+    expect(posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).text)).toEqual(["maybe at 8", "Sure"]);
+    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Sure");
   });
 
   it("a queued typed answer saves its question, since its line is not in the transcript yet", async () => {
@@ -742,14 +761,15 @@ describe("typing while a question is open", () => {
     expect(patches(fetch)).toEqual([]);
   });
 
-  it("folds a room question at once", async () => {
+  it("a room question with choices stays open when the person types something else", async () => {
     const room = { ...group, busyBotId: undefined, messages: [{ ...ask(["Can't tonight", "Sure"]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
     let accept!: (response: Response) => void;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>((resolve) => { accept = resolve; }), [bot], [room]);
     await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "maybe at 8", threadId: room.threadId }));
-    expect(store.state.groups[0]?.messages[0]?.card?.answered).toBe("Answered in chat");
+    expect(store.state.groups[0]?.messages[0]?.card?.answered).toBeUndefined();
     await act(async () => accept(Response.json({ ok: true, threadId: room.threadId })));
-    expect(patches(fetch)).toEqual([["/api/groups/g1/cards/m-card", { answered: "Answered in chat" }]]);
+    expect(openQuestion(store.state.groups[0]!.messages)?.id).toBe("m-card");
+    expect(patches(fetch)).toEqual([]);
   });
 
   it("a room question without choices is settled by the typed line alone", async () => {
@@ -771,16 +791,18 @@ describe("typing while a question is open", () => {
     expect(store.state.bots[0]!.messages.map((message) => message.card?.answered)).toEqual(["docs", "main"]);
   });
 
-  it("saves a typed reply whose lost response the transcript recovers", async () => {
+  it("a lost response the transcript recovers leaves a question with choices open", async () => {
     const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
     const line: Message = { id: "u1", at: 2, role: "user", kind: "text", text: "maybe at 8", sendId: "s1" };
     const fetch = await mount(() => Response.json({ messages: [line], hasMore: false }), undefined, [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId, sendId: "s1" }));
-    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Answered in chat" }]]));
+    await vi.waitFor(() => expect(store.state.bots[0]!.messages.some((message) => message.id === "u1")).toBe(true));
+    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-card");
+    expect(patches(fetch)).toEqual([]);
   });
 
   it("a rejected typed reply reopens its 1:1 question and saves nothing", async () => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const idle = { ...bot, busy: false, activity: "idle", messages: [ask([])] } as Bot;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, cancelled: true, threadId: idle.threadId }), [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
     await vi.waitFor(() => expect(store.state.bots[0]?.messages[0]?.card?.answered).toBeUndefined());
@@ -788,15 +810,15 @@ describe("typing while a question is open", () => {
   });
 
   it("a reply held for sync keeps its question answered", async () => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const idle = { ...bot, busy: false, activity: "idle", messages: [ask([])] } as Bot;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, reason: "sync", queueId: "q1", threadId: idle.threadId }), [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
-    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Answered in chat" }]]));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Answered in chat");
+    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "maybe at 8" }]]));
+    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("maybe at 8");
   });
 
   it("a room saves a typed reply only once the room took it, and reopens on rejection", async () => {
-    const room = { ...group, busyBotId: undefined, messages: [{ ...ask(["Can't tonight", "Sure"]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
+    const room = { ...group, busyBotId: undefined, messages: [{ ...ask([]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
     let patchedBeforePost: unknown[] | undefined;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => {
       patchedBeforePost = patches(fetch);

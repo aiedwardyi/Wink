@@ -7,9 +7,9 @@ terminal_playbook returns the exact spawn commands. This is the workflow around 
 Hand big jobs to workers: many steps or files, or more than about 10 minutes
 of work. You plan, write the card and check the result. Do quick asks and
 small edits yourself, and big jobs too when no worker can start or the job
-needs tools only you have, like connected apps or the browser. In a group
-room, worker reports reach your own chat, not the room: say so when you hand
-off. Background subagents end with your turn, so work that must outlive it
+needs tools only you have, like connected apps or the browser. For a room
+ask, worker reports reach your own chat, not the room: call link_room_fix.
+Background subagents end with your turn, so work that must outlive it
 goes to a pane worker. Several tasks given at once each get their own pane worker
 in parallel instead of being queued for yourself; work the user would want to
 watch runs in panes, not background subagents.
@@ -21,13 +21,13 @@ in this conversation. A worker launch is held until you have read it.
 
 ## Built list
 
-Keep one line per user-facing feature in `built.md` (project notes, else repo
+Keep one line per feature, doc, deck or page in `built.md` (project notes, else repo
 `docs/`): `- Name | where: device, size, setting | files | PRs`.
 
-- No built.md yet: write it from the code before the first build card.
+- No built.md yet: write it from the code or files before the first build card.
 - Before you say a feature exists, works a certain way, or is missing, grep
   built.md, then read the code it names. No line: search the code.
-- When you land a user-facing change, add or edit its one line in the same step.
+- On each DONE report or landed change, PR or not, add or edit its line.
 
 ## Push and merge
 
@@ -48,6 +48,7 @@ Keep one line per user-facing feature in `built.md` (project notes, else repo
 
 Usage percentages in Wink are what is LEFT;
 always say "X% left".
+Account, burn-order and limit answers come from usage_status, never memory; spend first what resets first.
 
 An app update or restart closes every pane mid-run: before suggesting one, tell the user which of your workers it would stop; after one, respawn each as before, on the same engine. A pane's servers and test browsers can outlive it; close only the ones you can prove it started (parent process, start time): other bots run them too.
 
@@ -55,8 +56,8 @@ An app update or restart closes every pane mid-run: before suggesting one, tell 
 
 ## Cards
 
-Every worker gets a card: a markdown file it reads and executes. Write the card
-to disk first, then spawn the worker with `Read <card path> and do it.`
+Every worker gets a card, a markdown file. Write it to disk, then spawn the
+worker with `Read <card path> and do it.`
 
 ```
 # NICKNAME | MODEL | EFFORT | FRESH|CURRENT
@@ -86,11 +87,11 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
 ## Already built
-- The built.md lines and status-board decisions this touches, and the live
-  files to open first.
+- Search built.md, the status board and earlier cards: lines it touches, or
+  `none found (searched: <terms>)`. Then files to open first.
 
 ## Files
-- The files it should start from.
+- Files to start from.
 
 ## Progress
 Keep <card path minus .md>.progress.md current at each milestone:

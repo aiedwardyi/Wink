@@ -132,6 +132,12 @@ beforeAll(async () => {
           environment: { FAKE_CLAUDE_MODE: "late-after-stop" },
           config: { cli: FAKE_CLAUDE_CLI },
         },
+        claudePrewarm: {
+          driver: "claudeAgent",
+          displayName: "Fixture Claude Prewarm",
+          environment: { FAKE_CLAUDE_EAGER_INIT: join(home, "prewarm-spawned"), FAKE_CLAUDE_PROMPT_LOG: join(home, "prewarm-prompts.ndjson") },
+          config: { cli: FAKE_CLAUDE_CLI },
+        },
       },
     }),
   );
@@ -260,7 +266,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => boxStub.listen(0, "127.0.0.1", r));
   boxStubPort = (boxStub.address() as { port: number }).port;
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--require", join(SERVER_DIR, "testing", "roomy-host.cjs"), join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -879,6 +885,22 @@ describe("harness HTTP API", () => {
       for (const botId of createdBotIds) await api("DELETE", `/api/bots/${botId}`);
       await api("DELETE", `/api/bots/${outsider.id}`);
       await api("DELETE", `/api/bots/${chief.id}`);
+    }
+  });
+
+  it("reads the Usage page's accounts through the usage_status route", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const headers = await agentsHeaders(api, fakeClaudeDump, bot.id, bot.threadId);
+      expect((await fetch(`${BASE}/api/internal/usage?self=nobody`, { headers })).status).toBe(403);
+      const res = await fetch(`${BASE}/api/internal/usage?self=${encodeURIComponent(bot.id)}`, { headers });
+      expect(res.status).toBe(200);
+      const { text } = z.object({ text: z.string() }).parse(await res.json());
+      const board = z.object({ engines: z.array(z.object({ accounts: z.array(z.object({ name: z.string() })) })).min(1) }).parse((await api("GET", "/api/usage/board")).body);
+      expect(text).toContain("Percent is what is LEFT.");
+      for (const account of board.engines.flatMap((engine) => engine.accounts)) expect(text).toContain(`- ${account.name}`);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
     }
   });
 
@@ -2280,6 +2302,26 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("starts a new chat's Claude session on composer focus and sends the first message on it", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const prewarm = (await api("GET", "/api/instances")).body.instances.find((instance: { instanceId: string }) => instance.instanceId === "claudePrewarm");
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "claudePrewarm", model: prewarm.models.default } })).status).toBe(200);
+      expect((await api("POST", `/api/bots/${bot.id}/prewarm`)).status).toBe(200);
+      await expect.poll(() => existsSync(join(home, "prewarm-spawned"))).toBe(true);
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "first word" })).status).toBe(202);
+      const prompts = join(home, "prewarm-prompts.ndjson");
+      await expect.poll(() => existsSync(prompts)).toBe(true);
+      const [sent, ...more] = readFileSync(prompts, "utf8").trim().split("\n").map((line): { argv: string[]; systemPrompt?: string; text: string } => JSON.parse(line));
+      expect(more).toEqual([]);
+      expect(sent!.text).toContain("first word");
+      expect(sent!.argv.some((arg) => arg.startsWith("--append-system-prompt"))).toBe(false);
+      expect(sent!.systemPrompt).toContain(bot.name);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("leaves an idle stop recovery packet after interrupting a live turn", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     try {
@@ -2611,8 +2653,9 @@ describe("harness HTTP API", () => {
 
   it("persists task continuity across completed and stopped turns", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const packetPath = join(home, ".orbit", "task-state", `${bot.threadId}.json`);
+    const stream = await openSse(`${BASE}/api/events`);
     try {
+      await stream.until((frame) => frame.kind === "hello");
       const instances = z.array(z.object({
         instanceId: z.string(),
         models: z.object({ default: z.string() }),
@@ -2630,7 +2673,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${bot.id}/messages`, {
         text: "Prepare a durable weekly brief",
       })).status).toBe(202);
-      await expect.poll(() => existsSync(packetPath) && storedTaskPacket(bot.threadId).flushReason).toBe("turn-end");
+      await stream.until((frame) => frame.kind === "task.packet" && frame.threadId === bot.threadId && frame.packet.flushReason === "turn-end");
 
       const completed = storedTaskPacket(bot.threadId);
       expect(completed).toMatchObject({
@@ -2775,6 +2818,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${bot.id}/tasks/${bot.threadId}/recovery`, {})).status).toBe(200);
       expect(storedTaskPacket(bot.threadId).flushReason).toBe("progress");
     } finally {
+      stream.close();
       await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
       await api("DELETE", `/api/bots/${bot.id}`);
     }
@@ -3268,7 +3312,7 @@ describe("harness HTTP API", () => {
   it("validates and persists the global room turn timeout", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 5 });
+    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 1_440 });
 
     for (const turnTimeoutMinutes of [0, 1.5, 1441, "20", null]) {
       const invalid = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes } });
@@ -3286,7 +3330,7 @@ describe("harness HTTP API", () => {
     const disk = JSON.parse(readFileSync(join(home, ".orbit", "config.json"), "utf8"));
     expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
 
-    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 1_440 } });
   });
 
   it("keeps shared Local VM mode by default and saves per-bot mode when enabled", async () => {
@@ -5329,7 +5373,7 @@ describe("approval chip on the claude CLI", () => {
       expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).status).toBe(200);
       const auto = await argvForTurn(bot.id, "create todo.txt");
       expect(auto[auto.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
-      expect(JSON.parse(auto[auto.indexOf("--settings") + 1]).permissions.ask).toEqual(["Bash", "PowerShell"]);
+      expect(auto).not.toContain("--settings");
     } finally {
       await api("DELETE", `/api/bots/${bot.id}`);
     }

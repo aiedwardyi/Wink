@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { applyCredentialAllowlist } from "./config.ts";
+import { applyCredentialAllowlist, scrubbedEnv } from "./config.ts";
 import type { RateLimitWindow } from "./contracts.ts";
 import { acpChildEnv } from "./drivers/acp/core.ts";
 import { grokSupport } from "./drivers/acp/grok.ts";
@@ -74,7 +74,7 @@ export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?
   const home = account?.home ?? codexHome(env);
   if (account) await awaitDyingAppServers(2_000, home);
   return new Promise((resolve, reject) => {
-    const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env, stdio: ["pipe", "pipe", "pipe"], direct: codexDirect, ...(account ? { account, accountDriver: "codex" } : {}) });
+    const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env: scrubbedEnv(env), stdio: ["pipe", "pipe", "pipe"], direct: codexDirect, ...(account ? { account, accountDriver: "codex" } : {}) });
     const lines = createInterface({ input: child.stdout });
     let settled = false;
     let usage: JsonValue | undefined;

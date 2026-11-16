@@ -23,6 +23,7 @@ import { canAnswerCard, typedAnswer } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
+import { queueCancelled } from "@/lib/live-call/active";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { preferredStartupSelectionId } from "@/lib/sidebar-order";
@@ -37,7 +38,8 @@ import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstC
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
-import { joinedRoomIdOf } from "@/lib/team-rooms";
+import { joinedRoomIdOf, roomFileRefusal } from "@/lib/team-rooms";
+import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
@@ -205,7 +207,7 @@ export function useMascotMotionExpiry(nonce: number | undefined, dispatch: (acti
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null;
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null || isForumSelection(id);
       const selectedId =
         state.selectedId && known(state.selectedId)
           ? state.selectedId
@@ -685,6 +687,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         ...appSettingsNavigation(state, action),
+        appSettingsSkins: open && action.skins ? action.skins : null,
         settingsOpen: open ? false : state.settingsOpen,
         inspectorOpen: open ? false : state.inspectorOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -1049,6 +1052,7 @@ export const initialState: AppState = {
   appSettingsOpen: false,
   appSettingsSection: "general",
   appSettingsPage: false,
+  appSettingsSkins: null,
   provisioning: {},
   focusMessage: null,
   connected: false,
@@ -1858,7 +1862,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", threadId, sendId });
               }
-              showError(error);
+              showError(roomFileRefusal(error) ?? error);
               action.onError?.();
             });
           void holdReload(sending);
@@ -2258,6 +2262,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         bumpPeripheralVersion("routines");
       }
       switch (frame.kind) {
+        case "picture":
+          window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: frame.name }));
+          break;
+        case "board":
+          window.dispatchEvent(new Event(BOARD_CHANGED_EVENT));
+          break;
         case "turn.dispatch":
           if (frame.threadId) {
             liveTurns.current = liveTurnIdAfterDispatch(liveTurns.current, frame.threadId, frame.createdAt);
@@ -2459,6 +2469,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           for (const send of frame.sends ?? []) {
             rawDispatch({ type: "cancelQueued", botId: frame.botId, threadId: send.threadId, queueId: send.queueId });
           }
+          queueCancelled((frame.sends ?? []).flatMap((send: { sendId?: string }) => send.sendId ? [send.sendId] : []));
           break;
         case "bot.deleted":
           botPatchQueue.cancel(frame.botId);

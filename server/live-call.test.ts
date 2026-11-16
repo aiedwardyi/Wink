@@ -26,7 +26,8 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
-  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
+  const answered = vi.fn();
+  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered });
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -35,7 +36,7 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
-  return { dir, cfg, store, bot, fetch, post, sent };
+  return { dir, cfg, store, bot, fetch, post, sent, answered };
 }
 
 describe("call token", () => {
@@ -109,7 +110,7 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" }), expect.objectContaining({ name: "hush" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
@@ -158,7 +159,7 @@ describe("call token", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
     expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
-    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; your name wakes you.");
+    expect(brief).toContain("Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -217,7 +218,7 @@ describe("call token", () => {
   });
 
   it("order is the user's request to the voice, never its offer", () => {
-    const order = LIVE_TOOLS[0]!.parameters.properties.order!.description;
+    const order = LIVE_TOOLS[0]!.parameters!.properties.order!.description;
     expect(order).toContain("as they would say it to you");
     expect(order).toContain("never your offer or reply");
   });
@@ -237,7 +238,7 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Speak only English, whatever language they use, never one word of another.");
-    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again.");
+    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again. Only a [Wink] line changes the language you speak.");
     expect(brief).not.toContain("answer in that language");
     expect(brief).not.toContain("Switch only when the person clearly asks");
   });
@@ -274,6 +275,16 @@ describe("call token", () => {
     expect(cards[0]!.secret).toMatchObject({ target: "geminiApiKey", helpUrl: "https://aistudio.google.com/apikey" });
     expect(isCallKeyCard(cards[0]!.secret!)).toBe(true);
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a minted token", {}, true],
+    ["no key", { key: undefined }, false],
+    ["Google's refusal", { reply: () => Response.json({ error: { message: "quota" } }, { status: 429 }) }, false],
+  ])("stops a ringing bot call only on %s", async (_case, opts, stops) => {
+    const h = harness(opts);
+    await h.post("token");
+    expect(h.answered.mock.calls).toEqual(stops ? [[h.bot.id]] : []);
   });
 
   it("passes Google's quota 429 through", async () => {
@@ -444,6 +455,20 @@ describe("call lines and end", () => {
     ]);
   });
 
+  it("K1 an app notice keeps the voice's look but never reaches the bot or the next brief", async () => {
+    const h = harness();
+    const callId = "c-0123456789ab";
+    await h.post("lines", { callId, lines: [{ who: "user", text: "Deploy it." }, { who: "voice", text: "Okay, want me to deploy?" }, { who: "notice", text: "보내지 않음: 배포해 줘 (시간 초과)" }] });
+    const rows = h.store.activePath(h.bot.threadId);
+    expect(rows.at(-1)).toMatchObject({ role: "bot", kind: "text", engine: "geminiAgent", call: { id: callId, voice: true, notice: true } });
+    const [block] = callLinesSinceLastUserTurn(rows, new Set());
+    expect(block).toContain("Voice: Okay, want me to deploy?");
+    expect(block).not.toContain("배포해 줘");
+    const brief = await buildBrief(h.bot, rows, "Ed", 0);
+    expect(brief).toContain("Okay, want me to deploy?");
+    expect(brief).not.toContain("배포해 줘");
+  });
+
   it("400s a bad call id", async () => {
     expect((await harness().post("lines", { callId: "nope", lines: [{ who: "user", text: "hi" }] })).status).toBe(400);
   });
@@ -456,6 +481,13 @@ describe("call lines and end", () => {
     expect((await h.post("end", { callId: "c-0123456789ab", stats: full })).data).toEqual({ ok: true });
     const lines = readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
+  });
+
+  it("the stats line names the voice the call used", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { callId } = (await h.post("token")).data;
+    await h.post("end", { callId, stats: { ms: 1_000 } });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim())).toMatchObject({ callId, voice: "Alnilam" });
   });
 });
 

@@ -226,6 +226,24 @@ for (const status of ["pending", "resume failed", "unexpected menu"]) {
   });
 }
 
+test("old chat that reads like a menu does not close a worker the start hook then confirms", async (t) => {
+  const f = fixture(t);
+  const seen = ["unexpected menu", "resumed"];
+  f.host.workerResumeStatus = () => seen.shift() ?? "resumed";
+  await recovery.recoverWorkers(f.options);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.notes[0].text, /^RESUMED: codex/);
+});
+
+test("a resume the start hook confirms during the last poll wait is kept", async (t) => {
+  const f = fixture(t);
+  const seen = ["pending", "pending", "resumed"];
+  f.host.workerResumeStatus = () => seen.shift() ?? "resumed";
+  await recovery.recoverWorkers(f.options);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.notes[0].text, /^RESUMED: codex/);
+});
+
 test("a failed replacement close never sends FRESH guidance", async (t) => {
   const f = fixture(t);
   f.host.workerResumeStatus = () => "pending";
@@ -409,6 +427,27 @@ test("managed recovery preserves teacher and binds a new pane, generation and fr
   assert.equal(host.workerResumeStatus(pane.sessionId), "resumed");
   await assert.rejects(host.openForBot(row.botId, { cwd: ROOT, command: "claude" }, row), /claimed/);
   assert.equal(children.length, 1);
+});
+
+test("a recovered BLOCKED worker launches with its question", async (t) => {
+  const row = record("claude", { blocked: "FIX-B which key?" });
+  const f = fixture(t, [row]);
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const inputs = [];
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 8 * 1024 ** 3, setPriority() {},
+    mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh" }),
+    workerLaunch: async (input) => {
+      inputs.push(input);
+      return { kind: "managed", executable: "claude", args: ["-r", row.session.nativeId, NUDGE], environment: {}, account: { id: "claude", generation: 0 },
+        session: { engine: "claude", nativeId: row.session.nativeId, launchGeneration: randomUUID(), template: row.session.template } };
+    },
+    loadPty: () => ({ spawn() { return { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }; } }),
+  });
+  t.after(() => host.dispose());
+  const pane = await host.openForBot(row.botId, { label: row.label, cwd: ROOT, command: "claude" }, row);
+  assert.equal(inputs[0].resume.blocked, "FIX-B which key?");
+  assert.equal(JSON.parse(fs.readFileSync(f.file, "utf8")).find((run) => run.id === pane.sessionId).blocked, "FIX-B which key?");
 });
 
 function gatedRecovery(t, count, freeMemory) {

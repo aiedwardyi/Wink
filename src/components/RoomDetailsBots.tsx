@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { newBotPayload, resolveWizardModel, type EnginePick } from "@/lib/group-wizard";
 import { useI18n } from "@/lib/i18n";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { roomPeople, roomTeamBots } from "@/lib/team-rooms";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 
@@ -91,7 +92,7 @@ export function RoomDetailsBots({ group }: { group: Group }) {
       </ul>
       {problem && <p role="alert" className="mt-1 px-1 text-[12.5px] text-danger">{t("errors.request")}</p>}
       {adding && (
-        <div className={`${DETAILS_BOX} mt-2 p-2`}>
+        <div ref={revealOnOpen} className={`${DETAILS_BOX} mt-2 p-2`}>
           <BotPickerList
             bots={bots}
             picked={new Set(group.memberIds)}

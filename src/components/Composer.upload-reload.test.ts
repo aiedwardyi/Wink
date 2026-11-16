@@ -85,7 +85,7 @@ describe("update reload during an upload", () => {
     await vi.waitFor(() => expect(reloadHeld()).toBe(false));
     stop();
     expect(draftAtRelease).toContain("/tmp/shot.png");
-    expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Remove image"]')).not.toBeNull();
   });
 });
 
@@ -105,8 +105,8 @@ describe("picture still uploading", () => {
     await act(async () => box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
     expect(box.value).toBe("look at this");
     await act(async () => answer());
-    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
-    expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "image", path: "/tmp/shot.png" })]));
+    expect(host.querySelector('[aria-label="Remove image"]')).not.toBeNull();
   });
 
   it("keeps its chip when the chat is left mid-upload", async () => {
@@ -116,7 +116,7 @@ describe("picture still uploading", () => {
     await unmount?.();
     unmount = null;
     await act(async () => answer());
-    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "image", path: "/tmp/shot.png" })]));
   });
 
   it("stops its request and frees the upload line when its chip is removed", async () => {
@@ -141,6 +141,23 @@ describe("picture still uploading", () => {
     expect(localStorage.getItem("omb-draft-attachments")).toContain('"kind":"image"');
     await mountComposer({ bot });
     await vi.waitFor(() => expect(uploadJobs().size).toBe(0));
+  });
+});
+
+describe("document still uploading", () => {
+  it("shows its chip at once and Send waits for it", async () => {
+    const { host, answer, uploads } = await mountComposer();
+    await act(async () => {
+      const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+      Object.defineProperty(input, "files", { value: [new File([new Uint8Array([1, 2, 3])], "plan.pdf", { type: "application/pdf" })], configurable: true });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    expect(host.querySelector<HTMLButtonElement>('button[title="Send after the upload finishes"]')?.disabled).toBe(true);
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/api/attachments"))!;
+    expect(new Headers(init?.headers).get("x-attachment-name")).toBe("plan.pdf");
+    await act(async () => answer());
+    await vi.waitFor(() => expect(getDraftAttachments(localStorage, "bot::")).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png", name: "plan.pdf" })]));
   });
 });
 

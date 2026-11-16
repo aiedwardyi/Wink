@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
 import { ChatPeekParts, ChatPreviewContext } from "@/lib/chat-preview";
 import { PHONE_QUERY, swipeBlocked } from "@/lib/phone-swipe";
+import { TRANSCRIPT_TAIL_SIZE } from "@/lib/transcript-window";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
 import { TeamRoomTranscript } from "./TeamRoomRow";
@@ -83,9 +84,7 @@ afterEach(async () => {
 describe("cached chat preview", () => {
   it.each(["loaded", "loading"] as const)("measures the header once with %s fonts and repeats only for a pending font load", async (status) => {
     const descriptor = Object.getOwnPropertyDescriptor(document, "fonts");
-    let ready!: () => void;
-    const pending = new Promise<void>((resolve) => { ready = resolve; });
-    const fonts = { status, ready: status === "loaded" ? Promise.resolve() : pending };
+    const fonts = Object.assign(new EventTarget(), { status });
     Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
     const rangePrototype = Object.getPrototypeOf(document.createRange()) as Range;
     const measure = vi.spyOn(rangePrototype, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, toJSON: () => ({}) });
@@ -98,7 +97,7 @@ describe("cached chat preview", () => {
       expect(copies()).toBe(0);
       if (status === "loading") {
         fonts.status = "loaded";
-        await act(async () => { ready(); await pending; });
+        await act(async () => { fonts.dispatchEvent(new Event("loadingdone")); });
         expect(measure).toHaveBeenCalledTimes(2);
         expect(copies()).toBe(0);
       }
@@ -124,7 +123,7 @@ describe("cached chat preview", () => {
     (window as unknown as { happyDOM: { setViewport(value: { width: number; height: number }): void } }).happyDOM.setViewport({ width: 1440, height: 900 });
     if (kind === "bot") await render(false, heavyBot);
     else await renderRoom(false, heavyRoom);
-    expect(host.querySelectorAll("[data-mid]")).toHaveLength(120);
+    expect(host.querySelectorAll("[data-mid]")).toHaveLength(TRANSCRIPT_TAIL_SIZE);
   });
 
   it.each(["bot", "room"] as const)("opens a phone %s with the same small cached window", async (kind) => {

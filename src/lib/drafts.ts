@@ -107,6 +107,7 @@ export interface PersistedRoomHold {
   revision: number;
   replyToId?: string;
   attachments: Attachment[];
+  at?: number;
 }
 
 function isPersistedRoomHold(value: unknown): value is PersistedRoomHold {
@@ -119,6 +120,7 @@ function isPersistedRoomHold(value: unknown): value is PersistedRoomHold {
     typeof hold.threadId === "string" &&
     typeof hold.revision === "number" &&
     (hold.replyToId === undefined || typeof hold.replyToId === "string") &&
+    (hold.at === undefined || typeof hold.at === "number") &&
     Array.isArray(hold.attachments)
   );
 }
@@ -137,6 +139,7 @@ export function getRoomHolds(store: Store, id: string): PersistedRoomHold[] {
       revision: item.revision,
       ...(item.replyToId !== undefined ? { replyToId: item.replyToId } : {}),
       attachments: item.attachments.filter(isAttachment),
+      ...(item.at !== undefined ? { at: item.at } : {}),
     });
   }
   return holds;

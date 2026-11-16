@@ -12,6 +12,7 @@ import { z } from "zod";
 import * as atomic from "./atomic.ts";
 import { createDriveClient } from "./drive-client.ts";
 import { createDriveMirror, decodeDrivePath, drivePathHash, drivePathRule, encodeDrivePath, renameDriveFile, DriveMirrorError, type DriveHashes, type DriveOwner } from "./drive-mirror.ts";
+import { BOARD_DIR, createBoard } from "./board.ts";
 import { DriveIdentityError, readDriveOwnIds, type DriveOwnIds } from "./drive-own-ids.ts";
 import { GoogleAccount } from "./google-account.ts";
 import { GOOGLE_BINDING_FILE, GOOGLE_MIRROR_DIR, GOOGLE_TABLE_FILE, createGoogleSync, type GoogleSync } from "./google-sync.ts";
@@ -97,6 +98,8 @@ describe("Drive mirror", () => {
     ["threads-v2/bot/thread/writer-home/head.json", "own"], ["threads-v2 (1)/bot/thread/writer-home/head.json", "own"], ["threads-v2 (2)/bot/thread/writer-work/head.json", "peer"],
     ["threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "once"], ["assets/a.png", "once"], ["pictures/a.png", "once"], ["workspace.json", "once"],
     ["threads/bot/thread.conflict-work-1.json", "once"], ["threads/bot/thread.deleted.json", "once"], ["memory/bot/.ancestry/MEMORY.md.json", "once"],
+    ["board/device-home/p0123456789abcdef01234567.json", "own"], ["board/device-work/p0123456789abcdef01234567.json", "peer"],
+    ["board/device-work/notes.json", "unknown"], ["board/p0123456789abcdef01234567.json", "unknown"],
     ["devices/device-home.json.1.tmp", "ignore"], ["notes.txt", "unknown"], ["memory-v2 (0)/bot/aaaaaaaaaaaa.json", "unknown"],
   ])("classifies %s as %s", (path, rule) => {
     expect(drivePathRule(path, pcs[0].ids)).toBe(rule);
@@ -118,6 +121,25 @@ describe("Drive mirror", () => {
       expect(read.operations).toEqual([record]);
       expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots.tutor).toMatchObject(changes);
     }
+  });
+
+  it("carries Board posts and their fixes to the other PC", async () => {
+    const [home, work] = pcs.map((pc) => ({ pc, board: createBoard({ dir: join(pc.folder, "..", BOARD_DIR), pcId: () => pc.ids.profileDeviceId }) }));
+    const same = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = home!.board.post({ author_bot_id: "astra", kind: "stuck", title: "Codex usage limit", body: "Codex usage limit", source_ref: "call:ta:0:engine:limit" });
+    home!.board.sync(home!.pc.folder, same);
+    const path = `board/${home!.pc.ids.profileDeviceId}/${stuck.id}.json`;
+    expect((await home!.pc.mirror.syncOnce()).uploaded).toEqual([path]);
+    expect((await work!.pc.mirror.syncOnce()).downloaded).toEqual([path]);
+    expect(work!.board.sync(work!.pc.folder, same).pulled).toBe(1);
+    expect(work!.board.get(stuck.id)).toMatchObject({ status: "open" });
+
+    home!.board.solve(stuck.id, "Use Claude.");
+    home!.board.sync(home!.pc.folder, same);
+    expect((await home!.pc.mirror.syncOnce()).uploaded).toEqual([path]);
+    expect((await work!.pc.mirror.syncOnce()).downloaded).toEqual([path]);
+    work!.board.sync(work!.pc.folder, same);
+    expect(work!.board.get(stuck.id)).toMatchObject({ status: "solved", fix: "Use Claude." });
   });
 
   it("keeps each PC's own files authoritative across three PCs", async () => {
@@ -201,6 +223,31 @@ describe("Drive mirror", () => {
     expect(drive.downloads.map((id) => decodeDrivePath(drive.records.get(id)!.file.name))).toEqual(paths);
   });
 
+  it("lands chats one by one on a chat-first pass, open chat then the most recent, each head after its own segments", async () => {
+    const dir = (chat: number) => `threads-v2/bot/chat-${chat}/writer-home`;
+    const segments = (chat: number) => [1, 2, 3].map((seg) => `${dir(chat)}/seg-${seg}-${seg}.json.gz`);
+    for (let chat = 0; chat < 10; chat++) {
+      for (const path of segments(chat)) seed(path, path);
+      seed(`${dir(chat)}/head.json`, `head ${chat}`);
+    }
+    const heads: number[] = [];
+    const readyAtHead: boolean[] = [];
+    drive.onDownload = async (file) => {
+      const path = decodeDrivePath(file.name)!;
+      const chat = Number(/chat-(\d+)/.exec(path)![1]);
+      if (path.endsWith("/head.json")) {
+        heads.push(chat);
+        readyAtHead.push(segments(chat).every((segment) => existsSync(join(pcs[1].folder, segment))));
+      } else await delay(5);
+    };
+    const summary = await mirrorFor(pcs[1], { chatFirst: true, openThread: "chat-3" }).syncOnce();
+    expect(summary.downloaded).toHaveLength(40);
+    expect(heads).toEqual([3, 9, 8, 7, 6, 5, 4, 2, 1, 0]);
+    expect(readyAtHead).toEqual(Array(10).fill(true));
+    const paths = drive.downloads.map((id) => decodeDrivePath(drive.records.get(id)!.file.name)!);
+    expect(paths.indexOf(`${dir(9)}/head.json`)).toBeLessThan(paths.indexOf(segments(0)[0]));
+  });
+
   describe("boot and wake catch-up", () => {
     let sync: GoogleSync | undefined;
     const open = "threads-v2/bot/z-open/writer-home";
@@ -254,7 +301,7 @@ describe("Drive mirror", () => {
       const readyAtHead: boolean[] = [];
       drive.onDownload = async (file) => {
         if (decodeDrivePath(file.name)!.endsWith("/head.json")) {
-          readyAtHead.push([...segments, `${other}/seg-1-2.json.gz`].every((path) => existsSync(join(pcs[1].folder, path))));
+          readyAtHead.push((decodeDrivePath(file.name)!.startsWith(open) ? segments : [`${other}/seg-1-2.json.gz`]).every((path) => existsSync(join(pcs[1].folder, path))));
         }
       };
       google.resume();
@@ -317,6 +364,9 @@ describe("Drive mirror", () => {
       const google = await boot(clock, () => "z-open", () => {});
       google.resume();
       await google.kick();
+      // The kick landed mid-pass, so its one queued pass runs on time before the clock jumps.
+      await vi.advanceTimersByTimeAsync(0);
+      await google.idle();
       const { head } = backlog("boundary");
       clock.now += 30_000 + 60_000;
       await vi.advanceTimersByTimeAsync(30_000);

@@ -139,21 +139,12 @@ export function resolveLocalFile(path: string, roots: readonly string[], kind = 
   if (!isAbsolute(path)) throw fail(400, `${path}: path must be absolute, inside ${folders}`);
   let real: string;
   try {
-    real = realpathSync(path);
+    real = realpathSync.native(path);
   } catch {
     throw fail(404, missing);
   }
   if (/^[\\/]{2}/.test(real)) throw fail(403, outside);
-  const allowed = roots.some((root) => {
-    if (/^[\\/]{2}/.test(root)) return false;
-    try {
-      const fromRoot = relative(realpathSync(root), real);
-      return !fromRoot.startsWith("..") && !isAbsolute(fromRoot);
-    } catch {
-      return false;
-    }
-  });
-  if (!allowed) throw fail(403, outside);
+  if (!roots.some((root) => under(root, real) !== null)) throw fail(403, outside);
   let size: number;
   try {
     const stat = statSync(real);
@@ -164,6 +155,27 @@ export function resolveLocalFile(path: string, roots: readonly string[], kind = 
     throw fail(404, missing);
   }
   return { path: real, size };
+}
+
+/** `real` relative to `root`, or null when it is outside it. */
+function under(root: string, real: string): string | null {
+  if (/^[\\/]{2}/.test(root)) return null;
+  try {
+    const fromRoot = relative(realpathSync.native(root), real);
+    return fromRoot.startsWith("..") || isAbsolute(fromRoot) ? null : fromRoot;
+  } catch {
+    return null;
+  }
+}
+
+/** A host file a room may copy: an upload, or a project file outside dot folders, AppData and Wink's data. */
+export function sharableLocalFile(path: string, roots: readonly string[]): { path: string; size: number } {
+  const file = resolveLocalFile(path, [ATTACHMENTS_DIR, ...roots]);
+  if (under(ATTACHMENTS_DIR, file.path) !== null) return file;
+  const allowed = under(DATA_DIR, file.path) === null && roots.some((root) =>
+    under(root, file.path)?.split(/[\\/]/).every((part) => !part.startsWith(".") && part.toLowerCase() !== "appdata"));
+  if (!allowed) throw Object.assign(new Error(`${path}: private files can't be shared`), { status: 403 });
+  return file;
 }
 
 export function importLocalImage(path: string, roots: readonly string[]): SavedAttachment & { name: string } {

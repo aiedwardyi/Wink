@@ -20,11 +20,12 @@ export async function steerRoomSend(
   replyTo?: Message,
   sendId?: string,
   answersCard?: string,
+  roomFileIds: readonly string[] = [],
 ): Promise<Message | null> {
   const busy = group.busyBotId ? store.bot(group.busyBotId) : null;
   if (!busy?.busy) return null;
   const members = group.memberIds.flatMap((id) => store.bot(id) ?? []);
-  const [only, ...others] = roomResponders(text, members, { kind: "member", botId: busy.id });
+  const [only, ...others] = roomResponders(text, members, { kind: "member", botId: busy.id }, replyTo);
   if (only?.id !== busy.id || others.length) return null;
   const threadId = group.threadId;
   const adapter = instanceForBot?.(busy, threadId)?.adapter;
@@ -36,6 +37,6 @@ export async function steerRoomSend(
     throw Object.assign(new Error("the running turn ended before the steered message could be recorded"), { status: 409 });
   }
   if (!current.hosted) return store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId: replyTo?.id, sendId, steered: true, answersCard });
-  const { message } = hostSend(current as HostedGroup, text, replyTo, sendId);
+  const { message } = hostSend(current as HostedGroup, text, replyTo, sendId, roomFileIds);
   return store.patchMessage(threadId, message.id, { steered: true, answersCard }) ?? message;
 }

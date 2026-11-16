@@ -212,9 +212,15 @@ describe("phone sign-in page", () => {
     expect(workflow).toContain('requested || "wink.edwardyi.dev"');
   });
 
+  it.each(["site/signin/index.html", "site/privacy/index.html"])("keeps %s's meta policy to directives a meta tag honors", (page) => {
+    // a browser ignores these from a meta tag and logs a console error on every load; they need a response header
+    const policy = readFileSync(join(ROOT, page), "utf8").match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/)![1];
+    expect(policy).not.toMatch(/(frame-ancestors|report-uri|sandbox)/);
+  });
+
   it("allows Google and relay requests, with PC images limited to the relay base", () => {
     const policy =
-      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.wink.edwardyi.dev; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.wink.edwardyi.dev; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
     expect(HTML).toContain(policy);
     const relay = "https://relay.example.dev";
     const shipped = HTML.replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", "https://*.example.dev");
@@ -291,6 +297,15 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(3));
     const rows = [...document.querySelectorAll("#list button")].map((button) => [button.textContent, button.classList.contains("last")]);
     expect(rows).toEqual([["Ada", false], ["Mid", false], ["Zed", true]]);
+  });
+
+  it("draws the last-used arcs in Wink's blue accent, not pink, in light and dark", () => {
+    const precision = readFileSync(join(ROOT, "src/styles.css"), "utf8").match(/\[data-skin="precision"\] \{([^}]+)\}/)![1]!;
+    const accent = precision.match(/--color-accent: ([^;]+);/)![1]!;
+    expect(CSS.match(/:root \{([^}]+)\}/)![1]).toContain(`--edge: ${accent};`);
+    expect([...CSS.matchAll(/--edge(-glow)?: ([^;]+);/g)].map((each) => each[2]!.slice(0, 7))).toEqual([accent, accent, accent]);
+    expect(CSS.toLowerCase()).not.toContain("#ff4d9d");
+    expect(CSS).toMatch(/\.last::after \{[^}]*border-color: var\(--edge\);/);
   });
 
   it.each([[LABEL_B, true], ["", false], ["short", false]])("rings Google's button only for a remembered PC (%s)", (label, ringed) => {
@@ -384,7 +399,34 @@ describe("phone sign-in page", () => {
     inits[0]!.callback({ credential: DIR_TOKEN });
     await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
     expect(location.href).not.toContain("/pair");
-    expect(document.querySelector<HTMLAnchorElement>("#pick")?.getAttribute("href")).toBe("/?pick=1");
+    expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it("titles the PC list Choose a PC with no sign-in wording", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(document.querySelector("h1")?.textContent).toBe("Choose a PC");
+    expect(document.querySelector("main")?.textContent).not.toMatch(/sign in/i);
+    expect(document.querySelectorAll("main a:not([hidden])")).toHaveLength(1);
+  });
+
+  it.each(["/signin", "/?pick=1"])("offers no link back to itself while signed out (%s)", (url) => {
+    open(url, [{ label: LABEL_A, name: "Ada" }]);
+    expect(document.querySelector("h1")?.textContent).toBe("Sign in");
+    expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it.each([LABEL_A, "short"])("offers Choose another PC from a PC link that fails (%s)", async (label) => {
+    open(`/signin?pc=${label}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    if (label === LABEL_A) {
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      inits[0]!.callback({ credential: PC_TOKEN });
+    }
+    await vi.waitFor(() => expect(document.getElementById("status")?.className).toBe("status error"));
+    const pick = document.querySelector<HTMLAnchorElement>("#pick")!;
+    expect(pick.hidden).toBe(false);
+    expect(pick.getAttribute("href")).toBe("/?pick=1");
   });
 
   it.each([1, 2])("always lists %s PCs with pick=1 despite a remembered PC", async (count) => {

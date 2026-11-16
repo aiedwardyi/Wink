@@ -259,7 +259,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const deps = {
     bus: { subscribe: (fn: typeof settle) => { settle = fn; } }, providerReload: { settled: noop },
     workerTurns: { capture() {}, settled() {} }, drainQueuedSends, paneWake, routines: { tick: noop },
-    followPendingSyncImports: noop, store, syncMemory: noop,
+    followPendingSyncImports: noop, store, syncMemory: noop, publishSettledTurn: noop,
   };
   new Function(...Object.keys(deps), fold)(...Object.values(deps));
   const deleteDeps = {

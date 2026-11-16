@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
-import { mapFileDiff, mapFiles as mapChanges, mapFork, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
+import { mapFileDiff, mapFiles as mapChanges, mapFork, mapGit, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
 import { createMapPane, type MapPaneRecord } from "./map-pane.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { watchMapPanes } from "./map-events.ts";
@@ -78,6 +78,39 @@ it("reads plain patches when user Git colors are always enabled", async () => {
     expect.objectContaining({ kind: "remove", text: "const before = 1;" }),
     expect.objectContaining({ kind: "add", text: "const colored = 2;" }),
   ]));
+});
+
+it("runs no command a repo's own config names", async () => {
+  const { root, git, base } = repo();
+  const slash = (path: string) => path.replace(/\\/g, "/");
+  const marker = join(root, "..", `${root.split(/[\\/]/).pop()}-ran.txt`);
+  const hook = join(root, "..", `${root.split(/[\\/]/).pop()}-hook.cjs`);
+  roots.push(marker, hook);
+  writeFileSync(hook, "require('fs').appendFileSync(process.argv[2], process.argv[3] + '\\n'); if (process.argv[3] === 'clean') process.stdin.pipe(process.stdout);\n");
+  const run = (what: string) => `"${slash(process.execPath)}" "${slash(hook)}" "${slash(marker)}" ${what}`;
+  git("config", "core.fsmonitor", run("fsmonitor"));
+  git("config", "filter.evil.clean", run("clean"));
+  git("config", "filter.evil.required", "true");
+  writeFileSync(join(root, ".gitattributes"), "* filter=evil\n");
+  writeFileSync(join(root, "file.ts"), "const after = 2;\n");
+  const files = await mapFiles(root, base);
+  await mapFileDiff(root, base, files.find(file => file.path === "file.ts")!);
+  await mapRepoFiles(root);
+  expect(files.map(file => file.path).sort()).toEqual([".gitattributes", "file.ts"]);
+  expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
+});
+
+it("starts git without saved keys or Wink's token", async () => {
+  const { root } = repo();
+  vi.stubEnv("GEMINI_API_KEY", "saved");
+  vi.stubEnv("OMB_COMMS_TOKEN", "boot");
+  try {
+    const env = await mapGit(root, ["-c", "alias.wink-env=!env", "wink-env"]);
+    expect(env).toContain("GIT_OPTIONAL_LOCKS=0");
+    expect(env).not.toMatch(/GEMINI_API_KEY|OMB_COMMS_TOKEN/);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("keeps a deleted file diff separate from its replacement directory", async () => {
@@ -274,7 +307,6 @@ it("does no work before opening, refreshes from real edit events, and stops on c
   const count = read.mock.calls.length;
   writeFileSync(join(root, "file.ts"), "closed\n");
   listener?.();
-  await new Promise(done => setTimeout(done, 200));
   expect(read).toHaveBeenCalledTimes(count);
   expect((await fetch(`${url}/file?worker=pane-a&path=file.ts`)).status).toBe(404);
   git("add", ".");
@@ -339,6 +371,53 @@ async function open(workers: MapPaneRecord[]) {
   }
   return { url, seen, until, chat: () => listener(), close: () => abort.abort() };
 }
+
+it("reopens on the last snapshot and file list at once, then sends the fresh read", async () => {
+  const { root, base } = repo();
+  writeFileSync(join(root, "file.ts"), "const first = 2;\n");
+  const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
+  roots.push(folder);
+  writeFileSync(join(folder, "a.txt"), "x\n");
+  const feature = createMapPane({ panes: async () => [{ sessionId: "pane-a", cwd: root, label: "ALPHA", baseHead: base }, { sessionId: "pane-b", cwd: folder, label: "PLAIN" }], subscribe: () => () => {} });
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    if (url.pathname === "/live") streams.push(res);
+    void feature.handle(req, res, "bot", url.pathname.slice(1), url);
+  });
+  servers.push(server);
+  const url = `http://127.0.0.1:${await listenLocal(server)}`;
+  const live = async () => {
+    const abort = new AbortController();
+    const reader = (await fetch(`${url}/live`, { signal: abort.signal })).body!.getReader();
+    let buffered = "";
+    const next = async (): Promise<MapSnapshot> => {
+      while (!buffered.includes("\n\n")) buffered += new TextDecoder().decode((await reader.read()).value);
+      const end = buffered.indexOf("\n\n");
+      const data = JSON.parse(buffered.slice(6, end));
+      buffered = buffered.slice(end + 2);
+      return data;
+    };
+    return { next, close: () => abort.abort() };
+  };
+  const paths = (data: MapSnapshot) => data.workers[0].files.map(file => file.path);
+  const listed = (worker = "pane-a") => fetch(`${url}/repo?worker=${worker}`).then(res => res.json());
+  const first = await live();
+  expect(paths(await first.next())).toEqual(["file.ts"]);
+  expect(await listed()).toMatchObject({ paths: ["file.ts"] });
+  expect(await listed("pane-b")).toMatchObject({ paths: ["a.txt"] });
+  first.close();
+  await vi.waitFor(async () => expect((await fetch(`${url}/repo?worker=pane-a`)).status).toBe(404));
+  writeFileSync(join(root, "added.ts"), "const added = 1;\n");
+  writeFileSync(join(folder, "b.txt"), "x\n");
+  const again = await live();
+  expect(paths(await again.next())).toEqual(["file.ts"]);
+  expect(await listed()).toMatchObject({ paths: ["file.ts"] });
+  expect(await listed("pane-b")).toMatchObject({ paths: ["a.txt", "b.txt"] });
+  expect((await fetch(`${url}/file?worker=pane-a&path=file.ts`)).status).toBe(200);
+  expect(paths(await again.next())).toEqual(["file.ts", "added.ts"]);
+  await vi.waitFor(async () => expect(await listed()).toMatchObject({ paths: ["added.ts", "file.ts"] }));
+  again.close();
+});
 
 it("marks only the worker whose folder is gone and still opens the others", async () => {
   const { root, base } = repo();
@@ -423,6 +502,59 @@ it("recognizes non-git folders", async () => {
   const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
   roots.push(folder);
   expect(await mapHead(folder)).toBeNull();
+});
+
+function plain() {
+  const root = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
+  roots.push(root);
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" }).trim();
+  return { root, git };
+}
+
+it("shows a worker's new files in a folder without git as they land", async () => {
+  const { root } = plain();
+  const map = await open([{ sessionId: "pane-p", cwd: root, label: "PLAIN" }]);
+  expect((await map.until(() => true)).workers[0]).toMatchObject({ git: false, files: [] });
+  writeFileSync(join(root, "01_notes.md"), "one\n");
+  const after = await map.until(data => data.workers[0].editedAt > 0);
+  expect(after.workers[0]).toMatchObject({ git: false, files: [] });
+  expect(await fetch(`${map.url}/repo?worker=pane-p`).then(res => res.json())).toMatchObject({ paths: ["01_notes.md"] });
+  writeFileSync(join(root, "02_notes.md"), "two\n");
+  await map.until(data => data.workers[0].editedAt > after.workers[0].editedAt);
+  expect(await fetch(`${map.url}/repo?worker=pane-p`).then(res => res.json())).toMatchObject({ paths: ["01_notes.md", "02_notes.md"] });
+  map.close();
+});
+
+it("reads a repo with no commits as git with every file new, and keeps it through the first commits", async () => {
+  const { root, git } = plain();
+  git("init", "-q");
+  expect(await mapHead(root)).toBe("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+  writeFileSync(join(root, "a.md"), "a\n");
+  const map = await open([{ sessionId: "pane-g", cwd: root, label: "FRESH" }]);
+  expect((await map.until(() => true)).workers[0]).toMatchObject({ git: true, files: [{ path: "a.md", added: 1, removed: 0 }] });
+  const unborn = await fetch(`${map.url}/flow?worker=pane-g`);
+  expect([unborn.status, await unborn.json()]).toEqual([200, expect.objectContaining({ total: 0, pushed: 0, commits: [], pr: null })]);
+  git("commit", "-q", "--allow-empty", "-m", "empty");
+  writeFileSync(join(root, "b.md"), "b\n");
+  await map.until(data => data.workers[0].files.length === 2);
+  git("add", ".");
+  git("commit", "-qm", "notes");
+  writeFileSync(join(root, "c.md"), "c\n");
+  const committed = await map.until(data => data.workers[0].files.length === 3);
+  expect(committed.workers[0]).toMatchObject({ git: true, path: "c.md" });
+  expect(await fetch(`${map.url}/file?worker=pane-g&path=a.md`).then(res => res.json())).toMatchObject({ lines: [{ kind: "add", text: "a", line: 1 }] });
+  map.close();
+});
+
+it("switches a folder to git once it becomes a repo after Map first read it", async () => {
+  const { root, git } = plain();
+  writeFileSync(join(root, "a.md"), "a\n");
+  const map = await open([{ sessionId: "pane-n", cwd: root, label: "LATER" }]);
+  expect((await map.until(() => true)).workers[0].git).toBe(false);
+  git("init", "-q");
+  const repo = await map.until(data => data.workers[0].git);
+  expect(repo.workers[0].files.map(file => file.path)).toEqual(["a.md"]);
+  map.close();
 });
 
 it("subscribes to authorized lifecycle events and disconnects when Map closes", async () => {

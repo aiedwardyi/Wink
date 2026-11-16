@@ -52,7 +52,7 @@ async function mountComposer({ hold = false } = {}) {
     bodies,
     release,
     notice: () => host.querySelector(".bg-warning\\/10 > span")?.textContent ?? null,
-    chips: () => host.querySelectorAll('[aria-label="Remove file"]').length,
+    chips: () => host.querySelectorAll('[aria-label="Remove image"]').length,
   };
 }
 

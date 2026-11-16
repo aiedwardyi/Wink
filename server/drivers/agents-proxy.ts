@@ -21,12 +21,15 @@
 //   generate_image(prompt, …)             → create a PNG with the saved image key
 //   call_api(credential_id, method, url)  → call a service with its saved key
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
+//   usage_status()                        → the Usage page's % left and resets, read-only
 //   list_routines()                       → inspect this bot's scheduled work
 //   propose_routine(...)                  → show a confirmation card for a new routine
 //   propose_routine_action(...)           → show a confirmation card for a routine change
 //   update_task_state(...)                → save goal, progress, blockers, and next action
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
+//   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
+//   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -43,7 +46,7 @@ import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCusto
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
-import { createToolCatalog } from "./tool-catalog.ts";
+import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -226,10 +229,34 @@ const SEARCH_MY_CHATS_TOOL = {
   },
 };
 
+export const BOARD_TOOLS = [
+  {
+    name: "board_search",
+    description: "Search the Board, where this Wink's bots keep past blockers and the fixes that solved them.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { query: { type: "string", description: "Error text or keywords." }, project_id: { type: "string", description: "Project folder name. Defaults to yours." } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "board_post",
+    description: "Post to the Board for other bots: stuck (a blocker), fix (what solved one; parent_id is its post) or handoff.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { kind: { type: "string", enum: ["stuck", "fix", "handoff"] }, title: { type: "string" }, body: { type: "string" }, parent_id: { type: "string" } },
+      required: ["kind", "title", "body"],
+    },
+  },
+];
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
+  ...BOARD_TOOLS,
   {
     name: "list_bots",
     description: DEPTH > 0
@@ -532,6 +559,11 @@ const TOOLS = [
     },
   },
   {
+    name: "usage_status",
+    description: "Read-only live Usage page: % left, reset, Main and limit per engine account. Call before any account, burn order or limit answer.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "list_routines",
     description:
       "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's record, with up to 2,000 characters of its instructions and its latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
@@ -596,6 +628,20 @@ const TOOLS = [
     name: "no_reply_needed",
     description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "link_room_fix",
+    description: "Call right after terminal_spawn starts work on a group room's report. Wink posts \"Fix started: <title>\" in the room as you now, and \"Fixed in <version>: <title>\" once an offered update holds the merged work. Never post these yourself.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        sessionId: { type: "string", description: "From terminal_spawn." },
+        title: { type: "string", description: "A few words, in the room's language." },
+        room: { type: "string", description: "Room name; omit in that room." },
+      },
+      required: ["sessionId", "title"],
+    },
   },
 ];
 
@@ -999,6 +1045,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       text: `A secure ${r.label ?? label} card is now visible to the user. End this turn; Wink will resume the task after they save or decline. Never ask them to paste the key into chat.`,
     };
   }
+  if (name === "usage_status") {
+    const r = await api(`/api/internal/usage?self=${encodeURIComponent(BOT_ID)}`);
+    return { text: String(r.text ?? "") };
+  }
   if (name === "list_routines") {
     const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID });
     const r = await api(`/api/internal/routines?${query.toString()}`);
@@ -1088,12 +1138,21 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const r = await api("/api/internal/my-chats", { method: "POST", body: JSON.stringify({ query }) });
     return { text: String(r.text ?? "") };
   }
+  if (name === "board_search" || name === "board_post") {
+    const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
+  }
   if (name === "no_reply_needed") return { text: "ok" };
+  if (name === "link_room_fix") {
+    const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
+    return { text: String(r.text ?? "Linked.") };
+  }
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
 const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
+const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
 export async function handle(msg: Json) {
   const id = msg.id;
@@ -1117,8 +1176,8 @@ export async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      recordToolSchemas(() => catalog?.tools ?? eligibleTools);
-      ok(id, { tools: catalog?.tools ?? eligibleTools });
+      recordToolSchemas(() => listedTools);
+      ok(id, { tools: listedTools });
       return;
     case "tools/call": {
       if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);

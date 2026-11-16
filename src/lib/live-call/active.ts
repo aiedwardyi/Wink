@@ -15,6 +15,7 @@ let note: { botId: string; text: string } | null = null;
 let inView = 0;
 let releaseReload: (() => void) | null = null;
 const watchers = new Set<() => void>();
+const cancels = new Set<(sendIds: string[]) => void>();
 
 function notify() {
   for (const fn of [...watchers]) fn();
@@ -74,6 +75,16 @@ export function dropCall(ended: ActiveCall, text?: string) {
   notify();
 }
 
+
+/** Queued sends the server cancelled before they ran: only the call that sent one can end its wait. */
+export function queueCancelled(sendIds: string[]) {
+  for (const fn of [...cancels]) fn(sendIds);
+}
+
+export function onQueueCancelled(fn: (sendIds: string[]) => void): () => void {
+  cancels.add(fn);
+  return () => { cancels.delete(fn); };
+}
 
 /** The call's own chat is on screen while any returned release is unused. */
 export function showCallChat(): () => void {

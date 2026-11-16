@@ -37,6 +37,7 @@ import {
   projectFolderPrompt,
   projectNotesPrompt,
   projectPathsFromRecords,
+  resolveProjectFolder,
   userProjectTexts,
 } from "./project-folder.ts";
 import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage, sniffImageMime } from "./attachments.ts";
@@ -51,9 +52,13 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
+import { createRoomFixes, type RoomFixes } from "./room-fixes.ts";
+import { ghRun } from "./map-pr.ts";
+import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createRoomLanes, laneKey } from "./room-lane.ts";
+import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -121,6 +126,9 @@ import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
 import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createBotCalls } from "./bot-call.ts";
+import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
+import { createBoardCalls, userAnswer } from "./board-calls.ts";
+import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
@@ -132,6 +140,7 @@ import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
+import { usageStatusText } from "./usage-status.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
@@ -174,6 +183,7 @@ import {
   isEffortLevel,
   newId,
   type ModelSelection,
+  type PrepareFocus,
   type ProviderInstance,
   type RequestOutcome,
   type RuntimeEvent,
@@ -190,7 +200,7 @@ import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { CommsCallers } from "./comms-caller.ts";
+import { botRoute, CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -409,7 +419,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   chatSyncBotId,
@@ -480,6 +490,11 @@ const MIME = EARLY_MIME;
 
 ensureDirs();
 const whatsNew = openWhatsNew(DATA_DIR, process.env.OMB_APP_VERSION ?? "");
+// Set once the store loads; updater offers before that are covered by the boot check.
+let roomFixes: RoomFixes | undefined;
+const updateOfferSchema = z.object({ status: z.enum(["available", "downloaded"]), version: z.string() });
+const roomFixPaneSchema = z.object({ sessionId: z.string().min(1), cwd: z.string().catch(""), panes: z.array(z.object({ sessionId: z.string(), main: z.boolean().optional() })).catch([]) });
+const roomFixBodySchema = z.object({ fromBotId: z.string().catch(""), fromThreadId: z.string().catch(""), sessionId: z.string().catch(""), title: z.string().catch(""), room: z.string().optional().catch(undefined) });
 const callIntro = openCallIntro(DATA_DIR);
 // One-shot upgrade cleanup: drop the removed engine's plaintext key from the
 // stored file before anything reads it. Idempotent — a file without the
@@ -499,6 +514,7 @@ const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
 const crashCount = crashCounter({ origin: crashOrigin, project: process.env.WINK_CRASH_PROJECT?.trim() || null, key: () => (crashOrigin ? cfg.customKeys?.[new URL(crashOrigin).host] : null) });
 let profileSyncSettings: ProfileSyncSettings = loadProfileSyncSettings(DATA_DIR);
+const board = createBoard({ dir: join(DATA_DIR, BOARD_DIR), pcId: () => profileSyncSettings.deviceId, changed: () => broadcast({ kind: "board" }) });
 const threadSyncGate = createThreadSyncV2Gate(DATA_DIR);
 if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
@@ -530,6 +546,8 @@ utilityParentPort?.on("message", (event) => {
   const updateState = updateStateFromMessage(message);
   if (updateState) {
     broadcast({ kind: "update.state", state: updateState });
+    const offered = updateOfferSchema.safeParse(updateState);
+    if (offered.success) void roomFixes?.released(offered.data.version);
     return;
   }
   if (applyGoogleAccountMessage(message, googleAccount)) return;
@@ -640,8 +658,11 @@ googleAccount.onIdToken(googlePhotoChanged);
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
-function authorizedComms(header: string | string[] | undefined): boolean {
-  if (commsCallers.resolve(header)) return true;
+function authorizedComms(header: string | string[] | undefined, path: string): boolean {
+  const caller = commsCallers.resolve(header);
+  return caller ? botRoute(path, caller.botId) : bootToken(header);
+}
+function bootToken(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -1054,6 +1075,18 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+roomFixes = createRoomFixes({
+  dataDir: DATA_DIR,
+  store,
+  pane: async (botId, sessionId) => {
+    const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, sessionId);
+    const pane = roomFixPaneSchema.safeParse(snapshot.body);
+    if (snapshot.status !== 200 || !pane.success || pane.data.panes.some((row) => row.main && row.sessionId === pane.data.sessionId)) return null;
+    return { sessionId: pane.data.sessionId, cwd: pane.data.cwd };
+  },
+  git: mapGit,
+  gh: ghRun,
+});
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
@@ -2132,6 +2165,11 @@ function scheduleThreadUpload(threadId: string): void {
   threadSyncTimers.set(threadId, timer);
 }
 
+/** Kicks a Drive pass now for a settled reply and the memory its settle just wrote. */
+function publishSettledTurn(threadId: string): void {
+  void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(threadId) : undefined).then(() => googleSync.kick());
+}
+
 /** Runs before a route answers, so the user never types on a stale copy. */
 function pullSyncedThread(threadId: string): void | Promise<void> {
   if (threadSyncGate.enabled) return threadSyncV2?.pull(threadId).catch((error) => console.warn("chat sync v2: pull failed", error));
@@ -2353,6 +2391,17 @@ function noteTalked(botId: string): void {
   if (botSyncId) markTalked(memorySyncLedger, botSyncId);
 }
 
+function syncBoard(): void {
+  const folder = profileSyncSettings.folder;
+  if (!profileSyncSettings.syncChats || !folder || !existsSync(folder)) return;
+  const map = profileSyncSettings.botMap;
+  try {
+    board.sync(folder, { out: (localId) => map[localId] ?? localId, in: (syncId) => localIdForSyncId(map, syncId) ?? syncId });
+  } catch (error) {
+    console.warn("board sync: failed", error);
+  }
+}
+
 /** Bots and their memory ride the chat poll: remote bot ops first so a pending local edit is kept, then ours. */
 function syncProfiles(): void | Promise<void> {
   let pending: void | Promise<void> | undefined;
@@ -2363,6 +2412,7 @@ function syncProfiles(): void | Promise<void> {
   }
   const after = () => {
     publishProfileChangesSafely();
+    syncBoard();
     for (const bot of store.bots) {
       if (!botHasActiveTurn(bot.id)) syncMemory(bot.id);
     }
@@ -2426,6 +2476,8 @@ const googleSync = createGoogleSync({
   republishing: () => threadSyncV2?.republishing() ?? false,
   kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
+  picture: (name) => broadcast({ kind: "picture", name }),
+  memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
   openThread: () => threadRoutes.openThread(),
 });
 const uploadCloudRoots = cloudSyncRoots();
@@ -2753,7 +2805,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
-const turnSummary = turnSummaries((threadId, ids) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true }); });
+const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true, restated }); });
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -2886,7 +2938,7 @@ const projectNotesCheck = createProjectNotesCheck({
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
 const unlandedWork = createUnlandedWork({
-  reports: (threadId) => store.messagesFor(threadId),
+  reportsBack: (threadId) => store.notesBack(threadId),
   // a task keeps the folder it pinned; lastProjectCwd is the next task's
   repoDir: (botId, threadId) => {
     const pinned = store.taskByThread(botId, threadId)?.cwd;
@@ -2894,8 +2946,8 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
-// one bot at a time, so a restart after an update has the list before the first typed turn
-void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); })();
+// one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
+startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -3033,11 +3085,29 @@ function roomAlert(alert: RoomAlert) {
 const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
 
+function boardProject(threadId: string): string {
+  const bot = store.botByThread(threadId);
+  if (!bot) return "";
+  const pinned = store.taskByThread(bot.id, threadId)?.cwd;
+  return projectIdOf(pinned === undefined ? bot.cwd : pinned);
+}
+
+const boardCalls = createBoardCalls({
+  board,
+  projectOf: boardProject,
+  rings: (threadId) => !store.groupByThread(threadId) && !isHostedThread(store, threadId),
+});
+
 const botCalls = createBotCalls({
   send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`)),
   current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
+  called: (botId, threadId, blocker) => void boardCalls.called(botId, threadId, blocker),
+});
+
+store.onChange((change) => {
+  if (change.type === "message" && !change.imported && userAnswer(change.message)) boardCalls.answered(change.threadId, change.message);
 });
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
@@ -3060,7 +3130,7 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 // not per turn, so it lives here and rides /api/instances rather than being
 // banked on a task. Persisted so a restart keeps the last report until a turn or refresh replaces it.
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
-const boardEngines = new Map([["grokAgent", "grok"], ["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
+const boardEngines = new Map([["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
 const usageBoard = createUsageBoard({
   codexPromo: codexPromoStatus,
   accounts: {
@@ -3654,8 +3724,8 @@ bus.subscribe((event: RuntimeEvent) => {
         if (persistPeerUserReply(store, event, lastReply)) break;
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
-        // the line answering a direct steer stays shown: the final does not repeat it
-        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text"))) : undefined;
+        // the line answering a direct steer stays shown and is never hidden as restated: the final does not repeat it
+        const anchor = event.summarized ? undefined : store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
@@ -3669,7 +3739,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // kept so "finished" can say what it finished with, rather than
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply ? undefined : event.phase);
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);
@@ -4211,6 +4281,7 @@ bus.subscribe((event: RuntimeEvent) => {
               interrupted,
             }));
           }
+          boardCalls.turnEnded(event.threadId, event.ok && !interrupted);
           limitWaits.settled(event.threadId, event.turnId, event.ok);
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
@@ -4467,7 +4538,9 @@ bus.subscribe((event: RuntimeEvent) => {
   setTimeout(() => void routines?.tick(), 0);
   followPendingSyncImports();
   const settledBot = store.botByThread(event.threadId);
-  if (settledBot) syncMemory(settledBot.id);
+  if (!settledBot) return;
+  syncMemory(settledBot.id);
+  publishSettledTurn(event.threadId);
 });
 
 function paneNotesPending(threadId: string): boolean {
@@ -4760,8 +4833,12 @@ const DETAILED_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS;
 // here costs a reminder every send.
 const CORPUS_SEARCH_INSTRUCTIONS =
   " When searching any corpus, document set or files, match case-insensitively: scanned/OCR records often use capitals. An empty result tests your query first; try another search strategy or tool class before concluding absence. Never state an unqualified absence. When reporting no match, say what and how you searched so the user can judge a true negative.";
+const PLAIN_WORDS_INSTRUCTIONS =
+  " Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
+const REPEAT_MISTAKES_INSTRUCTIONS =
+  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
 // One block for every route, so none can carry one rule set without the other.
-const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS;
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS;
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -4897,6 +4974,42 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
       paneWake.settled();
     }, botHasActiveTurn));
   }
+}
+
+// The spawn shape startClaimedTurn gives an ordinary chat turn that opens a new session, or null when that
+// turn mounts something only a send may set up (a remote or VM computer, connected apps).
+function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
+  const task = store.taskByThread(bot.id, bot.threadId);
+  // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
+  if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
+  if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) return null;
+  if (bot.computer !== undefined && bot.computer !== "off") return null;
+  if (bot.cloudBackend === "vps" || box.boxConfigured(cfg)) return null;
+  const integrations: NonNullable<PrepareFocus["fresh"]>["integrations"] = {};
+  if (bot.shareTerminalWithChat !== false) {
+    const terminal = terminalIntegration(bot.id);
+    if (terminal) integrations.terminal = terminal;
+  }
+  const dwebUrl = process.env.DWEB_URL?.trim();
+  if (dwebUrl) integrations.dweb = { url: dwebUrl };
+  if (bot.computer === undefined && shouldMountLocalComputer({ requested: undefined, hostPlatform: process.platform, providerSupportsLocal: instance.adapter.capabilities.localComputerMcp === true })) {
+    const cua = readCuaConnection();
+    if (cua) integrations.localComputer = cua;
+  }
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0) : undefined;
+  if (agents) integrations.agents = agents;
+  const cwd = task.cwd !== undefined
+    ? task.cwd
+    : Object.keys(task.resumeCursors).length > 0
+      ? null
+      : bot.cwd ?? resolveProjectFolder({
+        pin: bot.cwd,
+        remembered: bot.lastProjectCwd,
+        continuation: false,
+        userTexts: userProjectTexts(store.messagesFor(bot.threadId), undefined, { since: bot.projectFolderClearedAt }),
+        recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
+      }).cwd ?? ensureWorkspace(bot.id);
+  return { integrations, cwd: cwd ?? undefined, leanStartup: bot.leanStartup === true ? true : undefined };
 }
 
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
@@ -5810,6 +5923,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";
         const withLate = (base: string) =>
           [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
+        const approval = bot.autoApprove ? "auto" : "ask";
         const system =
           persona +
           // The folder is already this turn's cwd, but nothing told the model
@@ -5848,6 +5962,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           DEFAULT_RULES +
+          accessRules(live.adapter.access?.({ approval, cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
@@ -5954,7 +6069,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
-        approval: bot.autoApprove ? "auto" : "ask",
+        approval,
         attended: !isUnattended(bot.id),
         integrations,
         cwd,
@@ -6905,6 +7020,8 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
+  // A teammate's request runs under the host's setting for this bot: Auto as set, else read-only.
+  const access: AccessTurn = { approval: bot.autoApprove ? "auto" : "ask", ...(lane || (authority && !bot.autoApprove) ? { readOnly: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
@@ -6913,7 +7030,9 @@ async function runClaimedGroupMemberTurn(
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
-    harnessPlaybookPrompt(Boolean(integrations.terminal));
+    harnessPlaybookPrompt(Boolean(integrations.terminal)) +
+    // last, so a read-only side lane shares the idle room's cached prefix
+    accessRules(instance.adapter.access?.({ ...access, cwd, integrations, leanStartup: memberTurnSelection(selection, bot.leanStartup).leanStartup }), integrations);
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
@@ -6977,9 +7096,7 @@ async function runClaimedGroupMemberTurn(
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
-        // A teammate's request runs under the host's setting for this bot: Auto as set, else read-only.
-        approval: bot.autoApprove ? "auto" : "ask",
-        ...(lane || (authority && !bot.autoApprove) ? { readOnly: true as const } : {}),
+        ...access,
         attended: !isUnattended(bot.id),
         cwd,
         integrations,
@@ -7089,7 +7206,8 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   const members = group.memberIds.map((id) => store.bot(id)).filter((bot): bot is BotRecord => Boolean(bot));
   const respondersFor = (line: Message) => {
     const asker = members.find((member) => !member.hidden && member.id === line.askedBy);
-    return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
+    const replyTo = line.replyToId ? store.messagesFor(threadId).find((message) => message.id === line.replyToId) : undefined;
+    return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder, replyTo);
   };
   const owed = () => owedRoomResponders(store.messagesFor(threadId), instructionId, respondersFor, resumedId);
   // one answered set for the recovered turns, as a live line's responders share: a mention must not rerun a member that is done
@@ -7098,11 +7216,11 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = []) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
-  const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
+  const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
   const shared = hosted && answersCard ? store.patchMessage(group.threadId, hosted.id, { answersCard }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group)) {
@@ -7129,19 +7247,22 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     .filter((b): b is NonNullable<typeof b> => Boolean(b));
   const availableMembers = members.filter((member) => !member.hidden);
   const archived = members.filter((member) => member.hidden);
-  const mentionedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0];
-  if (mentionedArchived) {
+  // a reply to an archived member addresses it unless the line tags someone else
+  const repliedArchived = archived.find((member) => member.id === replyTo?.from?.botId);
+  const addressedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0]
+    ?? (repliedArchived && !roomResponders(text, members, { kind: "mentions" }).length ? repliedArchived : undefined);
+  if (addressedArchived) {
     store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
       tool: {
-        name: `${mentionedArchived.name} is archived and can't respond — restore it or mention an active room member.`,
+        name: `${addressedArchived.name} is archived and can't respond — restore it or mention an active room member.`,
         ok: false,
       },
     });
   }
   const asker = availableMembers.find((member) => member.id === askerId);
-  let responders = roomResponders(text, members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
+  let responders = roomResponders(text, members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder, replyTo);
   // bot⇄bot channels: chipping in without a tag addresses the last speaker
   if (!responders.length && group.dm) {
     const lastSpeakerId = [...store.messagesFor(threadId)]
@@ -7154,9 +7275,9 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     const defaultArchivedId = group.defaultResponder.kind === "member" ? group.defaultResponder.botId : undefined;
     const defaultArchived = archived.find((member) => member.id === defaultArchivedId);
     let unavailableMessage: string | undefined;
-    if (!mentionedArchived && !availableMembers.length) {
+    if (!addressedArchived && !availableMembers.length) {
       unavailableMessage = "No active room members can respond — restore an archived bot or add an active member.";
-    } else if (!mentionedArchived && defaultArchived) {
+    } else if (!addressedArchived && defaultArchived) {
       unavailableMessage = `${defaultArchived.name} is archived and can't respond — restore it or mention an active room member.`;
     }
     if (unavailableMessage) {
@@ -7589,6 +7710,7 @@ const groupRoutes = createGroupRoutes({
   sendSequencer,
   resolveReplyTarget,
   startGroupTurn,
+  botCaller: (req) => Boolean(commsCallers.resolve(req.headers.authorization)),
   userName: () => cfg.profile?.name?.trim() || "User",
   cancelGroupTurnOperations,
   taskResumes,
@@ -7598,6 +7720,12 @@ const groupRoutes = createGroupRoutes({
   closeOpenApprovals,
   releaseInterruptedBot,
   roomLaneThread: roomLanes.thread,
+});
+const boardRoutes = createBoardRoutes({
+  board,
+  caller: (header) => commsCallers.resolve(header),
+  known: (botId) => Boolean(store.bot(botId)),
+  projectOf: boardProject,
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
@@ -7619,6 +7747,7 @@ const internalRoutes = createInternalRoutes({
   persistTaskPacket,
   notify,
   botCalls,
+  boardCalls,
   routines: routines!,
   delegationWatch,
   askHold,
@@ -7659,7 +7788,7 @@ const verifySite = createVerifySite({
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   logDecision: (row) => appendDecision(DATA_DIR, row),
   deviceId: () => profileSyncSettings.deviceId,
-  appToken: authorizedComms,
+  appToken: bootToken,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
   toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
   docRun: runId => verifyDoc.run(runId),
@@ -7706,9 +7835,10 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId) });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId) });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
+  firstTurnLaunch,
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,
   threadSyncGate,
@@ -7809,7 +7939,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 403, { error: "forbidden: cross-origin request" });
       }
     }
-    const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
+    const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization, path), REMOTE_KEY);
     if (!relay && roomDoorPath(path)) return json(res, 404, { error: "not found" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
@@ -7835,7 +7965,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const label = await paneLabel(terminalBridgeAccess, scope.bot, scope.pane);
       const note = mailboxNoteText(scope.pane, source.name || source.id, source.id, parsed.data.text, label);
       if (!note) return json(res, 400, { error: "empty message" });
-      if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
+      if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind, parsed.data.text);
       if (kind === "report") usageStats.workerReported(scope.pane, parsed.data.text);
       const message = store.appendMessage(source.threadId, { role: "bot", kind: "note", text: note, origin: profileSyncSettings.deviceId });
       if (kind === "report") void unlandedWork.refresh(source.id, source.threadId);
@@ -7895,6 +8025,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "GET" && path === "/api/internal/agents") {
         return await internalRoutes.agents(res, url);
       }
+      if (method === "GET" && path === "/api/internal/usage") {
+        if (!store.bot(url.searchParams.get("self") ?? "")) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, { text: usageStatusText(await usageBoard.read(), routineTimeZone()) });
+      }
       if (method === "GET" && path === "/api/internal/routines") {
         return await internalRoutes.listRoutines(res, url);
       }
@@ -7904,6 +8038,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/ask-bot") {
         return await internalRoutes.askBot(req, res);
       }
+      if (method === "POST" && path === BOARD_ROUTES.search) return await boardRoutes.search(req, res);
+      if (method === "POST" && path === BOARD_ROUTES.post) return await boardRoutes.post(req, res);
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
@@ -7942,12 +8078,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if ("skipped" in note) return json(res, 200, { skipped: true });
         return json(res, 201, { messageId: note.messageId });
       }
+      // link_room_fix: a room report tied to the pane fixing it.
+      if (method === "POST" && path === "/api/internal/room-fix") {
+        const body = roomFixBodySchema.safeParse(await readBody(req));
+        if (!body.success) return json(res, 400, { error: "bad request" });
+        const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
+        return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
+      }
       // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
-        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""));
+        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(String(body.command ?? "")));
@@ -8223,6 +8366,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     // ── device picker: PCs in the sync folder ──
+    if (method === "GET" && path === BOARD_ROUTES.list) return boardRoutes.list(res);
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
@@ -8635,10 +8779,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
-    if (m && method === "POST") {
-      if (m[2] === "token") botCalls.answered(m[1]!);
-      return await liveCall(req, res, m);
-    }
+    if (m && method === "POST") return await liveCall(req, res, m);
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
@@ -9247,6 +9388,7 @@ phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
+startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");

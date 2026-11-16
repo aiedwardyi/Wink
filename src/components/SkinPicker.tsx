@@ -15,10 +15,13 @@ import { loadScene, sceneOf, type SceneId } from "./ChatScene";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "neon-grid", "dim-sand", "lagoon", "snow", "wink-day", "notebook"];
-const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand", "lagoon", "lagoon-night", "snow", "snow-night", "neon-grid"]);
+// Newest release first: the grid opens on these, ahead of the older featured themes. Precision Dimmed stays under More themes.
+const NEW_SKIN_IDS: readonly SkinId[] = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night", "precision-dimmed", "bronze", "dim-sand"];
+const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook"];
+// Themes opens with every animated tile playing this long; after that only a hovered or pressed tile plays.
+const TILE_PLAY_MS = 3000;
 
-/** An animated theme's own scene, looping in its tile while the picker is open; a still tile under reduced motion. */
+/** An animated theme's own scene, looping in its tile while mounted; a still tile under reduced motion. */
 function MiniScene({ scene }: { scene: SceneId }) {
   const layer = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -106,8 +109,10 @@ export function Miniature({ skin, still = false }: { skin: SkinId; still?: boole
   );
 }
 
-export function SkinPicker() {
+/** `reveal`: scroll to the first of these tiles, once per request. */
+export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
   const { t } = useI18n();
+  const grid = useRef<HTMLDivElement>(null);
   // The document is the source of truth, not storage: main.tsx has already
   // stamped it, and reading it back keeps the checkmark honest even if the
   // skin was set some other way.
@@ -121,6 +126,17 @@ export function SkinPicker() {
   const [picked, setPicked] = useState<SkinId | null>(null);
   const moreId = useId();
   const [tried, setTried] = useState(readTriedSkins);
+  const [opening, setOpening] = useState(true);
+  const [hovered, setHovered] = useState<SkinId | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setOpening(false), TILE_PLAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  useEffect(() => {
+    if (!reveal?.length) return;
+    const tile = grid.current?.querySelector(reveal.map((id) => `[data-skin-tile="${id}"]`).join(", "));
+    tile?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "instant" : "smooth" });
+  }, [reveal]);
 
   // The theme-cycle hotkey calls applySkin() directly, outside this
   // component's own onClick - without this, the checkmark would go stale.
@@ -140,8 +156,9 @@ export function SkinPicker() {
   }
   const extra = SKINS.filter((skin) => !featured.includes(skin));
   const groups = (skins: typeof SKINS) => [
-    { key: "settings.skin.dark", skins: skins.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)) },
-    { key: "settings.skin.light", skins: skins.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)) },
+    { key: "settings.skin.animated", skins: skins.filter((skin) => skin.animated) },
+    { key: "settings.skin.dark", skins: skins.filter((skin) => !skin.animated && !LIGHT_SKIN_IDS.has(skin.id)) },
+    { key: "settings.skin.light", skins: skins.filter((skin) => !skin.animated && LIGHT_SKIN_IDS.has(skin.id)) },
   ] as const;
 
   const renderGroups = (items: typeof SKINS, folded = false) => groups(items).filter(({ skins }) => skins.length > 0).map(({ key, skins }) => (
@@ -149,17 +166,24 @@ export function SkinPicker() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {skins.map((skin) => {
           const selected = skin.id === active;
-          const isNew = !selected && NEW_SKIN_IDS.has(skin.id) && !tried.includes(skin.id);
+          const isNew = !selected && NEW_SKIN_IDS.includes(skin.id) && !tried.includes(skin.id);
           return (
             <button
               key={skin.id}
               type="button"
+              data-skin-tile={skin.id}
               onClick={() => {
                 applySkin(skin.id);
                 setActive(skin.id);
                 setPicked(folded ? skin.id : null);
               }}
               aria-pressed={selected}
+              // A touch enters on press and leaves on release or scroll, so a held tile plays too.
+              onPointerEnter={() => {
+                setOpening(false);
+                setHovered(skin.id);
+              }}
+              onPointerLeave={() => setHovered((was) => (was === skin.id ? null : was))}
               className={cn(
                 "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
                 selected
@@ -167,7 +191,8 @@ export function SkinPicker() {
                   : "border-hairline/60 hover:border-hairline hover:bg-control/50",
               )}
             >
-              <Miniature skin={skin.id} />
+              {/* A new key on hover: the scene plays again from its start. */}
+              <Miniature key={hovered === skin.id ? "hover" : "rest"} skin={skin.id} still={hovered ? hovered !== skin.id : !opening} />
               <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
                 {/* A long name wraps inside its own box, so the New tag never drops under it or covers it. */}
                 <div className="min-w-0 flex-1 break-words">
@@ -188,7 +213,7 @@ export function SkinPicker() {
   ));
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={grid} className="flex flex-col gap-4">
       {renderGroups(featured)}
       <button
         type="button"

@@ -203,6 +203,24 @@ describe("question folding", () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
+  it.each([["en", "1 more choice"], ["ko", "선택지 1개 더 보기"]] as const)("names one cut choice in the singular in %s", async (locale, label) => {
+    applyLocale(locale);
+    // the +N pill is narrower than a choice, so cutting one choice makes room
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+      if (!this.matches("[data-row-choices]")) return 0;
+      return [...this.querySelectorAll("button:not([hidden])")].reduce((width, chip) => width + (chip.textContent?.startsWith("+") ? 40 : 100), 0);
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.matches("[data-row-choices]") ? 250 : 0;
+    });
+    await render(`fold-one-more-${locale}`, ["Yes, both", "Only the open speed", "Change it"]);
+    await act(async () => button(locale === "ko" ? "질문 접기" : "Fold question").click());
+    await settle();
+    const more = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].find((chip) => !chip.hidden && chip.textContent === "+1");
+    expect(more?.getAttribute("aria-label")).toBe(label);
+    expect(more?.title).toBe(label);
+  });
+
   it("shows no +N pill when every choice fits", async () => {
     await render("fold-all-fit", ["Yes, both", "Only the open speed", "Change it"]);
     await fold();

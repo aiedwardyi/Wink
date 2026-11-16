@@ -1132,6 +1132,19 @@ describe("own name", () => {
       stream.close();
     }
   });
+
+  it("pushes a member bot's new face to live viewers", async () => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink", mascotStyle: "icon-21" })!;
+    const group = store.createGroup("Crew", [wink.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const mina = await joined(group, "Mina");
+    const stream = await openStream(group.hosted.roomId, mina.key, 0);
+    try {
+      store.patchBot(wink.id, { mascotStyle: "icon-11" });
+      await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.bots.some((bot) => bot.mascotStyle === "icon-11")));
+    } finally {
+      stream.close();
+    }
+  });
 });
 
 describe("reactions", () => {

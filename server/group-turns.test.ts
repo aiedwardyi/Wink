@@ -42,6 +42,114 @@ beforeEach(() => {
 const reply = (bot: BotRecord, text: string) =>
   store.appendMessage(group.threadId, { role: "bot", kind: "text", text, from: { botId: bot.id, name: bot.name, color: bot.color } });
 
+const groupTurn = () => {
+  const groupQueues = new Map<string, Promise<void>>();
+  const runGroupMemberTurn = vi.fn(async (_group: string, _thread: string, _botId: string) => true);
+  const start = load("startGroupTurn", {
+    store,
+    peopleOnlyRoom: () => false,
+    roomSetupPending: () => false,
+    rootForStart: () => null,
+    noteTalked: vi.fn(),
+    mentionedBots,
+    roomResponders,
+    resumePaneWakes: vi.fn(),
+    taskPacketForWrite: () => null,
+    seedTaskResumePacket: () => ({ instructionId: "i1" }),
+    persistTaskPacket: vi.fn(),
+    beginGroupTurnOperation: () => ({ cancelled: false, instructionId: "i1" }),
+    finishGroupTurnOperation: vi.fn(),
+    groupQueues,
+    runGroupMemberTurn,
+    roomTurnStillAssigned: load("roomTurnStillAssigned", { store }),
+  });
+  const ran = async (send: () => unknown) => {
+    send();
+    await groupQueues.get(group.id);
+    return runGroupMemberTurn.mock.calls.map((call) => call[2]);
+  };
+  return { start, ran };
+};
+
+describe("a reply to a member's line", () => {
+  const archivedLine = (name: string) => `${name} is archived and can't respond`;
+  beforeEach(() => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "mentions" } });
+  });
+
+  it("wakes that member in a mentions-only room", async () => {
+    const line = reply(ray, "Ray's take");
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([ray.id]);
+  });
+
+  it("goes to the replied-to member over the room's lead", async () => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "member", botId: kai.id } });
+    const line = reply(ray, "Ray's take");
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([ray.id]);
+  });
+
+  it("lets an @mention or @everyone win over the reply", async () => {
+    const line = reply(ray, "Ray's take");
+    const first = groupTurn();
+    expect(await first.ran(() => first.start(group.id, `@${zed.name} is it right?`, line))).toEqual([zed.id]);
+    const second = groupTurn();
+    expect(await second.ran(() => second.start(group.id, "@everyone is it right?", line))).toEqual([kai.id, ray.id, zed.id]);
+  });
+
+  it("keeps a reply to a person's line on the room's rule", async () => {
+    const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "my idea" });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "and another", line))).toEqual([]);
+  });
+
+  it("says an archived member can't respond instead of passing silently", async () => {
+    const line = reply(ray, "Ray's take");
+    store.patchBot(ray.id, { hidden: true });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([]);
+    expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ kind: "activity", tool: { name: expect.stringContaining(archivedLine(ray.name)), ok: false } });
+  });
+
+  it("wakes no lead or everyone for a reply to an archived member", async () => {
+    for (const defaultResponder of [{ kind: "everyone" }, { kind: "member", botId: kai.id }] as const) {
+      store.patchGroup(group.id, { defaultResponder });
+      store.patchBot(ray.id, { hidden: false });
+      const line = reply(ray, "Ray's take");
+      store.patchBot(ray.id, { hidden: true });
+      const { start, ran } = groupTurn();
+      expect(await ran(() => start(group.id, "why that one?", line))).toEqual([]);
+      expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ kind: "activity", tool: { name: expect.stringContaining(archivedLine(ray.name)) } });
+    }
+  });
+
+  it("wakes none of the host's bots for a reply to a teammate's bot", async () => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "everyone" } });
+    const line = store.appendMessage(group.threadId, { role: "bot", kind: "text", text: "Mina's bot here", from: { botId: "tb-1", name: "Bolt", color: "" }, author: { kind: "bot", id: "tb-1", name: "Bolt", owner: "p-mina" } });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([]);
+    const tagged = groupTurn();
+    expect(await tagged.ran(() => tagged.start(group.id, `@${kai.name} and you?`, line))).toEqual([kai.id]);
+  });
+
+  it("names no archived member when an @mention takes the line", async () => {
+    const line = reply(ray, "Ray's take");
+    store.patchBot(ray.id, { hidden: true });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, `@${kai.name} thoughts?`, line))).toEqual([kai.id]);
+    expect(store.messagesFor(group.threadId).some((message) => message.tool?.name?.includes(archivedLine(ray.name)))).toBe(false);
+  });
+
+  it("owes the replied-to member its answer after a restart", () => {
+    const answer = reply(zed, "Zed's take");
+    const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "why that one?", replyToId: answer.id });
+    const queueRoomParticipation = vi.fn();
+    load("queueOwedRoomTurns", { store, owedRoomResponders, roomRepliers, roomResponders, queueRoomParticipation })(group.id, group.threadId, ray.id, line.id);
+    expect(queueRoomParticipation.mock.calls.map((call) => call[0])).toEqual([zed.id]);
+  });
+});
+
 describe("a tapped question card in a group", () => {
   const ask = () =>
     store.appendMessage(group.threadId, {
@@ -69,35 +177,48 @@ describe("a tapped question card in a group", () => {
     await routes.postMessage(Readable.from([JSON.stringify({ text: "Yes", cardId: card.id })]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
     expect(steer).not.toHaveBeenCalled();
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, card.id);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, card.id, []);
   });
 
   it("runs the asking bot under a lead rule", async () => {
     store.patchGroup(group.id, { defaultResponder: { kind: "member", botId: kai.id } });
-    const groupQueues = new Map<string, Promise<void>>();
-    const runGroupMemberTurn = vi.fn(async (_group: string, _thread: string, _botId: string) => true);
-    const start = load("startGroupTurn", {
-      store,
-      peopleOnlyRoom: () => false,
-      roomSetupPending: () => false,
-      rootForStart: () => null,
-      noteTalked: vi.fn(),
-      mentionedBots,
-      roomResponders,
-      resumePaneWakes: vi.fn(),
-      taskPacketForWrite: () => null,
-      seedTaskResumePacket: () => ({ instructionId: "i1" }),
-      persistTaskPacket: vi.fn(),
-      beginGroupTurnOperation: () => ({ cancelled: false, instructionId: "i1" }),
-      finishGroupTurnOperation: vi.fn(),
-      groupQueues,
-      runGroupMemberTurn,
-      roomTurnStillAssigned: load("roomTurnStillAssigned", { store }),
-    });
-    start(group.id, "Yes", undefined, undefined, ray.id);
-    await groupQueues.get(group.id);
-    expect(runGroupMemberTurn.mock.calls.map((call) => call[2])).toEqual([ray.id]);
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "Yes", undefined, undefined, ray.id))).toEqual([ray.id]);
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ role: "user", askedBy: ray.id });
+  });
+});
+
+describe("a typed answer to an open question in a group", () => {
+  const post = async (body: Record<string, unknown>) => {
+    const startGroupTurn = vi.fn(() => ({ id: "m1" }));
+    const routes = createGroupRoutes({
+      store,
+      groupIsWorking: (value: GroupRecord) => Boolean(value.busyBotId),
+      instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer: vi.fn(async () => true) } }),
+      userName: () => "Edward",
+      sendSequencer: new SendSequencer(),
+      resolveReplyTarget: () => undefined,
+      startGroupTurn,
+    } as unknown as Parameters<typeof createGroupRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    await routes.postMessage(Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
+    expect(res.writeHead.mock.calls[0][0]).toBe(202);
+    return startGroupTurn;
+  };
+
+  it("goes to the member that asked, and stays a chat line", async () => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "member", botId: kai.id } });
+    store.appendMessage(group.threadId, {
+      role: "bot",
+      kind: "options",
+      from: { botId: ray.id, name: ray.name, color: ray.color },
+      card: { title: "Question", subtitle: "Which color?", options: [], askUser: true },
+    });
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, ray.id, undefined, []);
+  });
+
+  it("keeps the room's rule when no question is open", async () => {
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, undefined, []);
   });
 });
 

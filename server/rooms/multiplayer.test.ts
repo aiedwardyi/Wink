@@ -243,18 +243,21 @@ describe("a teammate's line in a shared bot group", () => {
 });
 
 describe("a teammate's request under the host's setting for the bot", () => {
-  /** The `approval` and `readOnly` a room turn sends, run from the sendTurn call in index.ts. */
+  /** The `approval` and `readOnly` a room turn sends: the `access` its sendTurn call spreads in index.ts. */
   function turnAccess(authority: string | undefined, bot: { autoApprove: boolean }, lane = false) {
     const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
-    let props: string[] = [];
+    let spread = false;
+    let init: string | undefined;
     const walk = (node: ts.Node) => {
       const input = ts.isCallExpression(node) && node.expression.getText(index).endsWith(".sendTurn") ? node.arguments[0] : undefined;
-      if (input && ts.isObjectLiteralExpression(input)) props = input.properties.map((prop) => prop.getText(index)).filter((text) => /^approval:|readOnly/.test(text));
+      if (input && ts.isObjectLiteralExpression(input)) spread = input.properties.some((prop) => prop.getText(index) === "...access");
+      if (ts.isVariableDeclaration(node) && node.name.getText(index) === "access") init = node.initializer?.getText(index);
       ts.forEachChild(node, walk);
     };
     walk(runner);
-    expect(props).toHaveLength(2);
-    return new Function("authority", "bot", "lane", `${js(`const access = { ${props.join(", ")} };`)}\nreturn access;`)(authority, bot, lane);
+    expect(spread).toBe(true);
+    expect(init).toBeDefined();
+    return new Function("authority", "bot", "lane", `${js(`const access = ${init};`)}\nreturn access;`)(authority, bot, lane);
   }
 
   /** The request.opened fold of index.ts for a request on the room's thread, up to its first break. */

@@ -1,13 +1,17 @@
 // Every message into a team room: the host's through the normal send route,
 // a person's through the door. The host's line is only committed here: the
 // normal group turn answers it. A person's wakes one bot, at most, with an ask.
+import { createHash, randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+
 import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
+import { sharableLocalFile } from "../attachments.ts";
 import type { Message } from "../store.ts";
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
 import { broadcastDoorStop } from "./door-streams.ts";
 import { committedRoomText, recentRoomEntries, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
-import { ownRoomFiles } from "./files.ts";
+import { copyRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { askById, createAsk, roomAskDeps, roomAsks, runAsk, type HostedGroup } from "./asks.ts";
@@ -136,10 +140,67 @@ const roomCopy = (text: string) => text
   .replace(/<attached-image\s[^>]*>/g, "[image]")
   .replace(/<attached-file\s[^>]*>/g, (tag) => `[file: ${/\sname="([^"]*)"/.exec(tag)?.[1] ?? "file"}]`);
 
-/** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy. */
-export function hostSend(group: HostedGroup, text: string, replyTo?: Pick<Message, "id" | "roomEntryId">, sendId?: string) {
+const LOCAL_TAG = /<attached-(image|file)\s+path="([^"]*)"((?:\s+[a-z]+="[^"]*")*)\s*\/?>/g;
+const ENTITY: Record<string, string> = { quot: "\"", lt: "<", gt: ">", amp: "&" };
+const attribute = (value = "") => value.replace(/&(?:#(\d+)|(\w+));/g, (entity, code?: string, name?: string) => (code ? String.fromCharCode(Number(code)) : ENTITY[name!] ?? entity));
+
+/** A tag's file when the composer could have attached it; a typed or pasted tag for any other path is only words. */
+function sharable(group: HostedGroup, path: string, copy = ""): string | null {
+  const roots = [group.cwd, ...groupBots(group).map((bot) => bot.cwd)].filter((root): root is string => Boolean(root));
+  try {
+    return sharableLocalFile(path, roots).path;
+  } catch {
+    // a desktop file outside the projects goes as the composer's upload of it, unless the file itself is private
+    if (!copy) return null;
+  }
+  try {
+    sharableLocalFile(path, [homedir(), ...roots]);
+    return sharableLocalFile(copy, []).path;
+  } catch {
+    return null;
+  }
+}
+
+/** The host's attached pictures and files in order; a big picture's smaller copy is not one of them. */
+function localFiles(text: string): Array<{ path: string; name: string; copy: string }> {
+  const tags = [...text.matchAll(LOCAL_TAG)].map(([, kind, path, rest]) => ({
+    file: kind === "file",
+    path: attribute(path),
+    name: attribute(/\sname="([^"]*)"/.exec(rest!)?.[1]),
+    preview: attribute(/\spreview="([^"]*)"/.exec(rest!)?.[1]),
+    copy: attribute(/\scopy="([^"]*)"/.exec(rest!)?.[1]),
+  }));
+  const previews = new Set(tags.map((tag) => tag.preview));
+  return tags
+    .filter((tag) => tag.path && (tag.file || !previews.has(tag.path)))
+    .map(({ path, name, copy }) => ({ path, name: name || path.split(/[\\/]/).pop()!, copy }));
+}
+
+/** Copies the host's attached files into a room with people and bots, as a teammate's upload; a retry of `sendId` reuses them. */
+export async function hostRoomFiles(group: HostedGroup, text: string, sendId?: string): Promise<string[]> {
+  if (peopleOnlyRoom(group.hosted.roomId)) return [];
+  const files = localFiles(text).flatMap((file) => {
+    const path = sharable(group, file.path, file.copy);
+    return path ? [{ ...file, path }] : [];
+  });
+  if (files.length > MAX_MESSAGE_FILES) throw Object.assign(new RoomError(400, `at most ${MAX_MESSAGE_FILES} files per message`), { code: "ROOM_FILE" });
+  const ids: string[] = [];
+  for (const [at, file] of files.entries()) {
+    const uploadId = sendId ? createHash("sha256").update(`${sendId}\n${at}\n${file.path}`).digest("base64url") : randomBytes(18).toString("base64url");
+    try {
+      ids.push((await copyRoomFile(file.path, group.hosted.roomId, { owner: "host", name: file.name, uploadId })).id);
+    } catch (error) {
+      throw Object.assign(error as Error, { code: "ROOM_FILE", file: file.name });
+    }
+  }
+  return ids;
+}
+
+/** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy, with `fileIds` from hostRoomFiles in place of the tags. */
+export function hostSend(group: HostedGroup, text: string, replyTo?: Pick<Message, "id" | "roomEntryId">, sendId?: string, fileIds: readonly string[] = []) {
   const full = !peopleOnlyRoom(group.hosted.roomId);
-  return hostedSend(group, { kind: "host" }, full ? roomCopy(text) : text, replyTo?.roomEntryId, sendId, [], { ...(full ? { text } : {}), ...(replyTo ? { replyToId: replyTo.id } : {}) });
+  const room = !full ? text : fileIds.length ? text.replace(LOCAL_TAG, (tag, _kind, path: string, rest: string) => (sharable(group, attribute(path), attribute(/\scopy="([^"]*)"/.exec(rest)?.[1])) ? "" : roomCopy(tag))).trim() : roomCopy(text);
+  return hostedSend(group, { kind: "host" }, room, replyTo?.roomEntryId, sendId, fileIds, { ...(full ? { text } : {}), ...(replyTo ? { replyToId: replyTo.id } : {}) });
 }
 
 /** Every member's line counts like the host's; a bot's quote is clean when its answer was. */

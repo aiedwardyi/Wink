@@ -161,10 +161,10 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("themes");
     expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
-    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Neon Grid", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"]) {
+    for (const name of ["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
     }
-    expect(html).toContain(`More themes (${SKINS.length - 16})`);
+    expect(html).toContain(`More themes (${SKINS.length - 20})`);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('data-skin="catppuccin-frappe"');
     expect(html).not.toContain('data-skin="servo-gray"');
@@ -400,16 +400,19 @@ describe("SettingsModal friends chrome", () => {
     expect(markup("themes")).toContain('title="Corners"');
   });
 
-  it("splits featured skins into Dark then Light groups", () => {
+  it("splits featured skins into Animated, Dark then Light groups", () => {
     const html = markup("themes");
+    const animated = html.lastIndexOf(">Animated<");
     const dark = html.lastIndexOf(">Dark<");
     const light = html.lastIndexOf(">Light<");
-    expect(dark).toBeGreaterThan(-1);
+    expect(animated).toBeGreaterThan(-1);
+    expect(dark).toBeGreaterThan(animated);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "neon-grid"]);
-    expect(ids(html.slice(light))).toEqual(["dim-sand", "lagoon", "snow", "wink-day", "notebook"]);
-    expect(ids(html)).toHaveLength(16);
+    expect(ids(html.slice(animated, dark))).toEqual(["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night"]);
+    expect(ids(html.slice(dark, light))).toEqual(["bronze", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot"]);
+    expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook"]);
+    expect(ids(html)).toHaveLength(20);
   });
 
 

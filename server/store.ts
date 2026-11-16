@@ -160,6 +160,8 @@ export interface Message {
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
+    /** files a successful call wrote, as the engine named them */
+    writes?: string[];
     setup?: boolean;
     signIn?: boolean;
     accountId?: string;
@@ -179,6 +181,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Hidden: a later text of its turn says the same, so replay skips it. */
+  restated?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */
   engine?: string;
   call?: import("../shared/live-call.ts").CallTag;
@@ -719,17 +723,23 @@ export function normalizeGroupDefaultResponder(
   return { kind: "member", botId: memberIds[0] };
 }
 
-/** Resolve the bots invoked by a human room message. Explicit targets win;
- * otherwise the room policy chooses one member, everyone, or nobody. */
+/** Resolve the bots invoked by a human room message. Explicit targets win,
+ * then the member it replies to; otherwise the room policy chooses one
+ * member, everyone, or nobody. A reply to an archived member or a
+ * teammate's bot wakes nobody here, as a guest's does. */
 export function roomResponders<T extends { id: string; name: string; hidden?: boolean }>(
   text: string,
   members: T[],
   defaultResponder: GroupDefaultResponder,
+  replyTo?: Pick<Message, "from" | "author">,
 ): T[] {
   const available = members.filter((member) => !member.hidden);
   if (/(?:^|\s)@everyone\b/i.test(text)) return available;
   const mentioned = mentionedBots(text, available);
   if (mentioned.length) return mentioned;
+  const replied = members.find((member) => member.id === replyTo?.from?.botId);
+  if (replied) return replied.hidden ? [] : [replied];
+  if (replyTo?.author?.owner) return [];
   if (defaultResponder.kind === "everyone") return available;
   if (defaultResponder.kind === "member") {
     const lead = available.find((member) => member.id === defaultResponder.botId);
@@ -1328,6 +1338,11 @@ export class Store {
   /** activePath newest first, read lazily from disk when the thread is not loaded. */
   activePathBack(threadId: string): Iterable<Message> {
     return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
+  }
+
+  /** Note rows newest first, read lazily from disk when the thread is not loaded. */
+  notesBack(threadId: string): Iterable<Message> {
+    return this.threads.has(threadId) ? this.thread(threadId).messages.filter((m) => m.kind === "note").toReversed() : mdb.notesBack(threadId);
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {

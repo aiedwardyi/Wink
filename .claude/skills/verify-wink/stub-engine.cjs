@@ -85,6 +85,23 @@ if (engine === "claude") {
       }
       out({ type: "system", subtype: "status", status: "requesting" });
       const { text, delay } = reply(model, message.message?.content);
+      if (text.includes("re: [restate]")) {
+        // A morning summary written before its tool calls, then said again after them.
+        const said = (body) => ({ type: "assistant", message: { id: randomUUID(), content: [{ type: "text", text: body }] } });
+        const tool = (name, input) => {
+          const id = randomUUID();
+          out({ type: "assistant", message: { id: randomUUID(), content: [{ type: "tool_use", id, name, input }] } });
+          out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "ok" }] }] } });
+        };
+        setTimeout(() => {
+          out(said("**TLDR: The cleanup is fully live, and part 1 has its new sound for you to hear.**\n- **Cleanup:** the last 2 steps went live overnight (01:01 and 07:31). I checked the live app after each one and everything passed.\n- **Part 1 sound:** rebuilt the same way as parts 2 and 3, with full snow crunches."));
+          tool("mcp__agents__ask_user", { question: "Does 2:10 sound OK?", choices: ["Sounds good", "Static"] });
+          tool("mcp__agents__update_task_state", { next_action: "wait for the 2:10 answer" });
+          out(said("**TLDR: The cleanup is fully live, and part 1's new sound is ready for you to listen to.**\n- **Cleanup:** the last 2 steps went live overnight, at 01:01 and 07:31. I checked the live app after each one and both passed.\n- **Part 1's sound** is rebuilt the same way as parts 2 and 3: full snow crunches.\n\nYour one question (2:10, the stair climb) is in your box."));
+          out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } });
+        }, delay);
+        return;
+      }
       const half = Math.ceil(text.length / 2);
       setTimeout(() => out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(0, half) } } }), delay / 2);
       setTimeout(() => {

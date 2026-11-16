@@ -129,6 +129,9 @@ export async function terminalStartResponse(
   return { status: 200, body: snapshotBody(bridgeSnapshotSchema.parse(await res.json().catch(() => ({})))) };
 }
 
+// A line and its Enter are two writes, so a second send to the pane waits for both.
+const paneSends = new Map<string, Promise<unknown>>();
+
 /** Sends a line from a remote browser with a send-only grant; answers the post-send snapshot. */
 export async function terminalSendResponse(
   access: TerminalBridgeAccess | null,
@@ -139,41 +142,61 @@ export async function terminalSendResponse(
   const parsed = terminalSendSchema.safeParse(input);
   if (!parsed.success) return { status: 400, body: { error: "sessionId, generation and text or key are required" } };
   const { sessionId, generation } = parsed.data;
-  let text: string;
+  let writes: string[];
   if ("key" in parsed.data) {
-    text = TERMINAL_KEYS[parsed.data.key];
+    writes = [TERMINAL_KEYS[parsed.data.key]];
   } else {
-    text = parsed.data.text;
+    const { text, paste } = parsed.data;
     if (Buffer.byteLength(text, "utf8") > TERMINAL_SEND_MAX_BYTES) {
       return { status: 400, body: { error: `terminal input is capped at ${TERMINAL_SEND_MAX_BYTES / 1024}KB` } };
     }
     if (text.includes("\x03")) return { status: 400, body: { error: "Ctrl+C is not allowed" } };
     if (CONTROL_BYTES.test(text)) return { status: 400, body: { error: "control characters are not allowed" } };
     // Framed only after validation, so a sender can never supply its own ESC.
-    if (parsed.data.paste) text = `\x1b[200~${text}\x1b[201~\n`;
+    const body = paste ? `\x1b[200~${text}\x1b[201~` : text.replace(/[\r\n]+$/, "");
+    const enter = paste ? "\n" : text.slice(body.length);
+    // Text plus Enter in one write can land in Claude Code as a paste that never submits.
+    writes = body && enter ? [body, enter] : [text];
   }
   if (!access) return { status: 503, body: { error: "terminal bridge unavailable" } };
-  const send = { sessionId, generation, text };
-  let res: Response;
-  try {
-    res = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(botId)}/terminal/send`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${terminalSendGrant(access.token, botId)}`, "content-type": "application/json" },
-      body: JSON.stringify(send),
-      signal: AbortSignal.timeout(5_000),
-    });
-  } catch {
-    return { status: 502, body: { error: "terminal bridge unreachable" } };
-  }
-  if (!res.ok) {
-    const errorBody = (await res.json().catch(() => ({}))) as { error?: string };
-    if (res.status === 404 || /unknown terminal/i.test(errorBody.error ?? "")) {
-      return { status: 404, body: { error: "Unknown terminal" } };
+  const key = `${botId}:${sessionId}`;
+  const sent = (paneSends.get(key) ?? Promise.resolve()).then(() => writeTerminal(access, botId, sessionId, generation, writes, fetchImpl));
+  const settled = sent.catch(() => {});
+  paneSends.set(key, settled);
+  void settled.then(() => { if (paneSends.get(key) === settled) paneSends.delete(key); });
+  return sent;
+}
+
+async function writeTerminal(
+  access: TerminalBridgeAccess,
+  botId: string,
+  sessionId: string,
+  generation: number,
+  writes: string[],
+  fetchImpl: typeof fetch,
+) {
+  let res: Response | undefined;
+  for (const text of writes) {
+    try {
+      res = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(botId)}/terminal/send`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${terminalSendGrant(access.token, botId)}`, "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, generation, text }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      return { status: 502, body: { error: "terminal bridge unreachable" } };
     }
-    if (res.status === 409) return { status: 409, body: { error: errorBody.error ?? "Terminal session is stale" } };
-    return { status: 502, body: { error: `terminal bridge: HTTP ${res.status}` } };
+    if (!res.ok) {
+      const errorBody = (await res.json().catch(() => ({}))) as { error?: string };
+      if (res.status === 404 || /unknown terminal/i.test(errorBody.error ?? "")) {
+        return { status: 404, body: { error: "Unknown terminal" } };
+      }
+      if (res.status === 409) return { status: 409, body: { error: errorBody.error ?? "Terminal session is stale" } };
+      return { status: 502, body: { error: `terminal bridge: HTTP ${res.status}` } };
+    }
   }
-  return { status: 200, body: snapshotBody((await res.json().catch(() => ({}))) as Record<string, unknown>) };
+  return { status: 200, body: snapshotBody(((await res?.json().catch(() => ({}))) ?? {}) as Record<string, unknown>) };
 }
 
 /** A pane's terminal label, if the desktop bridge knows one. */
@@ -224,6 +247,7 @@ export async function raisePaneAttention(
   botId: string,
   sessionId: string,
   kind?: "report" | "auto" | "stall",
+  text?: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   if (!access) return;
@@ -232,7 +256,7 @@ export async function raisePaneAttention(
     await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(botId)}/terminal/attention`, {
       method: "POST",
       headers: { authorization: `Bearer ${terminalReadGrant(access.token, botId)}`, "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, kind }),
+      body: JSON.stringify({ sessionId, kind, text }),
       signal: AbortSignal.timeout(5_000),
     });
   } catch {}

@@ -26,7 +26,8 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
   const { state, dispatch } = useStore();
   const loadOlder = useOlderMessages(dispatch, group.threadId, group.messages[0]?.id, group.hasMore);
   const sidebarOnRight = useSidebarSide() === "right";
-  const lines = useMemo(() => hostLines(group.messages), [group.messages]);
+  const teamBots = roomTeamBots(group);
+  const lines = useMemo(() => hostLines(group.messages, teamBots), [group.messages, teamBots]);
   const base = hostRoomBase(group.hosted.roomId);
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useTeamRoomReply(base, group.id, group.messages);
   const names = useMemo(() => reactionNames(roomPeople(group)), [group]);

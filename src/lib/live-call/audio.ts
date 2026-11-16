@@ -7,6 +7,8 @@ const FADE_SAMPLES = 0.3 * VOICE_RATE;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
+// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps.
+const OUTPUT_GAIN = 0.7;
 
 export class CallAudio {
   private stream: MediaStream | null = null;
@@ -19,6 +21,7 @@ export class CallAudio {
   private startedAt = 0;
   private queuedSec = 0;
   private readonly voice: AnalyserNode;
+  private readonly out: GainNode;
   private readonly destination: MediaStreamAudioDestinationNode;
   private readonly output = new Audio();
   private mic: AnalyserNode | null = null;
@@ -33,7 +36,10 @@ export class CallAudio {
     this.voice = ctx.createAnalyser();
     this.voice.fftSize = this.samples.length;
     this.destination = ctx.createMediaStreamDestination();
-    this.voice.connect(this.destination);
+    this.out = ctx.createGain();
+    this.out.gain.value = OUTPUT_GAIN;
+    this.voice.connect(this.out);
+    this.out.connect(this.destination);
   }
 
   async capture(onFrame: (pcm: ArrayBuffer) => void) {
@@ -120,7 +126,7 @@ export class CallAudio {
 
   /** Call before close(): the output stays open just long enough to finish it. */
   boop() {
-    this.tailMs = boop(this.ctx, this.destination);
+    this.tailMs = boop(this.ctx, this.out);
   }
 
   /** Loudness 0-1 of the voice, or of whoever is louder when `mic` is on; read per frame. */

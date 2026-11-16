@@ -15,6 +15,7 @@ import { watchCodexPromo } from "./codex-promo.mjs";
 import { nudgeApiBlip } from "./pane-blip.mjs";
 import { mapBase } from "./map-base.mjs";
 import { createMapEvents } from "./map-events.mjs";
+import { withClaudePaneEnv } from "../shared/claude-launch-env.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -1214,7 +1215,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         Object.assign(paneEnv, { ORBIT_SCRATCH: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
       } catch {}
     }
-    if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
+    if (botPane) await withClaudePaneEnv(Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) }));
     const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
     });
@@ -1307,6 +1308,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const commands = `${session.commandInput}${text}`.split("\r");
     if (submit && !text.includes("\r")) commands.push("");
     session.commandInput = commands.pop().slice(-INPUT_ECHO_LIMIT);
+    // An Enter sent apart from its line still launches what the line typed.
+    const submitted = commands.join("\r");
     for (const command of commands) {
       if (command.trim()) session.commandInputs.push({ hash: commandHash(command), reported: false });
     }
@@ -1320,7 +1323,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.stallArmedAt = now();
       session.stallChangedAt = session.stallArmedAt;
       session.idleCompacting = false;
-      const engineText = launch ?? text;
+      const engineText = launch ?? submitted;
       const launched = session.botPane ? WORKER_CLI_RE.exec(engineText) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
@@ -1332,7 +1335,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.claudeTrustAnswered = false;
         session.agentSeen = false;
         session.agentEchoed = false;
-        session.agentCommand = text.replace(/\s+/g, "");
+        session.agentCommand = (launch ? text : submitted).replace(/\s+/g, "");
         session.contextNote = null;
         session.contextCompactPending = false;
         watchStalls(session);
@@ -1729,7 +1732,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.reportLost = null;
         if (session.reportSignal) { try { fs.unlinkSync(session.reportSignal); } catch {} }
         if (session.runningCommand) session.runningCommand.reported = true;
-        paneRuns?.reported(session.id);
+        // BLOCKED waits on the teacher, so the run is still live for a restart to bring back.
+        const blocked = /^\s*BLOCKED\b\s*([\s\S]*)/.exec(text ?? "");
+        if (blocked) paneRuns?.blocked(session.id, blocked[1].trim().slice(0, 2000) || "your last report");
+        else paneRuns?.reported(session.id);
         session.finished = [];
         session.autoNote = null;
         session.autoReported = true;
@@ -1810,7 +1816,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           if (!claimed) throw new Error("Worker recovery already claimed or unavailable");
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
-        if (recovery) launchInput.resume = recovery.session;
+        if (recovery) launchInput.resume = recovery.blocked ? { ...recovery.session, blocked: recovery.blocked } : recovery.session;
         // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
         else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
         if (slot) remoteLine = await remote.open({ name: input.host, command: input.command, cwd: input.cwd, slot });

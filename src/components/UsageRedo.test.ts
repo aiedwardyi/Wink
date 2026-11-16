@@ -508,6 +508,10 @@ it("closes the hand on press, before the drag starts", () => {
   expect(usageCss).toMatch(/\[data-usage-reorder\]:active \{ cursor: grabbing; \}/);
 });
 
+it("shows the normal arrow over a row until it is pressed", () => {
+  expect(usageCss).not.toMatch(/\[data-usage-reorder\] \{ cursor: grab; \}/);
+});
+
 it("keeps a 44 px hold band on the 20 px engine head", () => {
   expect(usageCss).toMatch(/\.usage-engine-head\[data-usage-reorder\]::before \{[^}]*inset: -12px 0;/);
 });
