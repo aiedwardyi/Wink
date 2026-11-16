@@ -14,6 +14,15 @@ import { addPerson, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts"
 import { listRoomFiles } from "./files.ts";
 import { hostRoomFiles, hostSend } from "./send.ts";
 
+const copying = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
+vi.mock("./send.ts", async (actual) => {
+  const real = await actual<typeof import("./send.ts")>();
+  return { ...real, hostRoomFiles: vi.fn(async (...args: Parameters<typeof real.hostRoomFiles>) => {
+    await copying.before?.();
+    return real.hostRoomFiles(...args);
+  }) };
+});
+
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
 const PDF = Buffer.from("%PDF-1.4\n% host doc\n");
 
@@ -23,6 +32,11 @@ let local: string;
 
 function routes(botCaller = false) {
   return createGroupRoutes({
+    broadcast: vi.fn(),
+    cancelGroupTurnOperations: vi.fn(),
+    closeOpenApprovals: vi.fn(),
+    publicGroupState: vi.fn(() => ({})),
+    taskResumes: { forgetThread: vi.fn() },
     store,
     sendSequencer: new SendSequencer(),
     resolveReplyTarget: () => undefined,
@@ -33,10 +47,10 @@ function routes(botCaller = false) {
   } as unknown as Parameters<typeof createGroupRoutes>[0]);
 }
 
-async function send(text: string, sendId = "send-0123456789abcdef", botCaller = false) {
+async function send(text: string, sendId = "send-0123456789abcdef", botCaller = false, made = routes(botCaller)) {
   const req = Readable.from([JSON.stringify({ text, sendId })]) as unknown as IncomingMessage;
   const res = { writeHead: vi.fn(), end: vi.fn() };
-  await routes(botCaller).postMessage(req, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
+  await made.postMessage(req, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
   return { status: res.writeHead.mock.calls[0][0] as number, body: JSON.parse(res.end.mock.calls[0][0]) };
 }
 
@@ -61,6 +75,7 @@ beforeEach(() => {
   configureRoomAsks({ store, hostName: () => "Edward", instance: () => null, dispatch: vi.fn(), stopTurn: vi.fn(async () => {}), endSession: vi.fn(async () => {}) });
 });
 afterEach(() => {
+  copying.before = null;
   configureRoomAsks(null);
   closeAsksDb();
   closeRoomsDb();
@@ -106,6 +121,24 @@ describe("the host's files in a room with people and bots", () => {
     const first = await hostRoomFiles(group, text, "send-retry-0123456789");
     expect(await hostRoomFiles(group, text, "send-retry-0123456789")).toEqual(first);
     expect(listRoomFiles(group.hosted.roomId, "Edward").files).toHaveLength(1);
+  });
+
+  it("refuses a retry whose file changed since its first copy", async () => {
+    const path = put("shot.png", PNG);
+    await hostRoomFiles(group, image(path), "send-changed-0123456789");
+    writeFileSync(path, Buffer.concat([PNG, PNG]));
+    await expect(hostRoomFiles(group, image(path), "send-changed-0123456789")).rejects.toMatchObject({ status: 409, code: "ROOM_FILE" });
+  });
+
+  it("keeps a Stop pressed while the files copy", async () => {
+    const made = routes();
+    const before = store.messagesFor(group.threadId).length;
+    copying.before = async () => {
+      const req = Readable.from([]) as unknown as IncomingMessage;
+      await made.interrupt(req, { writeHead: vi.fn(), end: vi.fn() } as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
+    };
+    expect(await send(image(put("shot.png", PNG)), undefined, false, made)).toMatchObject({ body: { cancelled: true } });
+    expect(store.messagesFor(group.threadId)).toHaveLength(before);
   });
 
   it("leaves a bot's own call as names", async () => {

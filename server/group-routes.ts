@@ -447,6 +447,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               return { ok: true as const, threadId, message: accepted.message, idle: idle() };
             }
           }
+          const stops = roomStops.get(group.id);
           const roomFileIds = group.hosted && !deps.botCaller?.(req) ? await hostRoomFiles(group as HostedGroup, text, sendId) : [];
           const current = store.group(group.id);
           if (!current) throw Object.assign(new Error("no such group"), { status: 404 });
@@ -455,7 +456,6 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          const stops = roomStops.get(current.id);
           const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard, roomFileIds);
           // a Stop during the steer await hands the line back, as a 1:1 Send now
           if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };

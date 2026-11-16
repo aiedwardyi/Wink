@@ -2,8 +2,8 @@
 // stream to disk, are fsynced, and only then get a row; a room reaches a blob
 // only through its row, so a crash leaves nothing the room can open.
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, existsSync, readdirSync, rmSync } from "node:fs";
-import { mkdir, open, rename, rm, stat, type FileHandle } from "node:fs/promises";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pipeline, type Readable } from "node:stream";
@@ -310,14 +310,24 @@ export async function saveRoomFile(req: IncomingMessage, roomId: string, upload:
 
 /** A file on this PC, taken in under the same checks and limits as an upload. */
 export async function copyRoomFile(path: string, roomId: string, upload: Upload): Promise<RoomFile> {
-  const size = await stat(path).then((info) => (info.isFile() ? info.size : null), () => null);
-  if (size === null) throw statusError(404, "file not found");
+  // opened before any await, so an unreadable file is a refusal, not an unhandled stream error
+  const handle = await open(path, "r").catch(() => null);
+  const size = handle && await handle.stat().then((info) => (info.isFile() ? info.size : null), () => null);
+  if (!handle || size === null) {
+    await handle?.close();
+    throw statusError(404, "file not found");
+  }
   const release = holdRoomFiles();
-  const body = createReadStream(path);
   try {
-    return await saveFile(body, size, roomId, upload);
+    const kept = withDb((db) => db.prepare(`SELECT ${FILE_COLUMNS} FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?`).get(roomId, upload.owner, upload.uploadId) as FileRow | undefined);
+    if (!kept) return await saveFile(handle.createReadStream({ autoClose: false }), size, roomId, upload);
+    // a retry reuses its earlier copy before asking the room for space again
+    const hash = createHash("sha256");
+    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk as Buffer);
+    if (hash.digest("hex") !== kept.sha256) throw statusError(409, "uploadId was used for another file");
+    return publicFile(kept);
   } finally {
-    body.destroy();
+    await handle.close();
     release();
   }
 }
