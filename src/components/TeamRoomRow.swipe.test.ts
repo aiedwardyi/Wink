@@ -67,6 +67,12 @@ beforeEach(() => {
   time = 0;
   phone = true;
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 392 });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.hasAttribute("data-team-room-transcript") ? 600 : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.hasAttribute("data-team-room-transcript") ? this.querySelectorAll("[data-mid]").length * 100 : 0;
+  });
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
     matches: query.includes("reduced-motion") ? false : query.includes("max-width") ? phone : query.includes("pointer: coarse"),
     addEventListener: () => {},

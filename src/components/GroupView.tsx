@@ -90,6 +90,8 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import { turnPresenceWaiting } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
@@ -228,9 +230,9 @@ const NO_JOINS: RoomJoin[] = [];
 export const Transcript = memo(function Transcript({
   group,
   members,
-  messages,
+  messages: listed,
   transcript,
-  streamingMessage,
+  streamingMessage: streamingRow,
   dock,
   onReply,
   onMessageMenu,
@@ -261,6 +263,9 @@ export const Transcript = memo(function Transcript({
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
+  const shownRows = useChatPeekRows();
+  const messages = useMemo(() => peekRows(listed, shownRows), [listed, shownRows]);
+  const streamingMessage = shownRows ? streamingRow : null;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const teamBotOf = (id?: string) => roomTeamBots(group).find((b) => b.id === id);
   const people = useMemo(() => {
@@ -950,11 +955,16 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group: live, hidden = false }: { group: Group; hidden?: boolean }) {
-  const archive = useGroupArchive(live.id);
+export const GroupView = memo(function GroupView({ group: live, hidden = false }: { group: Group; hidden?: boolean }) {
+  const preview = useChatPreview();
+  const peekSettled = useChatPeekSettled();
+  const phone = useIsPhone();
+  const compactWindow = preview || phone;
+  const heldArchive = useGroupArchive(live.id);
+  const archive = preview ? null : heldArchive;
   const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch, turnOrigin } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
   const stream = useStreaming();
   const streaming = stream.streaming[group.threadId];
@@ -973,7 +983,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
   // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
   const reaching = useRef(false);
   const touchTop = useRef(0);
-  const find = useSearchFindSeed(group.threadId);
+  const find = useSearchFindSeed(group.threadId, !preview);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     group.threadId,
@@ -998,9 +1008,10 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     setMenuThread(group.threadId);
     setMenu(null);
   }
-  useEffect(() => endSelectMode, [group.threadId]);
+  useEffect(() => preview ? undefined : endSelectMode, [group.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
+      if (preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1008,7 +1019,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind]);
+  }, [find.openFind, preview]);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -1075,21 +1086,27 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     start: number;
     end: number | null;
     expanded?: boolean;
+    size?: number;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(group.messages.length, TRANSCRIPT_TAIL_SIZE, renders),
+    start: tailWindowStart(group.messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders),
     end: null,
+    size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
   }));
+  const windowSize = transcriptWindow.size ?? TRANSCRIPT_WINDOW_SIZE;
+  const tailSize = transcriptWindow.size ?? TRANSCRIPT_TAIL_SIZE;
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders), end: null, size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined });
   }
+  if (!compactWindow && windowSize < TRANSCRIPT_WINDOW_SIZE) setTranscriptWindow((w) => ({ ...w, size: TRANSCRIPT_WINDOW_SIZE }));
   const [windowTerminal, setWindowTerminal] = useState(terminal);
   if (windowTerminal !== terminal) {
     setWindowTerminal(terminal);
     setTranscriptWindow({
       key: transcriptKey,
-      start: tailWindowStart(shown.length, TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], showToolCalls, showActivities)),
+      start: tailWindowStart(shown.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], showToolCalls, showActivities)),
       end: null,
+      size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
     });
   }
   // The window is index-based, so an older page landing on top shifts it.
@@ -1117,9 +1134,9 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     endIndex,
   } = useMemo(
     () => resolveTranscriptWindow(shown, follow && !jump.messages
-      ? followedWindow(transcriptWindow, shown.length, TRANSCRIPT_WINDOW_SIZE, renders).start
-      : transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
-    [shown, follow, jump.messages, renders, transcriptWindow],
+      ? followedWindow(transcriptWindow, shown.length, windowSize, renders).start
+      : transcriptWindow.start, windowSize, transcriptWindow.end),
+    [shown, follow, jump.messages, renders, transcriptWindow, windowSize],
   );
 
   const setBottomFollow = useCallback((next: boolean) => {
@@ -1140,12 +1157,12 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
   const docked = useReplyDock(listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
   const dockSlot = docked?.slot;
   const dockLive = docked?.live ?? false;
-  const lastUserAt = group.messages.findLast((m) => m.role === "user")?.at;
+  const since = turnOrigin(group.threadId);
   const dock = useMemo<ReplyDock | null>(() => dockSlot ? {
     slot: dockSlot,
     live: dockLive,
     label: activityLabel,
-    since: noReply ? undefined : lastUserAt,
+    since: noReply ? undefined : since,
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     avatar: (
@@ -1158,7 +1175,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
         trackPointer={false}
       />
     ),
-  } : null, [dockSlot, dockLive, activityLabel, lastUserAt, noReply, presenceSpeaker, group.name, toolInFlight]);
+  } : null, [dockSlot, dockLive, activityLabel, since, noReply, presenceSpeaker, group.name, toolInFlight]);
 
   // the window holding a focus target commits before useFocusMessage scrolls
   const appliedFocus = useRef<number | null>(null);
@@ -1167,7 +1184,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
   const { open: openJump, close: closeJump } = jump;
   useEffect(() => {
     const focus = state.focusMessage;
-    if (!focus || focus.consumed || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
+    if (preview || !focus || focus.consumed || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
     const liveIndex = group.messages.findIndex((message) => message.id === focus.messageId);
     const list = liveIndex >= 0 ? group.messages : shown;
     const targetIndex = liveIndex >= 0 ? liveIndex : shown.findIndex((message) => message.id === focus.messageId);
@@ -1193,22 +1210,28 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     setBottomFollow(false);
     if (switching || next !== current) setTranscriptWindow({ key: transcriptKey, ...next, expanded: next.end === null });
     setFocusWindowNonce(focus.nonce);
-  }, [closeJump, endIndex, group.hasMore, group.messages, group.threadId, openJump, setBottomFollow, showActivities, showToolCalls, shown, startIndex, state.focusMessage, transcriptKey, transcriptWindow.end]);
+  }, [closeJump, endIndex, group.hasMore, group.messages, group.threadId, openJump, setBottomFollow, showActivities, showToolCalls, shown, startIndex, state.focusMessage, transcriptKey, transcriptWindow.end, preview]);
   const focusPaging =
     Boolean(group.hasMore) &&
     state.focusMessage?.threadId === group.threadId &&
     !shown.some((message) => message.id === state.focusMessage?.messageId);
-  useFocusMessage(group.threadId, shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
+  useFocusMessage(group.threadId, !preview && shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
   useEffect(() => {
-    if (!follow || jump.messages || followedWindow(transcriptWindow, group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders) === transcriptWindow) return;
-    setTranscriptWindow((w) => followedWindow(w, group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders));
-  }, [follow, jump.messages, group.messages.length, renders, transcriptWindow]);
+    if (!follow || jump.messages || followedWindow(transcriptWindow, group.messages.length, windowSize, renders) === transcriptWindow) return;
+    setTranscriptWindow((w) => followedWindow(w, group.messages.length, windowSize, renders));
+  }, [follow, jump.messages, group.messages.length, renders, transcriptWindow, windowSize]);
   // A plain tail holds at least the newest window of visible rows - see ChatView.
-  const tailStart = useMemo(() => tailWindowStart(group.messages.length, TRANSCRIPT_TAIL_SIZE, renders), [group.messages.length, renders]);
+  const tailStart = useMemo(() => tailWindowStart(group.messages.length, tailSize, renders), [group.messages.length, renders, tailSize]);
 
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
   // `follow` is intentionally omitted - see ChatView.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (transcriptWindow.size === undefined || !el || !followRef.current) return;
+    el.scrollTo({ top: el.scrollHeight });
+    previousScrollTop.current = el.scrollTop;
+  }, [group.id, group.threadId, windowSize, transcriptWindow.size, startIndex]);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
@@ -1244,12 +1267,18 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
 
   // A plain tail too short to scroll pages older rows in until it fills or the thread runs out.
   // A widening window still to commit is not short of rows.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!peekSettled || windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
+    const size = Math.min(TRANSCRIPT_WINDOW_SIZE, windowSize * 2);
+    setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(group.messages.length, size, renders) }));
+  }, [peekSettled, windowSize, startIndex, group.messages.length, renders, jump.messages, transcriptWindow, underfilled]);
   const fillPaging =
-    Boolean(group.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart;
+    Boolean(group.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart && (windowSize >= TRANSCRIPT_WINDOW_SIZE || startIndex === 0);
   useEffect(() => {
     const el = scrollRef.current;
-    if (fillPaging && el && transcriptUnderfilled(el)) loadOlder();
-  }, [fillPaging, loadOlder, underfilled]);
+    if (!preview && fillPaging && el && transcriptUnderfilled(el)) loadOlder();
+  }, [fillPaging, loadOlder, underfilled, preview]);
 
   const preExpandScroll = useRef<TranscriptScroll | null>(null);
   const expandEarlier = (onFail: () => void, beforeCommit: () => boolean, pages: number) => {
@@ -1294,7 +1323,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1328,7 +1357,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
     <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
-      <GroupCallOverlay group={group} members={members} />
+      {!preview && <GroupCallOverlay group={group} members={members} />}
       <div
         className={cn(
           // md:min-h-18 matches the 1:1 header's 48px avatar row, so switching never jumps
@@ -1340,7 +1369,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
           <RoomTitle name={group.name} picture={<RoomPicture key={group.id} src={group.hosted && roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
+        <div data-no-swipe className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
           <RoomAlertsBell chat={group.id} />
@@ -1369,13 +1398,15 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
           onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
         />
       ) : (
-        <PinnedBanner
-          bot={{ name: t("chrome.aBot"), threadId: group.threadId, hasMore: group.hasMore }}
-          pinnedId={group.pinnedMessageId}
-          messages={group.messages}
-          onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
-          onUnpin={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
-        />
+        <div data-no-swipe className="contents">
+          <PinnedBanner
+            bot={{ name: t("chrome.aBot"), threadId: group.threadId, hasMore: group.hasMore }}
+            pinnedId={group.pinnedMessageId}
+            messages={group.messages}
+            onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
+            onUnpin={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
+          />
+        </div>
       )}
 
       <ReconnectingCue />
@@ -1384,6 +1415,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
       <div
         ref={scrollRef}
         data-orbit-transcript
+        data-compact-transcript={compactWindow && transcriptWindow.size !== undefined && !transcriptWindow.expanded || undefined}
         data-room-transcript
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
@@ -1439,7 +1471,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
           setMenu({ kind: "selection", x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" });
         }}
       >
-        {setupPending ? (
+        {preview && group.messages.length === 0 ? null : setupPending ? (
           <div
             className="flex min-h-full w-full items-center px-5 py-8"
             style={{ paddingBottom: TRANSCRIPT_GAP }}
@@ -1457,7 +1489,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
         >
           {group.messages.length === 0 && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
-              <div className="flex -space-x-2">
+              <div data-no-swipe className="flex -space-x-2">
                 {members.slice(0, 3).map((b) => (
                   <BotAvatar
                     key={b.id}
@@ -1476,7 +1508,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
               </div>
             </div>
           )}
-          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (
+          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (!preview || group.messages.length > 0) && (
             <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
@@ -1528,7 +1560,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
               instant={responding}
               quiet={noReply?.quiet}
               wrap={Boolean(noReply)}
-              since={noReply ? undefined : lastUserAt}
+              since={noReply ? undefined : since}
             />
           )}
           <div ref={setHeldSlot} className="contents" />
@@ -1547,6 +1579,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
       )}
 
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
+      <ChatPeekPart part="composer">
       {archive ? (
         <GroupArchiveBar />
       ) : (
@@ -1560,7 +1593,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
               busy={roomRecoveryBusy(group, recoveryBot.busy)}
             />
           )}
-          <CallWidgetSlot className="px-3 pb-2 md:hidden" />
+          {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
           <WakeChips botIds={group.memberIds} threadId={group.threadId} />
           <Composer
             key={group.threadId}
@@ -1572,6 +1605,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
               sceneSend.current?.();
             }}
             locked={setupPending}
+            focusBlocked={preview}
             replyTo={replyTo}
             onClearReply={clearReply}
             onConsumeReply={consumeReply}
@@ -1580,9 +1614,10 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
           />
         </>
       )}
+      </ChatPeekPart>
       </div>
       </div>
     </main>
     </MediaViewerProvider>
   );
-}
+});

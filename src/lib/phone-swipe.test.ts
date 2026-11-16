@@ -16,7 +16,7 @@ import {
   neighborId,
   saveVibration,
   sheetSwipeCloses,
-  swipeBotIds,
+  swipeChatIds,
   swipeBlocked,
   swipeStep,
   vibrationEnabled,
@@ -157,9 +157,9 @@ describe("dragOffset", () => {
   });
 });
 
-describe("swipeBotIds", () => {
+describe("swipeChatIds", () => {
   const work = userSectionId("Work");
-  const order = { sectionOrder: ["unassigned", work], itemOrder: { unassigned: ["bot:b", "bot:a"], [work]: ["bot:d", "bot:c"] } };
+  const order = { sectionOrder: ["unassigned", work], itemOrder: { unassigned: ["bot:b", "group:room", "bot:a"], [work]: ["bot:d", "bot:c"] } };
   const bots = [
     { id: "a" },
     { id: "b" },
@@ -170,12 +170,12 @@ describe("swipeBotIds", () => {
     { id: "older", hidden: true },
   ];
 
-  it("lists bots in sidebar order with sections and tiers, skipping rooms and archived bots", () => {
-    expect(swipeBotIds(bots, [{ id: "room" }], order, "a")).toEqual(["e", "b", "a", "d", "c"]);
+  it("lists bots and rooms in sidebar order with sections and tiers, skipping archived bots", () => {
+    expect(swipeChatIds(bots, [{ id: "room" }], order, "a")).toEqual(["e", "b", "room", "a", "d", "c"]);
   });
 
   it("moves between archived bots from an archived bot", () => {
-    expect(swipeBotIds(bots, [], order, "old")).toEqual(["old", "older"]);
+    expect(swipeChatIds(bots, [{ id: "room" }], order, "old")).toEqual(["old", "older"]);
   });
 });
 
@@ -405,7 +405,7 @@ describe("usePhoneSwipe", () => {
     expect((document.querySelector("#stage") as HTMLElement).style.transform).toBe("");
   });
 
-  it("moves the menu button with the chat through a drag and its snap back", () => {
+  it("moves the menu button with the chat through a drag and its snap back", async () => {
     const menu = document.createElement("button");
     document.body.append(menu);
     const rider = { current: menu };
@@ -416,13 +416,15 @@ describe("usePhoneSwipe", () => {
     act(() => root.render(createElement(Ridden)));
     const stage = document.querySelector<HTMLElement>("#stage")!;
     [[300, 200], [280, 200], [240, 200]].forEach(([x, y], index) => touch(index ? "touchmove" : "touchstart", x!, y!, index * 16));
+    await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
     expect(stage.style.transform).toMatch(/^translateX\(-\d/);
     expect(menu.style.transform).toBe(stage.style.transform);
     touch("touchcancel", 0, 0, 48);
     expect(stage.style.transform).toBe("");
     expect(menu.style.transform).toBe("");
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
-    expect(app).toContain('dispatch({ type: "select", id }), menuButtonRef, swipeOrder);');
+    expect(app).toContain("usePhoneSwipe(id, enabled, select, rider, order, showPeek);");
+    expect(app).toContain("rider={menuButtonRef} order={swipeOrder} onSelect={selectSwipe}");
   });
 
   it("stops at the last bot", () => {
@@ -459,9 +461,9 @@ describe("usePhoneSwipe", () => {
 
   it("is turned off by the open drawer in App", () => {
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
-    const overlay = app.slice(app.indexOf("const nativeViewOverlayOpen ="), app.indexOf("const swipeStageRef"));
+    const overlay = app.slice(app.indexOf("const nativeViewOverlayOpen ="), app.indexOf("const swipeChatId"));
     expect(overlay).toContain("drawerOpen ||");
-    expect(app).toContain("usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen,");
+    expect(app).toContain("enabled={!terminalOpen && !nativeViewOverlayOpen}");
   });
 
   it("rebinds after the stage node is replaced (e.g. Back from another view)", () => {

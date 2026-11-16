@@ -27,7 +27,7 @@ export function RoomNotice({ base, line, text, onJump }: { base: string; line?: 
     } catch {}
   };
   return (
-    <div data-room-notice className="w-full shrink-0 px-5 pt-1">
+    <div data-room-notice data-no-swipe className="w-full shrink-0 px-5 pt-1">
       <div className="mx-auto mb-2 flex max-w-[48rem] items-start gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
         <Megaphone size={14} className="mt-[3px] shrink-0 text-accent" />
         <button

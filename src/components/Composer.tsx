@@ -84,11 +84,13 @@ import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } 
 import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
+import { useChatPreview } from "@/lib/chat-preview";
 import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
@@ -248,6 +250,9 @@ export function Composer({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
+  const preview = useChatPreview();
+  const phone = useIsPhone();
+  const nativeSizing = phone && window.CSS?.supports?.("field-sizing", "content") === true;
   const { capabilities } = useDesktopCapabilities();
   const rainbow = useRainbowBox();
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
@@ -366,6 +371,7 @@ export function Composer({
   // an upload chip with no job is from before a reload.
   const jobs = useSyncExternalStore(onUploadJobs, uploadJobs, uploadJobs);
   useEffect(() => {
+    if (preview) return;
     for (const a of attachments) if ((a.kind === "file" || a.kind === "image") && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
     const changed = attachments.filter((a) => {
       const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
@@ -381,7 +387,7 @@ export function Composer({
       }),
     );
     for (const a of changed) if (jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
-  }, [attachments, jobs, setAttachments]);
+  }, [attachments, jobs, setAttachments, preview]);
   const shownAttachments = useMemo(
     () =>
       attachments.map((a): Attachment => {
@@ -503,7 +509,7 @@ export function Composer({
   const baseText = useRef("");
 
   useEffect(() => {
-    if (!bot || focusBlocked || state.composerFocusBotId !== bot.id) return;
+    if (preview || !bot || focusBlocked || state.composerFocusBotId !== bot.id) return;
     const active = document.activeElement;
     if (active instanceof Element && active.closest('[role="dialog"][aria-modal="true"]')) return;
     const input = inputRef.current;
@@ -511,24 +517,24 @@ export function Composer({
     if (!composerNeedsTap()) input.focus();
     requestBotPrewarm(bot.id);
     dispatch({ type: "composerFocused", botId: bot.id });
-  }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId]);
+  }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId, preview]);
 
   useEffect(() => {
-    if (peopleRoom) focusComposerOnActivation({ composer: inputRef.current });
-  }, [peopleRoom]);
+    if (peopleRoom && !preview) focusComposerOnActivation({ composer: inputRef.current });
+  }, [peopleRoom, preview]);
 
   // Reply chip alone leaves the cursor wherever it was, so a reply looks
   // picked but the user still has to click the box before typing. A failed
   // send restores replyTo, so this can also fire long after the click, with the
   // palette or a modal open, and has to yield the same way autofocus does.
   useEffect(() => {
-    if (!replyTo || focusBlocked || composerNeedsTap()) return;
+    if (preview || !replyTo || focusBlocked || composerNeedsTap()) return;
     const active = document.activeElement;
     if (active instanceof Element && active.closest('[role="dialog"][aria-modal="true"]')) return;
     const input = inputRef.current;
     if (!input || input.disabled) return;
     input.focus();
-  }, [focusBlocked, locked, replyTo]);
+  }, [focusBlocked, locked, replyTo, preview]);
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
@@ -549,7 +555,7 @@ export function Composer({
   const draftRefusalGone = refused !== undefined &&
     (!attachments.some((attachment) => attachment.kind === "image") || imageTargetsSupport(text, refused.after, replyTo ?? null) === "supported");
   const shownImageNotice = draftRefusalGone ? null : visibleComposerNotice(imageNotice, threadId);
-  const catchingUp = useCatchingUp(bot && !group ? threadId : null);
+  const catchingUp = useCatchingUp(!preview && bot && !group ? threadId : null);
   const showImageSupportNotice = (support: ReturnType<typeof imageTargetsSupport>, draft?: { after: boolean }) => {
     const text = imageSupportNotice(support, {
       unsupported: t("composer.imageUnsupported"),
@@ -594,7 +600,7 @@ export function Composer({
     });
   }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
   const pickerOpen = candidates.length > 0;
-  useBackLayer(pickerOpen, () => setDismissedAt(mention?.start ?? null));
+  useBackLayer(!preview && pickerOpen, () => setDismissedAt(mention?.start ?? null));
   const pickerRef = useRef<HTMLDivElement>(null);
   const mentionStart = mention?.start ?? null;
   useEffect(() => {
@@ -610,8 +616,10 @@ export function Composer({
 
   useEffect(() => {
     const el = inputRef.current;
-    if (el) fitComposerHeight(el, parseFloat(getComputedStyle(el).lineHeight) || 24);
-  }, [text]);
+    if (!el) return;
+    if (nativeSizing) el.style.height = "";
+    else fitComposerHeight(el, parseFloat(getComputedStyle(el).lineHeight) || 24);
+  }, [text, nativeSizing]);
 
   const pickMention = (peer: MentionChoice) => {
     if (!mention) return;
@@ -638,7 +646,7 @@ export function Composer({
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );
   const queuedRef = useRef<QueuedGroupSend[]>(queued);
-  const holdsRoom = Boolean(group);
+  const holdsRoom = Boolean(group) && !preview;
   useEffect(() => (holdsRoom ? claimRoomHolds(draftId) : undefined), [holdsRoom, draftId]);
   const roomFlushLock = useRef(false);
   const mountedRef = useRef(true);
@@ -919,7 +927,7 @@ export function Composer({
     }
   };
   useEffect(() => {
-    if (!group) return;
+    if (preview || !group) return;
     if (locked) return;
     if (busy) {
       roomFlushLock.current = false;
@@ -953,7 +961,7 @@ export function Composer({
         commitQueued(rearmRoomFlushHold(queuedRef.current));
       },
     });
-  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, locked]);
+  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, locked, preview]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
@@ -1332,6 +1340,7 @@ export function Composer({
           ref={setComposerRef}
           data-orbit-composer=""
           rows={1}
+          style={nativeSizing ? { fieldSizing: "content" } : undefined}
           value={text}
           onChange={(e) => {
             pasteUndo.current = null;

@@ -455,7 +455,7 @@ describe("wiring", () => {
     }
     const roomPinDeps =
       groupView.match(
-        /el\.scrollTo\(\{\s*top:\s*el\.scrollHeight\s*\}\);\s*previousScrollTop\.current\s*=\s*el\.scrollTop;\s*\},\s*\[([^\]]*)\]\)/,
+          /useEffect\(\(\) => \{\s*const el = scrollRef\.current;\s*if \(!el \|\| !followRef\.current\) return;\s*el\.scrollTo\(\{\s*top:\s*el\.scrollHeight\s*\}\);\s*previousScrollTop\.current\s*=\s*el\.scrollTop;\s*\},\s*\[([^\]]*)\]\)/,
       )?.[1] ?? "";
     expect(roomPinDeps).toContain("group.messages.length");
     expect(roomPinDeps).toContain("streaming");

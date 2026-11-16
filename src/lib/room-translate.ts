@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 
 import { request } from "./api-request";
+import { useChatPreview } from "./chat-preview";
 import type { LocaleId } from "./i18n";
 
 export function alreadyInLanguage(text: string, lang: LocaleId): boolean {
@@ -16,12 +17,13 @@ export function translateLine(base: string, entryId: string, lang: LocaleId): Pr
 }
 
 export function useTranslationAvailable(base: string): boolean {
+  const preview = useChatPreview();
   const { state } = useStore();
   // A usage report lands on every bot turn and cannot change whether an engine translates.
   const engines = useMemo(() => JSON.stringify([state.config?.gemini?.configured, state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance)]), [state.instances, state.config?.gemini?.configured]);
   const [answer, setAnswer] = useState({ base, available: false });
   useEffect(() => {
-    if (!base) return;
+    if (preview || !base) return;
     let current = true;
     const check = () => {
       void request(`${base}/translate`).then((body) => { if (current) setAnswer({ base, available: body.available === true }); }, () => { if (current) setAnswer({ base, available: false }); });
@@ -29,8 +31,8 @@ export function useTranslationAvailable(base: string): boolean {
     check();
     window.addEventListener("focus", check);
     return () => { current = false; window.removeEventListener("focus", check); };
-  }, [base, engines]);
-  return answer.base === base && answer.available;
+  }, [base, engines, preview]);
+  return !preview && answer.base === base && answer.available;
 }
 
 type Translation = { key: string; visible: boolean; pending: boolean; failed: boolean; text?: string };
