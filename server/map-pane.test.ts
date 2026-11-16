@@ -343,7 +343,10 @@ async function open(workers: MapPaneRecord[]) {
 it("reopens on the last snapshot and file list at once, then sends the fresh read", async () => {
   const { root, base } = repo();
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
-  const feature = createMapPane({ panes: async () => [{ sessionId: "pane-a", cwd: root, label: "ALPHA", baseHead: base }], subscribe: () => () => {} });
+  const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
+  roots.push(folder);
+  writeFileSync(join(folder, "a.txt"), "x\n");
+  const feature = createMapPane({ panes: async () => [{ sessionId: "pane-a", cwd: root, label: "ALPHA", baseHead: base }, { sessionId: "pane-b", cwd: folder, label: "PLAIN" }], subscribe: () => () => {} });
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
     if (url.pathname === "/live") streams.push(res);
@@ -365,16 +368,19 @@ it("reopens on the last snapshot and file list at once, then sends the fresh rea
     return { next, close: () => abort.abort() };
   };
   const paths = (data: MapSnapshot) => data.workers[0].files.map(file => file.path);
-  const listed = () => fetch(`${url}/repo?worker=pane-a`).then(res => res.json());
+  const listed = (worker = "pane-a") => fetch(`${url}/repo?worker=${worker}`).then(res => res.json());
   const first = await live();
   expect(paths(await first.next())).toEqual(["file.ts"]);
   expect(await listed()).toMatchObject({ paths: ["file.ts"] });
+  expect(await listed("pane-b")).toMatchObject({ paths: ["a.txt"] });
   first.close();
   await vi.waitFor(async () => expect((await fetch(`${url}/repo?worker=pane-a`)).status).toBe(404));
   writeFileSync(join(root, "added.ts"), "const added = 1;\n");
+  writeFileSync(join(folder, "b.txt"), "x\n");
   const again = await live();
   expect(paths(await again.next())).toEqual(["file.ts"]);
   expect(await listed()).toMatchObject({ paths: ["file.ts"] });
+  expect(await listed("pane-b")).toMatchObject({ paths: ["a.txt", "b.txt"] });
   expect((await fetch(`${url}/file?worker=pane-a&path=file.ts`)).status).toBe(200);
   expect(paths(await again.next())).toEqual(["file.ts", "added.ts"]);
   await vi.waitFor(async () => expect(await listed()).toMatchObject({ paths: ["added.ts", "file.ts"] }));

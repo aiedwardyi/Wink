@@ -67,7 +67,11 @@ export function createMapPane(deps: MapPaneDeps) {
       resend = error;
       const snapshot: MapSnapshot = { workers: [...panes.values()].map(value => value.worker) };
       if (error) snapshot.error = true;
-      else known.set(botId, panes);
+      else {
+        known.set(botId, panes);
+        const roots = new Set([...known.values()].flatMap(seen => [...seen.values()].map(record => record.root)));
+        for (const root of lists.keys()) if (!roots.has(root)) lists.delete(root);
+      }
       write(snapshot);
     };
     const write = (snapshot: MapSnapshot) => {
@@ -188,10 +192,10 @@ export function createMapPane(deps: MapPaneDeps) {
     if (route === "repo") {
       if (!record) return json(res, 404, { error: "No such worker" });
       const { root } = record;
-      const read = (record.base ? mapRepoFiles(root) : root ? mapWalkFiles(root) : Promise.resolve([])).then(paths => { lists.set(root, paths); return paths; });
-      // The list drifts mostly by the worker's own edits, which Map adds from the snapshot: the last list paints at once, this read serves the next open.
+      const read = (record.base ? mapRepoFiles(root) : root ? mapWalkFiles(root) : Promise.resolve([])).then(paths => { if (record.base) lists.set(root, paths); return paths; });
+      // A Git list drifts mostly by the worker's own edits, which Map adds from the snapshot: the last list paints at once, this read serves the next open.
       const last = lists.get(root);
-      if (last) { read.catch(() => {}); return json(res, 200, { name: basename(root), paths: last }); }
+      if (last) { read.catch(() => lists.delete(root)); return json(res, 200, { name: basename(root), paths: last }); }
       try { return json(res, 200, { name: basename(root), paths: await read }); }
       catch { return json(res, 503, { error: "Could not list the files" }); }
     }
