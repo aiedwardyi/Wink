@@ -1596,7 +1596,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} />
+          <ShowPaneButton threadId={bot.threadId} live={workers.some((shown) => shown.state === "working" || shown.state === "waiting")} />
 
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
         </div>
