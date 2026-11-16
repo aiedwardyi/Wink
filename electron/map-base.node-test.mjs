@@ -15,6 +15,7 @@ test("captures launch HEAD and persists it while tolerating older pane records",
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8" }).trim();
     assert.equal(await mapBase(root), null);
     git("init", "-q");
+    assert.equal(await mapBase(root), "4b825dc642cb6eb9a060e54bf8d69288fbee4904");
     fs.writeFileSync(path.join(root, "a.txt"), "before\n");
     git("add", ".");
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial");

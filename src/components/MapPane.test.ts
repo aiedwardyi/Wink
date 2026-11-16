@@ -97,6 +97,18 @@ it("uses plain empty and non-git lines in both languages", async () => {
   expect([...host.querySelectorAll(".map-tree-file")].map(row => row.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts", "README.md", "b.ts"]);
 });
 
+it("lists a folder without git again each time its worker writes in it", async () => {
+  const paths = ["01.md"];
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "notes", paths: [...paths] }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  const plain = { id: "p", nick: "PLAIN", git: false, files: [], editedAt: 0 };
+  await emit([plain]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("1 files · Not a git foldernotes / PLAIN");
+  paths.push("02.md");
+  await emit([{ ...plain, editedAt: 5 }]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("2 files · Not a git foldernotes / PLAIN");
+});
+
 it("requests only the selected file and recovers from a failed diff", async () => {
   const read = vi.mocked(fetch);
   const reply = read.getMockImplementation()!;
