@@ -1,4 +1,5 @@
 import { chatErrorText } from "@/lib/error-text";
+import { lateReportText } from "@/lib/late-report";
 import { ErrorDetails } from "./ErrorDetails";
 import { AppErrorBanner } from "./AppErrorBanner";
 import { Fold } from "./Fold";
@@ -369,7 +370,7 @@ function NoteReport({ note }: { note: PaneNote }) {
   return (
     <>
       {note.status && <div className="font-medium text-ink">{t(NOTE_STATUS_KEY[note.status])}</div>}
-      {noteText(note, t)}
+      {lateReportText(noteText(note, t), t)}
     </>
   );
 }

@@ -135,6 +135,7 @@ export interface Message {
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
   text?: string;
+  mailbox?: { key: string };
   /** Versioned model-context state. Unknown versions stay intact on disk. */
   compaction?: unknown;
   card?: OptionCardData;
@@ -2154,6 +2155,8 @@ export class Store {
     const followed = follow && !bot.busy && current !== threadId
       && (empty || newest(messages, -Infinity) > newest(this.messagesFor(current), this.activeTask(botId)?.createdAt ?? 0));
     const t = this.thread(threadId);
+    const receipts = new Map(t.messages.filter(message => message.mailbox).map(message => [message.id, message.mailbox]));
+    messages = messages.map(message => receipts.has(message.id) ? { ...message, mailbox: receipts.get(message.id) } : message);
     const before = new Map(t.messages.map((m) => [m.id, JSON.stringify(m)]));
     mdb.replaceThread(threadId, messages, activeLeafId);
     t.messages = messages;

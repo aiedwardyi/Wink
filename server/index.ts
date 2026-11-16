@@ -309,7 +309,9 @@ import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
-import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
+import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
+import { receiveMailboxPost } from "./mailbox-delivery.ts";
+import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
 import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
@@ -1077,6 +1079,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const mailboxReceipts = createMailboxReceipts();
 roomFixes = createRoomFixes({
   dataDir: DATA_DIR,
   store,
@@ -2537,6 +2540,7 @@ function pageSize(raw: string | null): number | null | undefined {
 
 /** HTTP copy of a transcript row - bot-authored secrets are redacted; the stored row is unchanged. */
 function clientMessage(message: Message): Message {
+  if (message.mailbox) { const { mailbox: _mailbox, ...publicMessage } = message; message = publicMessage; }
   if (message.tool?.usageWait) {
     const wait = message.tool.usageWait;
     message = { ...message, tool: { ...message.tool, usageWait: { ...wait, cancelable: wait.ownerDeviceId === profileSyncSettings.deviceId && Boolean(limitWaits.store.get(wait.id)) } } };
@@ -7998,32 +8002,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // itself never starts a turn: a busy teacher has it steered into its live
     // turn, else paneWake may start one once the teacher is idle.
     if (method === "POST" && path === "/api/mailbox") {
-      const scope = mailboxScope(req.headers, MAILBOX_SECRET);
-      if (!scope.ok) return json(res, 401, { error: scope.error });
-      const body = await readMailboxBody(req);
-      if (!body.ok) return json(res, body.status, { error: body.error });
-      const parsed = mailboxPostSchema.safeParse(body.value);
-      if (!parsed.success) return json(res, 400, { error: "invalid mailbox message" });
-      refreshCodexPromo(parsed.data.text, usageBoard.touch);
-      const source = mailboxRecipient(store.bots, scope);
-      if (!source) return json(res, 404, { error: "no such bot" });
-      let kind = parsed.data.kind;
-      if (kind === "auto") {
-        if (await deferMailboxAuto(terminalBridgeAccess, scope, parsed.data.text)) return json(res, 200, { ok: true, deferred: true });
-        // No watcher to hand it to: store it now like a plain note, a duplicate beats a lost wake.
-        kind = undefined;
-      }
-      const label = await paneLabel(terminalBridgeAccess, scope.bot, scope.pane);
-      const note = mailboxNoteText(scope.pane, source.name || source.id, source.id, parsed.data.text, label);
-      if (!note) return json(res, 400, { error: "empty message" });
-      if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind, parsed.data.text);
-      if (kind === "report") usageStats.workerReported(scope.pane, parsed.data.text);
-      const message = store.appendMessage(source.threadId, { role: "bot", kind: "note", text: note, origin: profileSyncSettings.deviceId });
-      if (kind === "report") void unlandedWork.refresh(source.id, source.threadId);
-      if (source.notifications !== false) phonePing(source.id, pingForMailbox(source.name || source.id, parsed.data.text, botNotifyIconPath(source)), { botId: source.id, threadId: source.threadId });
-      if (kind !== "report") void raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
-      void noteSteer.noteArrived(source.id, source.threadId, scope.pane);
-      return json(res, 200, { ok: true, id: message.id });
+      const result = await receiveMailboxPost(req, {
+        secret: MAILBOX_SECRET, store, receipts: mailboxReceipts, origin: profileSyncSettings.deviceId,
+        label: scope => paneLabel(terminalBridgeAccess, scope.bot, scope.pane),
+        auto: (scope, text, identity) => deferMailboxAuto(terminalBridgeAccess, scope, text, undefined, identity),
+        attention: (scope, kind, text) => raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind, text),
+        reported: (scope, text, source) => { usageStats.workerReported(scope.pane, text); void unlandedWork.refresh(source.id, source.threadId); },
+        refresh: text => refreshCodexPromo(text, usageBoard.touch),
+        notify: (source, text) => phonePing(source.id, pingForMailbox(source.name || source.id, text, botNotifyIconPath(source)), { botId: source.id, threadId: source.threadId }),
+        arrived: (scope, source) => { void noteSteer.noteArrived(source.id, source.threadId, scope.pane); },
+      });
+      return json(res, result.status, result.body);
     }
     if (path.startsWith("/api/") && !(method === "GET" && path === "/api/health") && !credentials.phoneSession &&
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)) {
