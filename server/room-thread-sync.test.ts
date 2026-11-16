@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { createGroupRoutes } from "./group-routes.ts";
+import { closeMessageDb } from "./message-db.ts";
 import { createRoomThreads } from "./room-thread-sync.ts";
 import { Store } from "./store.ts";
 import { syncHold } from "./sync-hold.ts";
+import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 
 const OWN = "own-writer";
 
@@ -97,5 +99,29 @@ describe("room chats from another PC", () => {
     const message = { id: "m1", role: "bot", kind: "text", text: "", createdAt: 1, card } as unknown as Parameters<typeof rooms.outgoing>[0];
     expect(rooms.outgoing(message).card?.routineRequest?.botId).toBe("sync-atlas");
     expect(rooms.incoming(rooms.outgoing(message)).card?.routineRequest?.botId).toBe(atlas.id);
+  });
+
+  it("keeps what was typed into a room thread after a peer's delete through a restart", async () => {
+    const boot = () => {
+      const store = new Store(() => ({ instanceId: "fake", model: "m" }));
+      const rooms = createRoomThreads({ store, botMap: () => ({}), syncId: (botId) => botId });
+      const sync = createThreadSyncV2Store({
+        store, dataDir: DATA_DIR, deviceId: "local", folder: () => null, enabled: () => true, target: (threadId) => rooms.target(threadId),
+        bots: () => [], running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {}, rooms,
+      })!;
+      return { store, rooms, sync };
+    };
+    let pc = boot();
+    const group = pc.store.createGroup("Plans", []);
+    pc.store.appendMessage(group.threadId, { role: "user", kind: "text", text: "before" });
+    pc.rooms.apply(group.id, group.threadId, [{ cursor: 1, kind: "delete", rowId: "", value: { deletedAt: 1 }, conflict: false }]);
+    pc.store.appendMessage(group.threadId, { role: "user", kind: "text", text: "after" });
+    pc.sync.stop();
+    await pc.sync.close();
+    closeMessageDb();
+    pc = boot();
+    expect(pc.store.messagesFor(group.threadId).map((message) => message.text)).toEqual(["after"]);
+    pc.sync.stop();
+    await pc.sync.close();
   });
 });

@@ -343,6 +343,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       }
       engine.commit(task, outgoing, undefined, (db) => {
         write();
+        // a local write revives a deleted thread, so a restart must not replay the delete
+        if (task.deleted && outgoing.some((mutation) => mutation.kind !== "delete")) {
+          db.prepare("UPDATE sync_v2_store SET deleted = 0 WHERE threadId = ?").run(threadId);
+          task.deleted = 0;
+        }
         for (const mutation of outgoing) {
           if (mutation.kind === "metadata") {
             db.prepare("UPDATE sync_v2_store SET title = ?, createdAt = ?, deleted = 0 WHERE threadId = ?")
