@@ -15,8 +15,9 @@ import { loadScene, sceneOf, type SceneId } from "./ChatScene";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["neon-grid", "samurai-ink", "night-rain", "warp", "circuit", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "dim-sand", "lagoon", "snow", "wink-day", "notebook"];
-const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand", "lagoon", "lagoon-night", "snow", "snow-night", "neon-grid", "samurai-ink", "night-rain", "warp", "circuit"]);
+// Newest release first: the grid opens on these, ahead of the older featured themes. Precision Dimmed stays under More themes.
+const NEW_SKIN_IDS: readonly SkinId[] = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night", "precision-dimmed", "bronze", "dim-sand"];
+const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook"];
 // Themes opens with every animated tile playing this long; after that only a hovered or pressed tile plays.
 const TILE_PLAY_MS = 3000;
 
@@ -157,7 +158,7 @@ export function SkinPicker() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {skins.map((skin) => {
           const selected = skin.id === active;
-          const isNew = !selected && NEW_SKIN_IDS.has(skin.id) && !tried.includes(skin.id);
+          const isNew = !selected && NEW_SKIN_IDS.includes(skin.id) && !tried.includes(skin.id);
           return (
             <button
               key={skin.id}
