@@ -90,7 +90,8 @@ export function captureWorkerSession(sessions, runs, authorization, input) {
   if (!capture || session.retired || session.workerFinished || session.exitCode !== null || !runs) return false;
   const received = Buffer.from(typeof authorization === "string" ? authorization : "");
   const expected = Buffer.from(`Bearer ${capture.auth}`);
-  if (received.length !== expected.length || !timingSafeEqual(received, expected)) return false;
+  // A pane kept through a restart still holds the credential it was launched with; only its hash was saved.
+  if (capture.auth === null ? !workerSessionAuthorized(capture.run.authHash, authorization) : received.length !== expected.length || !timingSafeEqual(received, expected)) return false;
   if (!runs.capture(input)) return false;
   capture.confirmed = input.source;
   return true;

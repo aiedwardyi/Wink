@@ -1269,6 +1269,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const [kind, markerId, value] = osc.startsWith("133;") ? osc.slice(4).split(";") : [];
       if (markerId !== session.id) return;
       if (kind === "C" && /^[A-Za-z0-9+/]{43}=$/.test(value)) {
+        session.marked = true;
         session.shellExecuting = true;
         // Input consumed by a program never reaches the shell's reader.
         const index = session.commandInputs.findIndex((command) => command.hash === value);
@@ -1278,6 +1279,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         return;
       }
       if (kind !== "D" || !/^\d+$/.test(value)) return;
+      session.marked = true;
       if (session.shellExecuting) {
         session.worker = false;
         session.workerFinished = true;
@@ -1928,7 +1930,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const managed = Boolean(run.account);
       const session = createSession({
         id: run.id, key: `${sender.id}:${run.botId}:pane:${randomUUID()}`, event: { sender }, input: { botId: run.botId, label: run.label ?? undefined, cols: pane.cols, rows: pane.rows }, folder: { teacher: run.teacher }, cwd: run.cwd, botPane: true,
-        worker: managed ? { kind: "managed", account: run.account, executable: run.executable } : null, managed, workerSession: run.session ? { auth: randomUUID(), env: {}, run: { ...run.session } } : null, baseHead: run.baseHead ?? null,
+        worker: managed ? { kind: "managed", account: run.account, executable: run.executable } : null, managed, workerSession: run.session ? { auth: null, env: {}, run: { ...run.session } } : null, baseHead: run.baseHead ?? null,
         paneEnv: { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${run.id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${run.id}`) }, shell: run.shell, pty, spawn: null, mail,
       });
       // Old output only rebuilds the screen: no keys are typed at it, no note is sent for it and the window does not see it twice.
@@ -1937,9 +1939,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return replayed.then(() => {
         if (session.retired) return null;
         const at = now();
-        const running = session.exitCode === null && (pane.mark?.value.startsWith(`${run.id};`) ? pane.mark.kind === "C" : session.shellExecuting);
+        // The listed mark is older than the replay, so it only stands in when the replay had none.
+        const running = session.exitCode === null && (!session.marked && pane.mark?.value.startsWith(`${run.id};`) ? pane.mark.kind === "C" : session.shellExecuting);
         const reported = run.state === "reported";
         Object.assign(session, { adopting: false, workerReady: true, exitReported: session.exitCode !== null, resizedAt: -Infinity, reportAt: reported ? at : 0, stallArmedAt: at, stallChangedAt: at, engine: run.engine ?? null, agentSeen: true, claudeTrustAnswered: true, shellExecuting: running, workerFinished: !running });
+        // The prompt before a kept command may be past the ring, so its end counts whatever history id it shows.
+        if (running) Object.assign(session, { runningCommand: { hash: null, reported }, historyId: session.historyId ?? "" });
         if (running && run.engine) watchStalls(session);
         if (session.exitCode === null) paneCleanup?.opened(session);
         active.set(session.key, session.id);
