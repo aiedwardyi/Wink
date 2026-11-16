@@ -6,6 +6,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MapPane } from "./MapPane";
+import { tokenize } from "@/lib/map-highlight.worker";
 import { applyLocale } from "@/lib/i18n";
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 
@@ -40,6 +41,7 @@ beforeEach(() => {
   root = createRoot(host);
   vi.stubGlobal("EventSource", vi.fn(function () { stream = { close }; return stream; }));
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.stubGlobal("Worker", Tokenizer);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] })));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); applyLocale("en"); });
@@ -757,4 +759,70 @@ it("says how many new files a capped worker left out", async () => {
   await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
   await emit([{ ...workers[0], more: 4800 }]);
   expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 중 2개 변경 · 외 파일 4,800개wink / ALPHA");
+});
+
+const posts: string[][] = [];
+class Tokenizer {
+  onmessage?: (event: { data: object }) => void;
+  postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[] }) {
+    if (data.stop) return;
+    posts.push(data.code);
+    void tokenize(data.path, data.theme, data.code, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => this.onmessage?.({ data: { id: data.id, done } }));
+  }
+  terminate() {}
+}
+const until = async (check: () => boolean) => {
+  for (let i = 0; i < 300 && !check(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(check()).toBe(true);
+};
+const source = [
+  { kind: "context", text: "// sum two numbers", line: 1 },
+  { kind: "remove", text: "const total = 1;", line: 2 },
+  { kind: "add", text: 'const total = "two";', line: 2 },
+  { kind: "context", text: "export type Total = number;", line: 3 },
+];
+const colors = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>(".map-code-row code span")].map(span => [span.textContent, span.style.color.toUpperCase()]));
+const openSource = async (path: string) => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: source }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path, files: [{ path, added: 1, removed: 1 }] }]);
+};
+
+it("colors code like VS Code's dark theme in both views and keeps the diff marks", async () => {
+  await openSource("src/a.ts");
+  await until(() => colors()["const"] !== undefined);
+  expect(colors()).toMatchObject({ "// sum two numbers": "#6A9955", const: "#569CD6", '"two"': "#CE9178", "1": "#B5CEA8", Total: "#4EC9B0" });
+  expect([...host.querySelectorAll(".map-code-row")].map(row => [row.getAttribute("data-kind"), row.querySelector("b")?.textContent, row.querySelector("code")?.textContent])).toEqual([["context", "", "// sum two numbers"], ["remove", "-", "const total = 1;"], ["add", "+", 'const total = "two";'], ["context", "", "export type Total = number;"]]);
+  await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Changes only")!.click(); });
+  expect(reads().at(-1)?.[0]).not.toContain("whole=1");
+  expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+  expect(host.querySelector('.map-code-row[data-kind="add"] b')?.textContent).toBe("+");
+});
+
+it("colors code like VS Code's light theme on a light skin", async () => {
+  document.documentElement.dataset.skin = "atelier";
+  try {
+    await openSource("src/light.ts");
+    await until(() => colors()["const"] !== undefined);
+    expect(colors()).toMatchObject({ "// sum two numbers": "#008000", const: "#0000FF", '"two"': "#A31515", Total: "#267F99" });
+  } finally { delete document.documentElement.dataset.skin; }
+});
+
+it("leaves a file in an unknown language as plain text", async () => {
+  await openSource("notes.zzz");
+  await until(() => posts.some(code => code.includes("// sum two numbers")) && !!host.querySelector(".map-code-row"));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(host.querySelector(".map-code-row code span")).toBeNull();
+  expect(host.querySelector('.map-code-row[data-kind="add"] code')?.textContent).toBe('const total = "two";');
+});
+
+it("draws an already colored file at once from the cache without tokenizing it again", async () => {
+  await openSource("src/again.ts");
+  await until(() => colors()["const"] !== undefined);
+  const sent = posts.length;
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await openSource("src/again.ts");
+  expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+  expect(posts.length).toBe(sent);
 });
