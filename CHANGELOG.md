@@ -2,6 +2,19 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.271] - 2026-11-16
+
+### Changed
+- Tapping a question's choice adds no bubble from you; the greyed card shows "Answered:" with your choice, and the bot still gets it.
+- Typing a reply while a question is open folds that question the moment your message sends, in chats and rooms.
+
+### Fixed
+- On a phone, swiping goes through every bot chat in sidebar order, also with a section folded or a search typed, and the chat keeps following after a small sideways swipe.
+- On a phone, turning the screen keeps the open chat, and the side menu no longer gets stuck.
+- An app update no longer reloads Wink in the middle of a call; it waits until the call ends.
+- Tapping a notification while Wink is offline opens its chat, and closes any open menu or picker.
+- An open picture stays open when the room's files update, and on a phone Settings' close button is easier to tap.
+
 ## [1.0.270] - 2026-11-15
 
 ### Added

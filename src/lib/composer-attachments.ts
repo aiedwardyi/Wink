@@ -184,7 +184,6 @@ export function uploadAttachment(file: Pick<File, "name" | "size" | "type" | "la
  * oversized paste is refused before the upload starts, not mid-stream. */
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
-export const UPLOAD_MAX_BYTES = 10 * 1024 ** 3;
 /** Matches claude.ts NATIVE_IMAGE_MAX_BYTES, the lowest inline limit; other engines open the path. */
 export const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -513,7 +512,7 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
     getPath: (file: T) => string;
     /** Saves a big picture's smaller copy; the browser passes shrunkPicture. */
     shrunkPath?: (file: T) => Promise<string | undefined>;
-    t: (key: "composer.uploadTooBig" | "composer.uploadFailed", vars?: Record<string, string | number>) => string;
+    t: (key: "composer.uploadFailed", vars?: Record<string, string | number>) => string;
   },
 ): Promise<{ attachments: Attachment[]; uploads: { id: string; file: T }[]; notice: string | null }> {
   const files = [..._files];
@@ -521,13 +520,8 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   const shrunkPath = _opts.shrunkPath ?? (async () => undefined);
   const attachments: Attachment[] = [];
   const uploads: { id: string; file: T }[] = [];
-  const tooBig: string[] = [];
   const uploadErrors: string[] = [];
   const bigUpload = (file: T, shrink = false) => {
-    if (file.size > UPLOAD_MAX_BYTES) {
-      tooBig.push(t("composer.uploadTooBig", { name: file.name }));
-      return;
-    }
     const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 }, shrink);
     attachments.push(chip);
     uploads.push({ id: chip.id, file });
@@ -574,6 +568,5 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       bigUpload(file);
     }
   }
-  const notices = [...tooBig, ...uploadErrors];
-  return { attachments, uploads, notice: notices.length ? notices.join(" ") : null };
+  return { attachments, uploads, notice: uploadErrors.length ? uploadErrors.join(" ") : null };
 }

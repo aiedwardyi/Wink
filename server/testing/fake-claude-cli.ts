@@ -780,6 +780,12 @@ const playTurn = (prompt: JsonValue, held = false) => {
     return;
   }
 
+  if (mode === "tool-hang") {
+    out({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu-hang", name: "Bash", input: { command: "sleep forever" } }] } });
+    setInterval(() => {}, 1_000);
+    return;
+  }
+
   if (mode === "late-after-stop") {
     // Stop ends stdin and kills the tree (SIGTERM on POSIX, taskkill /F on
     // Windows); whichever lands first, the speaker set up at startup says

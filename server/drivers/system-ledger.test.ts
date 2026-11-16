@@ -59,6 +59,33 @@ describe("system ledger", () => {
     expect(ledger.prompt("accepted", "Second section\nFirst section")).toBe("Second section\nFirst section");
   });
 
+  it("keeps a held system across a restart instead of resending it", () => {
+    const rules = "Approval boundaries stay unchanged. ".repeat(100);
+    const first = `${rules}\nOwner: Mina.\nBudget: 740 dollars.`;
+    systemLedger(true, "restart-held").record("session", first);
+    const restarted = systemLedger(true, "restart-held");
+    expect(restarted.holds("session", first)).toBe(true);
+    expect(restarted.prompt("session", first)).toBeUndefined();
+    const update = restarted.prompt("session", first.replace("740", "790"))!;
+    expect(update).toContain("[Added:]\nBudget: 790 dollars.");
+    expect(update).not.toContain(rules);
+    expect(systemLedger(false, "restart-held").prompt("session", first.replace("740", "790"))).toBe(first.replace("740", "790"));
+    expect(systemLedger(true, "other-instance").prompt("session", first)).toBe(first);
+  });
+
+  it("resends after a restart when the last turn never settled or compacted", () => {
+    const ledger = systemLedger(true, "restart-unsettled");
+    ledger.record("crashed", "rules");
+    ledger.begin("crashed");
+    expect(ledger.prompt("crashed", "rules")).toBeUndefined();
+    expect(systemLedger(true, "restart-unsettled").prompt("crashed", "rules")).toBe("rules");
+    ledger.keep("crashed");
+    expect(systemLedger(true, "restart-unsettled").prompt("crashed", "rules")).toBeUndefined();
+    ledger.record("compacted", "rules");
+    ledger.forget("compacted");
+    expect(systemLedger(true, "restart-unsettled").prompt("compacted", "rules")).toBe("rules");
+  });
+
   it("resends budgets moved between projects even when the status also changes", () => {
     const ledger = systemLedger(true);
     const rules = "Approval boundaries stay unchanged. ".repeat(100);

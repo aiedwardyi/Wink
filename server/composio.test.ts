@@ -20,6 +20,7 @@ let base = "";
 const calls: Array<{ method: string; path: string; query: string; body: any }> = [];
 let malformedConnectedAccounts = false;
 let connectedAccountsUnavailable = false;
+let extraGithubAccounts = 0;
 // The project's own auth configs, and the ones the stub Session was created
 // with — a Session only knows the configs named at its creation, which is
 // the whole reason #509 happened.
@@ -117,6 +118,7 @@ beforeAll(async () => {
           { id: "ca_github_personal", alias: "personal", toolkit: { slug: "github" }, status: "ACTIVE", updated_at: "2026-08-17T09:00:00Z" },
           { id: "ca_notion", alias: "team", toolkit: { slug: "notion" }, status: "INITIATED", updated_at: "2026-08-17T08:01:00Z" },
           { id: "ca_linear", toolkit: { slug: "linear" }, status: "EXPIRED", updated_at: "2026-08-17T08:02:00Z" },
+          ...Array.from({ length: extraGithubAccounts }, (_, i) => ({ id: `ca_github_${i}`, alias: `extra-${i}`, toolkit: { slug: "github" }, status: "ACTIVE" })),
         ],
         next_cursor: "accounts-page-2",
       }));
@@ -225,7 +227,7 @@ describe.sequential("Composio Sessions", () => {
       },
       multi_account: {
         enable: true,
-        max_accounts_per_toolkit: 5,
+        max_accounts_per_toolkit: 10,
         require_explicit_selection: true,
       },
     });
@@ -253,7 +255,7 @@ describe.sequential("Composio Sessions", () => {
       user_id: "openmausbot_legacy",
       multi_account: {
         enable: true,
-        max_accounts_per_toolkit: 5,
+        max_accounts_per_toolkit: 10,
         require_explicit_selection: true,
       },
     });
@@ -325,6 +327,18 @@ describe.sequential("Composio Sessions", () => {
     await expect(authorizeService(cfg, "github", "personal-three")).resolves.toEqual({
       url: "https://connect.composio.dev/link/github",
     });
+  });
+
+  it("links a sixth account of one app", async () => {
+    const cfg: AppConfig = {
+      composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
+    };
+    extraGithubAccounts = 3;
+    try {
+      await expect(authorizeService(cfg, "github", "sixth")).resolves.toEqual({ url: "https://connect.composio.dev/link/github" });
+    } finally {
+      extraGithubAccounts = 0;
+    }
   });
 
   it("validates account aliases before sending them upstream", () => {

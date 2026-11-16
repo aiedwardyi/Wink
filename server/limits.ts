@@ -10,6 +10,7 @@ const TOKENS = "Runaway loop: this text rides every turn, so it bounds prompt to
 const AUTO = "Runaway loop: automatic model calls or checks with nobody asking.";
 const STATE = "Data loss: internal history or cache that would grow without end; nothing is refused.";
 const DISPLAY = "Display only; nothing is refused.";
+const JOINER = "Crash: shipped joiner builds fail to parse the whole room past this (guest-client.ts state schema), so every joiner goes blank and offline.";
 const PROMPT = "Prompt wording that guides the model; nothing is refused.";
 
 /** Real limits, kept on purpose. */
@@ -81,6 +82,9 @@ export const KEPT_LIMITS: Limits = {
   "server/quorum-route.ts": { MAX_DAYS: OUTSIDER },
   "server/replies.ts": { MAX_REPLY_EXCERPT: TOKENS },
   "server/room-lane.ts": { MAX_ROOM_LANES: "Crash: each lane is another engine process; extra turns wait, never refused." },
+  "server/rooms/door-streams.ts": { MAX_BACKLOG_BYTES: OUTSIDER },
+  "server/rooms/door.ts": { MAX_STREAMS: OUTSIDER },
+  "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER, MAX_PEOPLE: `${JOINER} 100 people loaded, 101 went blank (measured).` },
   "server/routines.ts": { MAX_RUNS: STATE },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
@@ -148,9 +152,7 @@ export const PROMPT_WORDING: Limits = {
 
 /** Limits other cards own or a follow-up removes; delete the entry with the limit. */
 export const PENDING_LIMITS: Limits = {
-  "server/accounts.ts": { MAX_ENGINE_ACCOUNTS: "Follow-up: 8 sign-ins per engine guards nothing.", "At most ": "Follow-up: MAX_ENGINE_ACCOUNTS refusal." },
   "server/bot-routes.ts": { "this workspace is limited to": "Owned by CREATE-BOT-OPEN (workspace bot cap)." },
-  "server/config.ts": { MAX_LOCAL_VM_MAX_INSTANCES: "Follow-up: nothing reads maxInstances past the status echo." },
   "server/drivers/agents-proxy.ts": {
     MAX_CREATED_PER_TURN: "Owned by CREATE-BOT-OPEN.",
     "You can create at most": "Owned by CREATE-BOT-OPEN.",
@@ -162,18 +164,8 @@ export const PENDING_LIMITS: Limits = {
     "role must be at most 120": "Owned by CREATE-BOT-OPEN (create-bot route).",
     "instructions must be at most 1000": "Owned by CREATE-BOT-OPEN (create-bot route).",
   },
-  "server/phone-devices.ts": { MAX_PHONES: "Follow-up: 21st phone refused; pairing brute force is already MAX_PAIRING_ATTEMPTS." },
-  "server/rooms/door-streams.ts": { MAX_BACKLOG_BYTES: "ROOM-COLLAB-OPEN is editing rooms/; memory of a slow outsider stream (likely keep)." },
-  "server/rooms/door.ts": { MAX_STREAMS: "ROOM-COLLAB-OPEN is editing rooms/; outsider streams (likely keep)." },
   "server/rooms/files.ts": { MAX_MESSAGE_FILES: "Follow-up after ROOM-COLLAB-OPEN: 50 files per room message.", "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal." },
-  "server/rooms/guest-client.ts": {
-    MAX_PENDING_SENDS: "Follow-up after ROOM-COLLAB-OPEN: a joiner's 21st queued message.",
-    MAX_VIEW_ENTRIES: "ROOM-COLLAB-OPEN is editing rooms/; untrusted host input size (likely keep).",
-  },
-  "server/rooms/invites.ts": {
-    MAX_PEOPLE: "Owned by ROOM-COLLAB-OPEN (room size).",
-    MAX_CREDENTIAL_LENGTH: "ROOM-COLLAB-OPEN is editing rooms/; outsider credential size (likely keep).",
-  },
+  "server/rooms/guest-client.ts": { MAX_VIEW_ENTRIES: "Parked for Edward: caps the user's own view of a joined room at 10,000 local rows; not host input." },
   "server/rooms/upload-timeouts.ts": { MAX_UPLOAD_BYTES: "Follow-up after ROOM-COLLAB-OPEN: mirrors the 1 GB room file cap." },
   "server/team-manifest.ts": {
     MAX_TEAM_MEMBERS: "Owned by CREATE-BOT-OPEN (bot count from an imported team).",
@@ -185,11 +177,17 @@ export const PENDING_LIMITS: Limits = {
 
 /** Guards the scan cannot see by shape; the test checks each still exists. */
 export const NAMED_GUARDS: Limits = {
+  "electron/terminal-host.mjs": { "Ctrl+C is not allowed": "Never interrupts a running worker: a confirmed send cannot carry Ctrl+C into a live pane." },
+  "server/terminal-snapshot.ts": { "Ctrl+C is not allowed": "Never interrupts a running worker: the remote terminal box cannot paste Ctrl+C into a live pane." },
   "server/index.ts": {
     chainEdge: "Runaway loop: the room reply-loop guard; each bot-to-bot mention pair runs once per human message.",
     MAX_COMMS_DEPTH: "Runaway loop: the bot-to-bot reply-loop guard.",
   },
   "server/comms-root.ts": { ROOT_TURNS: "Runaway loop: bot-to-bot turns after one human message; resets on the next one." },
+  "server/drivers/claude.ts": {
+    NATIVE_IMAGE_MAX_COUNT: "Crash: past 20 image blocks the Claude API rejects the request on its many-image dimension limit (vision docs); later images stay path tags the bot can Read.",
+  },
+  "server/rooms/db.ts": { ROOM_TEXT_MAX: `${JOINER} A 20,001-character line was dropped for live joiners (measured).` },
   "server/rooms/my-room-bots.ts": { "Room Stop": "The room Stop button: bot lines wake no bot until a person or the host speaks." },
   "server/http-helpers.ts": { "413": BODY },
   "server/uploads.ts": { disk_full: "Data loss: a big upload that would fill the disk." },

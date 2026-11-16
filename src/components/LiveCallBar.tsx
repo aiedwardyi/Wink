@@ -173,6 +173,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       engine: () => new GeminiLive(),
       audio,
       post,
+      opener: active.opener,
     });
     return { call, level: (mic) => audio.level(mic) };
   });

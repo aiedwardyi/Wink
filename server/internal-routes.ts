@@ -10,6 +10,7 @@ import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
+import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
@@ -58,6 +59,7 @@ type InternalRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
+  botCalls?: Pick<BotCalls, "blockers">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -193,6 +195,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
+      if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
@@ -489,7 +492,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
-        return json(res, 400, { error: "needs a prompt (max 4000 chars) and a supported size and quality" });
+        return json(res, 400, { error: "needs a prompt and a supported size and quality" });
       }
       const roots = botOutputRoots(from, fromThreadId, owner.group?.id);
       let generated: Awaited<ReturnType<typeof generateImageFile>>;

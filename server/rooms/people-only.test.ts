@@ -129,10 +129,10 @@ describe("people-only room create", () => {
     expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
   });
 
-  it("keeps a bot in a room nobody shares", async () => {
+  it("lets a room nobody shares drop its last bot", async () => {
     const created = await call(routes().create, { name: "Bots", memberIds: [wink] });
-    expect((await call(routes().patch, { memberIds: [] }, [created.body.group.id])).status).toBe(400);
-    expect(store.group(created.body.group.id)!.memberIds).toEqual([wink]);
+    expect((await call(routes().patch, { memberIds: [] }, [created.body.group.id])).status).toBe(200);
+    expect(store.group(created.body.group.id)!.memberIds).toEqual([]);
   });
 
   it("never turns an existing bot room into a people-only room", async () => {

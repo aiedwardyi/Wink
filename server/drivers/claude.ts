@@ -657,7 +657,7 @@ function claudeToolDetail(name: string, input: unknown, output: string, isError:
 }
 
 const NATIVE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-const NATIVE_IMAGE_MAX_COUNT = 8;
+const NATIVE_IMAGE_MAX_COUNT = 20;
 const NATIVE_IMAGE_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const ATTACHED_IMAGE_TAG = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
 
@@ -685,7 +685,7 @@ function storeImage(path: string, storeDir: string): { block: ClaudeImageBlock; 
 }
 
 /** Attached store images ride along as native blocks; anything else stays the plain string.
- * Newest tags win the 8-image and 20 MiB budgets, so a replayed turn's old history can't
+ * Newest tags win the 20-image and 20 MiB budgets, so a replayed turn's old history can't
  * starve out the image the user just attached. A replayed turn also marks where history
  * ends and the user's latest message begins (`REPLY_MARKER`); tags before that marker are
  * old history re-attached as text, not something the user just sent, so only tags after it

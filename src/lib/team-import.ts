@@ -31,7 +31,6 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
   const team = root.team as Record<string, unknown>;
   if (typeof team.name !== "string" || !team.name.trim()) throw new Error(t("teamImport.teamNoName"));
   if (!Array.isArray(team.members) || team.members.length === 0) throw new Error(t("teamImport.teamNoMembers"));
-  if (team.members.length > 200) throw new Error(t("teamImport.teamTooMany"));
   const members = team.members.map((member, index) => {
     if (!member || typeof member !== "object" || Array.isArray(member)) {
       throw new Error(t("teamImport.memberInvalid", { index: index + 1 }));
@@ -83,7 +82,6 @@ function packagePreview(root: Record<string, unknown>, manifest: unknown): Pendi
   const pkg = root.package as Record<string, unknown>;
   if (typeof pkg.name !== "string" || !pkg.name.trim()) throw new Error(t("teamImport.playbookNoName"));
   if (!Array.isArray(pkg.agents) || pkg.agents.length === 0) throw new Error(t("teamImport.playbookNoBots"));
-  if (pkg.agents.length > 200) throw new Error(t("teamImport.playbookTooMany"));
   const members = pkg.agents.map((agent, index) => {
     if (!agent || typeof agent !== "object" || Array.isArray(agent)) throw new Error(t("teamImport.botInvalid", { index: index + 1 }));
     const value = agent as Record<string, unknown>;

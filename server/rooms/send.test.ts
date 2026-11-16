@@ -5,7 +5,7 @@ import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
 import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
-import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, type RoomPerson } from "./db.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, ROOM_TEXT_MAX, type RoomPerson } from "./db.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend, hostSend, liveBotChain, stopBotChain, teamBotSend } from "./send.ts";
 import { addTeamBot, type TeamBot } from "./team-bots.ts";
@@ -126,11 +126,11 @@ describe("hostedSend", () => {
   });
 
   it("keeps the host's full text on the thread row and caps a tag-free copy for the room", () => {
-    const text = `see <attached-image path="C:\\a.png" />\n<attached-file path="C:\\b.log" name="b.log" size="9" />\n${"x".repeat(PERSON_TEXT_MAX)}`;
+    const text = `see <attached-image path="C:\\a.png" />\n<attached-file path="C:\\b.log" name="b.log" size="9" />\n${"x".repeat(ROOM_TEXT_MAX)}`;
     const { entry, message } = hostSend(group, text);
     expect(message.text).toBe(text);
     expect(entry.text).toMatch(/^see \[image\]\n\[file: b\.log\]\nx+$/);
-    expect(entry.text).toHaveLength(PERSON_TEXT_MAX);
+    expect(entry.text).toHaveLength(ROOM_TEXT_MAX);
     expect(hostSend(group, '<attached-image path="C:\\a.png" />').entry.text).toBe("[image]");
   });
 

@@ -120,6 +120,7 @@ import { codexCredit, codexCreditRows } from "./codex-credit.ts";
 import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
 import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
+import { createBotCalls } from "./bot-call.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
@@ -471,6 +472,7 @@ import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, t
 import { observeLive } from "./side-live-state.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
+import { CODE_FIX_INSTRUCTIONS } from "./code-fix-rules.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -3031,6 +3033,13 @@ function roomAlert(alert: RoomAlert) {
 const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
 
+const botCalls = createBotCalls({
+  send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`)),
+  current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
+  chat: (threadId) => store.groupByThread(threadId)?.id,
+  skip: (threadId) => isHostedThread(store, threadId),
+});
+
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
   const chat = store.groupByThread(open.threadId)?.id;
@@ -3162,17 +3171,9 @@ const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 
 // activity-based, so an hour-long turn that keeps streaming is never
 // touched, and turns parked on a human approval are exempt.
 const TURN_STALL_MS = Math.max(60_000, Number(process.env.OMB_TURN_STALL_MS) || 20 * 60_000);
-// A tool that is still running keeps the turn alive past TURN_STALL_MS - a long
-// build emits nothing between item.started and item.completed. This is the
-// ceiling on that exemption, for a tool that never returns at all.
-const TURN_TOOL_CAP_MS = Math.max(
-  TURN_STALL_MS,
-  Number(process.env.OMB_TURN_TOOL_CAP_MS) || 60 * 60_000,
-);
 const roomStallCompletions = new RoomTurnStallRegistry();
 const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
-  toolCapMs: TURN_TOOL_CAP_MS,
   checkMs: 60_000,
   onStall: (turn) => {
     repeats.settle(turn.threadId);
@@ -3238,6 +3239,12 @@ const watchdog = new TurnWatchdog({
       }
     }, 6_000);
     release.unref?.();
+  },
+  onQuiet: (turn) => {
+    const bot = store.bot(turn.botId);
+    // a lane turn or an open approval owns what the bot's activity says
+    if (!bot?.busy || bot.activeThreadId !== turn.threadId || bot.activity === "waiting-on-you") return;
+    store.setActivity(bot.id, turn.quiet ? "no-signal" : "working", turn.threadId);
   },
 });
 watchdog.start();
@@ -4753,6 +4760,8 @@ const DETAILED_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS;
 // here costs a reminder every send.
 const CORPUS_SEARCH_INSTRUCTIONS =
   " When searching any corpus, document set or files, match case-insensitively: scanned/OCR records often use capitals. An empty result tests your query first; try another search strategy or tool class before concluding absence. Never state an unqualified absence. When reporting no match, say what and how you searched so the user can judge a true negative.";
+// One block for every route, so none can carry one rule set without the other.
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS;
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -5838,7 +5847,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           showImagePrompt +
           (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
-          CORPUS_SEARCH_INSTRUCTIONS +
+          DEFAULT_RULES +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
@@ -6900,7 +6909,7 @@ async function runClaimedGroupMemberTurn(
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
-    CORPUS_SEARCH_INSTRUCTIONS +
+    DEFAULT_RULES +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7609,6 +7618,7 @@ const internalRoutes = createInternalRoutes({
   taskPacketForWrite,
   persistTaskPacket,
   notify,
+  botCalls,
   routines: routines!,
   delegationWatch,
   askHold,
@@ -8551,7 +8561,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo|flow)$/);
     if (m) {
-      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       return await workerMap.handle(req, res, m[1], m[2], url);
     }
@@ -8626,7 +8635,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
-    if (m && method === "POST") return await liveCall(req, res, m);
+    if (m && method === "POST") {
+      if (m[2] === "token") botCalls.answered(m[1]!);
+      return await liveCall(req, res, m);
+    }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
@@ -8860,10 +8872,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
-    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim() })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode() })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId), (roomId) => myRoomBotTurns.stopMine(roomId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);

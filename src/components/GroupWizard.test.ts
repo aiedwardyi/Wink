@@ -283,7 +283,7 @@ describe("GroupWizard members", () => {
       expect(input).toBeDefined();
       expect(host.querySelector(`label[for="${input!.id}"]`)?.textContent).toBe(label);
       expect(input!.placeholder).toBe(placeholder);
-      expect(input!.maxLength).toBe(40);
+      expect(input!.hasAttribute("maxlength")).toBe(false);
       await act(async () => button(host, add).click());
       expect(host.querySelector('[role="alert"]')?.textContent).toBe(required);
       expect(apiCalls).toHaveLength(0);

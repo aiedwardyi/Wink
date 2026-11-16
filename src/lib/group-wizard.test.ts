@@ -122,9 +122,9 @@ describe("wizard naming and payloads", () => {
     });
   });
 
-  it("trims and caps the name at 40 characters without an ellipsis", () => {
+  it("trims the name and keeps it past 40 characters", () => {
     const selection = { instanceId: "codex-1", model: "m" };
-    expect(newBotPayload(`  ${"a".repeat(45)}  `, selection).name).toBe("a".repeat(40));
+    expect(newBotPayload(`  ${"a".repeat(45)}  `, selection).name).toBe("a".repeat(45));
     expect(newBotPayload("  ", selection).name).toBe("");
   });
 

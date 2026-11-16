@@ -316,7 +316,7 @@ describe("pinned ask_user question", () => {
     expect(row()!.textContent).not.toContain("Staging has last week's data.");
     expect([...row()!.querySelectorAll(".truncate")].at(-1)?.textContent).toBe("Ship to prod or staging?");
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
-    expect([...row()!.querySelectorAll("[data-row-choices] button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
+    expect([...row()!.querySelectorAll("[data-row-choices] button:not([hidden])")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
     expect(rowButton("Prod").className).toContain("whitespace-nowrap");
     expect(pinButton("Hide question")).toBeTruthy();
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
@@ -495,11 +495,11 @@ describe("pinned ask_user question", () => {
     expect(dot()).toBeNull();
   });
 
-  it("waits behind a pending approval, which keeps its composer takeover", async () => {
+  it("waits behind a pending approval and leaves the box typeable", async () => {
     await mount({ bot: bot([question, approval]) });
     expect(pin()).toBeNull();
     expect(host!.querySelector('[role="region"][aria-label="Pending approval"]')).not.toBeNull();
-    expect(textarea()?.disabled).toBe(true);
+    expect(textarea()?.disabled).toBe(false);
   });
 
   it("names the room member who asked and answers in the room", async () => {

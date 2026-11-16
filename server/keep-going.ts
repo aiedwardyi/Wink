@@ -10,9 +10,7 @@ import type { TaskResumePacket } from "./task-state.ts";
 export const KEEP_GOING_INTERVAL_MS = 30 * 60_000;
 export const KEEP_GOING_DAILY_CAP = 12;
 export const KEEP_GOING_USAGE_FRESH_MS = 2 * 60 * 60_000;
-const BENCH_ZONE = "Asia/Seoul";
-const BENCH_FROM = 3 * 60 + 45;
-const BENCH_TO = 5 * 60;
+const DAY_ZONE = "Asia/Seoul";
 const RECEIPTS_KEPT = 40;
 export const KEEP_GOING_RULES =
   `Agentic Mode is on. Don't end a turn while this task has a pending step you can do and nothing is running: start it. No question cards or "want me to" offers: decide on merit and report what you did. Ask only for logins, deletes, money, or push/merge/release rules.`;
@@ -25,7 +23,6 @@ export type KeepGoingSkip =
   | "task-changed"
   | "busy"
   | "queued"
-  | "bench"
   | "waiting"
   | "daily-cap"
   | "no-task-record"
@@ -110,21 +107,12 @@ export function keepGoingPrompt(step: string): string {
 
 function seoulParts(now: number): Record<string, string> {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: BENCH_ZONE,
+    timeZone: DAY_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
   }).formatToParts(now);
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
-}
-
-export function inBenchWindow(now: number): boolean {
-  const parts = seoulParts(now);
-  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
-  return minutes >= BENCH_FROM && minutes < BENCH_TO;
 }
 
 const seoulDay = (now: number) => {
@@ -353,7 +341,6 @@ export class KeepGoing {
       delete entry.startAfter;
       this.save();
     }
-    if (inBenchWindow(now)) return { skipped: "bench" };
     if (entry.startAfter) return { skipped: "waiting" };
     const today = seoulDay(now);
     if (entry.receipts.filter((receipt) => seoulDay(receipt.at) === today).length >= KEEP_GOING_DAILY_CAP) {
