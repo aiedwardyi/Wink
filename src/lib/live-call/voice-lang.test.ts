@@ -704,6 +704,31 @@ describe("11-16 call c-21351ca21949, in its own order", () => {
     expect(sentToBot(posts)).toEqual([HELLO]);
   });
 
+  it.each(["after the wordless second turn", "with no second turn"])("the answer to his next question plays, though it starts before his words come back (%s)", async (order) => {
+    const { audio, engine } = await live();
+    const e = engine();
+    e.events.heard("Can you send me hello on chat?");
+    offer(e, "Want me to send a hello message in the chat for you?", HELLO, "p1");
+    await tick(5_000);
+    e.events.heard("Yes.");
+    await tick(1_200);
+    speak(e, "On it.");
+    await tick(10);
+    if (order === "after the wordless second turn") {
+      e.events.answering();
+      e.events.audio(pcm());
+      e.events.turnDone();
+    }
+    await tick(5_000);
+    const played = audio.played;
+    e.events.answering();
+    e.events.heard("What's on my list?");
+    e.events.audio(pcm());
+    e.events.said("You have two things on your list.");
+    e.events.turnDone();
+    expect(audio.played).toBe(played + 1);
+  });
+
   it("a failed send still speaks after the ack", async () => {
     const { audio, engine } = await live({ messages: { status: 500, data: { error: "down" } } });
     const e = engine();
