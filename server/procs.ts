@@ -148,7 +148,7 @@ export function execCli(
     });
   } catch (error) {
     // Windows throws here, not in the callback, for a file it can't start (npm's placeholder claude.exe).
-    queueMicrotask(() => cb(error as Error, "", ""));
+    queueMicrotask(() => cb(error instanceof Error ? error : new Error(String(error)), "", ""));
   }
 }
 
@@ -156,9 +156,11 @@ export function execCli(
 export function cliVersion(cli: string, opts: ExecFileOptions & AccountLaunchOptions, cb: (version: string | null) => void): void {
   execCli(cli, ["--version"], opts, (err, stdout) => {
     if (!err) return cb(stdout.trim());
-    const failed = resolveCli(cli).command;
+    // Two npm shims can both run node.exe; only the whole launch tells them apart.
+    const launch = (file: string) => JSON.stringify(resolveCli(file));
+    const failed = launch(cli);
     preferCli(cli, null);
-    const rest = findCliCandidates(cli).filter((file) => file !== cli && resolveCli(file).command !== failed);
+    const rest = findCliCandidates(cli).filter((file) => file !== cli && launch(file) !== failed);
     const next = (i: number): void => {
       if (i === rest.length) return cb(null);
       execCli(rest[i], ["--version"], opts, (err, stdout) => {

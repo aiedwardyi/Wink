@@ -4037,7 +4037,7 @@ describe("ClaudeDriver snapshot auth (fake CLI)", () => {
   });
 });
 
-// JJ's PC: npm blocked Claude's postinstall, so %APPDATA%\npm\claude.cmd runs a placeholder claude.exe
+// npm blocked Claude's postinstall, so %APPDATA%\npm\claude.cmd runs a placeholder claude.exe
 // that can't start, and it sits ahead of the native install in ~/.local/bin.
 describe.skipIf(process.platform !== "win32")("ClaudeDriver behind npm's placeholder claude.exe", () => {
   const PLACEHOLDER = `echo "Error: claude native binary not installed." >&2
@@ -4105,6 +4105,14 @@ CALL :find_dp0
     install(true);
     expect(await (await create()).snapshot()).toMatchObject({ state: "available", version: "2.1.232 (Claude Code)", authenticated: true });
     expect(procs.resolveCli("claude").args[0]).toBe(join(root, ".local", "bin", "claude.js"));
+  });
+
+  it("runs the native install when a broken npm claude also runs through node.exe", async () => {
+    install(true);
+    const npm = join(root, "AppData", "Roaming", "npm");
+    writeFileSync(join(npm, "claude.cmd"), `@ECHO off\r\n"%~dp0broken-claude.js" %*\r\n`);
+    writeFileSync(join(npm, "broken-claude.js"), "process.exit(1);\n");
+    expect(await (await create()).snapshot()).toMatchObject({ state: "available", version: "2.1.232 (Claude Code)" });
   });
 
   it("reads Not installed, not signed out, when the placeholder is the only claude", async () => {
