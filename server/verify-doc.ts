@@ -339,7 +339,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     run.recording.finish({ status, ms: ms(), issues: [], notChecked: pages });
     run.saved = run.recording.save(VERIFY_REPLAYS_DIR, threadId, run.messageId!).then(kept => {
       const stored = store.messagesFor(threadId).find(message => message.id === run.messageId);
-      if (stored?.verify?.runId === runId) store.patchMessage(threadId, run.messageId!, { verify: { ...run.card, replay: kept.get(`${threadId}/${run.messageId}`) ?? [] } });
+      if (stored?.verify?.runId === runId) store.patchMessage(threadId, run.messageId!, { verify: { ...stored.verify, replay: kept.get(`${threadId}/${run.messageId}`) ?? [] } });
     }).catch(() => {}).finally(() => { runs.delete(runId); });
   }
 
