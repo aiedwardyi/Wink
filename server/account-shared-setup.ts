@@ -15,7 +15,7 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
   };
   let sameHome = true;
   attempt("home", () => { sameHome = canonicalAccountHome(baseHome) === canonicalAccountHome(account.home); });
-  if (sameHome || !["claudeAgent", "codex"].includes(driver)) return;
+  if (sameHome || !["claudeAgent", "codex", "grokAgent"].includes(driver)) return;
   const present = (path: string) => lstatSync(path, { throwIfNoEntry: false });
   const sourceStat = (path: string) => statSync(path, { throwIfNoEntry: false });
   const link = (source: string, destination: string) => {
@@ -35,6 +35,7 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
     });
     for (const name of ["rules", "agents", "commands", "output-styles"]) attempt(name, () => link(join(baseHome, name), join(account.home, name)));
   }
+  if (driver === "grokAgent") for (const name of ["rules", "commands"]) attempt(name, () => link(join(baseHome, name), join(account.home, name)));
   attempt("skills", () => {
     const scanStart = Date.now();
     const source = join(baseHome, "skills");
@@ -54,7 +55,7 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
     const current = present(destination);
     if (complete && current?.isDirectory() && scanStart - Math.max(sourceInfo.mtimeMs, current.mtimeMs) > SETTLE_MS) skillScans.set(key, { sourceMtimeMs: sourceInfo.mtimeMs, destinationMtimeMs: current.mtimeMs });
   });
-  if (driver === "codex") attempt("AGENTS.md", () => {
+  if (driver === "codex" || driver === "grokAgent") attempt("AGENTS.md", () => {
     const override = join(baseHome, "AGENTS.override.md");
     const source = sourceStat(override)?.isFile() ? override : join(baseHome, "AGENTS.md");
     const sourceInfo = sourceStat(source);

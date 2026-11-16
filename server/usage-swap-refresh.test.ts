@@ -18,7 +18,7 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 describe("usage swap refresh", () => {
   it.each([
-    ["claudeAgent", "claudeAgent"], ["codex", "codex"], ["grokAgent", "grok"],
+    ["claudeAgent", "claudeAgent"], ["codex", "codex"], ["grokAgent", "grokAgent"],
     ["museAgent", "muse"], ["antigravityAgent", "gemini"],
   ] as const)("automatically reads %s after a snapshot identity swap, once", async (driver, boardDriver) => {
     const root = mkdtempSync(join(tmpdir(), "wink-USAGE-STALE-SWAP-"));
