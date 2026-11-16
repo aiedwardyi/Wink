@@ -87,7 +87,7 @@ it("serves only authenticated owners and preserves the existing team response", 
   const stats: TeamStats = { now: MIDNIGHT, days: [], pcs: [], people: [] };
   // SAFETY: only the owner, count and stats methods are reachable on these requests.
   const server = createApiServer({
-    base: "example.test", relayHost: "relay.example.test",
+    bases: ["example.test"], relayHosts: ["relay.example.test"],
     accounts: { owner }, signinOrigin: "https://signin.test", teamOwnerEmail: "owner@example.test",
     team: { stats: (_tz: number) => stats }, snags: { countToday: snags }, reports: { countToday: reports },
     limits: { pcsPerIpPerMin: 100 }, log: silentLogger, now: () => MIDNIGHT,

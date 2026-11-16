@@ -1255,12 +1255,26 @@ describe("setup codes", () => {
     expect(pc.saves).toEqual([]);
   });
 
-  it("refuses a code for another relay once this PC is enrolled, naming the current one", async () => {
+  it("moves an enrolled PC to the base in a new code once that relay takes it", async () => {
+    const pc = await fresh({ enrolled: true, config: { base: "old.example" } });
+    const moved = pc.statuses.until((s) => s.state === "connected" && s.host?.endsWith(`.${BASE}`) === true);
+    const res = await pc.post("/api/phone-relay/setup", { code: buildSetupCode(BASE, pc.invite()) });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ configured: true, enabled: true, base: BASE });
+    expect(pc.saves).toEqual([BASE]);
+    expect(readTicket(pc.r.dataDir).kind).toBe("ok");
+    await moved;
+  });
+
+  it("keeps an enrolled PC where it is when the relay in a new code refuses it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const pc = await fresh({ enrolled: true });
+    const ticket = readTicket(pc.r.dataDir);
     const res = await pc.post("/api/phone-relay/setup", { code: buildSetupCode("other.example", pc.invite()) });
-    expect(res).toEqual({ status: 409, body: { error: `this PC already uses the relay at ${BASE}` } });
+    expect(res.status).toBe(400);
     expect(pc.saves).toEqual([]);
     expect(pc.config.base).toBe(BASE);
+    expect(readTicket(pc.r.dataDir)).toEqual(ticket);
   });
 
   it("keeps the saved base when the invite is refused, so a new code can follow", async () => {

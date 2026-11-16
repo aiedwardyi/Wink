@@ -354,21 +354,21 @@ describe("account directory", () => {
       JSON.stringify({
         base: "wink.example.com",
         acme,
-        google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: "https://wink.edwardyi.dev" },
+        google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: "https://app.getwink.dev" },
       }),
     );
     const config = await loadConfig(path);
     expect(config.google).toEqual({
       desktopClientId: DESKTOP,
       webClientId: WEB,
-      signinOrigin: "https://wink.edwardyi.dev",
+      signinOrigin: "https://app.getwink.dev",
     });
     await writeFile(
       path,
       JSON.stringify({
         base: "wink.example.com",
         acme,
-        google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: "https://wink.edwardyi.dev/signin" },
+        google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: "https://app.getwink.dev/signin" },
       }),
     );
     await expect(loadConfig(path)).rejects.toThrow(/config is invalid/);
