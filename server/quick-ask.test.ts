@@ -606,6 +606,13 @@ describe("Gate 0", () => {
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true })] })).toBe(false);
   });
 
+  it("skips the helper for a tapped choice, even when an older card is the one still open", () => {
+    const older = closed({ staysOpen: true, options: ["Yes", "No"] });
+    const tapped: Message = { ...closed({ staysOpen: true, options: [QUESTION, "Later"], answered: QUESTION }), id: "c2", at: 2 };
+    expect(routesQuick({ ...base, messages: [older, tapped] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [older, tapped], answersCard: tapped.id })).toBe(false);
+  });
+
   it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {
     expect(routesQuick({ ...base, instance: { driverKind, fork: () => null, generateText: async () => "" } as never })).toBe(false);
   });

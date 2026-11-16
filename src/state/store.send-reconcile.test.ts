@@ -691,7 +691,7 @@ describe("typing while a question is open", () => {
 
   it("keeps a card with choices open when the person types something else", async () => {
     const [before, line] = [typedPast.slice(0, 5), typedPast[5]!];
-    const asked = before[3]!;
+    const asked = before.find((message) => message.card?.askUser)!;
     const idle: Bot = { ...bot, busy: false, activity: "idle", messages: before };
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: idle.threadId, message: line }), [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: line.text!, threadId: idle.threadId, sendId: line.sendId }));
