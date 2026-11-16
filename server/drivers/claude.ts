@@ -874,6 +874,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       restartTurn?: () => void;
       /** started by prepare and no turn has taken it yet */
       prepared?: Lease;
+      /** a new session started without its system text; the turn that takes it sends it in `initialize` */
+      systemDeferred?: boolean;
     }
     const sessions = new Map<string, Session>();
     const lastSpawn = new Map<string, ClaudeSpawn>();
@@ -994,7 +996,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const writeControl = (
       s: Session,
       threadId: string,
-      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } } | EffortRequest,
+      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } | { subtype: "initialize"; appendSystemPrompt?: string } } | EffortRequest,
     ): Promise<boolean> => {
       if (!s.child.stdin.writable || s.child.stdin.destroyed) return Promise.resolve(false);
       return new Promise((resolve) => {
@@ -1231,14 +1233,24 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           return { turnId };
         }
         lease = reserved;
-      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
+      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && (sessionId === null ? live.systemDeferred === true : sessionId === live.sessionId)) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         unprepare(live, "adopted");
+        const deferred = live.systemDeferred === true;
         turnTimer.setMeta({ reusedSession: true });
         turnTimer.mark("spawnOrReuse");
-        trace?.span("spawn", "reused")();
-        trace?.span("initialize", "reused")();
-        trace?.span("resume", "loaded-session")();
+        trace?.span("spawn", deferred ? "prepared" : "reused")();
+        trace?.span("initialize", deferred ? "prepared" : "reused")();
+        trace?.span(deferred ? "start" : "resume", deferred ? "prepared-session" : "loaded-session")();
+        if (deferred) {
+          live.systemDeferred = false;
+          const prior = lastSpawn.get(threadId);
+          if (prior) lastSpawn.set(threadId, { ...prior, args: [...args], cursor: live.sessionId! });
+          plans.delete(threadId);
+          plans.set(threadId, { ...turn, text: "", trace: undefined, transcript: undefined, resumeFallback: undefined, systemUpdate: undefined, resumeCursor: live.sessionId! });
+          if (plans.size > 64) plans.delete(plans.keys().next().value!);
+          trace?.delivered("start", () => ({ system: turn.system ?? "" }));
+        }
         turnTimer.mark("cliReady");
         live.turn = { turnId, settled: false, sawStreamDelta: false, timer: turnTimer, trace, launch: { request: turn, retry, abort: retryAbort } };
         live.auto = auto;
@@ -1255,7 +1267,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           broker: live.broker,
         });
         if (!relaunchOf) emit({ ...base(threadId, turnId), type: "turn.started" });
-        const written = await writeUser(live, threadId, turn.text);
+        // ordered ahead of the message on stdin; the CLI applies it before its first request
+        const initialized = !deferred || !turn.system || await writeControl(live, threadId, { type: "control_request", request_id: newId(), request: { subtype: "initialize", appendSystemPrompt: turn.system } });
+        const written = initialized && await writeUser(live, threadId, turn.text);
         if (!written) {
           active.delete(threadId);
           live.turn = null;
@@ -1384,6 +1398,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         argsKey,
         sessionId: sessionId ?? newSessionId,
         prepared: lease,
+        systemDeferred: prepare && sessionId === null && !turn.system ? true : undefined,
         turn: prepare ? null : {
           ...restart?.turn,
           merging: undefined,
@@ -2362,8 +2377,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           moved = true;
         }
         if (!admitted || accountBlocked || preparing.has(focus.threadId)) return;
-        const plan = plans.get(focus.threadId);
-        if (!plan?.resumeCursor || usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
+        if (usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
+        const { fresh, ...settings } = focus;
+        // a thread whose next turn starts a new session gets that session now, its system text at Send
+        const plan = fresh ? { ...settings, ...fresh, text: "" } : plans.get(focus.threadId);
+        if (!plan || (!fresh && !plan.resumeCursor)) return;
         if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
         preparing.add(focus.threadId);
         try {

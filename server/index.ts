@@ -37,6 +37,7 @@ import {
   projectFolderPrompt,
   projectNotesPrompt,
   projectPathsFromRecords,
+  resolveProjectFolder,
   userProjectTexts,
 } from "./project-folder.ts";
 import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage, sniffImageMime } from "./attachments.ts";
@@ -4934,6 +4935,42 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
   }
 }
 
+// The spawn shape startClaimedTurn gives an ordinary chat turn that opens a new session, or null when that
+// turn mounts something only a send may set up (a remote or VM computer, connected apps).
+function freshTurnShape(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
+  const task = store.taskByThread(bot.id, bot.threadId);
+  // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
+  if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
+  if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) return null;
+  if (bot.computer !== undefined && bot.computer !== "off") return null;
+  if (bot.cloudBackend === "vps" || box.boxConfigured(cfg)) return null;
+  const integrations: NonNullable<PrepareFocus["fresh"]>["integrations"] = {};
+  if (bot.shareTerminalWithChat !== false) {
+    const terminal = terminalIntegration(bot.id);
+    if (terminal) integrations.terminal = terminal;
+  }
+  const dwebUrl = process.env.DWEB_URL?.trim();
+  if (dwebUrl) integrations.dweb = { url: dwebUrl };
+  if (bot.computer === undefined && shouldMountLocalComputer({ requested: undefined, hostPlatform: process.platform, providerSupportsLocal: instance.adapter.capabilities.localComputerMcp === true })) {
+    const cua = readCuaConnection();
+    if (cua) integrations.localComputer = cua;
+  }
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0) : undefined;
+  if (agents) integrations.agents = agents;
+  const cwd = task.cwd !== undefined
+    ? task.cwd
+    : Object.keys(task.resumeCursors).length > 0
+      ? null
+      : bot.cwd ?? resolveProjectFolder({
+        pin: bot.cwd,
+        remembered: bot.lastProjectCwd,
+        continuation: false,
+        userTexts: userProjectTexts(store.messagesFor(bot.threadId), undefined, { since: bot.projectFolderClearedAt }),
+        recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
+      }).cwd ?? ensureWorkspace(bot.id);
+  return { integrations, cwd: cwd ?? undefined, leanStartup: bot.leanStartup === true ? true : undefined };
+}
+
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
   const trace = currentTurnTrace();
   const epoch = currentTurnEpoch(botId);
@@ -7753,6 +7790,7 @@ applyBrandLeadBot({
 const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId) });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
+  freshTurnShape,
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,
   threadSyncGate,

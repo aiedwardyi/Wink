@@ -1,5 +1,7 @@
 import { once } from "node:events";
-import { chmodSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -102,5 +104,36 @@ describe("Claude prepared children", () => {
     await vi.waitFor(() => expect(prepared.exitCode !== null || prepared.signalCode !== null).toBe(true));
     await vi.waitFor(() => expect(warmPool.stats().reserved).toBe(0));
     expect(children).toHaveLength(2);
+  });
+
+  describe("a thread's first turn", () => {
+    const sentSystem = (log: string) => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; argv: string[]; systemPrompt?: string });
+    const firstTurn = async (fresh: { cwd: string }, sendCwd: string) => {
+      const log = join(mkdtempSync(join(tmpdir(), "claude-first-")), "prompts.ndjson");
+      vi.stubEnv("FAKE_CLAUDE_PROMPT_LOG", log);
+      await instance.prepare!(undefined, { threadId: "t-first", approval: "ask", fresh });
+      const spawnedAhead = children.length;
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-first", text: "hi", approval: "ask", cwd: sendCwd, system: "You are Wink." });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+      return { spawnedAhead, sent: sentSystem(log) };
+    };
+
+    it("starts its session before Send and hands the system text over at Send", async () => {
+      const { spawnedAhead, sent } = await firstTurn({ cwd: tmpdir() }, tmpdir());
+      expect(spawnedAhead).toBe(1);
+      expect(children).toHaveLength(1);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.systemPrompt).toBe("You are Wink.");
+      expect(sent[0]!.argv.some((arg) => arg.startsWith("--append-system-prompt"))).toBe(false);
+    });
+
+    it("cold-starts when the turn's shape differs from the prepared one", async () => {
+      const { spawnedAhead, sent } = await firstTurn({ cwd: tmpdir() }, process.cwd());
+      expect(spawnedAhead).toBe(1);
+      expect(children).toHaveLength(2);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.pid).toBe(children[1]!.pid);
+      expect(sent[0]!.systemPrompt).toBe("You are Wink.");
+    });
   });
 });

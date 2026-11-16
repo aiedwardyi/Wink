@@ -114,7 +114,7 @@ const argAfter = (flag: string): string | null => {
 };
 
 const systemPromptPath = argAfter("--append-system-prompt-file");
-const systemPrompt = systemPromptPath ? readFileSync(systemPromptPath, "utf8") : argAfter("--append-system-prompt");
+let systemPrompt = systemPromptPath ? readFileSync(systemPromptPath, "utf8") : argAfter("--append-system-prompt");
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 
@@ -240,7 +240,7 @@ if (lateRole === "speaker") {
 // exits only when stdin ends. `slow` leaves a gap between the tool result
 // and the reply so a test can steer into it.
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string } } };
+type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string }; appendSystemPrompt?: string } };
 const sessionId = forked ? (argAfter("--session-id") ?? `${argAfter("--resume")}-fork`) : (argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session");
 const model = argAfter("--model") ?? "claude-fake";
 let effort = argAfter("--effort");
@@ -1057,6 +1057,11 @@ process.stdin.on("data", (c) => {
       const requestId = String(control.request_id ?? "");
       if (control.request?.subtype === "interrupt" && onInterrupt) onInterrupt(requestId);
       else if (control.request?.subtype === "apply_flag_settings") answerFlagSettings(requestId, control.request.settings?.effortLevel);
+      else if (control.request?.subtype === "initialize") {
+        // the real CLI appends this to the system text of every later request
+        if (control.request.appendSystemPrompt) systemPrompt = control.request.appendSystemPrompt;
+        ackInterrupt(requestId);
+      }
       else ackInterrupt(requestId);
       continue;
     }
