@@ -284,7 +284,7 @@ describe("pushPayload", () => {
 
   it("wires the icon into the mailbox ping and the test push", () => {
     const index = readFileSync(join(import.meta.dirname, "index.ts"), "utf8");
-    expect(index).toContain("pingForMailbox(source.name || source.id, parsed.data.text, botNotifyIconPath(source))");
+    expect(index).toContain("pingForMailbox(source.name || source.id, text, botNotifyIconPath(source))");
     expect(index).toContain("const icon = botNotifyIconPath(body.data.botId === undefined ? undefined : store.bot(body.data.botId));");
     expect(index).toContain('tag: "orbit:test", url: "/", icon }');
   });

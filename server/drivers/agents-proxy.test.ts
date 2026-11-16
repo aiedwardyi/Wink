@@ -56,6 +56,7 @@ let routinesResponse: unknown = {
   ],
 };
 let lastRoutineRequestBody: any = null;
+let lastWakeBody: any = null;
 interface TaskStateRequestBody {
   pause_automatic_wakes?: boolean;
   fromBotId: string;
@@ -268,6 +269,17 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify(routinesResponse));
     }
+    if (req.method === "POST" && req.url === "/api/internal/wake") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastWakeBody = JSON.parse(data);
+        const refused = lastWakeBody.at === "refuse";
+        res.writeHead(refused ? 400 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(refused ? { error: "You already have 10 pending wakes. Cancel one first." } : lastWakeBody.cancel ? { ok: true } : { id: "wake-1", local: "Sat, Nov 14, 03:45 (Asia/Seoul)" }));
+      });
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/internal/routine-requests") {
       let data = "";
       req.on("data", (c) => (data += c));
@@ -390,6 +402,7 @@ describe("agents-proxy MCP surface", () => {
       "list_routines",
       "propose_routine",
       "propose_routine_action",
+      "wake_me",
       "set_keep_going",
       "no_reply_needed",
       "link_room_fix",
@@ -1107,6 +1120,25 @@ describe("agents-proxy MCP surface", () => {
     expect(tool.inputSchema.properties.routine_id.type).toBe("string");
   });
 
+  it("sets, refuses and cancels a self-wake without a confirmation card", async () => {
+    lastWakeBody = null;
+    lastRoutineRequestBody = null;
+    const set = await callTool("wake_me", { at: "2026-11-14T03:45:00+09:00", note: "resume the deploy check" });
+    expect(set.result.isError).toBeFalsy();
+    expect(set.result.content[0].text).toContain("wake-1");
+    expect(set.result.content[0].text).toContain("03:45");
+    expect(lastWakeBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", at: "2026-11-14T03:45:00+09:00", note: "resume the deploy check" });
+    expect(lastRoutineRequestBody).toBeNull();
+    const refused = await callTool("wake_me", { at: "refuse", note: "x" });
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.content[0].text).toContain("10 pending wakes");
+    const cancelled = await callTool("wake_me", { cancel: "wake-1" });
+    expect(cancelled.result.isError).toBeFalsy();
+    expect(lastWakeBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", cancel: "wake-1" });
+    const missing = await callTool("wake_me", {});
+    expect(missing.result.isError).toBe(true);
+  });
+
   it("proposes a weekly routine through a confirmation-only request", async () => {
     lastRoutineRequestBody = null;
     const res = await callTool("propose_routine", {
@@ -1306,7 +1338,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(23);
+    expect(list.result.tools).toHaveLength(24);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1318,7 +1350,7 @@ describe("agents-proxy identity gate", () => {
     ]);
   });
 
-  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "set_keep_going", "report_issue"])("refuses %s from a peer turn before calling the harness", async (name) => {
+  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "wake_me", "set_keep_going", "report_issue"])("refuses %s from a peer turn before calling the harness", async (name) => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_TEAM_REPORTS: "1" }, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toContain("unavailable in peer turns");
@@ -1331,6 +1363,23 @@ describe("agents-proxy identity gate", () => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, name as string, args);
     expect(call.result.isError).toBeFalsy();
   });});
+
+describe("agents-proxy read-only room turn", () => {
+  const identity = { OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0", OMB_READ_ONLY_TURN: "1" };
+
+  it("lists no saved keys, connected apps, bot asks, Forum posts or Agentic Mode", async () => {
+    const { list } = await probeWithIdentity(identity);
+    expect(list.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
+      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "update_task_state", "usage_status", "wait_delegation",
+    ]);
+  });
+
+  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post"])("refuses %s before calling the harness", async (name) => {
+    const { call } = await probeWithIdentity(identity, name);
+    expect(call.result.isError).toBe(true);
+    expect(call.result.content[0].text).toBe(`${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`);
+  });
+});
 
 describe("agents-proxy catalog", () => {
   const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
@@ -1443,10 +1492,10 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 23, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 24, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 24, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 25, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 24, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 25, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 25, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 26, true],
     [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
     [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],

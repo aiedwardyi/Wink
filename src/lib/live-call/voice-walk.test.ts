@@ -42,6 +42,8 @@ function fakeAudio(): Mic {
     async heal() { return true; },
     stopMic() {},
     play() {},
+    endTurn() {},
+    tune() {},
     flush() {},
     close() {},
     boop() {},

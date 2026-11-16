@@ -18,10 +18,11 @@ function when(schedule: Routine["schedule"], tag: string, everyDay: string) {
   return `${days.join(", ")} ${time}`;
 }
 
-/** A bot's routines, behind one Alarms line that shows only when it has some. */
-export function BotAlarms({ routines }: { routines: Routine[] }) {
+/** A bot's routines, behind one Alarms line that shows only when it has some. Its own wake_me wakes are not alarms. */
+export function BotAlarms({ routines: all }: { routines: Routine[] }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
+  const routines = all.filter((routine) => !routine.wake);
   if (!routines.length) return null;
   const tag = localeTag(locale);
   return (

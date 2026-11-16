@@ -14,6 +14,7 @@ import { CertManager, type AcmeClientLike } from "./acme.ts";
 import { BASE_RE } from "./config.ts";
 import { handleControl, handleData, type ChannelContext } from "./channels.ts";
 import { Enroller, TICKET_TTL_SEC } from "./enroll.ts";
+import { GoogleEnroller, GoogleEnrollJournal } from "./google-enroll.ts";
 import { createApiServer } from "./http.ts";
 import { Hub } from "./hub.ts";
 import { InviteStore } from "./invites.ts";
@@ -102,7 +103,8 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
   const reports = teamOwnerEmail ? new ReportStore(opts.dataDir, teamOwnerEmail) : undefined;
   const roomCodes = await RoomCodeStore.open(opts.dataDir, now, log);
   const stats = opts.stats ? await StatsStore.open(opts.dataDir, opts.stats, now, log) : undefined;
-  const hub = new Hub({ limits, log, now, team });
+  const googleEnrolls = opts.google ? await GoogleEnrollJournal.open(opts.dataDir) : undefined;
+  const hub = new Hub({ limits, log, now, team, joinedWithGoogle: (label) => googleEnrolls?.has(label) ?? false });
   const revoked = new RevocationList(opts.revokedLabelsFile, log);
   await revoked.load();
   const store = await InviteStore.open(opts.dataDir, now);
@@ -147,12 +149,24 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
         ticketTtlSec,
       })
     : undefined;
+  const googleEnroller = accounts && googleEnrolls
+    ? new GoogleEnroller({
+        accounts,
+        journal: googleEnrolls,
+        operatorPrivateKey: opts.operatorPrivateKey,
+        isRevoked: (label) => revoked.has(label),
+        limits,
+        now,
+        ticketTtlSec,
+      })
+    : undefined;
   const api = createApiServer({
     base,
     relayHost,
     hub,
     enroller,
     accounts,
+    googleEnroller,
     signinOrigin: opts.google?.signinOrigin,
     team,
     teamOwnerEmail,

@@ -2531,6 +2531,20 @@ test("FINISHED accepts split markers but ignores prompt text and foreign markers
   assert.equal(f.notes.length, 1);
 });
 
+test("turn-end watcher preserves the original mailbox identity", async (t) => {
+  const identity = { messageId: "123e4567-e89b-12d3-a456-426614174000", sentAt: Date.now(), queued: true };
+  const posts = [];
+  const f = stallFixture({ notePane: (mail, scope, text, _fetch, original) => postPaneNote(mail, scope, text, async (_url, init) => {
+    posts.push(JSON.parse(init.body));
+    return new Response("{}");
+  }, original) });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "AGENT", command: "codex go" });
+  f.host.attendBot("bot-1", pane.sessionId, "auto", "all green", identity);
+  await f.advance(90_000);
+  assert.deepEqual(posts, [{ text: "all green", ...identity }]);
+});
+
 test("turn-end note waits 90 seconds and is delivered once", async (t) => {
   const f = stallFixture();
   t.after(() => f.host.dispose());

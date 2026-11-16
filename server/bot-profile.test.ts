@@ -44,6 +44,14 @@ describe("parseBotProfilePatch (both modes)", () => {
     expect(result).toEqual({ ok: true, patch: { name: "Mira" } });
   });
 
+  it("takes a bot's call picks and refuses ones the call cannot play", () => {
+    const call = { voice: "Sulafat", speed: 0.8, style: "calm", language: "ko" } as const;
+    expect(parseBotProfilePatch({ call }, true)).toEqual({ ok: true, patch: { call } });
+    for (const bad of [{ voice: "Nova" }, { speed: 2 }, { style: "loud" }, { language: "fr" }, { volume: 0.5 }]) {
+      expect(parseBotProfilePatch({ call: bad } as never).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("keeps instructions of any length", () => {
     const description = "Follow this rule. ".repeat(2_000);
     expect(parseBotProfilePatch({ description }, true)).toEqual({ ok: true, patch: { description } });

@@ -3,11 +3,29 @@
 export const LIVE_MODEL = "gemini-3.8-live";
 /** The call voice until the person picks another. */
 export const LIVE_VOICE = "Aoede";
-/** Gemini Live prebuilt voices offered in Settings, shown as Jenn, Eddie and Adele. */
-export const LIVE_VOICES = ["Aoede", "Alnilam", "Erinome"] as const;
+/** Every Gemini Live prebuilt voice; Jenn, Eddie and Adele first. Each has a two-word vibe (callVoice.vibe.* in the i18n catalog). */
+export const LIVE_VOICES = [
+  "Aoede", "Alnilam", "Erinome", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel",
+  "Algieba", "Despina", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+] as const;
 export type LiveVoice = (typeof LIVE_VOICES)[number];
-// Must match the picker labels (callVoice.* in the i18n catalog).
-export const LIVE_VOICE_NAMES: Record<LiveVoice, readonly string[]> = { Aoede: ["Jenn"], Alnilam: ["Eddie"], Erinome: ["Adele", "아델"] };
+// Must match the picker labels (callVoice.* in the i18n catalog); other voices go by their own name.
+const VOICE_NAMES: Partial<Record<LiveVoice, readonly string[]>> = { Aoede: ["Jenn"], Alnilam: ["Eddie"], Erinome: ["Adele", "아델"] };
+export function liveVoiceNames(voice: LiveVoice): readonly string[] {
+  return VOICE_NAMES[voice] ?? [voice];
+}
+
+/** A bot's own call picks; anything unset follows the app (voice in Settings, language from the app). */
+export const CALL_STYLES = ["calm", "normal", "lively"] as const;
+export type CallStyle = (typeof CALL_STYLES)[number];
+export const CALL_SPEED = { min: 0.7, max: 1.3, step: 0.1 } as const;
+export type CallPrefs = { voice?: LiveVoice; speed?: number; style?: CallStyle; language?: "en" | "ko" };
+// Calm plays 4.4 dB under normal; lively 1 dB over, still under -3 dBTP.
+export const STYLE_GAIN: Record<CallStyle, number> = { calm: 0.6, normal: 1, lively: 1.12 };
+export const STYLE_LINES: Partial<Record<CallStyle, string>> = {
+  calm: "VOICE: Speak softly and gently, low-key and unhurried, like a quiet late-night talk. Never loud or excited.",
+  lively: "VOICE: Speak with bright, upbeat energy.",
+};
 // Live has no accent field, so the accent rides the system instruction.
 export const LIVE_ACCENTS: Partial<Record<LiveVoice, string>> = { Erinome: "When you speak English, use a natural British accent." };
 export function liveGeneration(voice: LiveVoice = LIVE_VOICE) {
