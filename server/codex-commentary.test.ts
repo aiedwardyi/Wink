@@ -379,4 +379,8 @@ describe("a final answer that restates a text from before a tool call", () => {
     expect(events.filter(isText)).toHaveLength(1);
     expect(settled("t-gemini", events).shown).toHaveLength(1);
   });
+
+  it("drops the Gemini step a later step restates from its one row", async () => {
+    expect(settled("t-gemini", await gemini()).shown).toEqual([final]);
+  });
 });
