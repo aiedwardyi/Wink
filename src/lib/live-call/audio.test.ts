@@ -33,7 +33,6 @@ function setup() {
   const tones: Array<{ connect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }> = [];
   const buffers: Float32Array[] = [];
   const sources: Array<{ buffer: unknown; connect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; onended: (() => void) | null }> = [];
-  const gains: Node[] = [];
   const ctx = {
     state: "suspended",
     currentTime: 1,
@@ -56,17 +55,13 @@ function setup() {
       tones.push(osc);
       return osc;
     },
-    createGain: () => {
-      const node = { gain: { value: 1, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn(), setTargetAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() };
-      gains.push(node);
-      return node;
-    },
+    createGain: () => ({ gain: { value: 1, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn(), setTargetAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() }),
     createBiquadFilter: () => ({ type: "", frequency: { value: 0 }, connect: vi.fn() }),
     audioWorklet: { addModule: vi.fn(async () => {}) },
     resume: vi.fn(async (): Promise<void> => { ctx.state = "running"; }),
     close: vi.fn(async () => {}),
   };
-  return { audio: new CallAudio(ctx as unknown as AudioContext), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones, buffers, gains };
+  return { audio: new CallAudio(ctx as unknown as AudioContext), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones, buffers };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -162,7 +157,7 @@ describe("CallAudio", () => {
   });
 
   it("plays the voice at a calm speech level, with the boop kept at the same level beside it", async () => {
-    const { audio, destination, voice, gains } = setup();
+    const { audio, destination, voice, tones } = setup();
     await audio.capture(() => {});
     audio.boop();
     const level = gainTo(voice, destination)!;
@@ -170,7 +165,7 @@ describe("CallAudio", () => {
     expect(RECORDED.lufs + db).toBeGreaterThan(-21);
     expect(RECORDED.lufs + db).toBeLessThan(-19);
     expect(RECORDED.peakDb + db).toBeLessThan(-3);
-    expect(gainTo(gains.at(-1)!, destination)).toBe(level);
+    expect(gainTo(tones[0]!, destination)).toBe(level);
     audio.close();
   });
 
