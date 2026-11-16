@@ -92,13 +92,8 @@ async function startOutside(gate, runtime, args, env) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
-    "$start = New-Object System.Diagnostics.ProcessStartInfo",
-    `$start.FileName = ${literal(runtime.executable)}`,
-    `$start.Arguments = ${literal(args.map((arg) => `"${arg}"`).join(" "))}`,
-    `$start.WorkingDirectory = ${literal(runtime.bin)}`,
-    "$start.UseShellExecute = $true",
-    "$start.WindowStyle = 'Hidden'",
-    "[Console]::Out.Write([System.Diagnostics.Process]::Start($start).Id)",
+    `$started = Start-Process -PassThru -WindowStyle Hidden -FilePath ${literal(runtime.executable)} -WorkingDirectory ${literal(runtime.bin)} -ArgumentList ${literal(args.map((arg) => `"${arg}"`).join(" "))}`,
+    "[Console]::Out.Write($started.Id)",
   ].join("\n");
   const shell = path.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const child = startProcess(gate, () => spawn(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env }));
