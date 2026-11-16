@@ -471,6 +471,7 @@ import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, t
 import { observeLive } from "./side-live-state.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
+import { CODE_FIX_INSTRUCTIONS } from "./code-fix-rules.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -4751,6 +4752,8 @@ const DETAILED_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS;
 // here costs a reminder every send.
 const CORPUS_SEARCH_INSTRUCTIONS =
   " When searching any corpus, document set or files, match case-insensitively: scanned/OCR records often use capitals. An empty result tests your query first; try another search strategy or tool class before concluding absence. Never state an unqualified absence. When reporting no match, say what and how you searched so the user can judge a true negative.";
+// One block for every route, so none can carry one rule set without the other.
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS;
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -5836,7 +5839,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           showImagePrompt +
           (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
-          CORPUS_SEARCH_INSTRUCTIONS +
+          DEFAULT_RULES +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
@@ -6898,7 +6901,7 @@ async function runClaimedGroupMemberTurn(
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
-    CORPUS_SEARCH_INSTRUCTIONS +
+    DEFAULT_RULES +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
