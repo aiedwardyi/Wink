@@ -603,8 +603,9 @@ it("shows one line and a Demo-chipped example on an empty Map, with no calls, un
   await emit([]);
   expect(host.querySelector(".map-empty")?.textContent).toBe("No live workers");
   expect(host.querySelector(".map-example > p")?.textContent).toBe("Your workers' changes show here live");
-  expect(host.querySelector(".map-example small")?.textContent).toBe("Demo");
-  expect(["bg-accent", "text-accent-ink"].every(name => host.querySelector(".map-example small")?.classList.contains(name))).toBe(true);
+  const chip = host.querySelector(".map-example small");
+  expect(chip?.textContent).toBe("Demo");
+  expect([...chip?.classList ?? []]).toEqual(expect.arrayContaining(["bg-accent", "text-accent-ink"]));
   expect(host.querySelector(".map-example > div")?.hasAttribute("inert")).toBe(true);
   const file = () => host.querySelector(".map-example .map-code")?.textContent;
   const first = file();
