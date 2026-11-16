@@ -20,8 +20,9 @@ import { PAIRING_TTL_MS, PHONES_FILE, PhoneDevices } from "./phone-devices.ts";
 import { GPAIR_TTL_MS, pairNonce } from "./phone-google.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { enrollWith } from "./phone-relay/enroll.ts";
+import { enrollWithGoogle } from "./phone-relay/google-enroll.ts";
 import { createPhoneRelay } from "./phone-relay/runtime.ts";
-import { readIdentity, readTicket, writeAccount } from "./phone-relay/store.ts";
+import { readAccount, readIdentity, readTicket, writeAccount } from "./phone-relay/store.ts";
 import type { JsonObject } from "./schema.ts";
 import { FakeClock } from "./phone-relay/testing/fake-clock.ts";
 import { loopbackLookup } from "./phone-relay/testing/fake-relay.ts";
@@ -765,6 +766,7 @@ describe("relay request gate", () => {
       ["GET", "/api/phone-relay/status"],
       ["PUT", "/api/phone-relay"],
       ["POST", "/api/phone-relay/enroll"],
+      ["POST", "/api/phone-relay/google-enroll"],
     ];
     for (const [method, path] of routes) {
       const res = await viaRelay(w.r, path, {
@@ -1339,5 +1341,151 @@ describe("setup codes", () => {
     expect(res.status).toBe(200);
     expect(readTicket(pc.r.dataDir).kind).toBe("ok");
     expect(pc.saves).toEqual([]);
+  });
+});
+
+describe("Google join", () => {
+  /** A PC with no relay set up, signed in to Google, whose build names the team relay. */
+  async function joiner(options: { teamBase?: string | null; sub?: string | null; enrolled?: boolean; config?: PhoneRelayConfig; port?: number } = {}) {
+    const r = await rig({ enroll: options.enrolled === true });
+    const issuer = new FakeGoogle();
+    const config: PhoneRelayConfig = { ...(options.enrolled ? r.config : { acmeDirectories: r.config.acmeDirectories }), ...options.config };
+    const saves: string[] = [];
+    const statuses = new StatusLog();
+    const sub = options.sub === undefined ? OWNER : options.sub;
+    const google = { held: sub ? issuer.token({ sub }) : null };
+    const fresh = vi.fn(async () => (sub ? issuer.token({ sub }) : null));
+    const access: PhoneAccess = new PhoneAccess({
+      dataDir: r.dataDir,
+      env: {},
+      staticDir: null,
+      config: () => config,
+      saveEnabled: (enabled) => {
+        config.enabled = enabled;
+      },
+      saveSetup: (base) => {
+        saves.push(base);
+        Object.assign(config, { base, enabled: true });
+      },
+      teamBase: options.teamBase === undefined ? BASE : options.teamBase,
+      onChange: () => statuses.push(access.status()),
+      start: (relayOptions) =>
+        createPhoneRelay(relayOptions, { clock: new FakeClock(), env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
+      enroll: (enrollOptions) => enrollWith(enrollOptions, { https: { ca: r.relay.ca.certPem, port: r.relay.port, lookup: loopbackLookup }, env: {} }),
+      googleEnroll: (joinOptions) => enrollWithGoogle(joinOptions, { https: { ca: r.relay.ca.certPem, port: options.port ?? r.relay.port, lookup: loopbackLookup } }),
+      google: { webClientId: WEB_CLIENT, sub: () => sub, idToken: () => google.held, freshIdToken: fresh, name: () => "Desk PC", keys: issuer.keys },
+    });
+    await access.start(() => {});
+    worlds.push(async () => {
+      await access.stop();
+      await r.close();
+    });
+    const call = async (method: string, path: string, body?: JsonObject, bearer = true) => {
+      const server = createServer(async (req, res) => {
+        if (!(await access.handle(req, res, path, method, bearer))) send(res, 404, { error: "no route" });
+      });
+      const port = await listenLocal(server);
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}${path}`, { method, body: body && JSON.stringify(body) });
+        return { status: res.status, body: z.record(z.string(), z.unknown()).parse(await res.json()) };
+      } finally {
+        server.close();
+      }
+    };
+    const join = (bearer = true) => call("POST", "/api/phone-relay/google-enroll", {}, bearer);
+    const status = async () => (await call("GET", "/api/phone-relay/status")).body;
+    return { r, access, config, saves, statuses, issuer, google, fresh, call, join, status };
+  }
+
+  it("joins the team relay with one click, then connects and lists this PC for its Google account", async () => {
+    const pc = await joiner();
+    expect(await pc.status()).toMatchObject({ configured: false, enabled: false, joinable: true });
+    const connected = pc.statuses.until((s) => s.state === "connected");
+    const res = await pc.join();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ configured: true, enabled: true, base: BASE });
+    expect(pc.saves).toEqual([BASE]);
+    expect(readTicket(pc.r.dataDir).kind).toBe("ok");
+    expect(readAccount(pc.r.dataDir).kind).toBe("ok");
+    expect(pc.r.relay.enrollBodies).toEqual([]);
+    expect(JSON.parse(pc.r.relay.googleEnrollBodies[0]!)).toMatchObject({ idToken: pc.google.held });
+    expect(pc.fresh).not.toHaveBeenCalled();
+    await connected;
+  });
+
+  it.each([
+    [503, { error: "full", retryAfter: 3600 }],
+    [403, { error: "account-full" }],
+  ])("says the relay is full and saves nothing when it answers %i", async (code, answer) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pc = await joiner();
+    pc.r.relay.googleEnrollAnswer = () => ({ status: code, body: JSON.stringify(answer) });
+    expect(await pc.join()).toEqual({ status: 409, body: { error: "relay-full" } });
+    expect(pc.saves).toEqual([]);
+    expect(pc.config.base).toBeUndefined();
+    expect(readTicket(pc.r.dataDir).kind).toBe("missing");
+    expect(await pc.status()).toMatchObject({ configured: false, joinable: true });
+  });
+
+  it("calls an old relay without the Google route, or one that is offline, unavailable", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const old = await joiner();
+    old.r.relay.offerGoogle = false;
+    expect(await old.join()).toEqual({ status: 409, body: { error: "relay-unavailable" } });
+    expect(old.saves).toEqual([]);
+    const dead = createServer();
+    const port = await listenLocal(dead);
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
+    const offline = await joiner({ port });
+    expect(await offline.join()).toEqual({ status: 409, body: { error: "relay-unavailable" } });
+    expect(offline.saves).toEqual([]);
+    expect(readTicket(offline.r.dataDir).kind).toBe("missing");
+  });
+
+  it("refreshes a held Google token the relay would call stale", async () => {
+    const pc = await joiner();
+    pc.google.held = pc.issuer.token({ sub: OWNER }, Date.now() - 11 * 60_000);
+    const res = await pc.join();
+    expect(res.status).toBe(200);
+    expect(pc.fresh).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(pc.r.relay.googleEnrollBodies[0]!).idToken).not.toBe(pc.google.held);
+  });
+
+  it("asks a signed-out PC to sign in and sends nothing", async () => {
+    const pc = await joiner({ sub: null });
+    expect(await pc.join()).toEqual({ status: 409, body: { error: "signed-out" } });
+    expect(pc.r.relay.googleEnrollBodies).toEqual([]);
+    expect(readdirSync(pc.r.dataDir)).toEqual([]);
+  });
+
+  it("keeps the Google join on the PC's own token", async () => {
+    const pc = await joiner();
+    expect(await pc.join(false)).toEqual({ status: 403, body: { error: "manage phone access on this PC" } });
+    expect(pc.r.relay.googleEnrollBodies).toEqual([]);
+  });
+
+  it.each([["another relay", "other.example"], ["the team relay", BASE]])("refuses a PC that holds a ticket for %s, naming it", async (_, teamBase) => {
+    const pc = await joiner({ enrolled: true, teamBase });
+    expect(await pc.join()).toEqual({ status: 409, body: { error: `this PC already uses the relay at ${BASE}` } });
+    expect(pc.r.relay.googleEnrollBodies).toEqual([]);
+  });
+
+  it("leaves a build with no team relay on the Tailscale path: not joinable, nothing written, nothing sent", async () => {
+    const pc = await joiner({ teamBase: null });
+    expect(await pc.status()).toMatchObject({ configured: false, enabled: false, joinable: false, state: "off" });
+    expect(await pc.join()).toEqual({ status: 409, body: { error: "relay-unavailable" } });
+    expect(pc.r.relay.log).toEqual([]);
+    expect(readdirSync(pc.r.dataDir)).toEqual([]);
+  });
+
+  it("keeps the setup code path on its own invite and base when a team relay exists", async () => {
+    const pc = await joiner({ teamBase: "team.example" });
+    const connected = pc.statuses.until((s) => s.state === "connected");
+    const res = await pc.call("POST", "/api/phone-relay/setup", { code: buildSetupCode(BASE, mintInvite(pc.r.relay.operatorKey)) });
+    expect(res.status).toBe(200);
+    expect(pc.saves).toEqual([BASE]);
+    expect(pc.r.relay.enrollBodies).toHaveLength(1);
+    expect(pc.r.relay.googleEnrollBodies).toEqual([]);
+    await connected;
   });
 });

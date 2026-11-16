@@ -1,6 +1,6 @@
 // In-process stand-in for relay.<base> built on the shared protocol: SNI
 // routing on one port, control and data channels, go splicing, and the
-// enroll and account APIs. It never decrypts phone traffic, like the real relay.
+// enroll, Google enroll and account APIs. It never decrypts phone traffic, like the real relay.
 
 import { EventEmitter } from "node:events";
 import { generateKeyPairSync, verify, type KeyObject } from "node:crypto";
@@ -30,9 +30,10 @@ import {
   type RelayMessage,
 } from "../../../shared/relay-protocol.ts";
 import { parseClientHello } from "../../../shared/tls-client-hello.ts";
-import { accountPayload, idTokenClaims } from "../account.ts";
+import { ACCOUNT_TOKEN_MAX_AGE_MS, accountPayload, idTokenClaims } from "../account.ts";
 import type { RelayConnector } from "../client.ts";
 import { enrollPayload } from "../enroll.ts";
+import { googleEnrollPayload } from "../google-enroll.ts";
 import { SpliceStream } from "../ingress.ts";
 import { listenLocal } from "./net.ts";
 import type { TestCa } from "./pki.ts";
@@ -89,6 +90,10 @@ export class FakeRelay extends EventEmitter {
   /** Every byte the relay spliced, both directions. */
   readonly spliced: Buffer[] = [];
   readonly enrollBodies: string[] = [];
+  /** Serve /v1/enroll/google, as a relay with a google block does. An old relay answers 404. */
+  offerGoogle = true;
+  googleEnrollAnswer: ((body: string) => EnrollAnswer) | null = null;
+  readonly googleEnrollBodies: string[] = [];
   /** Without it, /v1/acme/eab answers 404 like a relay with no second CA. */
   eabAnswer: ((body: string) => EnrollAnswer) | null = null;
   readonly eabBodies: string[] = [];
@@ -377,6 +382,13 @@ export class FakeRelay extends EventEmitter {
         res.writeHead(answer.status, { "content-type": "application/json" }).end(answer.body);
         return;
       }
+      if (req.method === "POST" && req.url === "/v1/enroll/google" && this.offerGoogle) {
+        this.googleEnrollBodies.push(body);
+        this.record("enroll:google");
+        const answer = this.googleEnrollAnswer ? this.googleEnrollAnswer(body) : this.defaultGoogleEnroll(body);
+        res.writeHead(answer.status, { "content-type": "application/json" }).end(answer.body);
+        return;
+      }
       if (req.method === "POST" && req.url === "/v1/acme/eab" && this.eabAnswer) {
         this.eabBodies.push(body);
         const answer = this.eabAnswer(body);
@@ -420,6 +432,26 @@ export class FakeRelay extends EventEmitter {
     const token = idTokenClaims(idToken);
     if (!token) return { status: 403, body: JSON.stringify({ error: "bad-token" }) };
     return { status: 200, body: JSON.stringify({ account: this.accountFor(claims.value.label, token.sub) }) };
+  }
+
+  /** Checks the PC signature and token age; trusts the ID token's sub, as defaultAccount does. */
+  private defaultGoogleEnroll(body: string): EnrollAnswer {
+    let parsed: { idToken?: string; pk?: string; sig?: string };
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return { status: 400, body: JSON.stringify({ error: "bad-request" }) };
+    }
+    const { idToken, pk, sig } = parsed;
+    if (!idToken || !pk || !sig) return { status: 400, body: JSON.stringify({ error: "bad-request" }) };
+    const key = publicKeyFromRaw(pk);
+    if (!key || !verify(null, googleEnrollPayload(idToken, pk), key, Buffer.from(sig, "base64url"))) {
+      return { status: 403, body: JSON.stringify({ error: "bad-signature" }) };
+    }
+    const token = idTokenClaims(idToken);
+    if (!token || Date.now() - token.iat > ACCOUNT_TOKEN_MAX_AGE_MS) return { status: 403, body: JSON.stringify({ error: "token-stale" }) };
+    const label = labelForPublicKey(Buffer.from(pk, "base64url"));
+    return { status: 200, body: JSON.stringify({ ticket: this.ticketFor(pk), account: this.accountFor(label, token.sub) }) };
   }
 
   private defaultEnroll(body: string): EnrollAnswer {

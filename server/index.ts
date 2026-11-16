@@ -612,6 +612,7 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
     saveConfig({ phoneRelay: { base, enabled: true } });
     Object.assign(cfg, loadConfig());
   },
+  teamBase: teamRelayBase(googleEnv.teamRelay),
   room: handleRoomDoor,
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);

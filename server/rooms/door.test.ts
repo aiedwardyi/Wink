@@ -213,7 +213,7 @@ beforeAll(async () => {
     config: () => ({ base: "wink.test", enabled: true }),
     saveEnabled: () => {},
     start: () => relay,
-    loadClient: async () => ({ start: () => relay, enroll: async () => {}, peer: () => peer }),
+    loadClient: async () => ({ start: () => relay, enroll: async () => {}, googleEnroll: async () => ({ ok: true }), peer: () => peer }),
     room: handleRoomDoor,
   });
   await access.start(app);

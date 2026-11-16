@@ -111,6 +111,77 @@ describe("PhoneAccessSettings", () => {
     await act(async () => root.unmount());
   });
 
+  const joinable = () => status({ available: true, configured: false, enabled: false, state: "off", host: null, joinable: true });
+
+  it.each([
+    ["en", "Connect to this PC from your devices?", "Turn On", "Open on any device"],
+    ["ko", "내 기기에서 이 PC에 연결할까요?", "켜기", "다른 기기에서 열기"],
+  ])("with a relay to join, the switch asks once, joins with Google and shows the QR, in %s", async (locale, ask, turnOn, open) => {
+    localStorage.setItem("omb-locale", locale);
+    const onNoRelay = vi.fn();
+    let relay = joinable();
+    const enroll = vi.fn(() => (relay = status()));
+    serve({
+      "GET /api/phone-relay/status": () => relay,
+      "GET /api/google-account": () => ({ state: "signed-in", email: "fixture@example.invalid" }),
+      "GET /api/phone/devices": () => ({ phones: [] }),
+      "POST /api/phone-relay/google-enroll": enroll,
+    });
+    const { host, root } = await renderView({ onNoRelay });
+    expect(host.textContent).toContain("fixture@example.invalid");
+    const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(toggle.disabled).toBe(false);
+    await act(async () => click(toggle));
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(ask);
+    expect(enroll).not.toHaveBeenCalled();
+    await act(async () => click(button(dialog, turnOn)));
+    expect(enroll).toHaveBeenCalledTimes(1);
+    expect(enroll).toHaveBeenCalledWith({ method: "POST" });
+    expect(onNoRelay).not.toHaveBeenCalled();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
+    expect(host.textContent).toContain(open);
+    await act(async () => root.unmount());
+  });
+
+  it.each([
+    ["en", "relay-full", "The fast phone link is full this week. Use Tailscale for now."],
+    ["en", "relay-unavailable", "Not available on this PC yet. Use Tailscale below."],
+    ["en", "enroll-failed", "Not available on this PC yet. Use Tailscale below."],
+    ["ko", "relay-full", "빠른 휴대폰 연결이 이번 주에는 꽉 찼습니다. 지금은 Tailscale을 사용하세요."],
+  ])("a join refused in %s with %s goes to the other ways with one line", async (locale, refusal, line) => {
+    localStorage.setItem("omb-locale", locale);
+    const onNoRelay = vi.fn();
+    serve({
+      "GET /api/phone-relay/status": joinable,
+      "GET /api/google-account": () => ({ state: "signed-in", email: "fixture@example.invalid" }),
+      "POST /api/phone-relay/google-enroll": () => {
+        throw new Error(refusal);
+      },
+    });
+    const { host, root } = await renderView({ onNoRelay });
+    const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    await act(async () => click(toggle));
+    await act(async () => click(document.querySelector<HTMLElement>('[role="dialog"] button:last-of-type')!));
+    expect(onNoRelay).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(line);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await act(async () => root.unmount());
+  });
+
+  it("with a relay to join, a signed-out PC signs in first", async () => {
+    const signIn = vi.fn(async () => ({ ok: true as const, email: "fixture@example.invalid" }));
+    vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+    serve({ "GET /api/phone-relay/status": joinable, "GET /api/google-account": () => ({ state: "signed-out" }) });
+    const { host, root } = await renderView();
+    expect(host.querySelector('[role="switch"]')).toBeNull();
+    expect(host.textContent).toContain("Sign in with Google to turn this on.");
+    await act(async () => click(button(host, "Sign In")));
+    expect(signIn).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
   it("says not available when the relay is forced off", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }) });
     const off = await renderView();
