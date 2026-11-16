@@ -691,6 +691,8 @@ export const en = {
   "routine.expandSidebar": "Expand sidebar, a routine rang",
   "routine.card.queued": "Starts when the current reply ends",
   "routine.card.rang": "Rang at {time}",
+  "wake.chip": "Wakes {time}",
+  "wake.cancel": "Cancel the wake at {time}",
   "routine.card.waiting": "Needs a reply below",
   "routine.card.failed": "Failed: {error}",
   "routine.card.missed": "Missed {time}, this PC was off",
@@ -796,6 +798,7 @@ export const en = {
   "chrome.closeRecentlyDeleted": "Close recently deleted",
   "chrome.restoreFolderBusy": "Could not restore {name}. A file in its folder is open in another app. Close it and try again.",
   "chrome.deleteChannel": "Delete group",
+  "chrome.deleteGroupBodyAllPcs": "This deletes {name} on all your PCs. This cannot be undone.",
   "chrome.cannotContactTeammates": "This engine cannot contact teammates yet",
 
   "chrome.bots": "Bots",
@@ -2545,6 +2548,8 @@ export const ko = {
   "routine.expandSidebar": "사이드바 펼치기, 루틴 알람이 울렸어요",
   "routine.card.queued": "지금 답변이 끝나면 시작해요",
   "routine.card.rang": "{time}에 울렸어요",
+  "wake.chip": "{time}에 깨워요",
+  "wake.cancel": "{time} 깨우기 취소",
   "routine.card.waiting": "아래에서 답이 필요해요",
   "routine.card.failed": "실패했어요: {error}",
   "routine.card.missed": "{time} 알람을 놓쳤어요. PC가 꺼져 있었어요",
@@ -2650,6 +2655,7 @@ export const ko = {
   "chrome.closeRecentlyDeleted": "최근 삭제한 봇 닫기",
   "chrome.restoreFolderBusy": "{name} 봇을 복원하지 못했습니다. 폴더 안 파일이 다른 앱에서 열려 있습니다. 닫은 뒤 다시 시도하세요.",
   "chrome.deleteChannel": "그룹 삭제",
+  "chrome.deleteGroupBodyAllPcs": "{name} 그룹을 모든 PC에서 삭제합니다. 되돌릴 수 없습니다.",
   "chrome.cannotContactTeammates": "이 엔진은 아직 팀원에게 연락할 수 없습니다",
 
   "chrome.bots": "봇",

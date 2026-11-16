@@ -22,7 +22,7 @@ it("lets a bot's own token reach every route its agents and terminal tools call 
   const proxy = ["agents-proxy.ts", "terminal-proxy.ts"].map((file) => readFileSync(new URL(`./drivers/${file}`, import.meta.url), "utf8")).join("\n");
   const called = [...new Set([...proxy.matchAll(/["`}](\/api\/internal\/[\w/-]+)/g)].map((m) => m[1]!.replace(/\/$/, "/x")))];
   expect(called.length).toBeGreaterThan(15);
-  for (const path of [...called, VERIFY_ROUTES.tool, "/api/verify/runs/run-1234/live", "/api/bots/b1/map/repo"]) expect(botRoute(path, "b1"), path).toBe(true);
+  for (const path of [...called, "/api/internal/wake", VERIFY_ROUTES.tool, "/api/verify/runs/run-1234/live", "/api/bots/b1/map/repo"]) expect(botRoute(path, "b1"), path).toBe(true);
   for (const path of ["/api/internal/terminal-bridge", "/api/internal/google-account", "/api/phone/pairing", "/api/bots/b1", "/api/config", "/api/internal/agents/x", "/api/verify/runs/run-1234/decision", "/api/bots/b2/map/repo", "/api/bots/b1/map/repo/x", "/api/bots/b1/memory"]) {
     expect(botRoute(path, "b1"), path).toBe(false);
   }
