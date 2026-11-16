@@ -109,8 +109,10 @@ export function Miniature({ skin, still = false }: { skin: SkinId; still?: boole
   );
 }
 
-export function SkinPicker() {
+/** `reveal`: scroll to the first of these tiles, once per request. */
+export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
   const { t } = useI18n();
+  const grid = useRef<HTMLDivElement>(null);
   // The document is the source of truth, not storage: main.tsx has already
   // stamped it, and reading it back keeps the checkmark honest even if the
   // skin was set some other way.
@@ -130,6 +132,11 @@ export function SkinPicker() {
     const timer = setTimeout(() => setOpening(false), TILE_PLAY_MS);
     return () => clearTimeout(timer);
   }, []);
+  useEffect(() => {
+    if (!reveal?.length) return;
+    const tile = grid.current?.querySelector(reveal.map((id) => `[data-skin-tile="${id}"]`).join(", "));
+    tile?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "instant" : "smooth" });
+  }, [reveal]);
 
   // The theme-cycle hotkey calls applySkin() directly, outside this
   // component's own onClick - without this, the checkmark would go stale.
@@ -163,6 +170,7 @@ export function SkinPicker() {
             <button
               key={skin.id}
               type="button"
+              data-skin-tile={skin.id}
               onClick={() => {
                 applySkin(skin.id);
                 setActive(skin.id);
@@ -204,7 +212,7 @@ export function SkinPicker() {
   ));
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={grid} className="flex flex-col gap-4">
       {renderGroups(featured)}
       <button
         type="button"

@@ -167,6 +167,20 @@ describe("featured themes", () => {
   });
 });
 
+describe("Reveal", () => {
+  it("scrolls to the first of the asked themes in the grid, once per request", async () => {
+    await mount();
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {});
+    const reveal = (skins: SkinId[] | null) => act(async () => root.render(createElement(I18nProvider, null, createElement(SkinPicker, { reveal: skins }))));
+    await reveal(["circuit", "warp", "samurai-ink"]);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(tiles().find((tile) => tile.dataset.skinTile === "samurai-ink"));
+    await reveal(null);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    scrolled.mockRestore();
+  });
+});
+
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
     await mount("precision", "en");
