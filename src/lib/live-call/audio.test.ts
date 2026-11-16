@@ -2,6 +2,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CallAudio } from "./audio";
 
+// gemini-3.8-live recordings of Aoede, Alnilam and Erinome, played at unity gain.
+const RECORDED = { lufs: -17.2, peakDb: -1.3 };
+
+type Port = { connect?: ReturnType<typeof vi.fn>; disconnect?: ReturnType<typeof vi.fn> };
+type Node = { connect: ReturnType<typeof vi.fn>; gain?: { value: number } };
+
+function gainTo(node: Node, to: Port): number | undefined {
+  for (const [next] of node.connect.mock.calls) {
+    if (next === to) return 1;
+    const rest = next?.connect ? gainTo(next, to) : undefined;
+    if (rest !== undefined) return rest * (next.gain?.value ?? 1);
+  }
+  return undefined;
+}
+
 function setup() {
   const micTrack = { stop: vi.fn(), readyState: "live", muted: false };
   const voiceTrack = { stop: vi.fn() };
@@ -40,7 +55,7 @@ function setup() {
       tones.push(osc);
       return osc;
     },
-    createGain: () => ({ gain: { value: 0, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn(), setTargetAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() }),
+    createGain: () => ({ gain: { value: 1, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn(), setTargetAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() }),
     createBiquadFilter: () => ({ type: "", frequency: { value: 0 }, connect: vi.fn() }),
     audioWorklet: { addModule: vi.fn(async () => {}) },
     resume: vi.fn(async (): Promise<void> => { ctx.state = "running"; }),
@@ -54,12 +69,12 @@ afterEach(() => vi.unstubAllGlobals());
 describe("CallAudio", () => {
   it("opens the media output after echo-cancelled capture, without a direct speaker path", async () => {
     const { audio, ctx, output, destination, getUserMedia, voice } = setup();
-    expect(voice.connect).not.toHaveBeenCalledWith(ctx.destination);
+    expect(gainTo(voice, ctx.destination)).toBeUndefined();
     expect(output.srcObject).toBeNull();
     expect(output.play).not.toHaveBeenCalled();
     await audio.capture(() => {});
     expect(getUserMedia).toHaveBeenCalledWith({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    expect(voice.connect).toHaveBeenCalledWith(destination);
+    expect(gainTo(voice, destination)).toBeGreaterThan(0);
     expect(output.srcObject).toBe(destination.stream);
     expect(output.play).toHaveBeenCalledOnce();
     expect(getUserMedia.mock.invocationCallOrder[0]).toBeLessThan(output.play.mock.invocationCallOrder[0]!);
@@ -139,6 +154,19 @@ describe("CallAudio", () => {
     expect(second![0]).toBeCloseTo(1 / 3);
     expect(second![2_400]).toBe(0.5);
     expect(later!.every((sample) => sample === 0.5)).toBe(true);
+  });
+
+  it("plays the voice at a calm speech level, with the boop kept at the same level beside it", async () => {
+    const { audio, destination, voice, tones } = setup();
+    await audio.capture(() => {});
+    audio.boop();
+    const level = gainTo(voice, destination)!;
+    const db = 20 * Math.log10(level);
+    expect(RECORDED.lufs + db).toBeGreaterThan(-21);
+    expect(RECORDED.lufs + db).toBeLessThan(-19);
+    expect(RECORDED.peakDb + db).toBeLessThan(-3);
+    expect(gainTo(tones[0]!, destination)).toBe(level);
+    audio.close();
   });
 
   it("lets the boop finish before releasing the output", async () => {
