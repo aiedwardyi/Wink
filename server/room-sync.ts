@@ -196,6 +196,10 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
       if (Object.keys(held).length) file.pending.push({ groupId: group.id, at: group.createdAt, changes: held });
     }
   }
+  // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow
+  for (const group of store.groups) {
+    if (group.hosted && marked.has(group.id) && write(group.id, { hosted: true }, host.now())) forget(file, marked, group.id);
+  }
   const left: Pending[] = [];
   for (const entry of [...file.pending].sort((a, b) => a.at - b.at)) {
     if (entry.deleted) {
@@ -267,6 +271,15 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
     if (mine.some((entry) => entry.deleted)) continue;
     let group = store.group(id);
     if (group?.hosted) continue;
+    if (remote.hosted === true) {
+      if (group && host.working(group)) {
+        deferred = true;
+        continue;
+      }
+      if (group) removeRoom(store, group);
+      forget(file, marked, id);
+      continue;
+    }
     if (!group) {
       if (typeof remote.name !== "string" || typeof remote.createdAt !== "number" || typeof remote.threadId !== "string") continue;
       if (store.groupByThread(remote.threadId)) continue;
