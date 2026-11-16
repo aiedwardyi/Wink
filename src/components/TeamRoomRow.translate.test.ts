@@ -54,7 +54,7 @@ describe("teammate translation", () => {
   it("drops a local bubble's translation when its source text changes", async () => {
     const props = { base: "/api/rooms/r1", entryId: "m-b1", canTranslate: true, children: (translation: Parameters<typeof RoomTranslationText>[0]["translation"] | null) => translation && [
       createElement(RoomTranslateButton, { key: "button", translation }),
-      createElement(RoomTranslationText, { key: "text", translation }),
+      createElement(RoomTranslationText, { key: "text", translation, markdown: false }),
     ] };
     await act(async () => root.render(createElement(RoomLineTranslation, { ...props, text: "준비됐어요." })));
     await act(async () => button()!.click());
@@ -137,6 +137,39 @@ describe("teammate translation", () => {
     generate = async () => new Response(JSON.stringify({ text: "체크리스트가 준비됐어요." }));
     await act(async () => host.querySelector<HTMLButtonElement>('[data-room-translation] button')!.click());
     expect(host.textContent).toContain("체크리스트가 준비됐어요.");
+  });
+
+  it("renders a bot line's translation through Markdown like its original", async () => {
+    const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando" }, text: "Status:\n\n- **Workers** are done\n- Tests pass", files: [] };
+    generate = async () => new Response(JSON.stringify({ text: "상태:\n\n- **작업자**가 끝났어요\n- 테스트 통과" }));
+    applyLocale("ko");
+    await render([bot]);
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect([...translated.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["작업자가 끝났어요", "테스트 통과"]);
+    expect(translated.querySelector("strong")?.textContent).toBe("작업자");
+    expect(translated.textContent).not.toContain("**");
+  });
+
+  it("renders HTML in a bot line's translation as text", async () => {
+    const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando" }, text: "All set.", files: [] };
+    generate = async () => new Response(JSON.stringify({ text: '<img src=x onerror="alert(1)">준비됐어요' }));
+    applyLocale("ko");
+    await render([bot]);
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect(translated.querySelector("img, script")).toBeNull();
+    expect(translated.textContent).toContain("준비됐어요");
+  });
+
+  it("keeps a person line's translation as linked plain text", async () => {
+    generate = async () => new Response(JSON.stringify({ text: "- **not bold**\nhttps://example.com" }));
+    await render();
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect(translated.querySelector("li, strong")).toBeNull();
+    expect(translated.textContent).toContain("- **not bold**");
+    expect(translated.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
   });
 
   it("has no translate button without an engine", async () => {

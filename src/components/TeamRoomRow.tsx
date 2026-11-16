@@ -92,14 +92,18 @@ export function RoomTranslateButton({ translation }: { translation: LineTranslat
   );
 }
 
-export function RoomTranslationText({ translation }: { translation: LineTranslation }) {
+/** `markdown` matches the original's renderer: bot lines are Markdown, person lines are linked text. */
+export function RoomTranslationText({ translation, markdown }: { translation: LineTranslation; markdown: boolean }) {
   const { t } = useI18n();
   if (!translation.visible) return null;
+  const text = translation.text ?? "";
   return (
     <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
       {translation.pending ? t("teamRoom.translating") : translation.failed
         ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
-        : translation.text}
+        : markdown
+          ? <MessageBoundary fallbackText={text}><ChatMarkdown text={text} localLinks={false} /></MessageBoundary>
+          : <LinkedText text={text} />}
     </div>
   );
 }
@@ -205,7 +209,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
               {line.author.kind === "bot" && line.text.trim()
                 ? <MessageBoundary fallbackText={line.text}><ChatMarkdown text={line.text} localLinks={false} /></MessageBoundary>
                 : <LinkedText text={line.text} />}
-              <RoomTranslationText translation={translation} />
+              <RoomTranslationText translation={translation} markdown={line.author.kind === "bot"} />
               <RoomFileRows base={base} files={line.files} className={cn(line.text && "mt-2")} />
             </div>
           </div>
