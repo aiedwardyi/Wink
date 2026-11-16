@@ -302,10 +302,11 @@ function hasOwnDefaultMode(configDir: string, cwd: string): boolean {
 }
 
 /** The grants of the launch flags in sendTurn; server/turn-access.test.ts checks them against the real argv. */
-export function claudeAccess(config: Pick<ClaudeConfig, "permissionMode" | "tools" | "disallowedTools">, turn: AccessTurn): TurnAccess {
+export function claudeAccess(config: Pick<ClaudeConfig, "permissionMode" | "tools" | "disallowedTools">, turn: AccessTurn, ownMode = false): TurnAccess {
   if (turn.readOnly) return { edits: "off", commands: "off" };
   const has = (names: string[]) => names.some((name) => (config.tools?.includes(name) ?? true) && !config.disallowedTools?.includes(name));
-  const grants: TurnAccess = config.permissionMode === "bypassPermissions" ? FREE_ACCESS
+  const grants: TurnAccess = ownMode ? { edits: "own", commands: "own" }
+    : config.permissionMode === "bypassPermissions" ? FREE_ACCESS
     : turn.approval === "ask" ? { edits: "ask", commands: "ask" }
     : { edits: "free", commands: turn.approval === "auto" ? "auto" : "ask" };
   return {
@@ -2297,7 +2298,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           rateLimits: true,
         },
         sendTurn,
-        access: (turn) => claudeAccess(config, turn),
+        // same test as sendTurn's ownMode: the user's own defaultMode replaces Wink's acceptEdits
+        access: (turn) => claudeAccess(config, turn,
+          turn.approval !== "ask" && turn.integrations?.localComputer?.scope !== "local-computer" && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+          hasOwnDefaultMode(input.account?.home ?? claudeConfigDir({ ...process.env, ...input.environment }), turn.cwd ?? homedir())),
         steer,
         applyEffort: async (threadId, effort) => {
           const s = sessions.get(threadId);

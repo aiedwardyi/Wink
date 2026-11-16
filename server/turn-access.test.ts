@@ -45,6 +45,7 @@ function wireGrants(engine: Engine, approval: Approval, dump: Dump): { edits: Gr
     case "claude": {
       const mode = argAfter(argv, "--permission-mode");
       if (mode === "bypassPermissions") return { edits: "free", commands: "free" };
+      if (!mode) return { edits: "own", commands: "own" };
       const asked: string[] = JSON.parse(argAfter(argv, "--settings") ?? "{}").permissions?.ask ?? [];
       return { edits: mode === "acceptEdits" && !asked.includes("Edit") ? "free" : routed, commands: routed };
     }
@@ -59,8 +60,9 @@ function wireGrants(engine: Engine, approval: Approval, dump: Dump): { edits: Gr
       if (argv.includes("--dangerously-skip-permissions")) return { edits: "free", commands: "free" };
       return { edits: argv.includes("accept-edits") ? "free" : "off", commands: "off" };
     case "grok":
-      expect(argAfter(argv, "--permission-mode"), JSON.stringify(dump).slice(0, 1500)).toBeTruthy();
-      return argAfter(argv, "--permission-mode") === "bypassPermissions" ? { edits: "free", commands: "free" } : { edits: routed, commands: routed };
+      if (argAfter(argv, "--permission-mode") === "bypassPermissions") return { edits: "free", commands: "free" };
+      // no Wink override: the user's own grok config decides
+      return argv.includes("--permission-mode") ? { edits: routed, commands: routed } : { edits: "own", commands: "own" };
     case "muse":
       // fullAuto: false in this config, so every approval reaches Wink
       return { edits: routed, commands: routed };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { antigravityAccess, buildAntigravityTurnArgv } from "./antigravity.ts";
 import { claudeAccess } from "./claude.ts";
+import { grokSupport } from "./acp/grok.ts";
 import { accessRules, FREE_ACCESS, routedAccess } from "./turn-access.ts";
 
 const agents = { command: "node", args: [], env: {} };
@@ -22,6 +23,13 @@ describe("turn access", () => {
     expect(claudeAccess({ permissionMode: "acceptEdits", tools: [] }, { approval: "auto" })).toEqual({ edits: "off", commands: "off" });
     expect(claudeAccess({ permissionMode: "bypassPermissions", tools: ["Read", "WebFetch"] }, { approval: "auto" })).toEqual({ edits: "off", commands: "off" });
     expect(claudeAccess({ permissionMode: "acceptEdits", disallowedTools: ["Bash", "PowerShell"] }, { approval: "auto" })).toEqual({ edits: "free", commands: "off" });
+  });
+
+  it("grok and claude Auto follow the user's own config when Wink sets no mode", () => {
+    expect(grokSupport.grants!({ cli: "grok", fullAuto: false }, { approval: "auto" })).toEqual({ edits: "own", commands: "own" });
+    expect(grokSupport.grants!({ cli: "grok", fullAuto: false }, { approval: "ask" })).toEqual({ edits: "ask", commands: "ask" });
+    expect(grokSupport.grants!({ cli: "grok", fullAuto: true }, { approval: "ask" })).toEqual(FREE_ACCESS);
+    expect(claudeAccess({ permissionMode: "acceptEdits" }, { approval: "auto" }, true)).toEqual({ edits: "own", commands: "own" });
   });
 
   it("codex Auto without a Wink override defers to the user's own settings", () => {
