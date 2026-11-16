@@ -101,7 +101,7 @@ export function useJoinedRoom(roomId: string, limit = 200, beforeOlder?: RefObje
   const summary = summaries.find((room) => room.roomId === roomId);
   const empty = useMemo(() => summary ? { ...summary, entries: [] } : undefined, [summary]);
   const [room, setRoom] = useState(() => lastDetail?.roomId === roomId ? lastDetail : undefined);
-  const oldest = useRef<{ roomId: string; seq?: number }>(undefined);
+  const oldest = useRef<{ roomId: string; seq?: number }>(room?.detail ? { roomId, seq: room.detail.entries[0]?.seq } : undefined);
   useEffect(() => {
     if (preview) return;
     let alive = true;
