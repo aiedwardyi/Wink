@@ -92,6 +92,8 @@ export type Skin = {
   name: string;
   /** One line, shown under the name in the picker. */
   nameKey?: MessageKey;
+  /** Has a motion layer (ChatScene); the picker groups these under Animated. */
+  animated?: true;
 };
 
 export const SKINS: readonly Skin[] = [
@@ -103,7 +105,7 @@ export const SKINS: readonly Skin[] = [
   { id: "midnight", name: "Midnight" },
   { id: "atelier", name: "Atelier" },
   { id: "foundry", name: "Foundry" },
-  { id: "lagoon", name: "Lagoon", nameKey: "settings.skin.lagoon" },
+  { id: "lagoon", name: "Lagoon", nameKey: "settings.skin.lagoon", animated: true },
   { id: "ledger", name: "Ledger" },
   { id: "catppuccin-frappe", name: "Catppuccin Frappe" },
   { id: "tokyo-night", name: "Tokyo Night" },
@@ -161,14 +163,14 @@ export const SKINS: readonly Skin[] = [
   { id: "precision-dimmed", name: "Precision Dimmed" },
   { id: "bronze", name: "Bronze" },
   { id: "dim-sand", name: "Dim Sand" },
-  { id: "lagoon-night", name: "Lagoon Night", nameKey: "settings.skin.lagoonNight" },
-  { id: "snow", name: "Snow", nameKey: "settings.skin.snow" },
-  { id: "snow-night", name: "Snow Night", nameKey: "settings.skin.snowNight" },
-  { id: "neon-grid", name: "Neon Grid", nameKey: "settings.skin.neonGrid" },
-  { id: "samurai-ink", name: "Samurai Ink", nameKey: "settings.skin.samuraiInk" },
-  { id: "night-rain", name: "Night Rain", nameKey: "settings.skin.nightRain" },
-  { id: "warp", name: "Warp", nameKey: "settings.skin.warp" },
-  { id: "circuit", name: "Circuit", nameKey: "settings.skin.circuit" },
+  { id: "lagoon-night", name: "Lagoon Night", nameKey: "settings.skin.lagoonNight", animated: true },
+  { id: "snow", name: "Snow", nameKey: "settings.skin.snow", animated: true },
+  { id: "snow-night", name: "Snow Night", nameKey: "settings.skin.snowNight", animated: true },
+  { id: "neon-grid", name: "Neon Grid", nameKey: "settings.skin.neonGrid", animated: true },
+  { id: "samurai-ink", name: "Samurai Ink", nameKey: "settings.skin.samuraiInk", animated: true },
+  { id: "night-rain", name: "Night Rain", nameKey: "settings.skin.nightRain", animated: true },
+  { id: "warp", name: "Warp", nameKey: "settings.skin.warp", animated: true },
+  { id: "circuit", name: "Circuit", nameKey: "settings.skin.circuit", animated: true },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */

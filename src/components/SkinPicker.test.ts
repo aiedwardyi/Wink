@@ -6,6 +6,7 @@ import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, SKINS, applySkin, nextSkin, type SkinId } from "@/lib/skins";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import type { SceneModule } from "@/scenes/scene-host";
+import { sceneOf } from "./ChatScene";
 
 type Running = { skin: string; events: string[]; frames: number; stopped: boolean };
 const { running, broken, fakeScene } = vi.hoisted(() => {
@@ -34,12 +35,18 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
-const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon Night", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Lagoon", "Snow", "Dim Sand", "Wink Day", "Notebook"];
-const darkCount = 15;
+const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Dim Sand", "Wink Day", "Notebook"];
+const lightStart = 17;
 const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", "Samurai Ink": "사무라이 잉크", "Night Rain": "나이트 레인", Warp: "워프", Circuit: "서킷", Lagoon: "라군", Snow: "스노우" };
 const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Lagoon", "Snow"];
 const animated = ["circuit", "lagoon", "lagoon-night", "neon-grid", "night-rain", "samurai-ink", "snow", "snow-night", "warp"];
+const movingOrder = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night"];
 const taggedOld = () => tagged().filter((name) => !scene.includes(name!));
+const sections = () => [...document.querySelectorAll(".grid")].map((grid) => ({
+  title: grid.parentElement!.previousElementSibling!.textContent,
+  // SAFETY: every tile stamps data-skin-tile from its SkinId.
+  skins: [...grid.querySelectorAll<HTMLElement>("[data-skin-tile]")].map((tile) => tile.dataset.skinTile as SkinId),
+}));
 const kept = ["Wink Violet", "Wink Black", "Pewter", "Precision Dimmed"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
 const names = () => tiles().map((button) => button.querySelector(".font-medium")?.textContent);
@@ -97,7 +104,7 @@ describe("featured themes", () => {
   it("opens with every new theme ahead of every older one in each section", async () => {
     await mount("precision");
     const sections = [...document.querySelectorAll(".grid")].map((grid) => [...grid.querySelectorAll("button[aria-pressed]")].map((button) => !!button.querySelector("[data-skin-new]")));
-    expect(sections).toHaveLength(2);
+    expect(sections).toHaveLength(3);
     for (const isNew of sections) expect(isNew).toEqual([...isNew].sort((a, b) => Number(b) - Number(a)));
     expect(names()[0]).toBe("Samurai Ink");
   });
@@ -135,7 +142,7 @@ describe("featured themes", () => {
     expect(servo.getAttribute("aria-pressed")).toBe("true");
     await act(async () => more.click());
     await folded();
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Servo Gray", ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), "Servo Gray", ...featured.slice(lightStart)]);
   });
 
   it("keeps Precision Dimmed under More themes and gives an active extra theme the current-theme slot", async () => {
@@ -143,10 +150,10 @@ describe("featured themes", () => {
     expect(names()).not.toContain("Precision Dimmed");
     await act(async () => root.unmount());
     await mount("precision-dimmed");
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Precision Dimmed", ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), "Precision Dimmed", ...featured.slice(lightStart)]);
     await act(async () => root.unmount());
     await mount("kanagawa");
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Kanagawa", ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), "Kanagawa", ...featured.slice(lightStart)]);
     await act(async () => applySkin("precision"));
     expect(names()).not.toContain("Kanagawa");
     expect(names()).not.toContain("Wink");
@@ -156,7 +163,7 @@ describe("featured themes", () => {
     await mount(id);
     expect(document.documentElement.dataset.skin).toBe(id);
     const name = SKINS.find((skin) => skin.id === id)!.name;
-    expect(names()).toEqual([...featured.slice(0, darkCount), name, ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), name, ...featured.slice(lightStart)]);
     expect(document.querySelector('[aria-pressed="true"]')?.querySelector(".font-medium")?.textContent).toBe(name);
   });
 
@@ -164,6 +171,27 @@ describe("featured themes", () => {
     const order = [...SKINS.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)), ...SKINS.filter((skin) => LIGHT_SKIN_IDS.has(skin.id))];
     expect(order.map((skin) => skin.id)).toContain("servo-gray");
     for (let i = 0; i < order.length; i++) expect(nextSkin(order[i].id)).toBe(order[(i + 1) % order.length].id);
+  });
+});
+
+describe("Sections", () => {
+  it("flags exactly the skins with a motion layer as animated", () => {
+    for (const skin of SKINS) expect([skin.id, !!skin.animated]).toEqual([skin.id, !!sceneOf(skin.id)]);
+  });
+
+  it.each([
+    ["en", ["Animated", "Dark", "Light"]],
+    ["ko", ["움직이는 테마", "다크", "라이트"]],
+  ] as const)("groups the moving themes under Animated ahead of the still Dark and Light in %s", async (locale, titles) => {
+    await mount("precision", locale);
+    expect(sections().map((section) => section.title)).toEqual(titles);
+    const [moving, dark, light] = sections().map((section) => section.skins);
+    expect(moving).toEqual(movingOrder);
+    for (const id of [...dark, ...light]) expect(sceneOf(id)).toBeUndefined();
+    expect(light.every((id) => LIGHT_SKIN_IDS.has(id))).toBe(true);
+    expect(dark.some((id) => LIGHT_SKIN_IDS.has(id))).toBe(false);
+    await act(async () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    expect(sections().slice(3).map((section) => section.title)).toEqual(titles.slice(1));
   });
 });
 
@@ -184,7 +212,7 @@ describe("Reveal", () => {
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
     await mount("precision", "en");
-    expect(tagged()).toEqual(["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon Night", "Snow Night", "Bronze", "Lagoon", "Snow", "Dim Sand"]);
+    expect(tagged()).toEqual(["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Dim Sand"]);
     await act(async () => root.unmount());
     await mount("precision", locale);
     expect(document.querySelector("[data-skin-new]")?.textContent).toBe(locale === "en" ? "New" : "신규");
@@ -359,6 +387,13 @@ describe("Moving tiles", () => {
     flush(3);
     expect(frames).toHaveLength(0);
   });
+
+  it("keeps the Animated section with still tiles under reduced motion", async () => {
+    await open(true);
+    await painted();
+    expect(sections()[0]).toEqual({ title: "Animated", skins: movingOrder });
+    expect(running).toHaveLength(0);
+  });
 });
 
 describe("Scene themes", () => {
@@ -368,7 +403,7 @@ describe("Scene themes", () => {
   ] as const)("puts Lagoon and Snow up front as Day and Night tiles with the New tag in %s", async (locale, night, day) => {
     await mount("precision", locale);
     const shown = names();
-    expect(shown.indexOf(night[0])).toBeLessThan(shown.indexOf(day[0]));
+    for (const i of [0, 1]) expect(shown.indexOf(night[i])).toBe(shown.indexOf(day[i]) + 1);
     for (const name of [...night, ...day]) {
       expect(shown).toContain(name);
       expect(tagged()).toContain(name);
@@ -385,7 +420,7 @@ describe("Scene themes", () => {
     ["en", "night-rain", "Night Rain"], ["ko", "night-rain", "나이트 레인"],
     ["en", "warp", "Warp"], ["ko", "warp", "워프"],
     ["en", "circuit", "Circuit"], ["ko", "circuit", "서킷"],
-  ] as const)("puts the new animated themes first among the dark tiles with the New tag in %s (%s)", async (locale, id, name) => {
+  ] as const)("puts the new animated themes first among the animated tiles with the New tag in %s (%s)", async (locale, id, name) => {
     await mount("precision", locale);
     expect(names().indexOf(name)).toBeLessThan(5);
     expect(tagged()).toContain(name);
