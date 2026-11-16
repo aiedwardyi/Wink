@@ -262,12 +262,13 @@ export function Composer({
   const canSteer =
     Boolean(steerBot) && state.instances.find((i) => i.instanceId === steerBot!.modelSelection.instanceId)?.capabilities?.queueing === true;
   // only a line that member alone would answer joins its turn
-  const roomSteers = (message: string) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId));
+  const roomSteers = (message: string, reply = replyTo) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId, reply));
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
+  const repliedTo = (id?: string) => (id ? threadMessages.find((message) => message.id === id) : undefined);
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
@@ -529,10 +530,10 @@ export function Composer({
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
-  const imageTargetsSupport = (message: string, after = false) => {
+  const imageTargetsSupport = (message: string, after = false, reply = replyTo) => {
     if (room) return "supported";
     const responders = group
-      ? busy && !after && steerBot && roomSteers(message) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group)
+      ? busy && !after && steerBot && roomSteers(message, reply) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group, reply)
       : bot
         ? [{ modelSelection: modelForNextSend(bot, { busy, canSteer: canSteer && !after }) }]
         : [];
@@ -662,7 +663,7 @@ export function Composer({
   const [queuedMenu, setQueuedMenu] = useState<MessageMenuRequest | null>(null);
   const queuedActions = (entry: QueuedGroupSend) => ({
     cancel: () => dropQueued(entry.draft.sendId),
-    sendNow: group && roomSteers(entry.text) ? () => {
+    sendNow: group && roomSteers(entry.text, repliedTo(entry.replyToId)) ? () => {
       // the hold may have flushed while its menu was open
       if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
       dropQueued(entry.draft.sendId);
@@ -747,7 +748,7 @@ export function Composer({
   const retryFailedSend = (failed: FailedComposerSend) => {
     if (locked) return;
     if (failed.requestText.includes("<attached-image ")) {
-      const support = imageTargetsSupport(failed.requestText, failed.after);
+      const support = imageTargetsSupport(failed.requestText, failed.after, repliedTo(failed.replyToId));
       if (support !== "supported") {
         showImageSupportNotice(support);
         return;
@@ -925,7 +926,7 @@ export function Composer({
     const { next, rest } = peelNextBusyRoomSend(queued);
     if (!next) return;
     if (next.text.includes("<attached-image ")) {
-      const support = imageTargetsSupport(next.text);
+      const support = imageTargetsSupport(next.text, false, repliedTo(next.replyToId));
       if (support !== "supported") {
         showImageSupportNotice(support, { after: false });
         commitQueued(rest);
