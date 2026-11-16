@@ -520,7 +520,7 @@ export const Transcript = memo(function Transcript({
                       {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
                       <div className={cn(folded && USER_FOLD_CLASS)}>
                         <LinkedText text={translateText} />
-                        {translation && <RoomTranslationText translation={translation} />}
+                        {translation && <RoomTranslationText translation={translation} markdown={false} />}
                       </div>
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={group.threadId} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
@@ -529,7 +529,7 @@ export const Transcript = memo(function Transcript({
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
                       <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={pictured.has(m.id)} />
-                      {translation && <RoomTranslationText translation={translation} />}
+                      {translation && <RoomTranslationText translation={translation} markdown />}
                     </MessageBoundary>
                   ) : null}
                 </div>
