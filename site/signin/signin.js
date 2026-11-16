@@ -139,7 +139,8 @@
 
   function showList(pcs) {
     listed = pcs;
-    say("Choose a PC.");
+    $("title").textContent = "Choose a PC";
+    say("");
     const list = $("list");
     list.hidden = false;
     list.replaceChildren();
@@ -341,6 +342,8 @@
       void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
+    // A cold start is already the chooser, so the link would only reload it.
+    $("pick").hidden = false;
     if (pc === null || m === null || !LABEL_RE.test(pc) || !M_RE.test(m)) {
       say(BAD_LINK, "error");
       return;

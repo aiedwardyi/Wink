@@ -384,7 +384,34 @@ describe("phone sign-in page", () => {
     inits[0]!.callback({ credential: DIR_TOKEN });
     await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
     expect(location.href).not.toContain("/pair");
-    expect(document.querySelector<HTMLAnchorElement>("#pick")?.getAttribute("href")).toBe("/?pick=1");
+    expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it("titles the PC list Choose a PC with no sign-in wording", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(document.querySelector("h1")?.textContent).toBe("Choose a PC");
+    expect(document.querySelector("main")?.textContent).not.toMatch(/sign in/i);
+    expect(document.querySelectorAll("main a:not([hidden])")).toHaveLength(1);
+  });
+
+  it.each(["/signin", "/?pick=1"])("offers no link back to itself while signed out (%s)", (url) => {
+    open(url, [{ label: LABEL_A, name: "Ada" }]);
+    expect(document.querySelector("h1")?.textContent).toBe("Sign in");
+    expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it.each([LABEL_A, "short"])("offers Choose another PC from a PC link that fails (%s)", async (label) => {
+    open(`/signin?pc=${label}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    if (label === LABEL_A) {
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      inits[0]!.callback({ credential: PC_TOKEN });
+    }
+    await vi.waitFor(() => expect(document.getElementById("status")?.className).toBe("status error"));
+    const pick = document.querySelector<HTMLAnchorElement>("#pick")!;
+    expect(pick.hidden).toBe(false);
+    expect(pick.getAttribute("href")).toBe("/?pick=1");
   });
 
   it.each([1, 2])("always lists %s PCs with pick=1 despite a remembered PC", async (count) => {
