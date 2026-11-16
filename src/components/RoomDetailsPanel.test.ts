@@ -214,7 +214,8 @@ describe("Bots", () => {
     await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
     expect(scrolled).toHaveLength(1);
     const [picker, options] = scrolled[0]!;
-    expect(picker.querySelector('[role="checkbox"]') && picker.querySelector("[data-manage-create-bot]")).not.toBeNull();
+    expect(picker.querySelector('[role="checkbox"]')).not.toBeNull();
+    expect(picker.querySelector("[data-manage-create-bot]")).not.toBeNull();
     expect(picker.contains(host.querySelector("[data-room-add-bot]"))).toBe(false);
     expect(options).toEqual({ block: "nearest", behavior });
   });
@@ -522,7 +523,8 @@ describe("a joined room", () => {
     await act(async () => host.querySelector<HTMLButtonElement>("[data-add-my-bot]")!.click());
     const picks = [...section("bots").querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
     expect(scrolled).toHaveLength(1);
-    expect(scrolled[0]!.contains(picks[0]!) && !scrolled[0]!.contains(host.querySelector("[data-add-my-bot]"))).toBe(true);
+    expect(scrolled[0]!.contains(picks[0]!)).toBe(true);
+    expect(scrolled[0]!.contains(host.querySelector("[data-add-my-bot]"))).toBe(false);
     expect(picks.map((each) => each.textContent)).toEqual(["Ada"]);
     await act(async () => picks[0]!.click());
     expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/bots" });
