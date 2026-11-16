@@ -183,6 +183,7 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     onClick: (event: React.MouseEvent<HTMLElement>) => {
       if (press.current.held) { event.preventDefault(); press.current.held = false; }
       else if (press.current.touch && !event.currentTarget.hasAttribute("href")) {
+        press.current.touch = false;
         if (tip?.id === id) hide(id);
         else show(id, lines, event.currentTarget, true);
       }

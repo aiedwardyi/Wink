@@ -151,10 +151,10 @@ it("shows the detail on a long press without opening the link", async () => {
 it("shows the clash detail on a tap, and a tap again or elsewhere closes it", async () => {
   flows.b = flow({ pr: null });
   await render({ workers: [{ ...edited("src/a.ts"), id: "a", nick: "ALPHA" }, { ...edited("src/a.ts"), id: "b", nick: "BETA" }], all: true });
-  const tap = async (target: Element) => act(async () => {
-    for (const type of ["pointerdown", "pointerup", "pointerout"]) target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
-    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  });
+  const tap = async (target: Element) => {
+    for (const type of ["pointerdown", "pointerup", "pointerout"]) await act(async () => { target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" })); });
+    await act(async () => { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
+  };
   const clash = host.querySelector(".map-flow-clash")!;
   await tap(clash);
   expect(host.querySelector(".map-flow-tip")?.textContent).toBe("Also edited by BETAsrc/a.ts");
