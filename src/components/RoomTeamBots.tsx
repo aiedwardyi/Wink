@@ -2,6 +2,7 @@
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { addMyBot, removeMyBot, removeTeamBot, type JoinedPerson, type JoinedView } from "@/lib/team-rooms";
 import type { TeamBot } from "@/state/store-types";
 import { useStore } from "@/state/store";
@@ -72,7 +73,7 @@ export function JoinedBots({ room }: { room: JoinedView }) {
           </li>
         )}
       </ul>
-      {picking && <div className={`${DETAILS_BOX} mt-2 p-2`}><BotPickerList bots={choices} picked={NONE} onToggle={add} emptyHint={t("teamRoom.noBotsToAdd")} /></div>}
+      {picking && <div ref={revealOnOpen} className={`${DETAILS_BOX} mt-2 p-2`}><BotPickerList bots={choices} picked={NONE} onToggle={add} emptyHint={t("teamRoom.noBotsToAdd")} /></div>}
       {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t("errors.request")}</p>}
     </>
   );
