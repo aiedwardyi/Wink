@@ -124,6 +124,9 @@ import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
 import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createBotCalls } from "./bot-call.ts";
+import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
+import { createBoardCalls, userAnswer } from "./board-calls.ts";
+import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
@@ -508,6 +511,7 @@ const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
 const crashCount = crashCounter({ origin: crashOrigin, project: process.env.WINK_CRASH_PROJECT?.trim() || null, key: () => (crashOrigin ? cfg.customKeys?.[new URL(crashOrigin).host] : null) });
 let profileSyncSettings: ProfileSyncSettings = loadProfileSyncSettings(DATA_DIR);
+const board = createBoard({ dir: join(DATA_DIR, BOARD_DIR), pcId: () => profileSyncSettings.deviceId, changed: () => broadcast({ kind: "board" }) });
 const threadSyncGate = createThreadSyncV2Gate(DATA_DIR);
 if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
@@ -2381,6 +2385,17 @@ function noteTalked(botId: string): void {
   if (botSyncId) markTalked(memorySyncLedger, botSyncId);
 }
 
+function syncBoard(): void {
+  const folder = profileSyncSettings.folder;
+  if (!profileSyncSettings.syncChats || !folder || !existsSync(folder)) return;
+  const map = profileSyncSettings.botMap;
+  try {
+    board.sync(folder, { out: (localId) => map[localId] ?? localId, in: (syncId) => localIdForSyncId(map, syncId) ?? syncId });
+  } catch (error) {
+    console.warn("board sync: failed", error);
+  }
+}
+
 /** Bots and their memory ride the chat poll: remote bot ops first so a pending local edit is kept, then ours. */
 function syncProfiles(): void | Promise<void> {
   let pending: void | Promise<void> | undefined;
@@ -2391,6 +2406,7 @@ function syncProfiles(): void | Promise<void> {
   }
   const after = () => {
     publishProfileChangesSafely();
+    syncBoard();
     for (const bot of store.bots) {
       if (!botHasActiveTurn(bot.id)) syncMemory(bot.id);
     }
@@ -3063,11 +3079,29 @@ function roomAlert(alert: RoomAlert) {
 const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
 
+function boardProject(threadId: string): string {
+  const bot = store.botByThread(threadId);
+  if (!bot) return "";
+  const pinned = store.taskByThread(bot.id, threadId)?.cwd;
+  return projectIdOf(pinned === undefined ? bot.cwd : pinned);
+}
+
+const boardCalls = createBoardCalls({
+  board,
+  projectOf: boardProject,
+  rings: (threadId) => !store.groupByThread(threadId) && !isHostedThread(store, threadId),
+});
+
 const botCalls = createBotCalls({
   send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`)),
   current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
+  called: (botId, threadId, blocker) => void boardCalls.called(botId, threadId, blocker),
+});
+
+store.onChange((change) => {
+  if (change.type === "message" && !change.imported && userAnswer(change.message)) boardCalls.answered(change.threadId, change.message);
 });
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
@@ -4241,6 +4275,7 @@ bus.subscribe((event: RuntimeEvent) => {
               interrupted,
             }));
           }
+          boardCalls.turnEnded(event.threadId, event.ok && !interrupted);
           limitWaits.settled(event.threadId, event.turnId, event.ok);
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
@@ -7638,6 +7673,12 @@ const groupRoutes = createGroupRoutes({
   releaseInterruptedBot,
   roomLaneThread: roomLanes.thread,
 });
+const boardRoutes = createBoardRoutes({
+  board,
+  caller: (header) => commsCallers.resolve(header),
+  known: (botId) => Boolean(store.bot(botId)),
+  projectOf: boardProject,
+});
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
@@ -7658,6 +7699,7 @@ const internalRoutes = createInternalRoutes({
   persistTaskPacket,
   notify,
   botCalls,
+  boardCalls,
   routines: routines!,
   delegationWatch,
   askHold,
@@ -7947,6 +7989,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/ask-bot") {
         return await internalRoutes.askBot(req, res);
       }
+      if (method === "POST" && path === BOARD_ROUTES.search) return await boardRoutes.search(req, res);
+      if (method === "POST" && path === BOARD_ROUTES.post) return await boardRoutes.post(req, res);
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
@@ -8273,6 +8317,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     // ── device picker: PCs in the sync folder ──
+    if (method === "GET" && path === BOARD_ROUTES.list) return boardRoutes.list(res);
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];

@@ -1,0 +1,117 @@
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+
+import { BOARD_DIR, boardPostId, createBoard, errorSig, mergeBoardPosts, projectIdOf, type BoardPost } from "./board.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+import { CONFLICT_NOTICE_V2 } from "./thread-sync.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
+
+const home = (pc: string, clock = { at: 1_000 }) => {
+  const dir = join(temps.make(join(tmpdir(), "orbit-board-")), BOARD_DIR);
+  return { board: createBoard({ dir, pcId: () => pc, now: () => clock.at }), dir, clock };
+};
+
+const STUCK = { author_bot_id: "scout", kind: "stuck" as const, title: "Codex is out of credit", body: "Codex is out of credit on Home.", source_ref: "call:t1:engine:Codex is out of credit" };
+
+describe("board posts", () => {
+  it("writes one file per post, named by the event, so a repeat is the same post", () => {
+    const { board, dir, clock } = home("pc-a");
+    const first = board.post(STUCK);
+    clock.at = 2_000;
+    const again = board.post(STUCK);
+    expect(again.id).toBe(first.id);
+    expect(first.id).toBe(boardPostId(STUCK.source_ref));
+    expect(readdirSync(dir)).toEqual([`${first.id}.json`]);
+    expect(JSON.parse(readFileSync(join(dir, `${first.id}.json`), "utf8"))).toEqual({
+      id: first.id, parent_id: null, author_bot_id: "scout", project_id: "", kind: "stuck", title: STUCK.title, body: STUCK.body,
+      error_sig: errorSig(`${STUCK.title}\n${STUCK.body}`), status: "open", fix: "", source_ref: STUCK.source_ref, helped_bot_ids: [],
+      created_at: 1_000, updated_at: 2_000, pc_id: "pc-a",
+    });
+  });
+
+  it("signs the same failure the same across folders, numbers and ids", () => {
+    expect(errorSig("ENOENT: no such file C:\\Users\\a\\x.json (code 2) id 9f8e7d6c")).toBe(errorSig("enoent: no such file /home/b/y.json (code 17) id 0a1b2c3d"));
+    expect(errorSig("Codex is out of credit")).not.toBe(errorSig("Claude is signed out"));
+    expect(projectIdOf("D:\\wink\\wt\\Wink\\")).toBe("wink");
+  });
+
+  it("finds solved posts by words or signature, same project first", () => {
+    const { board } = home("pc-a");
+    const other = board.post({ ...STUCK, source_ref: "a", project_id: "site", title: "npm install fails with EACCES", body: "npm install fails with EACCES" });
+    const local = board.post({ ...STUCK, source_ref: "b", project_id: "wink", title: "npm install fails with EACCES in wink", body: "npm install fails with EACCES" });
+    board.post({ ...STUCK, source_ref: "c", project_id: "wink", title: "Gemini key missing", body: "Gemini key missing" });
+    expect(board.search({ query: "EACCES npm install", projectId: "wink" }).map((post) => post.id)).toEqual([local.id, other.id]);
+    expect(board.search({ query: "EACCES npm install", solvedOnly: true })).toEqual([]);
+    board.solve(other.id, "Run the installer as the signed-in user.");
+    expect(board.search({ query: "unrelated words", errorSig: other.error_sig, solvedOnly: true }).map((post) => post.id)).toEqual([other.id]);
+    expect(board.search({ query: "npm fails somewhere else entirely", solvedOnly: true, minShare: 0.6 })).toEqual([]);
+  });
+
+  it("merges two copies: newer edit leads, solved stays solved, helped bots add up", () => {
+    const base = { id: "p" + "0".repeat(24), parent_id: null, author_bot_id: "a", project_id: "", kind: "stuck", title: "t", body: "b", error_sig: "", status: "open", fix: "", source_ref: "s", helped_bot_ids: ["b1"], created_at: 5, updated_at: 10, pc_id: "pc-a" } satisfies BoardPost;
+    const solved = { ...base, status: "solved" as const, fix: "do x", helped_bot_ids: [], updated_at: 20, pc_id: "pc-b" };
+    const later = { ...base, title: "t2", helped_bot_ids: ["b2"], updated_at: 30 };
+    expect(mergeBoardPosts(mergeBoardPosts(base, solved), later)).toMatchObject({ title: "t2", status: "solved", fix: "do x", helped_bot_ids: ["b1", "b2"], created_at: 5 });
+  });
+});
+
+describe("board Drive sync", () => {
+  it("two PCs posting at once end with one copy of each post and no conflict copies", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    // the same bot is "scout" on A and "s-b" on B; both carry sync id "g-scout"
+    const idsA = { out: (id: string) => (id === "scout" ? "g-scout" : id), in: (id: string) => (id === "g-scout" ? "scout" : id) };
+    const idsB = { out: (id: string) => (id === "s-b" ? "g-scout" : id), in: (id: string) => (id === "g-scout" ? "s-b" : id) };
+
+    const sameA = a.board.post(STUCK);
+    a.board.post({ ...STUCK, source_ref: "only-a", title: "A only" });
+    b.clock.at = 1_500;
+    const sameB = b.board.post({ ...STUCK, author_bot_id: "s-b" });
+    b.board.post({ ...STUCK, author_bot_id: "s-b", source_ref: "only-b", title: "B only" });
+    b.board.helped([sameB.id], "s-b");
+    expect(sameB.id).toBe(sameA.id);
+
+    a.board.sync(folder, idsA);
+    const published = (pc: string) => Object.fromEntries(readdirSync(join(folder, BOARD_DIR, pc)).map((name) => [name, readFileSync(join(folder, BOARD_DIR, pc, name), "utf8")]));
+    const aFiles = published("pc-a");
+    b.board.sync(folder, idsB);
+    a.board.sync(folder, idsA);
+    b.board.sync(folder, idsB);
+
+    for (const side of [a.board, b.board]) {
+      const ids = side.list().map((post) => post.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(ids).toHaveLength(3);
+    }
+    expect(a.board.get(sameA.id)!.helped_bot_ids).toEqual(["scout"]);
+    expect(b.board.get(sameA.id)!.helped_bot_ids).toEqual(["s-b"]);
+    expect(a.board.list().find((post) => post.title === "B only")!.author_bot_id).toBe("scout");
+    // each PC writes only its own folder, so Drive never sees one file from two PCs
+    expect(readdirSync(join(folder, BOARD_DIR)).sort()).toEqual(["pc-a", "pc-b"]);
+    expect(Object.keys(published("pc-a")).every((name) => /^p[0-9a-f]{24}\.json$/.test(name))).toBe(true);
+    expect(Object.keys(published("pc-b")).every((name) => /^p[0-9a-f]{24}\.json$/.test(name))).toBe(true);
+    for (const [name, text] of Object.entries(aFiles)) if (!text.includes(sameA.id)) expect(published("pc-a")[name]).toBe(text);
+    expect(JSON.stringify(published("pc-a")) + JSON.stringify(published("pc-b"))).not.toContain(CONFLICT_NOTICE_V2);
+    // a settled pass writes nothing
+    expect(a.board.sync(folder, idsA)).toEqual({ pulled: 0, pushed: 0 });
+    expect(b.board.sync(folder, idsB)).toEqual({ pulled: 0, pushed: 0 });
+  });
+
+  it("skips a copy Drive mangled instead of taking it", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const post = a.board.post(STUCK);
+    a.board.sync(folder, ids);
+    writeFileSync(join(folder, BOARD_DIR, "pc-a", `${post.id} (1).json`), "{");
+    writeFileSync(join(folder, BOARD_DIR, "pc-a", `${post.id}.json`), "{\"id\":");
+    expect(b.board.sync(folder, ids).pulled).toBe(0);
+    expect(b.board.list()).toEqual([]);
+  });
+});
