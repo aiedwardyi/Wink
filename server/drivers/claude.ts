@@ -74,6 +74,8 @@ import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../a
 import { baseAccount } from "../worker-resume.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
+// Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
+const authChecks = new Map<string, Promise<string>>();
 
 /** Whether `claude` is signed in, and as whom.
  *
@@ -87,9 +89,19 @@ export function claudeAuthStatus(
   env: NodeJS.ProcessEnv,
   run: typeof execCli = execCli,
   account?: AccountContext,
+  deadlineMs = 3000,
 ): Promise<{ signedIn?: boolean; account?: string; identity?: string; engineSignedIn?: boolean }> {
+  const key = `${cli}\n${account?.home ?? claudeConfigDir(env)}`;
+  const check = authChecks.get(key) ?? new Promise<string>((resolve) => {
+    run(cli, ["auth", "status", "--json"], { env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => resolve(stdout));
+  });
+  if (!authChecks.has(key)) {
+    authChecks.set(key, check);
+    void check.finally(() => authChecks.delete(key)).catch(() => {});
+  }
   return new Promise((resolve) => {
-    run(cli, ["auth", "status", "--json"], { timeout: 3000, env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => {
+    const deadline = setTimeout(() => resolve({}), deadlineMs);
+    check.finally(() => clearTimeout(deadline)).then((stdout) => {
       try {
         const parsed = claudeAuthSchema.safeParse(JSON.parse(stdout));
         if (!parsed.success) resolve({});
