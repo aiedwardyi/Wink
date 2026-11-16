@@ -390,6 +390,7 @@ describe("agents-proxy MCP surface", () => {
       "propose_routine_action",
       "set_keep_going",
       "no_reply_needed",
+      "link_room_fix",
     ]);
   });
 
@@ -1303,7 +1304,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(20);
+    expect(list.result.tools).toHaveLength(21);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1440,10 +1441,10 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 20, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 21, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 21, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 22, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 21, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 22, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 22, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 23, true],
     [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
     [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],

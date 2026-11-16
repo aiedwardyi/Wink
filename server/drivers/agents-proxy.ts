@@ -603,6 +603,20 @@ const TOOLS = [
     description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
   },
+  {
+    name: "link_room_fix",
+    description: "Call right after terminal_spawn starts work on a group room's report. Wink posts \"Fix started: <title>\" in the room as you now, and \"Fixed in <version>: <title>\" once an offered update holds the merged work. Never post these yourself.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        sessionId: { type: "string", description: "From terminal_spawn." },
+        title: { type: "string", description: "A few words, in the room's language." },
+        room: { type: "string", description: "Room name; omit in that room." },
+      },
+      required: ["sessionId", "title"],
+    },
+  },
 ];
 
 type Json = Record<string, unknown>;
@@ -1099,6 +1113,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
+  if (name === "link_room_fix") {
+    const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
+    return { text: String(r.text ?? "Linked.") };
+  }
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 

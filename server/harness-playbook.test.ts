@@ -156,6 +156,10 @@ describe("harness playbook", () => {
     expect(loadHarnessPlaybook()).toContain("worker reports reach your own chat, not the room");
   });
 
+  it("tells every bot to link work for a room ask to the room", () => {
+    expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain("For a room ask, worker reports reach your own chat, not the room: call link_room_fix.");
+  });
+
   it("sends long follow-ups as a file, one line", () => {
     expect(loadHarnessPlaybook()).toContain("Follow-ups use the card rule: write long instructions to a file");
   });

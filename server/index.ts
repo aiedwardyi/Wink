@@ -51,6 +51,9 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
+import { createRoomFixes, type RoomFixes } from "./room-fixes.ts";
+import { ghRun } from "./map-pr.ts";
+import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createRoomLanes, laneKey } from "./room-lane.ts";
@@ -481,6 +484,11 @@ const MIME = EARLY_MIME;
 
 ensureDirs();
 const whatsNew = openWhatsNew(DATA_DIR, process.env.OMB_APP_VERSION ?? "");
+// Set once the store loads; updater offers before that are covered by the boot check.
+let roomFixes: RoomFixes | undefined;
+const updateOfferSchema = z.object({ status: z.enum(["available", "downloaded"]), version: z.string() });
+const roomFixPaneSchema = z.object({ sessionId: z.string().min(1), cwd: z.string().catch(""), panes: z.array(z.object({ sessionId: z.string(), main: z.boolean().optional() })).catch([]) });
+const roomFixBodySchema = z.object({ fromBotId: z.string().catch(""), fromThreadId: z.string().catch(""), sessionId: z.string().catch(""), title: z.string().catch(""), room: z.string().optional().catch(undefined) });
 const callIntro = openCallIntro(DATA_DIR);
 // One-shot upgrade cleanup: drop the removed engine's plaintext key from the
 // stored file before anything reads it. Idempotent — a file without the
@@ -531,6 +539,8 @@ utilityParentPort?.on("message", (event) => {
   const updateState = updateStateFromMessage(message);
   if (updateState) {
     broadcast({ kind: "update.state", state: updateState });
+    const offered = updateOfferSchema.safeParse(updateState);
+    if (offered.success) void roomFixes?.released(offered.data.version);
     return;
   }
   if (applyGoogleAccountMessage(message, googleAccount)) return;
@@ -1055,6 +1065,18 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+roomFixes = createRoomFixes({
+  dataDir: DATA_DIR,
+  store,
+  pane: async (botId, sessionId) => {
+    const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, sessionId);
+    const pane = roomFixPaneSchema.safeParse(snapshot.body);
+    if (snapshot.status !== 200 || !pane.success || pane.data.panes.some((row) => row.main && row.sessionId === pane.data.sessionId)) return null;
+    return { sessionId: pane.data.sessionId, cwd: pane.data.cwd };
+  },
+  git: mapGit,
+  gh: ghRun,
+});
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
@@ -7928,6 +7950,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/ask-user") {
         return await internalRoutes.askUser(req, res);
       }
+      // link_room_fix: a room report tied to the pane fixing it.
+      if (method === "POST" && path === "/api/internal/room-fix") {
+        const body = roomFixBodySchema.safeParse(await readBody(req));
+        if (!body.success) return json(res, 400, { error: "bad request" });
+        const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
+        return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
+      }
       // terminal_spawn: a display-only row in the bot's chat. Never a pane note, so no model sees it.
       if (method === "POST" && path === "/api/internal/launch-note") {
         const body = await readBody(req);
@@ -9250,6 +9279,7 @@ phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
+startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");

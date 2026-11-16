@@ -1,0 +1,124 @@
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { DATA_DIR } from "./config.ts";
+import { createRoomFixes, type RoomFixDeps } from "./room-fixes.ts";
+import { closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
+import { Store, type BotRecord, type GroupRecord } from "./store.ts";
+
+const SESSION = "abcdef12-3456-7890-abcd-ef1234567890";
+const MERGE = "a".repeat(40);
+
+let store: Store;
+let bot: BotRecord;
+let room: GroupRecord & { hosted: { roomId: string } };
+let gh: ReturnType<typeof vi.fn<RoomFixDeps["gh"]>>;
+let linkedAt: number;
+
+const fixes = (now = () => linkedAt) => createRoomFixes({
+  dataDir: DATA_DIR,
+  store,
+  pane: async (_botId, sessionId) => (SESSION.startsWith(sessionId) ? { sessionId: SESSION, cwd: "D:/repo/wt/fix-export" } : null),
+  git: async () => "D:/repo/.git\n",
+  gh,
+  now,
+});
+
+const roomLines = () => store.messagesFor(room.threadId).filter((message) => message.from?.botId === bot.id).map((message) => message.text);
+const committed = () => recentRoomEntries(room.hosted.roomId, 20).map((entry) => entry.text);
+const reportDone = () => store.appendMessage(bot.threadId, {
+  role: "bot",
+  kind: "note",
+  text: `[pane abcdef12] [FIX-EXPORT] from ${bot.name} (${bot.id}): DONE FIX-EXPORT branch=fix/export sha=${"b".repeat(40)} dirty=0\nPR 12 merged.`,
+});
+
+beforeEach(() => {
+  closeRoomsDb();
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  store = new Store(() => ({ instanceId: "fake", model: "m" }));
+  bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
+  // SAFETY: created with hosted set, so hosted.roomId is present.
+  room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: createRoom("Team").id }) as typeof room;
+  linkedAt = Date.parse("2026-11-16T05:00:00Z");
+  gh = vi.fn<RoomFixDeps["gh"]>(async (_cwd, args) => {
+    if (args[0] === "pr") return JSON.stringify([{ url: "https://github.com/acme/app/pull/12", mergedAt: "2026-11-16T07:00:00Z", mergeCommit: { oid: MERGE } }]);
+    if (args[1] === `repos/acme/app/compare/${MERGE}...v1.0.273`) return "ahead\n";
+    if (args[1] === `repos/acme/app/compare/${MERGE}...v1.0.272`) return "diverged\n";
+    throw new Error("HTTP 404: Not Found");
+  });
+});
+afterEach(closeRoomsDb);
+
+describe("room fixes", () => {
+  it("stores the link when a bot links the pane it just launched", async () => {
+    const linked = await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: "abcdef12", title: "Export button does nothing" });
+    expect(linked).toEqual({ text: expect.stringContaining('"Team"') });
+    expect(JSON.parse(readFileSync(join(DATA_DIR, "room-fixes.json"), "utf8"))).toEqual([
+      { botId: bot.id, groupId: room.id, sessionId: SESSION, title: "Export button does nothing", lang: "en", at: linkedAt, gitDir: "D:/repo/.git" },
+    ]);
+  });
+
+  it("posts Fix started once as the bot, across a repeat call and a restart", async () => {
+    const input = { botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" };
+    await fixes().link({ ...input, threadId: bot.threadId, room: "team" });
+    await fixes().link(input);
+    await fixes().link(input);
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing"]);
+    expect(committed()).toEqual(["Fix started: Export button does nothing"]);
+  });
+
+  it("posts Fixed in once, only for an offered release that holds the merged work", async () => {
+    await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" });
+    reportDone();
+    const live = fixes();
+    await live.released("1.0.272");
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing"]);
+    await live.released("1.0.273");
+    await live.released("1.0.273");
+    await fixes().released("1.0.273");
+    await fixes().released("1.0.274");
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing", "Fixed in 1.0.273: Export button does nothing"]);
+    expect(committed()).toEqual(["Fix started: Export button does nothing", "Fixed in 1.0.273: Export button does nothing"]);
+    expect(gh).toHaveBeenCalledWith("D:/repo", ["pr", "list", "--head=fix/export", "--state=merged", "--json=url,mergedAt,mergeCommit", "--limit=10"]);
+  });
+
+  it("never posts Fixed in on a merge alone", async () => {
+    const live = fixes();
+    await live.link({ botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" });
+    await live.released("1.0.273");
+    expect(gh).not.toHaveBeenCalled();
+    reportDone();
+    await live.released("1.0.272");
+    await live.released("1.0.300");
+    await live.released("main");
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing"]);
+  });
+
+  it("skips a PR with that branch merged before the link", async () => {
+    linkedAt = Date.parse("2026-11-16T08:00:00Z");
+    await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "Export button does nothing" });
+    reportDone();
+    await fixes().released("1.0.273");
+    expect(roomLines()).toEqual(["Fix started: Export button does nothing"]);
+  });
+
+  it("posts both lines in Korean when the bot titles the fix in Korean", async () => {
+    await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: SESSION, title: "내보내기 버튼이 안 눌려요" });
+    reportDone();
+    await fixes().released("1.0.273");
+    expect(committed()).toEqual(["수정 시작: 내보내기 버튼이 안 눌려요", "1.0.273에서 수정됨: 내보내기 버튼이 안 눌려요"]);
+  });
+
+  it("posts nothing for work that did not come from a room", async () => {
+    const local = fixes();
+    expect(await local.link({ botId: bot.id, threadId: bot.threadId, sessionId: SESSION, title: "Refactor the parser" })).toEqual({ error: expect.stringContaining("not in a room") });
+    expect(await local.link({ botId: bot.id, threadId: bot.threadId, sessionId: SESSION, title: "Refactor the parser", room: "Design" })).toEqual({ error: expect.stringContaining("Your rooms: Team") });
+    expect(await local.link({ botId: bot.id, threadId: room.threadId, sessionId: "ffffffff", title: "Refactor the parser" })).toEqual({ error: expect.stringContaining("Unknown pane") });
+    reportDone();
+    await local.released("1.0.273");
+    expect(roomLines()).toEqual([]);
+    expect(committed()).toEqual([]);
+    expect(gh).not.toHaveBeenCalled();
+  });
+});

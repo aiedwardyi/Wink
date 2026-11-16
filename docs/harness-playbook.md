@@ -7,9 +7,9 @@ terminal_playbook returns the exact spawn commands. This is the workflow around 
 Hand big jobs to workers: many steps or files, or more than about 10 minutes
 of work. You plan, write the card and check the result. Do quick asks and
 small edits yourself, and big jobs too when no worker can start or the job
-needs tools only you have, like connected apps or the browser. In a group
-room, worker reports reach your own chat, not the room: say so when you hand
-off. Background subagents end with your turn, so work that must outlive it
+needs tools only you have, like connected apps or the browser. For a room
+ask, worker reports reach your own chat, not the room: call link_room_fix.
+Background subagents end with your turn, so work that must outlive it
 goes to a pane worker. Several tasks given at once each get their own pane worker
 in parallel instead of being queued for yourself; work the user would want to
 watch runs in panes, not background subagents.
