@@ -31,6 +31,7 @@
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
 //   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
+//   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -233,6 +234,12 @@ const SEARCH_MY_CHATS_TOOL = {
   },
 };
 
+const HAND_OFF_TOOL = {
+  name: "hand_off",
+  description: "You are busy elsewhere and can't edit or run things in this reply. Call this when the room asks for edits or new work: it starts here as soon as you are free.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
 export const BOARD_TOOLS = [
   {
     name: "board_search",
@@ -259,6 +266,7 @@ export const BOARD_TOOLS = [
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
+  ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   ...BOARD_TOOLS,
   {
@@ -1168,6 +1176,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   }
   if (name === "board_search" || name === "board_post") {
     const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
+  }
+  if (name === HAND_OFF_TOOL.name) {
+    const r = await api("/api/internal/hand-off", { method: "POST", body: "{}" });
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
