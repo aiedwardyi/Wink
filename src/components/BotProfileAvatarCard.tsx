@@ -45,6 +45,12 @@ const AVATAR_LABEL_KEYS: Partial<Record<BotAvatarChoice, MessageKey>> = {
   "icon-50": "bot.avatarGeometric",
   "icon-51": "bot.avatarInk",
   "icon-52": "bot.avatarWarp",
+  "icon-53": "bot.avatarNeon",
+  "icon-54": "bot.avatarArcade",
+  "icon-55": "bot.avatarGold",
+  "icon-56": "bot.avatarCircuit",
+  "icon-57": "bot.avatarGlass",
+  "icon-58": "bot.avatarSakura",
 };
 
 export function BotProfileAvatarCard({
