@@ -38,6 +38,7 @@ import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
+import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
@@ -342,7 +343,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       }
       const active = new Map<string, Turn>();
       const children = new Set<ReturnType<typeof spawnCli>>();
-      const systemHeld = systemLedger();
+      const systemHeld = systemLedger(false, instanceId);
 
       // Idle hosts live in the warm pool. A session host keeps its session
       // across turns only while its sign-in is still the CLI's current one;
@@ -790,7 +791,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           mspTurnId: null as string | null,
           sessionId: null as string | null,
           model: null as string | null,
+          usage: undefined as { input: number; output: number; cachedInput: number } | undefined,
         };
+        const tokenReports = new Set<string>();
         const kinds: ItemKinds = new Map();
         const openTools = new Set<string>();
         const buffers = new Map<string, string>();
@@ -830,6 +833,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           state.settled = true;
           if (state.sessionId && compacted) systemHeld.forget(state.sessionId);
           else if (state.sessionId && systemSent && ok && stopReason === null) systemHeld.record(state.sessionId, systemSent);
+          else if (state.sessionId) systemHeld.keep(state.sessionId);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const ask of [...asks.values()]) ask.finish("deny", "system");
           // The entry drops BEFORE turn.completed: the queue drain on that
@@ -841,7 +845,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           for (const itemId of openTools) completeTool(itemId, false);
           turnTimer.mark("turnDone");
     turnTimer.finish();
-    emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason });
+    emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, ...(state.usage ? { usage: state.usage } : {}) });
           if (!kept) stop();
         };
         /** Hands the host back with its session after a clean native completion. */
@@ -860,7 +864,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (lease) {
             if (!pool.offer(lease, turnHost.session)) return false;
           } else {
-            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "speculative");
+            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "kept");
             let fresh = reserve();
             // Another host already idles under this key: this one replaces it.
             if (typeof fresh === "object" && (hosts.has(fresh) || preparing.has(fresh))) {
@@ -900,7 +904,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             emit({ ...base(threadId, turnId), type: "turn.stage", stage: "prompt-sent" });
           }
           const ack: any = await request;
-          if (ack?.status !== "accepted" || ack?.disposition !== "started") {
+          if (ack?.status !== "accepted" || (ack?.disposition !== "started" && ack?.disposition !== "queued")) {
             throw new Error(`turn/start not started (status ${ack?.status}, disposition ${ack?.disposition})`);
           }
           state.mspTurnId = typeof ack?.turnId === "string" ? ack.turnId : commandId;
@@ -1290,6 +1294,19 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
               emitUsage(p);
               break;
             }
+            case "session/tokenUsage": {
+              const usage = p.usage;
+              if (typeof p.viewCursor !== "string" || tokenReports.has(p.viewCursor)) break;
+              if (!Number.isSafeInteger(usage?.inputTokens) || usage.inputTokens < 0
+                || !Number.isSafeInteger(usage?.outputTokens) || usage.outputTokens < 0) break;
+              tokenReports.add(p.viewCursor);
+              const cached = usage.cacheReadTokens ?? usage.cachedTokens;
+              const total = state.usage ??= { input: 0, output: 0, cachedInput: 0 };
+              total.input += usage.inputTokens;
+              total.output += usage.outputTokens;
+              total.cachedInput += Number.isSafeInteger(cached) && cached >= 0 ? Math.min(cached, usage.inputTokens) : 0;
+              break;
+            }
             case "turn/foregroundCompleted": {
               // The answer is done; Muse keeps running background items
               // until turn/completed, which alone ends the turn.
@@ -1387,7 +1404,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             if (system) {
               systemHeld.forget(sessionId);
               systemSent = system;
-            }
+            } else systemHeld.begin(sessionId);
             const text = system ? `${system}\n\n${promptText}` : promptText;
             await startTurnOn(sessionId, text);
           } catch (err) {
@@ -1448,6 +1465,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             localComputerMcp: !config.fullAuto,
           },
           sendTurn,
+          // fullAuto answers every approval itself (openApproval); the rest reach Wink
+          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
           interruptTurn: async (threadId) => {
             active.get(threadId)?.interrupt();
           },

@@ -22,11 +22,11 @@ vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
     if (expression.includes("!!document.querySelector")) return true;
     if (expression.includes("const { all, visible, where }")) return f.targets;
     if (expression.includes("const n = globalThis.lvWatchTargets")) return { x: 20, y: 30, scrollY: 40 };
-    const rule = expression.includes('const rows = [], nodes') ? "details" : expression.includes('all("img[src]') ? "errors" : expression.includes('all("a[href]").filter(visible)') ? "links" : expression.includes("scrollWidth") ? "scroll" : expression.includes("const controls") ? "menu" : "copy";
+    const rule = expression.includes('const rows = [], range') ? "wraps" : expression.includes('const rows = [], nodes') ? "details" : expression.includes('all("img[src]') ? "errors" : expression.includes('all("a[href]").filter(visible)') ? "links" : expression.includes("scrollWidth") ? "scroll" : expression.includes("const controls") ? "menu" : "copy";
     f.observations.push(`${page.tile}:${rule}`);
     if (f.failures.has(`${page.tile}:${rule}`)) throw new Error("Unsupported color or removed node");
     if (f.values.has(rule)) return structuredClone(f.values.get(rule));
-    return { errors: { images: [] }, links: { links: [] }, scroll: { width: 392, scrollWidth: 392 }, menu: { links: [], menu: false }, copy: { texts: [] }, details: { rows: [] } }[rule];
+    return { errors: { images: [] }, links: { links: [] }, scroll: { width: 392, scrollWidth: 392 }, menu: { links: [], menu: false }, copy: { texts: [] }, details: { rows: [] }, wraps: { rows: [] } }[rule];
   },
   close() {},
 }) }));
@@ -153,6 +153,12 @@ it("counts actual per-element trials, carries boxes and records every detail che
   expect(checks).toHaveLength(result.counts.completed);
   expect(checks.filter(row => row.detail && row.result === "issue")).toHaveLength(2);
   expect(events.filter(event => event.kind === "part").map(event => event.part)).toEqual(["loads", "links", "phone"]);
+});
+
+it("reports a short label wrapped onto two lines at its box", async () => {
+  f.values.set("wraps", { rows: [{ where: "button#out", text: "Sign Out", length: 8, words: 2, lines: 2, control: true, split: "", box: [283, 233, 48, 44], scrollY: 0 }] });
+  const result = await runHiddenVerify(input()).done;
+  expect(result.issues.filter(row => row.rule === "label wraps")).toEqual(expect.arrayContaining([expect.objectContaining({ checker: "FIT", where: "button#out", measured: '"Sign Out" on 2 lines; keep the label on one line', box: [283, 233, 48, 44] })]));
 });
 
 it("tallies done and planned per checker and tile on the existing progress calls", async () => {
@@ -290,6 +296,7 @@ it("confirms an aborted local stylesheet and leaves scripts and phone layout unc
   expect(result.issues.map(x => [x.where, x.measured])).toEqual([["/missing.css", "HTTP 404; reload the page"]]);
   expect(result.notChecked).toEqual(expect.arrayContaining(["scripts (code from cdn.tailwindcss.com is blocked in the check)", "phone layout (styles from cdn.tailwindcss.com are blocked in the check)"]));
   expect(f.observations).not.toContain("phone:scroll");
+  expect(f.observations).not.toContain("phone:wraps");
 });
 
 it("records a picture of every new scroll stop before moving on, even on a fast run", async () => {

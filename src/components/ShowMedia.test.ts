@@ -274,6 +274,14 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   expect(shown).toEqual({ threadId: "r-thread", path: "plan.pdf", kind: "pdf", src: `/api/rooms/r1/files/${id(2)}` });
 });
 
+it("a room's pane has no Map tab, a bot chat's does", async () => {
+  const room: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => root.render(createElement(ShowPane, { media: true, source: room, hidden: false })));
+  expect(tab("Map")).toBeUndefined();
+  await act(async () => root.render(createElement(ShowPane, { media: true, source: chat, botId: "b1", hidden: false })));
+  expect(tab("Map")).toBeDefined();
+});
+
 it("says so when there are no files yet, in English and Korean", async () => {
   room = { files: [] };
   await act(async () => showMedia("t9"));
@@ -379,6 +387,20 @@ it("lists a room again only when a new message brings files", async () => {
   await render({ threadId: "r-thread", roomId: "r1", messages: [text, sent] });
   await settle();
   expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
+});
+
+it("keeps a room's open picture open when someone posts a file", async () => {
+  const sent: Message = { id: "m2", role: "user", kind: "text", at: 4, text: "", roomFiles: [{ id: id(4), name: "new.pdf", type: "application/pdf", bytes: 1 }] };
+  await act(async () => showMedia("r-thread"));
+  await render({ threadId: "r-thread", roomId: "r1", messages: [] });
+  await settle();
+  await click(host.querySelector("[data-media-grid] button"));
+  expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
+  room = { files: [{ id: id(4), name: "new.pdf", type: "application/pdf", bytes: 1, at: 4, sender: "Mina" }, ...roomFiles] };
+  await render({ threadId: "r-thread", roomId: "r1", messages: [sent] });
+  await settle();
+  expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
+  expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
 });
 
 it("closes at its open width, with the same thumbs and no new fetch", async () => {

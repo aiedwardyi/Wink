@@ -323,8 +323,8 @@ describe("ModelPicker friends chip", () => {
     expect(html).toContain("whitespace-nowrap");
   });
 
-  it("shortens the contributor card with the full name in aria/title", () => {
-    const museTwo: InstanceInfo = {
+  it("keeps three Muse cells and shortens only the contributor card", () => {
+    const muse: InstanceInfo = {
       instanceId: "muse",
       driverKind: "museAgent",
       displayName: "Meta Muse",
@@ -334,6 +334,7 @@ describe("ModelPicker friends chip", () => {
         options: [
           { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
           { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+          { id: "muse-ember-1.0", label: "Meta Muse Ember" },
         ],
       },
       capabilities: {},
@@ -345,7 +346,7 @@ describe("ModelPicker friends chip", () => {
         createElement(ModelPickerControl, {
           bot: { ...bot, modelSelection: { instanceId: "muse", model: "muse-spark-1.3-contributor", mode: "pinned" } },
           store: {
-            state: { instances: [museTwo], selectedId: "bot-1" },
+            state: { instances: [muse], selectedId: "bot-1" },
             dispatch: () => undefined,
             refreshInstances: async () => undefined,
           },
@@ -354,6 +355,9 @@ describe("ModelPicker friends chip", () => {
       ),
     );
     const list = html.slice(html.indexOf("data-model-picker-content"));
+    expect(list.match(/data-model-cell=/g)).toHaveLength(3);
+    expect(list).toContain('data-model-cell="muse-ember-1.0"');
+    expect(list).toContain("model-cross-name\">Meta Muse Ember<");
     expect(list).toContain('data-model-cell="muse-spark-1.3-contributor" aria-pressed="true"');
     expect(list).toContain("model-cross-name\">Meta Muse 1.3<");
     expect(list).toContain(">Contrib<");

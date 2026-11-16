@@ -4,6 +4,7 @@
 
 import { type BotRecord, type GroupRecord, type Message, type Store } from "./store.ts";
 import { findDelegationReceipt } from "./delegation-ledger.ts";
+import { linkRoomEntry } from "./rooms/mirror.ts";
 
 /** What a peer-exchange helper needs from the outside world:
  * the store (for persisted messages + groups) and the SSE broadcasters
@@ -90,12 +91,12 @@ export function mirrorExchange(
     return bus.store.appendMessage(threadId, m);
   };
   if (channel) {
-    note(channel.threadId, {
+    linkRoomEntry(bus.store, channel, note(channel.threadId, {
       role: "bot",
       kind: "text",
       text: message,
       from: { botId: from.id, name: from.name, color: from.color },
-    });
+    }));
   }
   const sourceActivity: Omit<Message, "id" | "at"> = {
     role: "bot",
@@ -162,12 +163,12 @@ export function mirrorReply(
   channel: GroupRecord | undefined,
 ): void {
   if (!channel || !reply.trim()) return;
-  bus.store.appendMessage(channel.threadId, {
+  linkRoomEntry(bus.store, channel, bus.store.appendMessage(channel.threadId, {
     role: "bot",
     kind: "text",
     text: reply,
     from: { botId: target.id, name: target.name, color: target.color },
-  });
+  }));
   bus.store.patchGroup(channel.id, { unread: true });
 }
 

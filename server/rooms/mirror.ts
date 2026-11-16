@@ -1,7 +1,7 @@
 // The host's own view of a team room: each log entry, copied into the hosted
 // thread from its committed value.
 import type { GroupRecord, Message, Store } from "../store.ts";
-import { appendRoomEntry, type RoomEntry, type RoomEntryDraft } from "./db.ts";
+import { appendRoomEntry, committedRoomText, roomById, type RoomEntry, type RoomEntryDraft } from "./db.ts";
 import { broadcastDoorEntry } from "./door-streams.ts";
 import { teamBot } from "./team-bots.ts";
 
@@ -23,7 +23,8 @@ function mirrorRoomEntry(store: MirrorStore, roomId: string, threadId: string, e
     ...(entry.author.kind === "bot" ? { from: { botId: entry.author.id, name: entry.author.name, color: bot?.color ?? (entry.author.owner ? teamBot(roomId, entry.author.id)?.color : undefined) ?? "" } } : {}),
     ...(replyTo ? { replyToId: replyTo.id } : {}),
     ...(sendId ? { sendId } : {}),
-    ...(entry.files ? { roomFiles: entry.files } : {}),
+    // the host's own text keeps its local files; the room's copies of them would show twice
+    ...(entry.files && local.text === undefined ? { roomFiles: entry.files } : {}),
   });
 }
 
@@ -32,4 +33,13 @@ export function writeRoomEntry(store: MirrorStore, group: GroupRecord & { hosted
   const entry = appendRoomEntry(group.hosted.roomId, draft);
   broadcastDoorEntry(group.hosted.roomId, entry);
   return { entry, message: mirrorRoomEntry(store, group.hosted.roomId, group.threadId, entry, sendId, local) };
+}
+
+/** Commit a bot row already in a shared group's thread, linked by `roomEntryId`, never copied. */
+export function linkRoomEntry(store: Pick<Store, "patchMessage">, group: GroupRecord, row: Message): void {
+  if (!group.hosted || !roomById(group.hosted.roomId) || row.roomEntryId || row.kind !== "text" || !row.from) return;
+  if (!committedRoomText("bot", row.text ?? "")) return;
+  const entry = appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: row.from.botId, name: row.from.name }, text: row.text ?? "" });
+  broadcastDoorEntry(group.hosted.roomId, entry);
+  store.patchMessage(group.threadId, row.id, { roomEntryId: entry.id });
 }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { teamOwnerHash } from "./team-route.ts";
+import { teamOwnerHash } from "./team-stats.ts";
 import { kstDayStart, teamTodayRoute } from "./team-today.ts";
 
 const OWNER = teamOwnerHash("owner@example.com");

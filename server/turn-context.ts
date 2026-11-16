@@ -2,6 +2,44 @@ import { redactSecretsInText } from "./redact.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
 
+export interface ReplayMessage {
+  role: "user" | "assistant";
+  text: string;
+  engine?: string;
+  speaker?: { botId: string; name: string };
+}
+
+// Voice-call provenance is not a chat engine switch.
+const REPLAY_ENGINE_NAMES = new Map([
+  ["claudeAgent", "Claude"],
+  ["codex", "Codex"],
+  ["antigravityAgent", "Gemini"],
+  ["grokAgent", "Grok"],
+  ["museAgent", "Muse"],
+]);
+
+export function replayEngineTag(engine?: string, driverKind?: string, model?: string): string {
+  const name = engine && REPLAY_ENGINE_NAMES.get(engine);
+  // Box selects its engine by model; its driver kind only names the runner.
+  const currentEngine = driverKind === "boxAgent" ? (model?.startsWith("gpt") ? "codex" : "claudeAgent") : driverKind;
+  return name && currentEngine && engine !== currentEngine ? ` (on ${name})` : "";
+}
+
+export function replayMessageText(message: ReplayMessage, driverKind: string, botId?: string, model?: string): string {
+  if (message.role !== "assistant" || (botId && message.speaker?.botId !== botId)) return message.text;
+  const tag = replayEngineTag(message.engine, driverKind, model);
+  if (!tag) return message.text;
+  const speaker = message.speaker?.name;
+  const prefix = speaker ? `${speaker}: ` : "";
+  return speaker && message.text.startsWith(prefix)
+    ? `${speaker}${tag}: ${message.text.slice(prefix.length)}`
+    : `${tag.trimStart()} ${message.text}`;
+}
+
+function replayLine(message: ReplayMessage, driverKind?: string, model?: string): string {
+  return `${message.role === "user" ? "User" : `Assistant${replayEngineTag(message.engine, driverKind, model)}`}: ${message.text}`;
+}
+
 // Building the text a driver actually receives. Three situations force an
 // inline replay of the active branch: a rewind (the visible branch
 // changed), a fresh engine (this instance has no session here — the user
@@ -15,7 +53,9 @@ export interface TurnContextInput {
   /** the user's new message */
   text: string;
   /** settled text turns on the active branch, oldest first, capped upstream */
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  transcript: ReplayMessage[];
+  driverKind?: string;
+  model?: string;
   /** the visible branch changed (edit / version switch) */
   rewound: boolean;
   /** this driver instance has no session cursor for this thread */
@@ -393,6 +433,19 @@ function systemLines(text: string): string[] {
     .filter((line) => line.trim());
 }
 
+function retainedLinesReordered(before: string[], after: string[]): boolean {
+  const oldLines = new Set(before);
+  const newLines = new Set(after);
+  const retainedBefore = before.filter((line) => newLines.has(line));
+  const retainedAfter = after.filter((line) => oldLines.has(line));
+  return retainedBefore.length !== retainedAfter.length
+    || retainedBefore.some((line, index) => line !== retainedAfter[index]);
+}
+
+export function systemLinesReordered(delivered: string, system: string): boolean {
+  return retainedLinesReordered(systemLines(delivered), systemLines(system));
+}
+
 /** Lines of `from` that `other` does not also hold, in `from`'s order. */
 function linesOnlyIn(from: string[], other: string[]): string[] {
   const left = new Map<string, number>();
@@ -416,8 +469,9 @@ export function withSystemChanges(
   if (delivered === undefined || delivered === system) return text;
   const before = systemLines(delivered);
   const after = systemLines(system);
-  const removed = linesOnlyIn(before, after);
-  const added = linesOnlyIn(after, before);
+  const reordered = retainedLinesReordered(before, after);
+  const removed = reordered ? before : linesOnlyIn(before, after);
+  const added = reordered ? after : linesOnlyIn(after, before);
   if (!removed.length && !added.length) return text;
   if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
   // Untagged, Haiku kept the stale system prompt in about half of real-CLI
@@ -577,7 +631,9 @@ const RESUME_FALLBACK_PREAMBLE =
 
 export function buildResumeFallback(input: {
   text: string;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  transcript: ReplayMessage[];
+  driverKind?: string;
+  model?: string;
   taskRecord?: TaskRecordContext;
   taskRecordText?: string;
 }): string {
@@ -587,7 +643,7 @@ export function buildResumeFallback(input: {
     record ? "" : null,
     RESUME_FALLBACK_PREAMBLE,
     "",
-    ...input.transcript.map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.text}`),
+    ...input.transcript.map((message) => replayLine(message, input.driverKind, input.model)),
     "",
     REPLY_MARKER,
     "",
@@ -632,7 +688,7 @@ export function buildTurnContext(input: TurnContextInput): {
       record ? "" : null,
       replayPreamble(input),
       "",
-      ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
+      ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
       "",
       REPLY_MARKER,
       "",

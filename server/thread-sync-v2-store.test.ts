@@ -1166,6 +1166,20 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     }, { timeout: 15_000, interval: 250 });
   });
 
+  it("publishes a settled turn at once instead of on the three-second timer", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    await a.call("live", { value: true });
+    await a.call("append", { role: "bot", text: "reply" });
+    await a.call("live", { value: false });
+    expect(await a.call("settle")).toBe("written");
+    const writers = join(folder, "threads-v2", "bot", "thread");
+    expect(readdirSync(writers).filter((writer) => existsSync(join(writers, writer, "head.json")))).toHaveLength(1);
+    await b.call("pull");
+    expect((await b.snapshot()).rows.map((row) => row.text)).toEqual(["reply"]);
+  });
+
   it("bounds worker publication to the versions captured while idle", async () => {
     const folder = temp();
     const a = new ThreadSyncV2({ folder, dataDir: temp(), deviceId: "a" });

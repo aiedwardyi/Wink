@@ -19,6 +19,17 @@ function world() {
   return { store, rando, other, say };
 }
 
+function myChats(store: Store) {
+  return async (caller: { botId: string; threadId: string } | undefined, query = "starzum") => {
+    const req = Object.assign(Readable.from([JSON.stringify({ query })]), { headers: { authorization: "Bearer t" } }) as unknown as IncomingMessage;
+    let status = 0;
+    let body: any;
+    const res = { writeHead: (code: number) => { status = code; return res; }, setHeader: () => res, end: (data: string) => { body = JSON.parse(data); } } as unknown as ServerResponse;
+    await myChatsRoute(req, res, { store, caller: () => caller, sideThreads: () => new Set(), owner: () => "Edward" });
+    return { status, body };
+  };
+}
+
 function starzum() {
   const w = world();
   w.say(w.rando.threadId, "user", `Plan for starzum.com: a landing page with a waitlist, launch Friday. ${CANARY}`);
@@ -85,21 +96,12 @@ describe("search_my_chats", () => {
     for (const leak of ["joined room task", "another bot", "room B", "Mina"]) expect(text).not.toContain(leak);
   });
 
-  it("answers only a room turn's own token, scoped to that bot, and leaves an owner-only chip in the room", async () => {
+  it("answers only a bot turn's own token, scoped to that bot, and leaves an owner-only chip in the room", async () => {
     const { store, rando, other, say } = starzum();
     say(other.threadId, "user", "starzum secret of another bot");
     const room = store.createGroup("New group", [rando.id]);
-    const call = async (caller: { botId: string; threadId: string } | undefined, query = "starzum") => {
-      const req = Object.assign(Readable.from([JSON.stringify({ query })]), { headers: { authorization: "Bearer t" } }) as unknown as IncomingMessage;
-      let status = 0;
-      let body: any;
-      const res = { writeHead: (code: number) => { status = code; return res; }, setHeader: () => res, end: (data: string) => { body = JSON.parse(data); } } as unknown as ServerResponse;
-      await myChatsRoute(req, res, { store, caller: () => caller, sideThreads: () => new Set(), owner: () => "Edward" });
-      return { status, body };
-    };
+    const call = myChats(store);
     expect((await call(undefined)).status).toBe(403);
-    expect((await call({ botId: rando.id, threadId: rando.threadId })).status).toBe(403);
-    expect((await call({ botId: other.id, threadId: room.threadId })).status).toBe(403);
     const ok = await call({ botId: rando.id, threadId: room.threadId });
     expect(ok.status).toBe(200);
     expect(ok.body.text).toContain("Plan for starzum.com");
@@ -107,6 +109,17 @@ describe("search_my_chats", () => {
     const chip = store.messagesFor(room.threadId).at(-1)!;
     expect(chip).toMatchObject({ role: "bot", kind: "activity", from: { botId: rando.id }, tool: { name: "Searched your 1:1: starzum", ok: true } });
     expect(JSON.stringify(store.messagesFor(room.threadId))).not.toContain(CANARY);
+  });
+});
+
+describe("search_my_chats outside a room", () => {
+  it("searches the bot's own chats from its 1:1", async () => {
+    const { store, rando, other, say } = starzum();
+    say(other.threadId, "user", "starzum secret of another bot");
+    const ok = await myChats(store)({ botId: rando.id, threadId: rando.threadId });
+    expect(ok.status).toBe(200);
+    expect(ok.body.text).toContain("Plan for starzum.com");
+    expect(ok.body.text).not.toContain("another bot");
   });
 });
 
@@ -216,5 +229,45 @@ describe("room echo", () => {
     const prepared = await prepareModelContext({ messages, contextWindow: 200_000, taskRecordText: "", userName: "Edward" });
     expect(prepared.status).toBe("ready");
     expect(JSON.stringify(prepared)).not.toContain("waitlist");
+  });
+});
+
+describe("room echo engine provenance", () => {
+  it.each([
+    ["claude-fable-5", "claudeAgent", "codex", "Codex"],
+    ["gpt-5.4", "codex", "claudeAgent", "Claude"],
+  ])("compares cloud echoes with the engine behind %s", (model, engine, otherEngine, otherName) => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Earlier reply"', engine, roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "boxAgent", model)).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+    expect(roomEchoesSinceLastUserTurn([{ ...row, engine: otherEngine }], new Set(), "Edward", undefined, "boxAgent", model).join("\n")).toContain(`You (on ${otherName}) answered:`);
+  });
+
+  it.each(["geminiAgent", "boxAgent", "localModel"])("leaves %s echoes untagged", (engine) => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Earlier reply"', engine, roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "museAgent")).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+  });
+
+  it("stores the replying engine and names it after a switch", () => {
+    const { store, rando, say } = world();
+    const room = store.createGroup("New group", [rando.id]);
+    say(room.threadId, "user", "Make a dog image");
+    const since = store.messagesFor(room.threadId).length;
+    say(room.threadId, "bot", "Generated a dog image", { engine: "antigravityAgent" });
+    const row = writeRoomEcho(store, rando, room, room.threadId, since, "Edward")!;
+    expect(row.engine).toBe("antigravityAgent");
+    const messages = store.activePath(rando.threadId);
+    const plain = roomEchoesSinceLastUserTurn(messages, new Set(), "Edward", undefined, "antigravityAgent");
+    expect(plain).toEqual(roomEchoesSinceLastUserTurn(messages, new Set(), "Edward"));
+    const switched = roomEchoesSinceLastUserTurn(messages, new Set(), "Edward", undefined, "museAgent").join("\n");
+    expect(switched).toContain('You (on Gemini) answered: "Generated a dog image"');
+    expect(row.text).toContain('You answered: "Generated a dog image"');
+  });
+
+  it("leaves legacy echoes untagged", () => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Legacy reply"', roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "museAgent")).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
   });
 });

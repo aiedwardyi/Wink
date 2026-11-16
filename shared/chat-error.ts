@@ -1,7 +1,7 @@
 export type ChatError =
   | { kind: "quiet"; site: "chatRace" | "chatQueue" }
   | { kind: "keep"; raw: string }
-  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied" | "errors.codexPromo"; vars?: Record<string, string | number>; raw?: string }
+  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.cliMissing" | "errors.signInUnconfirmed" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied" | "errors.codexPromo" | "errors.groupBusy" | "errors.groupWorking"; vars?: Record<string, string | number>; raw?: string }
   | { kind: "unknown"; raw: string };
 
 export function classifyChatError(line: string): ChatError {
@@ -11,6 +11,8 @@ export function classifyChatError(line: string): ChatError {
   if (reason.includes("codex_byok_restricted_by_api_credit_promo") || reason === "This OpenAI key's org is on API credit, which Codex can't use. Pick another Codex account.") return { kind: "known", key: "errors.codexPromo" };
   if (/^the (?:bot|channel) switched tasks before it could receive the message$/i.test(reason)) return { kind: "known", key: "errors.sendTaskChanged" };
   if (/^the (?:bot|channel) switched tasks before it could be interrupted$/i.test(reason)) return { kind: "known", key: "errors.stopTaskChanged" };
+  if (reason === "this group is working or waiting on you - finish that turn first") return { kind: "known", key: "errors.groupBusy" };
+  if (reason === "this group is working - stop that turn first") return { kind: "known", key: "errors.groupWorking" };
   if (/^(?:Claude is not signed in\.|Grok CLI is not signed in|Grok runs in WSL\.|`[^`]+` isn't installed|Project folder not found:)/.test(reason)) return { kind: "keep", raw };
   if (/^(?:a turn is already running on this thread|turn cancel(?:led|ed) before dispatch|the bot is (?:already working|still stopping its last turn)|sendId already belongs to another message)/i.test(reason)
     || (queued && reason === "no such task")) {
@@ -21,6 +23,9 @@ export function classifyChatError(line: string): ChatError {
   if (/^(?:provider|model) instance .*unavailable|model is unavailable|no working engine supports/.test(reason)) return { kind: "known", key: "errors.model" };
   if (/^connected apps are unavailable/.test(reason)) return { kind: "known", key: "errors.apps" };
   if (reason === "This account is signed out. Sign in again, then send your message.") return { kind: "known", key: "errors.signedOut" };
+  if (reason === "This account's sign-in isn't confirmed yet.") return { kind: "known", key: "errors.signInUnconfirmed" };
+  const missing = /^(Claude|Codex) isn't installed or isn't answering on this PC\.$/.exec(reason);
+  if (missing) return { kind: "known", key: "errors.cliMissing", vars: { engine: missing[1] } };
   if (reason === "Gemini is still busy after 3 tries. Try another model.") return { kind: "known", key: "chat.busyGaveUp" };
   const selfStopped = /^(.+?) stopped this reply on its own(?: \((.+)\))?$/.exec(reason);
   if (selfStopped) return { kind: "known", key: "errors.engineStopped", vars: { engine: selfStopped[1] }, raw: selfStopped[2] ? reason : undefined };

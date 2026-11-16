@@ -62,7 +62,7 @@ export interface ErrorClassification {
 }
 
 const RESUME_CURSOR_REJECTION_PATTERN =
-  /\b(?:(?:session|conversation)\s+(?:(?:\S+\s+)?not found|missing|invalid|unknown|expired)|(?:not found|missing|invalid|unknown|expired)\s+(?:session|conversation))\b/i;
+  /\b(?:(?:session|conversation)\s+(?:(?:\S+\s+)?not found|missing|invalid|unknown|expired)|(?:not found|missing|invalid|unknown|expired)\s+(?:session|conversation)|no\s+(?:session|conversation)\s+found)\b/i;
 
 export function isResumeCursorRejected(stderr: string): boolean {
   return RESUME_CURSOR_REJECTION_PATTERN.test(stderr);

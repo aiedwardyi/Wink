@@ -20,6 +20,8 @@ export function offscreenLimit(
   limit: number,
   chat: { unread?: boolean; readAt?: number },
   activeLeafId?: string | null,
+  /** Ask cards older than `messages`, when `messages` is only a thread's tail. */
+  earlier: readonly Message[] = [],
 ): number {
   // A branched page's active path can sit anywhere in insertion order, so keep it whole.
   if (activeLeafId && activeLeafId !== messages.at(-1)?.id) return limit;
@@ -30,7 +32,7 @@ export function offscreenLimit(
   }
   let rows = Math.min(limit, OFFSCREEN_TAIL);
   let prompt = false, ask = false, user = false, preview = false, read = !chat.unread;
-  const waiting = scanQuestion(messages);
+  const waiting = scanQuestion(earlier.length ? [...earlier, ...messages] : messages);
   for (let i = messages.length - 1; i >= floor; i--) {
     const message = messages[i]!;
     const keep = (!prompt && isPrompt(message)) || (!prompt && !ask && isAsk(message)) || message === waiting || (!preview && isPreview(message))

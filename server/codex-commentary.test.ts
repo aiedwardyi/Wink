@@ -1,6 +1,7 @@
 // A driver's turn through index.ts's own row and reply bookkeeping, sliced
 // out of the source, then the chat's shown filter.
-import { chmodSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -10,8 +11,11 @@ import { isVoiceLine } from "../shared/live-call.ts";
 import { isShownMessage } from "../src/lib/shown-message.ts";
 import { ensureDirs } from "./config.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
+import { GrokAgentDriver } from "./drivers/acp/grok.ts";
+import { AntigravityDriver } from "./drivers/antigravity.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
 import { CodexDriver } from "./drivers/codex.ts";
+import { MspMuseAgentDriver } from "./drivers/msp/muse.ts";
 import { takePeerReplyStamp, watchPeerTurn } from "./peer-takeover.ts";
 import { persistPeerUserReply } from "./peer-user-reply.ts";
 import { ENGINE_SUMMARY_PREFIX } from "./replies.ts";
@@ -22,6 +26,9 @@ import { ownTurnReply, turnSummaries } from "./turn-reply.ts";
 const testing = join(dirname(fileURLToPath(import.meta.url)), "testing");
 const FAKE_CODEX = join(testing, "fake-codex-app-server.ts");
 const FAKE_CLAUDE = join(testing, "fake-claude-cli.ts");
+const FAKE_ACP = join(testing, "fake-acp-cli.ts");
+const FAKE_AGY = join(testing, "fake-agy-cli.ts");
+const FAKE_MSP = join(testing, "fake-msp-cli.ts");
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
@@ -224,5 +231,156 @@ describe("a turn's commentary after its final answer", () => {
       { text: "final answer" },
       "completed",
     ]);
+  });
+});
+
+describe("a final answer that restates a text from before a tool call", () => {
+  const first = [
+    "**TLDR: The cleanup is fully live, and part 1 has its new sound for you to hear.**",
+    "- **Cleanup:** the last 2 steps went live overnight (01:01 and 07:31). I checked the live app after each one and everything passed.",
+    "- **Part 1 sound:** rebuilt the same way as parts 2 and 3: [p1-sound.mp4](C:\\work\\p1-sound.mp4)",
+  ].join("\n");
+  const final = [
+    "**TLDR: The cleanup is fully live, and part 1's new sound is ready for you to listen to.**",
+    "- **Cleanup:** the last 2 steps went live overnight, at 01:01 and 07:31. I checked the live app after each one and both passed.",
+    "- **Part 1's sound** is rebuilt the same way as parts 2 and 3: [p1-sound.mp4](C:\\work\\p1-sound.mp4)",
+    "",
+    "Your one question (2:10, the stair climb) is in your box.",
+  ].join("\n");
+  const scratch = mkdtempSync(join(tmpdir(), "restate-"));
+  const env: Record<string, string> = {};
+  let instance: ProviderInstance | undefined;
+
+  beforeEach(() => {
+    ensureDirs();
+    for (const cli of [FAKE_CLAUDE, FAKE_CODEX, FAKE_ACP, FAKE_AGY, FAKE_MSP]) chmodSync(cli, 0o755);
+  });
+
+  afterEach(async () => {
+    for (const key of Object.keys(env)) delete process.env[key];
+    await instance?.dispose();
+    instance = undefined;
+  });
+
+  const set = (values: Record<string, string>) => {
+    Object.assign(env, values);
+    Object.assign(process.env, values);
+  };
+  const run = async (created: ProviderInstance, threadId: string, text = "morning summary") => {
+    instance = created;
+    const recorder = recordEvents(created.adapter);
+    await created.adapter.sendTurn({ threadId, text, model: "fake" });
+    await recorder.until((e) => e.type === "turn.completed");
+    recorder.stop();
+    return recorder.events;
+  };
+  const settled = (threadId: string, events: RuntimeEvent[]) => {
+    const view = chat(threadId);
+    for (const event of events.filter((e) => e.type !== "turn.completed")) view.feed(event);
+    const live = view.shown();
+    view.feed(events.find((e) => e.type === "turn.completed")!);
+    return { live, shown: view.shown(), patches: view.patches };
+  };
+  const base = { environment: {}, enabled: true } as const;
+
+  const claude = async () => {
+    const tool = (id: string, name: string, input: object) => ({ type: "tool_use", id, name, input });
+    const result = (id: string, text: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } });
+    const fixture = join(scratch, "claude.json");
+    writeFileSync(fixture, JSON.stringify([
+      { type: "assistant", message: { id: "msg-1", stop_reason: "tool_use", content: [{ type: "text", text: first }, tool("tu-1", "mcp__agents__ask_user", { question: "Does 2:10 sound OK?", choices: ["Sounds good", "Static"] })] } },
+      result("tu-1", "Asked. Their answer will arrive as a new message."),
+      { type: "assistant", message: { id: "msg-2", stop_reason: "tool_use", content: [tool("tu-2", "mcp__agents__update_task_state", { next_action: "wait for the 2:10 answer" })] } },
+      result("tu-2", "Task record saved."),
+      { type: "assistant", message: { id: "msg-3", stop_reason: "end_turn", content: [{ type: "text", text: final }] } },
+      { type: "result", subtype: "success", is_error: false, result: final, total_cost_usd: 0 },
+    ]));
+    set({ FAKE_CLAUDE_REPLY_FIXTURE: fixture });
+    return run(await ClaudeDriver.create({ ...base, instanceId: "claude-test", displayName: "Claude", config: { cli: FAKE_CLAUDE, permissionMode: "acceptEdits" } }), "t-claude");
+  };
+  const codex = async (phases: [string?, string?]) => {
+    set({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: first, ...(phases[0] ? { phase: phases[0] } : {}) }, { text: final, ...(phases[1] ? { phase: phases[1] } : {}) }]) });
+    return run(await CodexDriver.create({ ...base, instanceId: "codex-test", displayName: "Codex", config: { cli: FAKE_CODEX, fullAuto: false } }), "t-codex");
+  };
+  const grok = async () => {
+    const fixture = join(scratch, "acp.json");
+    writeFileSync(fixture, JSON.stringify([
+      { sessionUpdate: "agent_message_chunk", content: { text: first } },
+      { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "ask_user" },
+      { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "completed" },
+      { sessionUpdate: "agent_message_chunk", content: { text: final } },
+    ]));
+    set({ FAKE_ACP_TOOL_FIXTURE: fixture });
+    return run(await GrokAgentDriver.create({ ...base, instanceId: "grok-test", displayName: "Grok", config: { cli: FAKE_ACP, fullAuto: false } }), "t-grok");
+  };
+  const muse = async () => {
+    const message = (id: string, text: string) => [
+      { method: "item/started", params: { item: { id, kind: "agentMessage" } } },
+      { method: "item/completed", params: { item: { id, kind: "agentMessage", text } } },
+    ];
+    set({
+      META_API_KEY: "meta-key",
+      FAKE_MSP_ITEMS: JSON.stringify([
+        ...message("m-1", first),
+        { method: "item/started", params: { item: { itemId: "tc-1", kind: "toolCall", tool: "ask_user", status: "inProgress" } } },
+        { method: "item/completed", params: { item: { itemId: "tc-1", kind: "toolCall", status: "completed" } } },
+      ]),
+    });
+    // echo-gated ends the turn with "echo: <prompt>", so the prompt is the final answer
+    set({ FAKE_MSP_MODE: "echo-gated" });
+    return run(await MspMuseAgentDriver.create({ ...base, instanceId: "muse-test", displayName: "Muse", config: { cli: FAKE_MSP, fullAuto: false } }), "t-muse", final);
+  };
+  const gemini = async () => {
+    const conversation = "conv-restate";
+    const step = (step_index: number, step_type: string, extra: object = {}) => ({ event: "step_update", conversation_id: conversation, step_update: { conversation_id: conversation, step_index, state: "DONE", step_type, ...extra } });
+    set({
+      FAKE_AGY_REPLAY: JSON.stringify([
+        { event: "init", conversation_id: conversation, init: {} },
+        step(1, "agent_response", { text_delta: first }),
+        step(2, "tool", { tool_name: "ask_user", tool_info: { name: "ask_user", parameters: {} } }),
+        step(3, "agent_response", { text_delta: final }),
+        { event: "result", conversation_id: conversation, result: { conversation_id: conversation, status: "SUCCESS", response: `${first}${final}`, duration_seconds: 1, num_turns: 1 } },
+      ]),
+    });
+    return run(await AntigravityDriver.create({ ...base, instanceId: "agy-test", displayName: "Gemini", config: { cli: FAKE_AGY, fullAuto: true } }), "t-gemini");
+  };
+
+  it("shows the Claude turn's final answer once it completes", async () => {
+    const events = await claude();
+    expect(events.filter(isText).map((e) => e.text)).toEqual([first, final]);
+    const { live, shown, patches } = settled("t-claude", events);
+    expect(live).toEqual([first, final]);
+    expect(shown).toEqual([final]);
+    expect(patches).toEqual([{ summarized: true, restated: true }]);
+  });
+
+  it("keeps the line answering a steer the final restates", async () => {
+    const events = await claude();
+    const view = chat("t-claude");
+    view.messages.push({ id: "user-b", at: 1, role: "user", kind: "text", text: "how did it go?", steered: true });
+    for (const event of events) view.feed(event);
+    expect(view.shown()).toEqual(["how did it go?", first, final]);
+  });
+
+  it.each([
+    ["Codex with phases", () => codex(["commentary", "final_answer"]), "t-codex"],
+    ["Codex without phases", () => codex([]), "t-codex"],
+    ["Grok", grok, "t-grok"],
+    ["Muse", muse, "t-muse"],
+  ] as const)("shows %s one final answer", async (_engine, play, threadId) => {
+    const events = await play();
+    const texts = events.filter(isText).map((e) => e.text);
+    expect(texts).toEqual([first, expect.stringContaining(final)]);
+    expect(settled(threadId, events).shown).toEqual([texts[1]]);
+  });
+
+  it("shows Gemini one row, since agy sends the turn's text as one response", async () => {
+    const events = await gemini();
+    expect(events.filter(isText)).toHaveLength(1);
+    expect(settled("t-gemini", events).shown).toHaveLength(1);
+  });
+
+  it("drops the Gemini step a later step restates from its one row", async () => {
+    expect(settled("t-gemini", await gemini()).shown).toEqual([final]);
   });
 });

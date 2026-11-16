@@ -6,7 +6,7 @@ import { LABEL_RE } from "../shared/relay-protocol.ts";
 import { REPORT_MAX_BYTES, reportOwnerHash, teamReportSchema, type TeamReport } from "../shared/team-report.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { boundedReportJson } from "./team-report-transport.ts";
-import { teamIdToken, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
+import { teamIdToken, teamRelayOrigin, type TeamTokenSource } from "./team-stats.ts";
 import { chiefReportIds, ownerChief, postChiefNote } from "./team-snags-owner.ts";
 import type { Store } from "./store.ts";
 

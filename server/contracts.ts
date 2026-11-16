@@ -343,6 +343,8 @@ export interface ProviderAdapter {
     askApproval?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
+  /** What this turn may do, from the same values the driver sets its flags with; the prompt states it. Only the box agent omits it (its box never asks); turn-access.test scans the rest. */
+  access?(turn: import("./drivers/turn-access.ts").AccessTurn): import("./drivers/turn-access.ts").TurnAccess;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
   /** End this running turn as a clean finish, through the driver's own
    * interrupt. Absent = the turn runs on to its natural end. */
@@ -392,6 +394,8 @@ export interface ProviderSnapshot {
   /** "checking": the first probe has not answered yet; never saved. */
   state: "available" | "unavailable" | "checking";
   reason?: string;
+  /** `--version` did not answer: the CLI is missing, broken or too slow, so sign-in state is unknown. */
+  cliMissing?: boolean;
   authenticated?: boolean;
   authChecked?: boolean;
   /** Email or account name of the sign-in, read from the CLI's own status or auth file. */

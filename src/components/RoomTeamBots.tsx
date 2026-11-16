@@ -2,22 +2,22 @@
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { addMyBot, removeMyBot, removeTeamBot, type JoinedPerson, type JoinedView } from "@/lib/team-rooms";
 import type { TeamBot } from "@/state/store-types";
 import { useStore } from "@/state/store";
 
-import { BotAvatar } from "./Avatar";
+import { RoomBotAvatar, type RoomBotLook } from "./Avatar";
 import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
 import { BotPickerList } from "./BotPickerList";
 
 const NONE = new Set<string>();
 
-function BotRow({ bot, label, onRemove }: { bot: { id: string; name: string; color: string }; label: string; onRemove?: () => void }) {
+function BotRow({ bot, label, onRemove }: { bot: RoomBotLook & { id: string }; label: string; onRemove?: () => void }) {
   const { t } = useI18n();
   return (
     <li data-room-team-bot={bot.id} className={`${DETAILS_ROW} flex items-center gap-3 py-2.5`}>
-      <BotAvatar bot={{ name: bot.name, color: (bot.color || DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={28} motion="none" motionKey={0} animated={false} />
+      <RoomBotAvatar bot={bot} state="happy" size={28} motion="none" motionKey={0} animated={false} />
       <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{label}</span>
       {onRemove && (
         <button
@@ -73,7 +73,7 @@ export function JoinedBots({ room }: { room: JoinedView }) {
           </li>
         )}
       </ul>
-      {picking && <div className={`${DETAILS_BOX} mt-2 p-2`}><BotPickerList bots={choices} picked={NONE} onToggle={add} emptyHint={t("teamRoom.noBotsToAdd")} /></div>}
+      {picking && <div ref={revealOnOpen} className={`${DETAILS_BOX} mt-2 p-2`}><BotPickerList bots={choices} picked={NONE} onToggle={add} emptyHint={t("teamRoom.noBotsToAdd")} /></div>}
       {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t("errors.request")}</p>}
     </>
   );

@@ -50,7 +50,7 @@ async function changedMain() {
 function turnScope(accountNotices: ReturnType<typeof createAccountNotices>, dispatch: (text: string) => Promise<{ turnId: string }>, summaryRebuild = false) {
   const store = { markPaneNotesDelivered: vi.fn(), activePath: () => [] };
   return {
-    accountNotices, dispatch, summaryRebuild, store, bot: { id: "atlas" }, threadId: "t1", threadSyncV2: null,
+    accountNotices, dispatch, summaryRebuild, store, bot: { id: "atlas" }, instance: { driverKind: "claudeAgent" }, model: "opus", threadId: "t1", threadSyncV2: null,
     paneNotes: ["Pane note: ATLAS-1 finished."], paneNoteIds: [], paneTokens: 0, modelContextWindow: 200_000, newestPaneNoteId: "n1",
     mailForTurn: () => [], routineCards: [], recallNotes: [], currentPrompt: "hello", messages: [], skipTranscript: new Set(), task: {},
     routineCardsSinceLastUserTurn: () => [], quickAnswers: [], callLines: [], closedAsk: [], quickAnswersSinceLastUserTurn: () => [], roomEchoes: [], roomEchoesSinceLastUserTurn: () => [], turnOpts: {}, replaysTranscript: false, recycleDeferred: false, seed: {}, systemSeed: null,
@@ -82,7 +82,7 @@ it("delivers a pending note on a room-member turn", async () => {
     accountNotices: notices, bot: { id: "atlas", autoApprove: false, leanStartup: false }, threadId: "room-1", hop: 0, text: "Room message", topics: "", roomSystem: "", cwd: undefined, integrations: {},
     roomMail: [], selection: { instanceId: "claude" }, isCancelled: () => false, epoch: 1, currentTurnEpoch: () => epoch,
     turnRegistry: { prepare: vi.fn() }, verifyDoc: { fixTurn: () => undefined }, workerTurns: { capture: vi.fn() }, pendingInterruptThreads: { started: vi.fn() },
-    rootForStart, rootId: null, authority: undefined, lane: false, turnKey: "atlas",
+    rootForStart, rootId: null, authority: undefined, lane: false, access: { approval: "ask" }, turnKey: "atlas",
     providerReload: { started: () => ({ adapter: { sendTurn: async (input: { text: string }) => { sent.push(input.text); return { turnId: "room-turn" }; } } }) },
     dispatchAdapterTurn: (_threadId: string, send: () => Promise<unknown>) => Promise.resolve().then(send),
     isUnattended: () => false, memberTurnSelection: () => ({}), bindInterruptedTurn: vi.fn(), markMailRead: vi.fn(),

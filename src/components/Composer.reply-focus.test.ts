@@ -141,7 +141,7 @@ describe("composer reply focus", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it("does not force focus during an approval", async () => {
+  it("keeps the box typeable during an approval", async () => {
     const textarea = await mount(null);
     const bot: Bot = {
       id: "approval", threadId: "approval-thread", name: "Approval", title: "", description: "",
@@ -151,11 +151,7 @@ describe("composer reply focus", () => {
         card: { title: "Approve", subtitle: "Run command", options: [], requestId: "request", tool: "Bash" } }],
     };
     await act(async () => root!.render(createElement(Composer, { bot })));
-    const focus = vi.spyOn(textarea, "focus");
-    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
-    await act(async () => frame.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect((textarea as HTMLTextAreaElement).disabled).toBe(true);
-    expect(focus).not.toHaveBeenCalled();
+    expect((textarea as HTMLTextAreaElement).disabled).toBe(false);
   });
 
   it("prevents touch blur and focuses once on the click", async () => {

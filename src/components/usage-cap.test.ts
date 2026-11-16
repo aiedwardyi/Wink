@@ -196,7 +196,7 @@ describe("motion", () => {
       engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose: vi.fn(), closing,
     }))));
   };
-  const scrim = () => document.querySelector<HTMLElement>('body > div[aria-hidden="true"].bg-black\\/45');
+  const scrim = () => document.querySelector<HTMLElement>('body > div[aria-hidden="true"].bg-black\\/55');
 
   it("fades the phone scrim in, and out with the view, taking no taps while it goes", async () => {
     await quick(false);

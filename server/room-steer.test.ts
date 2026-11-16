@@ -44,6 +44,13 @@ describe("steerRoomSend", () => {
     expect(rows).toHaveLength(1);
   });
 
+  it("marks a tapped choice steered into the asker's turn with its card", async () => {
+    const { deps, group, steer } = setup();
+    const row = await steerRoomSend(deps, group, "Sure", undefined, "send-2", "ask");
+    expect(steer).toHaveBeenCalledWith("room-t", "Sure", undefined, { fromUser: true });
+    expect(row).toMatchObject({ text: "Sure", steered: true, answersCard: "ask" });
+  });
+
   it("leaves the line to the room's next turn when it can't steer", async () => {
     for (const opts of [{ queueing: false }, { steered: false }]) {
       const { deps, group, rows } = setup(opts);
@@ -58,6 +65,27 @@ describe("steerRoomSend", () => {
       expect(await steerRoomSend(deps, group, text)).toBeNull();
       expect(steer).not.toHaveBeenCalled();
     }
+  });
+
+  it("steers a reply to the busy member, and leaves a reply to another member to its own turn", async () => {
+    const line = (botId: string) => ({ id: `r-${botId}`, role: "bot", kind: "text", text: "earlier", from: { botId, name: botId, color: "" } }) as Message;
+    const busy = setup();
+    expect(await steerRoomSend(busy.deps, busy.group, "why?", line("scout"))).toMatchObject({ steered: true, replyToId: "r-scout" });
+    const other = setup();
+    expect(await steerRoomSend(other.deps, other.group, "why?", line("pixel"))).toBeNull();
+    expect(other.steer).not.toHaveBeenCalled();
+  });
+
+  it("never steers a reply to an archived member or a teammate's bot into the busy member", async () => {
+    const archived = setup();
+    (archived.deps.store.bot("pixel") as BotRecord).hidden = true;
+    const toArchived = { id: "r-pixel", role: "bot", kind: "text", text: "earlier", from: { botId: "pixel", name: "Pixel", color: "" } } as Message;
+    expect(await steerRoomSend(archived.deps, archived.group, "why?", toArchived)).toBeNull();
+    expect(archived.steer).not.toHaveBeenCalled();
+    const team = setup();
+    const toTeammate = { id: "r-tb", role: "bot", kind: "text", text: "earlier", from: { botId: "tb-1", name: "Bolt", color: "" }, author: { kind: "bot", id: "tb-1", name: "Bolt", owner: "p-mina" } } as Message;
+    expect(await steerRoomSend(team.deps, team.group, "why?", toTeammate)).toBeNull();
+    expect(team.steer).not.toHaveBeenCalled();
   });
 
   it("refuses to record a steer the turn settled under", async () => {

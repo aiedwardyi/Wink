@@ -988,6 +988,19 @@ describe("Store", () => {
     expect(recovered.taskPacket(member.threadId)?.flushReason).toBe("progress");
   });
 
+  it("names the member that was speaking on a room crash packet", () => {
+    const store = new Store(selection);
+    const first = store.createBot();
+    const speaker = store.createBot();
+    const room = store.createGroup("Two bots", [first.id, speaker.id]);
+    store.writeTaskPacket(taskPacket(first.id, room.threadId));
+    store.setActivity(speaker.id, "working", room.threadId);
+
+    const recovered = new Store(selection);
+
+    expect(recovered.taskPacket(room.threadId)).toMatchObject({ flushReason: "crash", botId: speaker.id });
+  });
+
   it("seeds a room crash packet from the last room instruction when none was saved", () => {
     const store = new Store(selection);
     const member = store.createBot();

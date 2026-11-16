@@ -8,12 +8,14 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRoom } from "@/lib/joined-rooms";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
+import { useSkin } from "@/lib/skins";
 import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomMessage, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
 import { AppErrorBanner } from "./AppErrorBanner";
-import { BotAvatar } from "./Avatar";
+import { RoomBotAvatar } from "./Avatar";
+import { ChatScene, sceneOf } from "./ChatScene";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
 import { RoomTitle } from "./RoomTitle";
@@ -23,7 +25,7 @@ import { TurnPresence } from "./TurnPresence";
 
 const PAGE = 200;
 
-export function JoinedRoomView({ roomId }: { roomId: string }) {
+export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hidden?: boolean }) {
   const { t } = useI18n();
   const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
@@ -74,9 +76,13 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const joined = phase === "connecting" || phase === "live" || phase === "offline";
   const myTurns = (status === null ? myBots ?? [] : []).map((bot) => {
     const listed = teamBots?.find((candidate) => candidate.id === bot.id);
-    return { ...bot, name: listed?.name ?? "", color: (listed?.color || DEFAULT_MAUS_COLOR) as MausColor };
+    return { ...bot, name: listed?.name ?? "", color: (listed?.color || DEFAULT_MAUS_COLOR) as MausColor, mascotStyle: listed?.mascotStyle };
   });
   const stoppable = myTurns.some((bot) => bot.working || bot.waiting);
+  const chain = status === null ? room?.botChain : undefined;
+  const skin = useSkin();
+  const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   const seq = entries?.at(-1)?.seq;
   useEffect(() => {
     const read = () => {
@@ -92,7 +98,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     };
   }, [base, roomId, room?.unread, seq, state.selectedId, state.workspaceOpen]);
   return (
-    <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {scene && <ChatScene scene={scene} skin={skin} working={myTurns.some((bot) => bot.working) || Boolean(chain)} threadId={base} hidden={hidden} sendRef={sceneSend} />}
       <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <RoomTitle name={name} picture={<RoomPicture src={roomPictureUrl(base, room?.state?.picture)} retry={room?.link} />} disabled={!room?.state} />
         {room && joined && <RoomAlertsBell chat={joinedSelection(roomId)} />}
@@ -121,7 +128,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         presence={myTurns.map((bot) => (
           <TurnPresence
             key={bot.id}
-            avatar={<BotAvatar bot={state.bots.find((local) => local.id === bot.botId) ?? { name: bot.name, color: bot.color }} state="thinking" size={36} forward={false} lookAround={1} trackPointer={false} />}
+            avatar={<RoomBotAvatar bot={state.bots.find((local) => local.id === bot.botId) ?? { name: bot.name, color: bot.color, mascotStyle: bot.mascotStyle }} state="thinking" size={36} forward={false} lookAround={1} trackPointer={false} />}
             visible={Boolean(bot.working)}
             label={t("teamRoom.botWorking", { name: bot.name })}
             since={bot.since}
@@ -146,7 +153,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
               offline={phase !== "live"}
               status={myTurns.flatMap((bot) => bot.waiting ? [{ id: bot.id, text: t("teamRoom.botBusy", { name: bot.name }) }] : bot.error ? [{ id: bot.id, text: t("teamRoom.botFailed", { name: bot.name }), failed: true }] : [])}
               onStop={stoppable ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
-              chain={status === null ? room?.botChain : undefined}
+              onSend={() => sceneSend.current?.()}
+              chain={chain}
             />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}

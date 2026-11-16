@@ -24,7 +24,7 @@ export function PeerMessageBody({ text }: { text: string }) {
   const long = text.length > FOLD_CHARS || text.split("\n").length > FOLD_LINES;
   return (
     <div data-peer-body className="mt-1.5 ml-3 max-w-[min(42rem,78%)] border-l-2 border-hairline/50 pl-3 text-[14px] leading-relaxed whitespace-pre-wrap break-words text-ink">
-      <div className={cn(long && !expanded && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>
+      <div data-peer-text className={cn(long && !expanded && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>
         {text}
       </div>
       {long && (
