@@ -1,10 +1,12 @@
 import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
 import { DATA_DIR } from "../config.ts";
 import type { Message } from "../store.ts";
-import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, setJoinedWorks, type JoinedEntry } from "./joined.ts";
 import { MyRoomBotTurns, type MyRoomBotDeps } from "./my-room-bots.ts";
 
 const ROOM = "room1";
@@ -45,6 +47,7 @@ beforeEach(() => {
     startTurn: vi.fn(async (_botId: string, _threadId: string, _prompt: string, typed: string) => {
       thread.push({ id: "u", at: 0, role: "user", kind: "text", text: typed });
     }),
+    readOnlyTurns: () => true,
     messagesFor: () => thread,
     changed: vi.fn(),
   } as unknown as typeof deps;
@@ -256,7 +259,7 @@ describe("this PC's bot in a joined room", () => {
     await settle();
     const prompt = deps.startTurn.mock.calls[0]![2] as string;
     expect(prompt).toContain('"Peter" runs you; everyone else here is read-only.');
-    expect(prompt).toContain('tell them plainly: "Only Peter can ask me for this."');
+    expect(prompt).toContain('tell them plainly: "Peter has to turn this on for you."');
     expect(prompt).not.toContain("never refuse");
     expect(deps.startTurn.mock.calls[0]![5]).toBe(true);
     await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
@@ -266,6 +269,57 @@ describe("this PC's bot in a joined room", () => {
     await turns.settled(deps.startTurn.mock.calls[1]![1] as string, true);
     await settle();
     expect(deps.startTurn.mock.calls[2]![5]).toBe(false);
+  });
+
+  it("keeps the host and people already in the room at full power after the upgrade, and starts a new joiner read-only", async () => {
+    closeJoinedDb();
+    const file = new DatabaseSync(join(DATA_DIR, "joined.db"));
+    file.exec("DROP TABLE IF EXISTS people_works");
+    file.close();
+    setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }, { id: "p3", name: "Joon" }], bots: [], teamBots: [PETE] });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line({ kind: "host", id: "host", name: "Edward" }, "@Pete-Coder fix the login test", { at: Date.now() }));
+    await settle();
+    expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Peter" runs you; "Edward", "Mina" may also make you work; everyone else here is read-only.');
+    await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
+    turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder rename the file", { at: Date.now() }));
+    await settle();
+    expect(deps.startTurn.mock.calls[1]![5]).toBe(false);
+    await turns.settled(deps.startTurn.mock.calls[1]![1] as string, true);
+    turns.heard(ROOM, line({ kind: "person", id: "p3", name: "Joon" }, "@Pete-Coder delete the repo", { at: Date.now() }));
+    await settle();
+    expect(deps.startTurn.mock.calls[2]![5]).toBe(true);
+  });
+
+  it("lets this PC's person switch on a joiner, and switch them off again", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    const mina = { kind: "person" as const, id: "p2", name: "Mina" };
+    expect(setJoinedWorks(ROOM, "p2", true)).toBe(true);
+    turns.heard(ROOM, line(mina, "@Pete-Coder add totals", { at: Date.now() }));
+    await settle();
+    expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
+    expect(setJoinedWorks(ROOM, "p2", false)).toBe(true);
+    turns.heard(ROOM, line(mina, "@Pete-Coder push it", { at: Date.now() }));
+    await settle();
+    expect(deps.startTurn.mock.calls[1]![5]).toBe(true);
+  });
+
+  it("answers a read-only ask in the room when the bot's engine can't work read-only, instead of failing", async () => {
+    deps.readOnlyTurns = () => false;
+    const turns = new MyRoomBotTurns(deps);
+    const ask = line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder run the build", { at: Date.now() });
+    deps.client.botSend.mockResolvedValueOnce({ ok: true, value: { seq: ask.seq } });
+    turns.heard(ROOM, ask);
+    await settle();
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, `Pete-Coder can't take requests from you yet. Peter has to turn on "Can make bots work" for you.`, ask.id);
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+    turns.sent(ROOM, line(peter, "@Pete-Coder run the build"));
+    await settle();
+    expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
   });
 
   it("keeps a busy rejection waiting on this PC without posting a failure", async () => {
@@ -323,7 +377,7 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.startTurn).toHaveBeenCalledTimes(1);
     const [, , prompt, typed] = deps.startTurn.mock.calls[0]!;
     expect(typed).toBe(ask.text);
-    expect(prompt).toContain('"Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Only Peter can ask me for this." Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
+    expect(prompt).toContain('"Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you." Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
     expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @Pete-Coder what works for Peter on Saturday?');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "@EdBot Peter is free after 7." });
     await turns.settled("task-1", true);
@@ -525,6 +579,6 @@ describe("a room bot's @ to this PC's bot", () => {
     const turns = new MyRoomBotTurns(deps);
     turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
     await settle();
-    expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Only Peter can ask me for this.")\n"Peter" asked you: @Pete-Coder hi');
+    expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
   });
 });

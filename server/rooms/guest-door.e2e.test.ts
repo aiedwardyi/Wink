@@ -717,6 +717,7 @@ describe("bots in two homes hand work to each other", () => {
           return turns.settled(threadId, true);
         });
       },
+      readOnlyTurns: () => true,
       messagesFor: () => thread,
       changed: () => {},
       interrupt: async () => {},

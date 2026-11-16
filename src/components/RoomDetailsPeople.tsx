@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, setCanWork, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, setCanWork, setJoinedCanWork, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
 import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
@@ -187,13 +187,44 @@ export function HostPeople({ group }: { group: Group }) {
 export function JoinedPeople({ room }: { room: JoinedView }) {
   const { t } = useI18n();
   const people = room.state?.people ?? [];
+  const [works, setWorks] = useState(() => new Set(room.works));
+  const [problem, setProblem] = useState(false);
+  useEffect(() => setWorks(new Set(room.works)), [room.works]);
+  // only this PC's bots are switched, so the switch shows once one of them is in the room
+  const mine = room.status === "joined" && Boolean(room.myBots?.length);
+  const toggle = async (id: string) => {
+    const on = !works.has(id);
+    const flip = (value: boolean) => setWorks((current) => {
+      const next = new Set(current);
+      if (value) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    flip(on);
+    setProblem(false);
+    try {
+      await setJoinedCanWork(room.roomId, id, on);
+    } catch {
+      flip(!on);
+      setProblem(true);
+    }
+  };
+  const canWork = (id: string, name: string) => mine && (
+    <div className="mt-1 flex items-center justify-between gap-3 pl-[34px]">
+      <span className="min-w-0 text-[13px] text-ink-secondary">{t("teamRoom.canWork")}</span>
+      <DetailsSwitch on={works.has(id)} label={t("teamRoom.canWorkNamed", { name })} onToggle={() => void toggle(id)} />
+    </div>
+  );
   return (
-    <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
-      <PersonRow name={room.state?.host ?? ""}>
-        <span className="shrink-0 text-[12px] text-ink-secondary">{t("teamRoom.host")}</span>
-      </PersonRow>
-      {people.map((person) => person.id === room.me.id ? <RoomOwnName key={person.id} name={person.name} /> : <PersonRow key={person.id} name={person.name} />)}
-    </ul>
+    <>
+      <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
+        <PersonRow name={room.state?.host ?? ""} below={canWork("host", room.state?.host ?? "")}>
+          <span className="shrink-0 text-[12px] text-ink-secondary">{t("teamRoom.host")}</span>
+        </PersonRow>
+        {people.map((person) => person.id === room.me.id ? <RoomOwnName key={person.id} name={person.name} /> : <PersonRow key={person.id} name={person.name} below={canWork(person.id, person.name)} />)}
+      </ul>
+      {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t("errors.request")}</p>}
+    </>
   );
 }
 

@@ -123,6 +123,22 @@ describe("room codes", () => {
     expect((await joinedRoute("POST", "/api/joined/rooms/missing/read", c, async () => ({ seq: 0 })))?.status).toBe(404);
   });
 
+  it("flips Can make bots work through the local route and shows it on the room", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    const changed = vi.fn();
+    const c = guest({ onChange: changed });
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    const works = (person: string, on: unknown, method = "POST") => joinedRoute(method, `/api/joined/rooms/r1/people/${person}/works`, c, async () => ({ on }));
+    expect(c.room("r1")?.works).toEqual([]);
+    expect(await works("host", true)).toEqual({ status: 200, body: { works: true } });
+    expect(c.room("r1")?.works).toEqual(["host"]);
+    expect(changed).toHaveBeenCalledWith("r1");
+    expect((await works("host", "yes"))?.status).toBe(400);
+    expect((await works(STATE.me.id, true))?.status).toBe(404);
+    expect((await works("host", false, "GET"))?.status).toBe(404);
+  });
+
   it("hands the owner's Stop to this PC's own room turns", async () => {
     const stop = vi.fn(async () => {});
     const c = guest();

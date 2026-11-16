@@ -6619,6 +6619,10 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     joinedRoomThreads.add(threadId);
     return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
   },
+  readOnlyTurns: (botId, threadId) => {
+    const bot = store.bot(botId);
+    return Boolean(bot && botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true);
+  },
   messagesFor: (threadId) => store.messagesFor(threadId),
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   interrupt: async (botId, threadId) => {

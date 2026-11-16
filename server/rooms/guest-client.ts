@@ -26,6 +26,7 @@ import {
   joinedRooms,
   joinedSentName,
   joinedSummary,
+  joinedWorks,
   keepJoinedPicture,
   dropMyRoomBot,
   myRoomBots,
@@ -39,6 +40,7 @@ import {
   setJoinedReactions,
   setJoinedState,
   setJoinedSentName,
+  setJoinedWorks,
   type JoinedEntry,
   type JoinedFile,
   type JoinedMark,
@@ -123,6 +125,8 @@ export interface JoinedView {
   lastEntry?: JoinedEntry;
   /** The host's stream sent reactions, so it takes reactions and notices. */
   canReact: boolean;
+  /** Who may make this PC's bots work: "host" or a person id. */
+  works: string[];
   /** This PC's own bots the room still lists, by the host's id. */
   myBots: Array<{ id: string; botId: string; working?: boolean; since?: number; waiting?: boolean; error?: string }>;
   /** Bot lines in a live handoff, for the strip. */
@@ -460,6 +464,14 @@ export class GuestClient {
     return { ok: true, value: true };
   }
 
+  /** This PC's "Can make bots work" switch for the host or someone else in the room. */
+  setWorks(roomId: string, personId: string, on: unknown): GuestResult<boolean> {
+    if (typeof on !== "boolean") return failed(400, "on must be true or false");
+    if (!setJoinedWorks(roomId, personId, on)) return failed(404, "not found");
+    this.changed(roomId);
+    return { ok: true, value: on };
+  }
+
   /** Posts this PC's bot answer under the bot's room name. */
   async botSend(roomId: string, id: string, text: string, replyToId?: string): Promise<GuestResult<JoinedEntry>> {
     const creds = joinedKey(roomId);
@@ -623,7 +635,7 @@ export class GuestClient {
     const myBots = room.status === "joined" && listed.size
       ? myRoomBots(room.roomId).filter((bot) => listed.has(bot.id)).map(({ id, botId }) => ({ id, botId, ...this.deps.botTurn?.(room.roomId, id) }))
       : [];
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, botChain: this.deps.botChain?.(room.roomId) ?? 0, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), works: [...joinedWorks(room.roomId)], myBots, botChain: this.deps.botChain?.(room.roomId) ?? 0, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {

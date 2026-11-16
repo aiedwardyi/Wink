@@ -552,4 +552,26 @@ describe("a joined room", () => {
     await act(async () => picks[0]!.click());
     expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/bots" });
   });
+
+  it.each(["en", "ko"] as const)("gives the host and each teammate a Can make bots work switch for this PC's bots (%s)", async (locale) => {
+    mock.joined = [{ ...joined, state: { ...joined.state!, teamBots: [{ id: "tb-A", name: "Scout", color: "teal", owner: "me" }] }, myBots: [{ id: "tb-A", botId: "b1" }], works: ["host"] }];
+    await open({ joinedId: "j1" }, () => json({ works: true }), locale);
+    const switches = [...section("people").querySelectorAll<HTMLButtonElement>('[role="switch"]')];
+    const named = locale === "en" ? ["Edward can make bots work", "Seo-yeon Park can make bots work"] : ["Edward 님이 봇에게 일 시키기", "Seo-yeon Park 님이 봇에게 일 시키기"];
+    expect(switches.map((each) => [each.getAttribute("aria-label"), each.getAttribute("aria-checked")])).toEqual([[named[0], "true"], [named[1], "false"]]);
+    await act(async () => switches[1]!.click());
+    await settle();
+    expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/people/p2/works" });
+    expect(switches[1]!.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("turns a joined switch back off when this PC refuses it", async () => {
+    mock.joined = [{ ...joined, myBots: [{ id: "tb-A", botId: "b1" }], works: [] }];
+    await open({ joinedId: "j1" }, () => json({ error: "nope" }, 500));
+    const flip = section("people").querySelectorAll<HTMLButtonElement>('[role="switch"]')[1]!;
+    await act(async () => flip.click());
+    await settle();
+    expect(flip.getAttribute("aria-checked")).toBe("false");
+    expect(section("people").querySelector('[role="alert"]')).not.toBeNull();
+  });
 });

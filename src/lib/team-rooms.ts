@@ -74,6 +74,8 @@ export interface JoinedView {
   lastEntry?: JoinedEntry;
   /** False for an older host: no emoji row and no notice pin. */
   canReact?: boolean;
+  /** Who may make this PC's bots work: "host" or a person id. */
+  works?: string[];
   /** This PC's own bots in the room: the host's id and the local bot's. */
   myBots?: Array<{ id: string; botId: string; working?: boolean; since?: number; waiting?: boolean; error?: "failed" }>;
   /** Bot lines in a live handoff, for the strip. */
@@ -230,6 +232,10 @@ export function removeTeamBot(roomId: string, botId: string): Promise<{ ok: true
 
 export function addMyBot(roomId: string, botId: string): Promise<unknown> {
   return request(`${joinedRoomBase(roomId)}/bots`, { method: "POST", body: JSON.stringify({ botId }) });
+}
+
+export function setJoinedCanWork(roomId: string, personId: string, on: boolean): Promise<unknown> {
+  return request(`${joinedRoomBase(roomId)}/people/${personId}/works`, { method: "POST", body: JSON.stringify({ on }) });
 }
 
 export function removeMyBot(roomId: string, id: string): Promise<unknown> {
