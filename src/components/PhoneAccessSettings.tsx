@@ -231,9 +231,9 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       async () => {
         setStatus(await request("/api/phone-relay/google-enroll", { method: "POST" }));
       },
-      () => {
+      (cause) => {
         onNoRelay();
-        return t("settings.devices.reachFull");
+        return t(cause instanceof Error && cause.message === "relay-full" ? "settings.devices.reachFull" : "settings.devices.reachUnavailable");
       },
     );
   const remove = (phone: Phone) =>

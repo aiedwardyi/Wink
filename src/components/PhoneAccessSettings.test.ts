@@ -147,7 +147,8 @@ describe("PhoneAccessSettings", () => {
 
   it.each([
     ["en", "relay-full", "The fast phone link is full this week. Use Tailscale for now."],
-    ["en", "relay-unavailable", "The fast phone link is full this week. Use Tailscale for now."],
+    ["en", "relay-unavailable", "Not available on this PC yet. Use Tailscale below."],
+    ["en", "enroll-failed", "Not available on this PC yet. Use Tailscale below."],
     ["ko", "relay-full", "빠른 휴대폰 연결이 이번 주에는 꽉 찼습니다. 지금은 Tailscale을 사용하세요."],
   ])("a join refused in %s with %s goes to the other ways with one line", async (locale, refusal, line) => {
     localStorage.setItem("omb-locale", locale);

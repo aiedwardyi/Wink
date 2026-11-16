@@ -25,7 +25,7 @@ function rig(onChange: (access: PhoneAccess) => void = () => {}) {
     staticDir: null,
     config: () => config,
     saveEnabled: (enabled) => { config.enabled = enabled; },
-    loadClient: async () => ({ start, enroll: async () => {}, peer: () => null }),
+    loadClient: async () => ({ start, enroll: async () => {}, googleEnroll: async () => ({ ok: true }), peer: () => null }),
     onChange: () => onChange(access),
   });
   const change = (patch: Partial<PhoneRelayStatus>) => {

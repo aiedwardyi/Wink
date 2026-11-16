@@ -1410,8 +1410,8 @@ describe("Google join", () => {
     expect(pc.r.relay.googleEnrollBodies).toEqual([]);
   });
 
-  it("refuses a PC that holds a ticket for another relay, naming it", async () => {
-    const pc = await joiner({ enrolled: true, teamBase: "other.example" });
+  it.each([["another relay", "other.example"], ["the team relay", BASE]])("refuses a PC that holds a ticket for %s, naming it", async (_, teamBase) => {
+    const pc = await joiner({ enrolled: true, teamBase });
     expect(await pc.join()).toEqual({ status: 409, body: { error: `this PC already uses the relay at ${BASE}` } });
     expect(pc.r.relay.googleEnrollBodies).toEqual([]);
   });

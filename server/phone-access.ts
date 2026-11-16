@@ -602,7 +602,7 @@ export class PhoneAccess {
       const current = this.describe().base;
       const base = current ?? this.options.teamBase ?? null;
       if (this.options.env.ORBIT_RELAY === "0" || !this.options.saveSetup || !this.google || !google || !base) return reply(409, { error: "relay-unavailable" });
-      if (current && current !== this.options.teamBase && (await this.holdsTicket())) {
+      if (current && (await this.holdsTicket())) {
         return reply(409, { error: `this PC already uses the relay at ${current}` });
       }
       const joined = await this.googleEnroll({ dataDir: this.options.dataDir, base, sub: () => google.sub(), idToken: () => google.idToken(), freshIdToken: () => google.freshIdToken() });
