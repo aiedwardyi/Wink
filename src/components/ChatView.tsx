@@ -1215,7 +1215,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const joinPaging = editJoin?.key === transcriptKey && Boolean(bot.hasMore) && !bot.messages.some((message) => message.id === editJoin.parentId);
   // another view's join is kept; it resumes when its conversation is shown again
   if (editJoin?.key === transcriptKey && !joinPaging) setEditJoin(null);
-  const promptHunt = useRef<{ key: string; cursor: string } | null>(null);
+  const promptHunt = useRef<{ key: string; cursor: string; landed: boolean } | null>(null);
   const cursor = bot.messages[0]?.id;
   useEffect(() => {
     if (leafPaging) {
@@ -1232,9 +1232,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       return;
     }
     if (!promptPaging || !cursor) return;
-    if (promptHunt.current?.key === transcriptKey && promptHunt.current.cursor !== cursor) return;
-    promptHunt.current = { key: transcriptKey, cursor };
-    loadOlder(undefined, undefined, PROMPT_PAGES);
+    const hunt = promptHunt.current;
+    if (hunt?.key === transcriptKey && hunt.landed) return;
+    // a snapshot that replaced the tail mid-hunt drops that page, so its new tail hunts again
+    const next = hunt?.key === transcriptKey && hunt.cursor === cursor ? hunt : { key: transcriptKey, cursor, landed: false };
+    promptHunt.current = next;
+    loadOlder(() => (next.landed = true), undefined, PROMPT_PAGES);
   }, [leafPaging, joinPaging, joinRetry, promptPaging, loadOlder, cursor, transcriptKey]);
 
   // Stream buffers belong to the canonical tail, never an optimistic send.
