@@ -7091,7 +7091,8 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   const members = group.memberIds.map((id) => store.bot(id)).filter((bot): bot is BotRecord => Boolean(bot));
   const respondersFor = (line: Message) => {
     const asker = members.find((member) => !member.hidden && member.id === line.askedBy);
-    return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
+    const replyTo = line.replyToId ? store.messagesFor(threadId).find((message) => message.id === line.replyToId) : undefined;
+    return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder, replyTo);
   };
   const owed = () => owedRoomResponders(store.messagesFor(threadId), instructionId, respondersFor, resumedId);
   // one answered set for the recovered turns, as a live line's responders share: a mention must not rerun a member that is done
@@ -7131,19 +7132,22 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     .filter((b): b is NonNullable<typeof b> => Boolean(b));
   const availableMembers = members.filter((member) => !member.hidden);
   const archived = members.filter((member) => member.hidden);
-  const mentionedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0];
-  if (mentionedArchived) {
+  // a reply to an archived member addresses it unless the line tags someone else
+  const repliedArchived = archived.find((member) => member.id === replyTo?.from?.botId);
+  const addressedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0]
+    ?? (repliedArchived && !roomResponders(text, members, { kind: "mentions" }).length ? repliedArchived : undefined);
+  if (addressedArchived) {
     store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
       tool: {
-        name: `${mentionedArchived.name} is archived and can't respond — restore it or mention an active room member.`,
+        name: `${addressedArchived.name} is archived and can't respond — restore it or mention an active room member.`,
         ok: false,
       },
     });
   }
   const asker = availableMembers.find((member) => member.id === askerId);
-  let responders = roomResponders(text, members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
+  let responders = roomResponders(text, members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder, replyTo);
   // bot⇄bot channels: chipping in without a tag addresses the last speaker
   if (!responders.length && group.dm) {
     const lastSpeakerId = [...store.messagesFor(threadId)]
@@ -7156,9 +7160,9 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     const defaultArchivedId = group.defaultResponder.kind === "member" ? group.defaultResponder.botId : undefined;
     const defaultArchived = archived.find((member) => member.id === defaultArchivedId);
     let unavailableMessage: string | undefined;
-    if (!mentionedArchived && !availableMembers.length) {
+    if (!addressedArchived && !availableMembers.length) {
       unavailableMessage = "No active room members can respond — restore an archived bot or add an active member.";
-    } else if (!mentionedArchived && defaultArchived) {
+    } else if (!addressedArchived && defaultArchived) {
       unavailableMessage = `${defaultArchived.name} is archived and can't respond — restore it or mention an active room member.`;
     }
     if (unavailableMessage) {

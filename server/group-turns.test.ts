@@ -42,6 +42,93 @@ beforeEach(() => {
 const reply = (bot: BotRecord, text: string) =>
   store.appendMessage(group.threadId, { role: "bot", kind: "text", text, from: { botId: bot.id, name: bot.name, color: bot.color } });
 
+const groupTurn = () => {
+  const groupQueues = new Map<string, Promise<void>>();
+  const runGroupMemberTurn = vi.fn(async (_group: string, _thread: string, _botId: string) => true);
+  const start = load("startGroupTurn", {
+    store,
+    peopleOnlyRoom: () => false,
+    roomSetupPending: () => false,
+    rootForStart: () => null,
+    noteTalked: vi.fn(),
+    mentionedBots,
+    roomResponders,
+    resumePaneWakes: vi.fn(),
+    taskPacketForWrite: () => null,
+    seedTaskResumePacket: () => ({ instructionId: "i1" }),
+    persistTaskPacket: vi.fn(),
+    beginGroupTurnOperation: () => ({ cancelled: false, instructionId: "i1" }),
+    finishGroupTurnOperation: vi.fn(),
+    groupQueues,
+    runGroupMemberTurn,
+    roomTurnStillAssigned: load("roomTurnStillAssigned", { store }),
+  });
+  const ran = async (send: () => unknown) => {
+    send();
+    await groupQueues.get(group.id);
+    return runGroupMemberTurn.mock.calls.map((call) => call[2]);
+  };
+  return { start, ran };
+};
+
+describe("a reply to a member's line", () => {
+  const archivedLine = (name: string) => `${name} is archived and can't respond`;
+  beforeEach(() => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "mentions" } });
+  });
+
+  it("wakes that member in a mentions-only room", async () => {
+    const line = reply(ray, "Ray's take");
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([ray.id]);
+  });
+
+  it("goes to the replied-to member over the room's lead", async () => {
+    store.patchGroup(group.id, { defaultResponder: { kind: "member", botId: kai.id } });
+    const line = reply(ray, "Ray's take");
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([ray.id]);
+  });
+
+  it("lets an @mention or @everyone win over the reply", async () => {
+    const line = reply(ray, "Ray's take");
+    const first = groupTurn();
+    expect(await first.ran(() => first.start(group.id, `@${zed.name} is it right?`, line))).toEqual([zed.id]);
+    const second = groupTurn();
+    expect(await second.ran(() => second.start(group.id, "@everyone is it right?", line))).toEqual([kai.id, ray.id, zed.id]);
+  });
+
+  it("keeps a reply to a person's line on the room's rule", async () => {
+    const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "my idea" });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "and another", line))).toEqual([]);
+  });
+
+  it("says an archived member can't respond instead of passing silently", async () => {
+    const line = reply(ray, "Ray's take");
+    store.patchBot(ray.id, { hidden: true });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "why that one?", line))).toEqual([]);
+    expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ kind: "activity", tool: { name: expect.stringContaining(archivedLine(ray.name)), ok: false } });
+  });
+
+  it("names no archived member when an @mention takes the line", async () => {
+    const line = reply(ray, "Ray's take");
+    store.patchBot(ray.id, { hidden: true });
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, `@${kai.name} thoughts?`, line))).toEqual([kai.id]);
+    expect(store.messagesFor(group.threadId).some((message) => message.tool?.name?.includes(archivedLine(ray.name)))).toBe(false);
+  });
+
+  it("owes the replied-to member its answer after a restart", () => {
+    const answer = reply(zed, "Zed's take");
+    const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "why that one?", replyToId: answer.id });
+    const queueRoomParticipation = vi.fn();
+    load("queueOwedRoomTurns", { store, owedRoomResponders, roomRepliers, roomResponders, queueRoomParticipation })(group.id, group.threadId, ray.id, line.id);
+    expect(queueRoomParticipation.mock.calls.map((call) => call[0])).toEqual([zed.id]);
+  });
+});
+
 describe("a tapped question card in a group", () => {
   const ask = () =>
     store.appendMessage(group.threadId, {
@@ -74,29 +161,8 @@ describe("a tapped question card in a group", () => {
 
   it("runs the asking bot under a lead rule", async () => {
     store.patchGroup(group.id, { defaultResponder: { kind: "member", botId: kai.id } });
-    const groupQueues = new Map<string, Promise<void>>();
-    const runGroupMemberTurn = vi.fn(async (_group: string, _thread: string, _botId: string) => true);
-    const start = load("startGroupTurn", {
-      store,
-      peopleOnlyRoom: () => false,
-      roomSetupPending: () => false,
-      rootForStart: () => null,
-      noteTalked: vi.fn(),
-      mentionedBots,
-      roomResponders,
-      resumePaneWakes: vi.fn(),
-      taskPacketForWrite: () => null,
-      seedTaskResumePacket: () => ({ instructionId: "i1" }),
-      persistTaskPacket: vi.fn(),
-      beginGroupTurnOperation: () => ({ cancelled: false, instructionId: "i1" }),
-      finishGroupTurnOperation: vi.fn(),
-      groupQueues,
-      runGroupMemberTurn,
-      roomTurnStillAssigned: load("roomTurnStillAssigned", { store }),
-    });
-    start(group.id, "Yes", undefined, undefined, ray.id);
-    await groupQueues.get(group.id);
-    expect(runGroupMemberTurn.mock.calls.map((call) => call[2])).toEqual([ray.id]);
+    const { start, ran } = groupTurn();
+    expect(await ran(() => start(group.id, "Yes", undefined, undefined, ray.id))).toEqual([ray.id]);
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ role: "user", askedBy: ray.id });
   });
 });
