@@ -37,6 +37,8 @@ vi.mock("@/lib/live-call/audio", () => ({
     async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
     stopMic() {}
     play() {}
+    endTurn() {}
+    tune() {}
     flush() {}
     close() {}
     boop() {}
@@ -201,6 +203,23 @@ describe("call button in the message box", () => {
     }
   });
 
+  it("opens call settings on a right-click on Call and still calls on a left-click", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+      await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
+      expect(right.defaultPrevented).toBe(true);
+      expect(document.querySelector("[data-call-settings-menu] [data-call-settings]")).not.toBeNull();
+      expect(tokens()).toBe(0);
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await connect(host);
+      expect(tokens()).toBe(1);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("labels Call in Korean", async () => {
     applyLocale("ko");
     const { host, unmount } = await mount();
@@ -230,6 +249,26 @@ describe("live call in the message box", () => {
       await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
       await connect(host);
       expect(host.textContent).not.toContain("Free Gemini");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("expands the box with call settings from the gear", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.getAttribute("aria-expanded")).toBe("false");
+      expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+      await act(async () => gear.click());
+      expect(gear.getAttribute("aria-expanded")).toBe("true");
+      const panel = frame(host).querySelector<HTMLElement>("[data-call-settings]")!;
+      expect(panel.className).toContain("row-start-4");
+      expect(panel.querySelector('input[aria-label="Speed"]')).not.toBeNull();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      await act(async () => gear.click());
+      expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
     } finally {
       await unmount();
     }

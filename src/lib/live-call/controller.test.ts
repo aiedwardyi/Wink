@@ -35,6 +35,8 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
     stopMic() {},
     async heal() { return true; },
     play() {},
+    endTurn() {},
+    tune() {},
     flush() { this.flushed += 1; },
     close() {},
     boop() { this.cues.push("boop"); },

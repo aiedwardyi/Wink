@@ -1,6 +1,6 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { callStatus, clip, OPTION_CHARS } from "../../../shared/call-status";
-import { isVoiceLine, LIVE_VAD, LIVE_VOICE_NAMES, ORDER_EXPIRY_MS, type CallLine, type LiveVoice } from "../../../shared/live-call";
+import { isVoiceLine, LIVE_VAD, liveVoiceNames, ORDER_EXPIRY_MS, STYLE_GAIN, type CallLine, type CallPrefs, type LiveVoice } from "../../../shared/live-call";
 import { answerPrefix, isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
 import { openQuestion } from "@/lib/open-question";
@@ -40,6 +40,8 @@ export type CallAudioPort = {
   stopMic(): void;
   heal(): Promise<boolean>;
   play(pcm: Int16Array): void;
+  endTurn(): void;
+  tune(speed: number, level: number): void;
   flush(): void;
   close(): void;
   boop(): void;
@@ -313,6 +315,10 @@ export class LiveCall {
   private open = new OpenLines();
   private voiceAt = 0;
   private draining?: LiveEngine;
+  // A new voice, style or language: its session opens beside the live one and takes over in the next quiet.
+  private standby?: { engine: LiveEngine; ready: boolean; app: "en" | "ko" };
+  private picks?: string;
+  private swaps = 0;
   private drained?: () => void;
   private holdTimer?: ReturnType<typeof setTimeout>;
   private lateFinish?: (engine: LiveEngine | null) => void;
@@ -356,6 +362,7 @@ export class LiveCall {
     deps.audio.onIdle = () => {
       this.playedOut();
       this.pause();
+      this.takeOver();
       this.release();
       this.refresh();
       if (this.closing) this.closeIn(CLOSE_MS);
@@ -428,6 +435,63 @@ export class LiveCall {
     else this.engine?.sendAudio(pcm);
   }
 
+  /** Picks from the call menu: speed and level reach the next words heard; a new voice, style or language swaps the session. */
+  retune(prefs: CallPrefs, volume = 1) {
+    this.deps.audio.tune(prefs.speed ?? 1, STYLE_GAIN[prefs.style ?? "normal"] * volume);
+    const picks = [prefs.voice, prefs.style, prefs.language].join();
+    const changed = this.picks !== undefined && picks !== this.picks;
+    this.picks = picks;
+    if (changed) void this.swap();
+  }
+
+  private async swap() {
+    const run = ++this.swaps;
+    this.standby?.engine.close();
+    this.standby = undefined;
+    if (!this.engine || this.ended) return;
+    const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), callId: this.callId, swap: true }).catch(() => null);
+    if (run !== this.swaps || this.ended || posted?.status !== 200) return;
+    const engine = this.deps.engine();
+    const standby = { engine, ready: false, app: posted.data.locale === "ko" ? "ko" as const : "en" as const };
+    this.standby = standby;
+    const mine = () => this.standby === standby;
+    const timer = setTimeout(() => { if (mine()) this.dropStandby(); }, READY_MS);
+    const session = { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice };
+    const events = this.events(engine, session);
+    engine.connect(session, {
+      ...events,
+      ready: () => {
+        if (!mine()) return;
+        clearTimeout(timer);
+        standby.ready = true;
+        // SAFETY: the token route only returns a voice from LIVE_VOICES.
+        this.aliases = liveVoiceNames(posted.data.voice as LiveVoice);
+        this.takeOver();
+      },
+      closed: (code, reason) => (mine() ? this.dropStandby() : events.closed(code, reason)),
+    });
+  }
+
+  private dropStandby() {
+    this.standby?.engine.close();
+    this.standby = undefined;
+  }
+
+  // Never mid-word: what the old session is saying or hearing finishes there, then the next words go to the new one.
+  private takeOver() {
+    const next = this.standby;
+    if (!next?.ready || this.ended || this.playing || this.generating || this.deps.audio.playing || spokenText(this.heardBuf)) return;
+    const old = this.engine;
+    this.standby = undefined;
+    this.engine = next.engine;
+    this.connected = true;
+    this.handle = undefined;
+    this.app = next.app;
+    this.context.unshift(...this.riding.splice(0));
+    old?.close();
+    this.release();
+  }
+
   private async token(resume: boolean): Promise<LiveSession | null> {
     let posted: Posted;
     try {
@@ -449,18 +513,23 @@ export class LiveCall {
       return null;
     }
     this.callId = posted.data.callId;
-    this.aliases = LIVE_VOICE_NAMES[posted.data.voice as LiveVoice] ?? [];
+    this.aliases = posted.data.voice ? liveVoiceNames(posted.data.voice as LiveVoice) : [];
+    if (posted.data.locale === "en" || posted.data.locale === "ko") this.app = posted.data.locale;
     return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(resume && this.handle ? { handle: this.handle } : {}) };
   }
 
   private connect(session: LiveSession) {
     const engine = this.deps.engine();
     this.engine = engine;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => { if (this.engine === engine && !this.ended) void this.reconnect(); }, READY_MS);
+    engine.connect(session, this.events(engine, session));
+  }
+
+  private events(engine: LiveEngine, session: LiveSession): LiveEvents {
     const mine = () => this.engine === engine && !this.ended;
     const draining = () => this.draining === engine;
-    clearTimeout(this.readyTimer);
-    this.readyTimer = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
-    const events: LiveEvents = {
+    return {
       ready: () => {
         if (draining() && this.early && this.lateFinish) {
           for (const pcm of this.early.frames) engine.sendAudio(pcm);
@@ -564,6 +633,7 @@ export class LiveCall {
           this.unhold(!repeat);
           if (!repeat) this.caption("voice", this.saidBuf);
         }
+        this.deps.audio.endTurn();
         this.dropping = this.offTongue = this.checkAsk = false;
         const said = spokenText(this.saidBuf);
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
@@ -601,6 +671,7 @@ export class LiveCall {
         this.reack = this.ackEcho = false;
         if (this.playing) this.playing.ended = true;
         this.playedOut();
+        this.takeOver();
         this.release();
       },
       interrupted: () => {
@@ -652,7 +723,6 @@ export class LiveCall {
         void this.reconnect();
       },
     };
-    engine.connect(session, events);
   }
 
   private async reconnect() {
@@ -1544,6 +1614,8 @@ export class LiveCall {
   }
 
   private teardown(hangUp = false) {
+    this.swaps += 1;
+    this.dropStandby();
     const engine = this.engine;
     const live = this.connected;
     this.engine = null;

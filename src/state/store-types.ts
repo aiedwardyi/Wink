@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { LiveVoice } from "../../shared/live-call";
+import type { CallPrefs, LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -337,6 +337,7 @@ export interface Bot {
   speakReplies?: boolean;
   /** this bot's own voice id (falls back to the app-wide one) */
   voice?: string;
+  call?: CallPrefs;
   pinned?: boolean;
   hidden?: boolean;
   /** Sidebar section this bot renders under; absent = unsectioned. */

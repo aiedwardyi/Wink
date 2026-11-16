@@ -41,6 +41,8 @@ function fakeAudio(): Audio {
     stopMic() {},
     async heal() { return true; },
     play() { this.played += 1; },
+    endTurn() {},
+    tune() {},
     flush() { this.flushed += 1; },
     close() {},
     boop() {},

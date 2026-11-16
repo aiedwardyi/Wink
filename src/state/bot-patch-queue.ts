@@ -20,6 +20,7 @@ export type BotUpdatePatch = Partial<
     | "autoApprove"
     | "speakReplies"
     | "voice"
+    | "call"
     | "pinned"
     | "hidden"
     | "section"

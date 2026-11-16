@@ -44,6 +44,7 @@ import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
+import { VoiceChatSettings } from "./CallSettings";
 import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
@@ -824,6 +825,7 @@ export function SettingsPanel({
                 )}
               </div>
 
+              <VoiceChatSettings bot={bot} />
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
             </>
           )}

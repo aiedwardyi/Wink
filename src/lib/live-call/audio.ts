@@ -1,6 +1,7 @@
 // One AudioContext per call: worklet capture out, 24 kHz voice in, dropped at once on barge-in.
 import { boop } from "./call-sounds";
 import { CAPTURE_WORKLET } from "./capture-worklet";
+import { Stretch } from "./stretch";
 
 const VOICE_RATE = 24_000;
 const FADE_SAMPLES = 0.3 * VOICE_RATE;
@@ -17,6 +18,9 @@ export class CallAudio {
   private reopening?: Promise<boolean>;
   private closed = false;
   private sources = new Set<AudioBufferSourceNode>();
+  // Where each queued buffer starts, on the clock and in the turn, so a new speed remakes only what is not yet heard.
+  private queued = new Map<AudioBufferSourceNode, { at: number; from: number }>();
+  private readonly stretch = new Stretch();
   private nextAt = 0;
   private startedAt = 0;
   private queuedSec = 0;
@@ -159,10 +163,45 @@ export class CallAudio {
 
   play(pcm: Int16Array) {
     if (!pcm.length) return;
-    const buffer = this.ctx.createBuffer(1, pcm.length, VOICE_RATE);
-    const data = buffer.getChannelData(0);
+    if (this.stretch.ended) this.stretch.reset();
+    const raw = new Float32Array(pcm.length);
     // Only the call's first words ease in; every later reply starts at full level.
-    for (let i = 0; i < pcm.length; i++) data[i] = (pcm[i]! / 32768) * (this.faded < FADE_SAMPLES ? this.faded++ / FADE_SAMPLES : 1);
+    for (let i = 0; i < pcm.length; i++) raw[i] = (pcm[i]! / 32768) * (this.faded < FADE_SAMPLES ? this.faded++ / FADE_SAMPLES : 1);
+    const from = this.stretch.done;
+    this.schedule(this.stretch.push(raw), from);
+  }
+
+  /** The turn's audio is all in: what the stretch held back plays too. */
+  endTurn() {
+    const from = this.stretch.done;
+    this.schedule(this.stretch.end(), from);
+  }
+
+  /** Speed and level for the next words heard: the level moves at once, and queued words are remade at the new speed. */
+  tune(speed: number, level: number) {
+    this.out.gain.setTargetAtTime(OUTPUT_GAIN * level, this.ctx.currentTime, 0.03);
+    if (speed === this.stretch.speed) return;
+    const now = this.ctx.currentTime;
+    let first: { at: number; from: number } | undefined;
+    for (const [source, spot] of this.queued) {
+      if (spot.at <= now) continue;
+      if (!first || spot.at < first.at) first = spot;
+      source.onended = null;
+      source.stop();
+      this.sources.delete(source);
+      this.queued.delete(source);
+      this.queuedSec -= source.buffer?.duration ?? 0;
+    }
+    if (first) this.nextAt = first.at;
+    const from = first?.from ?? this.stretch.done;
+    this.schedule(this.stretch.restart(from, speed), from);
+    if (first && !this.sources.size) this.onIdle();
+  }
+
+  private schedule(data: Float32Array, from: number) {
+    if (!data.length) return;
+    const buffer = this.ctx.createBuffer(1, data.length, VOICE_RATE);
+    buffer.getChannelData(0).set(data);
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.voice);
@@ -173,10 +212,12 @@ export class CallAudio {
       this.queuedSec = 0;
     }
     source.start(this.nextAt);
+    this.queued.set(source, { at: this.nextAt, from });
     this.nextAt += buffer.duration;
     this.queuedSec += buffer.duration;
     this.sources.add(source);
     source.onended = () => {
+      this.queued.delete(source);
       if (!this.sources.delete(source) || this.sources.size) return;
       this.onIdle();
     };
@@ -194,6 +235,8 @@ export class CallAudio {
       }
     }
     this.sources.clear();
+    this.queued.clear();
+    this.stretch.reset();
     if (had) this.onIdle();
   }
 

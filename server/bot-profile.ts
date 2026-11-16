@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { botAvatarCropSchema, botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICES } from "../shared/live-call.ts";
 
 import type { BotRecord } from "./store.ts";
 
@@ -28,6 +29,15 @@ const profilePatchSchema = z.object({
     .max(BOT_PROFILE_LIMITS.voice, { error: "voice must be at most 200 characters" })
     .optional(),
   speakReplies: z.boolean({ error: "speakReplies must be true or false" }).optional(),
+  call: z
+    .object({
+      voice: z.enum(LIVE_VOICES).optional(),
+      speed: z.number().min(CALL_SPEED.min).max(CALL_SPEED.max).optional(),
+      style: z.enum(CALL_STYLES).optional(),
+      language: z.enum(["en", "ko"]).optional(),
+    }, { error: "call must be an object" })
+    .strict()
+    .optional(),
 });
 
 export type BotProfilePatchInput = z.input<typeof profilePatchSchema>;
@@ -35,7 +45,7 @@ export type BotProfilePatchInput = z.input<typeof profilePatchSchema>;
 export type BotProfilePatch = Partial<
   Pick<
     BotRecord,
-    "name" | "title" | "description" | "notifications" | "avatarUrl" | "avatarCrop" | "voice" | "speakReplies"
+    "name" | "title" | "description" | "notifications" | "avatarUrl" | "avatarCrop" | "voice" | "speakReplies" | "call"
   >
 >;
 

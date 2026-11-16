@@ -5,10 +5,13 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
 import { api, useStore } from "@/state/store";
-import { LIVE_VOICE, LIVE_VOICES, type LiveVoice } from "../../shared/live-call";
+import { LIVE_VOICE, type LiveVoice } from "../../shared/live-call";
+import { voiceLabel } from "./CallSettings";
 import { Card } from "./SettingsPrimitives";
 
 const PILL = "rounded-[max(0px,calc(var(--radius-lg)_-_3px))]";
+// The app default; every other voice is picked per bot in the call menu.
+const DEFAULT_VOICES: readonly LiveVoice[] = ["Aoede", "Alnilam", "Erinome"];
 
 export function CallVoicePicker() {
   const { t, locale } = useI18n();
@@ -56,7 +59,7 @@ export function CallVoicePicker() {
           <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{t("callVoice.hint")}</div>
         </div>
         <div role="radiogroup" aria-label={t("callVoice.title")} className="ml-auto flex w-fit shrink-0 gap-0.5 rounded-lg bg-inset p-[3px]">
-          {LIVE_VOICES.map((id) => [id, t(`callVoice.${id}`)] as const).map(([name, label]) => (
+          {DEFAULT_VOICES.map((id) => [id, voiceLabel(t, id)] as const).map(([name, label]) => (
             <div key={name} className={cn("flex items-center", PILL, name === voice && "bg-raised shadow-sm ring-1 ring-hairline/60")}>
               <button
                 type="button"
