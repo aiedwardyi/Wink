@@ -23,11 +23,14 @@ export function AboutYouCard() {
   const [open, setOpen] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const copiedTimer = useRef<number | null>(null);
+  // only the newest request's list lands: an older answer would undo a newer change
+  const listSeq = useRef(0);
 
   useEffect(() => {
     let gone = false;
+    const seq = ++listSeq.current;
     void api("/api/about-you").then((body) => {
-      if (!gone && Array.isArray(body?.sources)) setSources(body.sources);
+      if (!gone && seq === listSeq.current && Array.isArray(body?.sources)) setSources(body.sources);
     }).catch(() => {});
     return () => {
       gone = true;
@@ -49,9 +52,10 @@ export function AboutYouCard() {
   const add = async () => {
     if (busy || !text.trim()) return;
     setBusy(true);
+    const seq = ++listSeq.current;
     try {
       const body: Added & { sources: Source[] } = await api("/api/about-you", { method: "POST", body: JSON.stringify({ text }) });
-      setSources(body.sources);
+      if (seq === listSeq.current) setSources(body.sources);
       setText("");
       setMore(false);
       setNote([
@@ -67,9 +71,10 @@ export function AboutYouCard() {
   };
 
   const remove = async (source: string) => {
+    const seq = ++listSeq.current;
     try {
       const body = await api(`/api/about-you/sources/${encodeURIComponent(source)}`, { method: "DELETE" });
-      if (Array.isArray(body?.sources)) setSources(body.sources);
+      if (seq === listSeq.current && Array.isArray(body?.sources)) setSources(body.sources);
       setNote("");
     } catch {
       setNote(t("aboutYou.failed"));
@@ -92,6 +97,7 @@ export function AboutYouCard() {
           value={text}
           placeholder={t("aboutYou.placeholder")}
           aria-label={t("aboutYou.step2")}
+          disabled={busy}
           onChange={(event) => setText(event.target.value)}
         />
         <div className="mt-2 flex justify-end">

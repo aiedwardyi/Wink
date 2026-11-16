@@ -71,6 +71,48 @@ describe("About You card", () => {
     expect(button("Add More")).toBeDefined();
   });
 
+  const type = (value: string) => act(async () => {
+    const box = host.querySelector("textarea")!;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const later = () => {
+    let release!: () => void;
+    return { gate: new Promise<void>((resolve) => { release = resolve; }), release: () => act(async () => release()) };
+  };
+
+  it("keeps an import when the first list answers after it", async () => {
+    const first = later();
+    const served = request.getMockImplementation()!;
+    let lists = 0;
+    request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path !== "/api/about-you" || init?.method || lists++) return served(path, init);
+      await first.gate;
+      return Response.json({ sources: [] });
+    });
+    await render();
+    await type("- The user is Dana Park; call her Dana.");
+    await click("Add to Memory");
+    expect(host.querySelector("[data-about-you-source]")?.textContent).toContain("From ChatGPT");
+    await first.release();
+    expect(host.querySelector("[data-about-you-source]")?.textContent).toContain("From ChatGPT");
+  });
+
+  it("locks the paste while it imports", async () => {
+    const post = later();
+    const served = request.getMockImplementation()!;
+    request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST") await post.gate;
+      return served(path, init);
+    });
+    await render();
+    await type("- The user is Dana Park; call her Dana.");
+    await click("Add to Memory");
+    expect(host.querySelector("textarea")!.disabled).toBe(true);
+    await post.release();
+    expect(host.querySelector("textarea")).toBeNull();
+  });
+
   it("removes a source", async () => {
     saved = sources;
     await render();
