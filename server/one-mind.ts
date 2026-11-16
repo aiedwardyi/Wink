@@ -186,14 +186,13 @@ export interface MyChatsDeps {
   owner(): string;
 }
 
-/** The search_my_chats tool. Only a room turn's own token may call it, and only for its own bot's chats. */
+/** The search_my_chats tool. Only a bot turn's own token may call it, and only for its own bot's chats. */
 export async function myChatsRoute(req: IncomingMessage, res: ServerResponse, deps: MyChatsDeps): Promise<void> {
   const source = deps.caller(req.headers.authorization);
   if (!source) return json(res, 403, { error: "unknown sender" });
   const body = await readBody(req);
   const bot = deps.store.bot(source.botId);
-  const group = deps.store.groupByThread(source.threadId);
-  if (!bot || !group || group.dm || !group.memberIds.includes(bot.id)) return json(res, 403, { error: `${SEARCH_TOOL} works only in a room` });
+  if (!bot) return json(res, 403, { error: "unknown sender" });
   const query = typeof body?.query === "string" ? body.query.trim().replace(/\s+/g, " ").slice(0, QUERY_CHARS) : "";
   if (!query) return json(res, 400, { error: `${SEARCH_TOOL} needs a query` });
   const owner = deps.owner();

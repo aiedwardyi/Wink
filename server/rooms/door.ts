@@ -8,7 +8,7 @@ import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Message, Store } from "../store.ts";
-import type { HostedGroup } from "./asks.ts";
+import { revalidatePersonAsks, type HostedGroup } from "./asks.ts";
 import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, RoomError, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
@@ -497,6 +497,7 @@ export function removeRoomPerson(roomId: string, personId: string, keep?: Duplex
   const removed = removeGuest(roomId, personId, keep);
   if (removed) {
     removePersonTeamBots(roomId, personId);
+    void revalidatePersonAsks(roomId, personId);
     pushRoomState(roomId);
     tellHost(roomId);
   }

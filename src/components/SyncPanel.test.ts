@@ -227,12 +227,17 @@ describe("SyncPanel actions", () => {
     expect(line(host)).toBe("First PC on edward@example.com");
   });
 
-  it("shows a failed sign-in's own error on the status line", async () => {
+  it.each([
+    ["drive-permission-missing", "Tick the Google Drive box on Google's page, then sign in again."],
+    ["timeout", "Google sign-in timed out. Try again."],
+    ["offline", "Can't reach Google. Check your connection and try again."],
+    ["a-code-from-a-newer-build", "Google sign-in didn't finish. Try again."],
+  ])("shows a failed sign-in (%s) in plain words on the status line", async (error, text) => {
     const { account } = ogbStub();
-    account.signIn.mockResolvedValue({ ok: false, error: "Google sign-in timed out." });
+    account.signIn.mockResolvedValue({ ok: false, error });
     const host = await mount();
     await click(button(host, "Google Sign-in"));
-    expect(line(host)).toBe("Google sign-in timed out.");
+    expect(line(host)).toBe(text);
     expect(buttons(host)).toEqual(["Google Sign-in", "Drive Folder"]);
   });
 

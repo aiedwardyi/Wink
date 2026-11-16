@@ -76,8 +76,6 @@ export function suggestEngine(
   return fallback ? { instance: fallback, substituted: true } : null;
 }
 
-export const WIZARD_BOT_NAME_LIMIT = 40;
-
 export interface WizardBotSelection {
   instanceId: string;
   model: string;
@@ -89,7 +87,7 @@ export interface WizardBotPayload {
 }
 
 export function newBotPayload(name: string, selection: WizardBotSelection): WizardBotPayload {
-  return { name: name.trim().slice(0, WIZARD_BOT_NAME_LIMIT).trimEnd(), modelSelection: selection };
+  return { name: name.trim(), modelSelection: selection };
 }
 
 export interface WizardGroupPayload {

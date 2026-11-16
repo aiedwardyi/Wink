@@ -11,7 +11,6 @@ import {
   attachmentImageUrl,
   intakeFiles,
   formatSize,
-  pasteImageAttachment,
   pasteSummary,
   type Attachment,
   type PasteAttachment,
@@ -70,7 +69,6 @@ export function ComposerAttachments({
       t,
       allowImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
       shrunkPath: shrunkPicture,
     });
     if (!isActive()) return;

@@ -11,7 +11,7 @@ const inputSchema = z.object({
   command: z.string().max(64 * 1024), environment: z.record(z.string(), z.string()), mode: z.literal("send").optional(), unrouted: z.literal(true).optional(),
   resume: z.object({ engine: z.enum(["claude", "codex"]), nativeId: z.string().uuid(), accountId: z.string().refine(isInstanceId),
     accountGeneration: z.number().int().nonnegative(), template: z.object({ executable: z.string().max(32), args: z.array(z.string().max(64 * 1024)).max(1024) }),
-    unrouted: z.literal(true).optional() }).optional(),
+    unrouted: z.literal(true).optional(), blocked: z.string().max(2000).optional() }).optional(),
 });
 const countSchema = z.object({ count: z.number().int().nonnegative(), unknown: z.number().int().nonnegative(), generations: z.record(z.string(), z.number().int().nonnegative()) });
 const runsSchema = z.object({ runs: z.array(z.object({

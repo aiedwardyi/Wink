@@ -21,6 +21,7 @@
 //   generate_image(prompt, …)             → create a PNG with the saved image key
 //   call_api(credential_id, method, url)  → call a service with its saved key
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
+//   usage_status()                        → the Usage page's % left and resets, read-only
 //   list_routines()                       → inspect this bot's scheduled work
 //   propose_routine(...)                  → show a confirmation card for a new routine
 //   propose_routine_action(...)           → show a confirmation card for a routine change
@@ -43,7 +44,7 @@ import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCusto
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
-import { createToolCatalog } from "./tool-catalog.ts";
+import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -248,8 +249,7 @@ const TOOLS = [
         goal: { type: "string", minLength: 1, maxLength: 500, pattern: "\\S", description: "The user's durable outcome, at most 500 characters. Omit when unchanged." },
         plan: {
           type: "array",
-          maxItems: 20,
-          description: "The current concise plan, at most 20 steps. At most one step may be active.",
+          description: "The current concise plan, at most 20 steps.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -271,7 +271,6 @@ const TOOLS = [
           pause_automatic_wakes: { type: "boolean", description: "Set true only when the user asks you to stop or pause. Holds worker-report wake-ups until their next message; does not stop workers or end your current turn." },
         blockers: {
           type: "array",
-          maxItems: 10,
           description: "Current blockers, at most 10. Send an empty array when prior blockers are resolved.",
           items: {
             type: "object",
@@ -285,7 +284,6 @@ const TOOLS = [
         },
         artifacts: {
           type: "array",
-          maxItems: 20,
           description: "New files created inside this task's working folder, at most 20.",
           items: {
             type: "object",
@@ -299,8 +297,7 @@ const TOOLS = [
         },
         asks: {
           type: "array",
-          maxItems: 20,
-          description: "The user's asks, at most 20 per call. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          description: "The user's asks. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -371,13 +368,15 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot inherits the Chief's engine, starts with connected apps and automatic approvals disabled, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
+      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Short, unique display name for the specialist." },
         role: { type: "string", description: "The specialist's job title or role." },
         instructions: { type: "string", description: "What this specialist is responsible for and how it should work." },
+        model: { type: "string", description: "Model picker id, any engine." },
+        effort: { type: "string", description: "low, medium, high, ..." },
       },
       required: ["name", "role", "instructions"],
     },
@@ -532,6 +531,11 @@ const TOOLS = [
       },
       required: ["credential_id"],
     },
+  },
+  {
+    name: "usage_status",
+    description: "Read-only live Usage page: % left, reset, Main and limit per engine account. Call before any account, burn order or limit answer.",
+    inputSchema: { type: "object", properties: {} },
   },
   {
     name: "list_routines",
@@ -852,6 +856,8 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         name: botName,
         role,
         instructions,
+        model: typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined,
+        effort: typeof args.effort === "string" && args.effort.trim() ? args.effort.trim() : undefined,
       }),
     });
     createdThisTurn += 1;
@@ -999,6 +1005,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       text: `A secure ${r.label ?? label} card is now visible to the user. End this turn; Wink will resume the task after they save or decline. Never ask them to paste the key into chat.`,
     };
   }
+  if (name === "usage_status") {
+    const r = await api(`/api/internal/usage?self=${encodeURIComponent(BOT_ID)}`);
+    return { text: String(r.text ?? "") };
+  }
   if (name === "list_routines") {
     const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID });
     const r = await api(`/api/internal/routines?${query.toString()}`);
@@ -1094,6 +1104,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
 
 const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
+const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
 export async function handle(msg: Json) {
   const id = msg.id;
@@ -1117,8 +1128,8 @@ export async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      recordToolSchemas(() => catalog?.tools ?? eligibleTools);
-      ok(id, { tools: catalog?.tools ?? eligibleTools });
+      recordToolSchemas(() => listedTools);
+      ok(id, { tools: listedTools });
       return;
     case "tools/call": {
       if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);

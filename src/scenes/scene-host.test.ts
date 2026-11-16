@@ -149,6 +149,26 @@ describe("chat scene host", () => {
     expect(drawn).toHaveLength(3);
   });
 
+  it("idles between frames when the scene asks, and a hidden window cancels the wait", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let drawn = 0;
+    const module: SceneModule = { pauseOnBlur: false, create: (api) => ({ frame: () => (drawn++, true), idle: () => 17, event: () => api.wake(), dispose: () => undefined }) };
+    host = startScene(document.createElement("div"), module, root);
+    host.emit({ name: "busy" });
+    flush(1);
+    expect(drawn).toBe(1);
+    expect(frames).toHaveLength(0);
+    vi.advanceTimersByTime(17);
+    flush(1);
+    expect(drawn).toBe(2);
+    root.setAttribute("data-orbit-idle", "hidden");
+    await Promise.resolve();
+    vi.advanceTimersByTime(100);
+    expect(frames).toHaveLength(0);
+    expect(host.running()).toBe(false);
+    vi.useRealTimers();
+  });
+
   it("never starts a loop under reduced motion", () => {
     reduce = true;
     const { drawn, seen } = scene();

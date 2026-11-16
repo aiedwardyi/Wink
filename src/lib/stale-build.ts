@@ -3,7 +3,7 @@
 // new features until it reloads. Both paths reload once onto the new build.
 import { createContext, createElement, useContext, useEffect, useRef, useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
 import { STALE_RELOAD_KEY, staleReloadAllowed } from "../../shared/stale-reload";
-import { holdReload, onHoldReleased, reloadHeld } from "./reload-hold";
+import { holdReloadOpen, onHoldReleased, reloadHeld } from "./reload-hold";
 
 type GuardStore = Pick<Storage, "getItem" | "setItem"> | undefined;
 
@@ -170,8 +170,6 @@ export function useStaleBuildReload(connected: boolean, viewOpen: boolean) {
   }, [connected]);
   useEffect(() => {
     if (!viewOpen) return;
-    let close!: () => void;
-    void holdReload(new Promise<void>((resolve) => (close = resolve)));
-    return () => close();
+    return holdReloadOpen();
   }, [viewOpen]);
 }

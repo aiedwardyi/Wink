@@ -449,7 +449,7 @@ describe("quick route", () => {
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Let me check.", call: { ...call, voice: true } });
     await h.send({ text: QUESTION, call: { ...call, ask: true } });
     await h.settled();
-    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nYou: Let me check.") });
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nVoice: Let me check.") });
   });
 });
 
@@ -599,9 +599,9 @@ describe("Gate 0", () => {
     });
   });
 
-  it("passes past a live card with choices, but not a tap on one of them", () => {
+  it("skips the helper while a card with choices is open: typing answers it", () => {
     const choices = closed({ staysOpen: true, options: ["Ship today", "Hold for QA"] });
-    expect(routesQuick({ ...base, messages: [choices] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [choices] })).toBe(false);
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true, options: [QUESTION, "Hold for QA"] })] })).toBe(false);
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true })] })).toBe(false);
   });

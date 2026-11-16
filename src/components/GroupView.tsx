@@ -5,6 +5,7 @@
 import { ActivityChip, ErrorRow, NoteMessage, PinnedBanner, commPeer } from "./ChatView";
 import { CopyButton, FoldToggle, TimestampLabel, USER_FOLD_CLASS, userTextFolds } from "./ChatBubble";
 import { AppErrorBanner } from "./AppErrorBanner";
+import { ChatScene, sceneOf } from "./ChatScene";
 import { DaySeparator } from "./DaySeparator";
 import { JumpToLatest } from "./JumpToLatest";
 import { VerifyCard } from "./VerifyCard";
@@ -960,7 +961,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group: live }: { group: Group }) {
+export function GroupView({ group: live, hidden = false }: { group: Group; hidden?: boolean }) {
   const archive = useGroupArchive(live.id);
   const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
@@ -980,6 +981,9 @@ export function GroupView({ group: live }: { group: Group }) {
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
+  const reaching = useRef(false);
+  const touchTop = useRef(0);
   const find = useSearchFindSeed(group.threadId);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
@@ -1032,11 +1036,13 @@ export function GroupView({ group: live }: { group: Group }) {
   const lastGroupMessage = group.messages.at(-1);
   const toolInFlight = lastGroupMessage?.kind === "activity" && lastGroupMessage.tool?.ok === undefined;
   const skin = useSkin();
+  const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   const terminal = isTerminalSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
   const speakerEngine = state.instances.find((instance) => instance.instanceId === speaker?.modelSelection?.instanceId);
-  const { label: activityLabel, noReply } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind);
+  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind, speaker?.activity === "no-signal");
   const reveal = stream.reveal?.[group.threadId];
   const waiting = !reveal?.ended && turnPresenceWaiting({
     busy: Boolean(speaker),
@@ -1330,7 +1336,8 @@ export function GroupView({ group: live }: { group: Group }) {
 
   return (
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
       <GroupCallOverlay group={group} members={members} />
       <div
         className={cn(
@@ -1397,19 +1404,27 @@ export function GroupView({ group: live }: { group: Group }) {
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
-        onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
+        onTouchStart={(e) => {
+          touchY.current = e.touches[0]?.clientY ?? 0;
+          reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
+        }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) breakFollow();
+          if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
+        onTouchEnd={() => (reaching.current = false)}
+        onTouchCancel={() => (reaching.current = false)}
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,
@@ -1520,6 +1535,7 @@ export function GroupView({ group: live }: { group: Group }) {
               visible={waiting && !dockLive}
               docked={dockLive}
               label={activityLabel}
+              instant={responding}
               quiet={noReply?.quiet}
               wrap={Boolean(noReply)}
               since={noReply ? undefined : lastUserAt}
@@ -1559,7 +1575,10 @@ export function GroupView({ group: live }: { group: Group }) {
             group={group}
             members={members}
             composerRef={composerInputRef}
-            onSend={jumpToLatest}
+            onSend={() => {
+              jumpToLatest();
+              sceneSend.current?.();
+            }}
             locked={setupPending}
             replyTo={replyTo}
             onClearReply={clearReply}

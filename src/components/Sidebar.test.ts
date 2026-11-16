@@ -2181,7 +2181,7 @@ function SelectedProbe() {
 }
 
 function SwipeStage({ onSelect }: { onSelect: (id: string) => void }) {
-  const stage = usePhoneSwipe("a", true, onSelect);
+  const stage = usePhoneSwipe("a", true, onSelect, undefined, () => ["a", "b", "c"]);
   return createElement("div", { ref: stage }, createElement(Sidebar, { open: false, onClose: () => {} }));
 }
 
@@ -2285,6 +2285,22 @@ describe("Sidebar hold menu", () => {
           .dispatchEvent(new Event("scroll")));
         expect(view.menu()).toBeNull();
       } finally {
+        await view.unmount();
+      }
+    });
+
+    it.each(["contextmenu", "hold"])("stays open after %s while another pane scrolls", async (method) => {
+      const view = await mount(kind);
+      const chat = document.body.appendChild(document.createElement("div"));
+      try {
+        if (method === "contextmenu") await view.open();
+        else await view.hold();
+        await act(async () => chat.dispatchEvent(new Event("scroll")));
+        expect(view.menu()).not.toBeNull();
+        await act(async () => view.row().closest("[data-sidebar-list]")!.dispatchEvent(new Event("scroll")));
+        expect(view.menu()).toBeNull();
+      } finally {
+        chat.remove();
         await view.unmount();
       }
     });

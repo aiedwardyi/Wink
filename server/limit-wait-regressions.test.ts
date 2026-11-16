@@ -30,7 +30,7 @@ function harness(options: Partial<ConstructorParameters<typeof LimitWaits>[0]> =
     current: () => ({ threadId: "chat", controlKey: "request", busy: false }), usage, dispatch, changed, released, ...options });
   function arm(reset: number | null = state.now + 60 * MINUTE) {
     waits.track("bot", "chat", selection); waits.bind("chat", "turn");
-    waits.failed("chat", "turn", reset, "message", ["five_hour", "seven_day"]);
+    waits.failed("chat", "turn", { resetsAt: reset }, "message", ["five_hour", "seven_day"]);
     waits.settled("chat", "turn", false);
     return waits.store.all()[0]!;
   }
@@ -94,7 +94,7 @@ it("M3: a manual wait releases Keep Going and retained worker reports", async ()
   kg.enable("bot", "chat", null); h.state.now += KEEP_GOING_INTERVAL_MS;
   expect(await kg.check("bot")).not.toEqual({ skipped: "wakes-paused" });
   const wake = vi.fn();
-  const panes = new PaneWakeScheduler({ enabled: () => true, busy: () => h.waits.held("bot"), hasNotes: () => true, wake, warn: vi.fn() });
+  const panes = new PaneWakeScheduler({ enabled: () => true, busy: () => h.waits.held("bot"), hasNotes: () => true, wake });
   panes.noteArrived("bot", "chat"); await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
   expect(wake).toHaveBeenCalledTimes(1); panes.forgetBot("bot");
 });
@@ -112,7 +112,7 @@ it("M4: cancels a claim when the resolved selection changes at the provider boun
 it("L4: Cancel re-arms a worker-report burst that found the wait held", async () => {
   vi.useFakeTimers();
   const h = harness(); const row = h.arm(); const wake = vi.fn();
-  const panes = new PaneWakeScheduler({ enabled: () => true, busy: () => h.waits.held("bot"), hasNotes: () => true, wake, warn: vi.fn() });
+  const panes = new PaneWakeScheduler({ enabled: () => true, busy: () => h.waits.held("bot"), hasNotes: () => true, wake });
   h.released.mockImplementation((released: LimitWait) => panes.noteArrived(released.botId, released.threadId));
   panes.noteArrived("bot", "chat"); await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
   expect(wake).not.toHaveBeenCalled(); h.waits.cancel("bot", row.id);

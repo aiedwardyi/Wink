@@ -20,6 +20,7 @@ import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/p
 import { stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
+import { scanQuestion } from "../shared/open-question.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
@@ -33,7 +34,7 @@ type GroupRouteDeps = {
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   roomLaneThread?: (botId: string) => string | undefined;
   createGroupTaskRequestSchema: z.ZodType<{ title?: string }>;
-  checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  checkedMemberIds: (value: unknown, roster?: readonly string[]) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
   publicGroupState: (group: GroupRecord) => Record<string, unknown>;
   groupIsWorking: (group: GroupRecord) => boolean;
@@ -42,7 +43,7 @@ type GroupRouteDeps = {
   lastReply: Map<string, { text: string; messageId: string }>;
   sendSequencer: SendSequencer;
   resolveReplyTarget: (threadId: string, value: unknown) => Message | undefined;
-  startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string) => Message;
+  startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string) => Message;
   userName: () => string;
   cancelGroupTurnOperations: (groupId: string, threadId: string) => void;
   taskResumes: TaskResumeScheduler;
@@ -316,8 +317,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.memberIds !== undefined) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
-        const empty = existing.hosted ? peopleOnlyRoster(body.memberIds) : null;
-        const roster = empty?.ok ? empty : checkedMemberIds(body.memberIds);
+        const empty = peopleOnlyRoster(body.memberIds);
+        const roster = empty.ok ? empty : checkedMemberIds(body.memberIds, existing.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
         const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
         if (refusal) return json(res, 400, { error: refusal });
@@ -425,6 +426,10 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const sendId = parseSendId(body.sendId);
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
+      // a tapped question card is answered by the member that asked, whatever the room's rule
+      const asked = typeof body.cardId === "string" ? store.messagesFor(threadId).find((message) => message.id === body.cardId) : undefined;
+      const askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
+      const answersCard = asked?.card?.askUser ? asked.id : undefined;
       // nobody was asked to answer: no busy patch will come to end the sender's Thinking
       const idle = () => !groupIsWorking(store.group(group.id) ?? group);
       const receipt = await sendSequencer.run(
@@ -448,10 +453,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
             });
           }
           const stops = roomStops.get(current.id);
-          const steered = await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId);
+          const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard);
           // a Stop during the steer await hands the line back, as a 1:1 Send now
           if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
-          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId);
+          // a typed line answers the open question, so its asker takes it; a mention still wins
+          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard);
           return { ok: true as const, threadId, message, idle: idle() };
         },
       );

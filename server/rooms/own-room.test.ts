@@ -48,8 +48,8 @@ describe("ownRoomGroup", () => {
 
 describe("dropOwnJoins", () => {
   it("drops this PC's joined copy of its own room and its seat, and keeps the hosted lines and other rooms", () => {
-    const mina = addPerson(roomId, "Mina", "chat", []);
-    const self = addPerson(roomId, "Eddie 2", "chat", []);
+    const mina = addPerson(roomId, "Mina", []);
+    const self = addPerson(roomId, "Eddie 2", []);
     appendRoomEntry(roomId, { author: { kind: "host", id: "host", name: "Eddie" }, text: "hosted line" });
     saveJoined(roomId, HOST, self, KEY);
     addJoinedEntries(roomId, [{ seq: 1, id: "e1", at: 1, author: { kind: "host", id: "host", name: "Eddie" }, text: "joined copy" }]);

@@ -14,7 +14,6 @@ import { parseJson } from "./schema.ts";
 export const PHONES_FILE = "phone-devices.json";
 export const PAIRING_TTL_MS = 120_000;
 export const MAX_PAIRING_ATTEMPTS = 5;
-export const MAX_PHONES = 20;
 const DAY_MS = 24 * 60 * 60_000;
 export const PHONE_IDLE_MS = 90 * DAY_MS;
 export const COOKIE_REFRESH_MS = 7 * DAY_MS;
@@ -66,9 +65,9 @@ export interface PairingWindow {
   expiresAt: number;
 }
 
-export type PairError = "no-pairing" | "wrong-credential" | "too-many-attempts" | "too-many-phones" | "save-failed";
+export type PairError = "no-pairing" | "wrong-credential" | "too-many-attempts" | "save-failed";
 export type PairResult = { ok: true; phone: PublicPhone; token: string } | { ok: false; error: PairError };
-export type AdmitResult = { ok: true; phone: PublicPhone; token: string } | { ok: false; error: "too-many-phones" | "save-failed" };
+export type AdmitResult = { ok: true; phone: PublicPhone; token: string } | { ok: false; error: "save-failed" };
 
 interface Replay {
   requestId: string;
@@ -185,8 +184,6 @@ export class PhoneDevices {
       this.closePairing();
       return { ok: false, error: "too-many-attempts" };
     }
-    // After the guess check, so a full list tells a guesser nothing and the window survives a removal.
-    if (this.phones.length >= MAX_PHONES) return { ok: false, error: "too-many-phones" };
     this.window = null;
     const result = this.admit(name, "code");
     if (!result.ok) return result;
@@ -199,7 +196,6 @@ export class PhoneDevices {
 
   /** Adds a phone and mints its cookie token. The caller has already checked its proof. */
   admit(name: string | undefined, via: PhoneVia): AdmitResult {
-    if (this.phones.length >= MAX_PHONES) return { ok: false, error: "too-many-phones" };
     const now = this.clock.now();
     const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
     const record: PhoneRecord = {

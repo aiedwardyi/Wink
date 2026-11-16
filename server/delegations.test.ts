@@ -879,7 +879,6 @@ describe("busy retries and receipts", () => {
 
   it.each(["ask", "delegation"] as const)("releases a queued reservation when its target bot is deleted", async (kind) => {
     const roots = await import("./comms-root.ts");
-    const asks = await import("./comms-budget.ts");
     const root = rootForStart(from.threadId, { kind: "human", messageKey: `delete-target-${kind}` })!;
     for (let index = 0; index < roots.ROOT_TURNS - 1; index++) {
       const credit = roots.reserve(root, kind);
@@ -890,10 +889,8 @@ describe("busy retries and receipts", () => {
     if (!credit.ok) throw new Error("no credit");
     const queued = queueDelegation(commsBus, from, { toBotId: target.id, message: "never runs", depth: 0, root }, 1, from.threadId, { kind, reservation: credit.reservation });
     if (queued.result !== "ok" || !queued.id) throw new Error("not queued");
-    if (kind === "ask") expect(asks.claimOpenAsk(from.threadId, queued.id)).toBe(true);
     expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "reserved" });
     const release = vi.spyOn(roots, "release");
-    const releaseAsk = vi.spyOn(asks, "releaseOpenAsk");
     try {
       discardDelegationsFrom(commsBus, target.id);
       store.deleteBot(target.id);
@@ -905,12 +902,10 @@ describe("busy retries and receipts", () => {
       discardDelegationsFrom(commsBus, target.id);
       expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "reserved" });
       expect(release).toHaveBeenCalledExactlyOnceWith(credit.reservation);
-      expect(releaseAsk).toHaveBeenCalledExactlyOnceWith(from.threadId, queued.id);
       if (next.ok) roots.commit(next.reservation);
       expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "exhausted" });
     } finally {
       release.mockRestore();
-      releaseAsk.mockRestore();
     }
   });
 

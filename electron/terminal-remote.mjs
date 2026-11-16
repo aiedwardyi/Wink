@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import { createHash, randomInt } from "node:crypto";
 import { orbitBinFiles } from "./terminal-mailbox.mjs";
 import { quoteWindows } from "./terminal-worker.mjs";
+import { CLAUDE_PANE_ENV, CODE_MODE_CAVEATS } from "../shared/claude-launch-env.mjs";
 
-export const REMOTE_PANE_CEILING = 64;
 const GB = 1024 ** 3;
 const RESERVE = 1.5 * GB;
 const PANE_MEMORY = 0.6 * GB;
@@ -52,9 +52,9 @@ export function remoteArgs(command) {
 /** Picks a free tunnel port on the host and counts its panes still starting; `panes` are its live and opening ones. */
 export function remoteSlot(host, panes, at, random = randomInt) {
   const there = panes.filter((pane) => pane.host === host);
-  if (there.length >= REMOTE_PANE_CEILING) throw new Error(`Too many terminals on ${host} (limit ${REMOTE_PANE_CEILING}).`);
   const used = new Set(there.map((pane) => pane.port));
   const free = Array.from({ length: PORT_COUNT }, (_, index) => FIRST_PORT + index).filter((port) => !used.has(port));
+  if (free.length === 0) throw new Error(`All ${PORT_COUNT} tunnel ports on ${host} are in use. Close a finished pane with terminal_close or open it on another PC with host.`);
   return { host, port: free[random(free.length)], at, starting: startingPanes(there, at).length };
 }
 
@@ -66,6 +66,10 @@ export function remoteLaunchLine({ host, port, cwd, args }) {
     // localhost skips orbit-msg's 127.0.0.1 fallback ports, which belong to the host's own Wink.
     `$env:ORBIT_URL = 'http://localhost:${port}'`,
     "$env:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = 'false'",
+    // Read-only: the remote's own Claude must have saved the caveats, or Code Mode would ask in a pane nobody watches.
+    "$claudeConfig = if ($env:CLAUDE_CONFIG_DIR) { Join-Path $env:CLAUDE_CONFIG_DIR '.claude.json' } else { Join-Path $HOME '.claude.json' }",
+    "$claudeCaveats = Get-Content -Raw -LiteralPath $claudeConfig -ErrorAction SilentlyContinue",
+    ...Object.entries(CLAUDE_PANE_ENV).map(([name, value]) => `if (-not $env:${name} -and ${CODE_MODE_CAVEATS.map((caveat) => `$claudeCaveats -match '"${caveat}"\\s*:\\s*true'`).join(" -and ")}) { $env:${name} = ${quoteWindows(value)} }`),
     `$env:PATH = ${quoteWindows(`${host.root}\\bin;`)} + $env:PATH`,
     `$env:ORBIT_SCRATCH = ${quoteWindows(`${host.root}\\scratch\\`)} + $env:ORBIT_PANE`,
     "New-Item -ItemType Directory -Force $env:ORBIT_SCRATCH | Out-Null",

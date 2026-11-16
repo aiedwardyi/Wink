@@ -6,6 +6,9 @@ import { useI18n } from "@/lib/i18n";
 import { replyAuthor, replySnippet } from "@/lib/replies";
 import type { Message } from "@/state/store";
 
+export const QUOTE_LABEL = "block truncate text-[10.5px] font-medium text-accent";
+export const QUOTE_TEXT = "block truncate text-[11.5px] text-ink-secondary";
+
 export function ReplyQuote({
   message,
   fallbackName,
@@ -58,8 +61,8 @@ export function QuoteRow({
     <>
       {icon}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[10.5px] font-medium text-accent">{label}</span>
-        <span className="block truncate text-[11.5px] text-ink-secondary">{text}</span>
+        <span className={QUOTE_LABEL}>{label}</span>
+        <span className={QUOTE_TEXT}>{text}</span>
       </span>
     </>
   );

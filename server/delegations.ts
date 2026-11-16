@@ -6,7 +6,6 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
-import { releaseOpenAsk } from "./comms-budget.ts";
 import { release, type Reservation } from "./comms-root.ts";
 import { findDelegationReceipt, loadDelegationReceipts, recordDelegationReceipt, receiptSnapshot, resetDelegationReceipts } from "./delegation-ledger.ts";
 import { terminalMailState, type MailDestination, type MailState } from "./mail-types.ts";
@@ -80,7 +79,7 @@ export interface DelegationReceipt {
 
 export { findDelegationReceipt, recordDelegationReceipt } from "./delegation-ledger.ts";
 
-export type QueueResult = "ok" | "no_target" | "self" | "too_deep" | "too_many";
+export type QueueResult = "ok" | "no_target" | "self" | "too_deep";
 
 interface PendingDelegationSnapshot {
   sourceThreadId: string;
@@ -260,10 +259,6 @@ export function pendingDelegationSnapshot(): PendingDelegationSnapshot[] {
   );
 }
 
-/** How many handoffs one turn may queue. Small on purpose: this is the only
- * thing standing between a confused bot and a fan-out of real turns. */
-const MAX_QUEUED_PER_THREAD = 4;
-
 function appendDelegationActivity(
   bus: CommsBus,
   sourceThreadId: string,
@@ -295,10 +290,6 @@ export function queueDelegation(
   const target = bus.store.bot(item.toBotId);
   if (!target) return { result: "no_target" };
   const list = pendingDelegations.get(sourceThreadId) ?? [];
-  // Async handoff removes the backpressure that ask_bot got for free by
-  // making the caller wait. Without a cap, one turn can queue unboundedly
-  // and fan out into as many real turns on the next settle.
-  if (options.kind !== "ask" && list.filter((item) => item.kind !== "ask").length >= MAX_QUEUED_PER_THREAD) return { result: "too_many" };
   const id = options.id ?? newId();
   // The handoff prompt and its label are bot-authored and outlive the turn on
   // disk — scrub them the way the transcript copy of the same strings is.
@@ -459,7 +450,6 @@ export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?
   savePending();
   for (const item of dropped) {
     dropReservation(item);
-    releaseOpenAsk(threadId, item.id);
     recordDelegationReceipt({
       id: item.id,
       sourceThreadId: threadId,
@@ -530,7 +520,6 @@ export function discardDelegationsFrom(bus: CommsBus, sourceBotId: string): void
     const held = (pendingDelegations.get(threadId) ?? []).filter((item) => item.fromBotId === sourceBotId && ["held", "ready", "approval"].includes(findDelegationReceipt(item.id)?.state ?? "held"));
     for (const item of held) {
       dropReservation(item);
-      releaseOpenAsk(threadId, item.id);
       acknowledgeDelegation(threadId, item.id);
       updateReceipt(item.id, { status: "dropped", state: "dropped", result: "source bot deleted" });
       patchDelegationChip(bus, item.id, { name: `Delegation to @${bus.store.bot(item.toBotId)?.name ?? item.toBotId} dropped - the turn did not finish`, ok: false });
@@ -602,7 +591,6 @@ export function finishDelegatedTurn(
 ): boolean {
   reply = peerReplyText(turn.answer ?? reply);
   const target = bus.store.bot(turn.toBotId);
-  if (turn.taskId && turn.sourceThreadId) releaseOpenAsk(turn.sourceThreadId, turn.taskId);
   const existing = turn.taskId ? findDelegationReceipt(turn.taskId) : null;
   if (existing?.state && terminalMailState(existing.state)) return false;
   // tool calls or summaries only: a blank success would read as an answer

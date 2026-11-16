@@ -29,6 +29,8 @@ export type SceneApi = {
 export type Scene = {
   /** False ends the loop; the last frame stays up as a still. */
   frame(t: number, dt: number): boolean;
+  /** Ms to wait before asking for the next frame; none or 0 asks at once. */
+  idle?(): number;
   event(event: SceneEvent): void;
   dispose(): void;
 };
@@ -42,6 +44,7 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
   let on = false;
   let want = false;
   let raf = 0;
+  let idling: ReturnType<typeof setTimeout> | undefined;
   let last = 0;
   let clock = 0;
   let offscreen = false;
@@ -54,6 +57,7 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
     if (!on) return;
     on = false;
     cancelAnimationFrame(raf);
+    clearTimeout(idling);
   };
   const tick = (now: number) => {
     if (!on) return;
@@ -66,7 +70,10 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
       want = false;
       return;
     }
-    raf = requestAnimationFrame(tick);
+    // Every frame the page wakes for costs the renderer and GPU process, drawn or not; idling is what saves.
+    const wait = scene.idle?.() ?? 0;
+    if (wait > 0) idling = setTimeout(() => (raf = requestAnimationFrame(tick)), wait);
+    else raf = requestAnimationFrame(tick);
   };
   const wake = () => {
     if (reducedMotion()) return;

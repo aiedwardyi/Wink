@@ -209,6 +209,19 @@ describe("send after this turn", () => {
     ]);
   });
 
+  it("lets the user type while an approval is pending and sends the line after the turn", async () => {
+    const subject = bot("steers");
+    subject.messages = [{
+      id: "ask", role: "bot", kind: "options", at: 1,
+      card: { title: "Approval needed", subtitle: "rm", options: ["Allow", "Deny"], requestId: "r1", tool: "Bash" },
+    }];
+    const ui = await mount(subject);
+    expect(ui.host.querySelector("[data-pending-approval]")).not.toBeNull();
+    expect(ui.box.disabled).toBe(false);
+    await ui.press({});
+    await vi.waitFor(() => expect(ui.bodies).toEqual([expect.objectContaining({ text: "hello", deliver: "after" })]));
+  });
+
   it("keeps Shift+Enter a newline and never sends mid-composition", async () => {
     const ui = await mount(bot("steers"));
     await ui.press({ shiftKey: true });

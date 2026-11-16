@@ -434,7 +434,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         asks: Map<string, (behavior: string, source?: "user" | "timeout" | "system") => string | null>;
       }
       const active = new Map<string, Turn>();
-      const systemHeld = systemLedger();
+      const systemHeld = systemLedger(false, instanceId);
       const billingStops = new Set<() => void>();
       const pool = support.warmPool ?? sharedWarmPool;
       const incarnation = input.incarnation ?? newId();
@@ -1003,6 +1003,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (quietEnd && ok) stopReason = null;
           if (sessionId && compacted) systemHeld.forget(sessionId);
           else if (sessionId && systemSent && state.promptAccepted) systemHeld.record(sessionId, systemSent);
+          else if (sessionId) systemHeld.keep(sessionId);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const finish of [...asks.values()]) finish("cancel", "system");
           for (const finish of interjectionWaiters.values()) finish(false);
@@ -1370,7 +1371,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             if (system) {
               systemHeld.forget(activeSessionId);
               systemSent = system;
-            }
+            } else systemHeld.begin(activeSessionId);
             const promptTurn = { ...fallbackTurn, system };
             const text = support.buildPromptText
               ? support.buildPromptText(promptTurn)

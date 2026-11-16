@@ -8,10 +8,12 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, taskAskSchema } from "./task-asks.ts";
+import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
+// open asks ride outside the 16 KiB budget; this only stops a runaway file from being read whole
+const TASK_STATE_READ_MAX_BYTES = 8 * 1024 * 1024;
 
 const LIMITS = {
   id: 160,
@@ -88,7 +90,8 @@ const taskResumePacketSchema = z.object({
   ]),
   lastEventId: idSchema.optional(),
   turnsAtWrite: z.number().int().nonnegative(),
-  asks: z.array(taskAskSchema).max(ASK_LIMITS.kept).optional(),
+  asks: z.array(taskAskSchema).optional(),
+  lastAskId: z.number().int().nonnegative().optional(),
 }).strict();
 
 export type TaskResumePacket = z.output<typeof taskResumePacketSchema>;
@@ -171,18 +174,19 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
     }];
   });
   if (asks?.length) normalized.asks = asks;
+  const lastAskId = lastAskIdOf(packet);
+  if (lastAskId) normalized.lastAskId = lastAskId;
   return taskResumePacketSchema.parse(normalized);
 }
 
 function serializeBounded(packet: TaskResumePacket): string {
   const bounded = structuredClone(packet);
   const pruneOrder = ["completed", "evidence", "artifacts", "plan", "blockers"] as const;
-  let serialized = JSON.stringify(bounded, null, 2);
-  while (Buffer.byteLength(serialized, "utf8") > TASK_STATE_MAX_BYTES) {
+  const budgeted = () => Buffer.byteLength(JSON.stringify({ ...bounded, asks: bounded.asks?.filter((ask) => !isOpenAsk(ask)) }, null, 2), "utf8");
+  while (budgeted() > TASK_STATE_MAX_BYTES) {
     const closedAsk = bounded.asks?.findIndex((ask) => !isOpenAsk(ask)) ?? -1;
     if (closedAsk >= 0) {
       bounded.asks?.splice(closedAsk, 1);
-      serialized = JSON.stringify(bounded, null, 2);
       continue;
     }
     const removable = pruneOrder.filter((candidate) => bounded[candidate].length > 1);
@@ -196,9 +200,8 @@ function serializeBounded(packet: TaskResumePacket): string {
     )[0];
     if (!key) throw new Error("task state exceeds its storage limit");
     bounded[key].shift();
-    serialized = JSON.stringify(bounded, null, 2);
   }
-  return serialized;
+  return JSON.stringify(bounded, null, 2);
 }
 
 // a sha256 hex digest and its newline
@@ -213,7 +216,7 @@ function sealed(packet: TaskResumePacket, dir: string): { path: string; serializ
   return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
 }
 
-function fileText(path: string, maxBytes = TASK_STATE_MAX_BYTES): string | null {
+function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
   try {
     const status = lstatSync(path);
     if (!status.isFile() || status.isSymbolicLink() || status.size > maxBytes) return null;
@@ -240,7 +243,7 @@ function savedMark(path: string): string {
 }
 
 function stagedRecord(path: string, threadId: ThreadId): { raw: string; packet: TaskResumePacket } | null {
-  const text = fileText(stagedPath(path), TASK_STATE_MAX_BYTES + MARK_BYTES);
+  const text = fileText(stagedPath(path), TASK_STATE_READ_MAX_BYTES + MARK_BYTES);
   if (!text || text.slice(0, MARK_BYTES) !== savedMark(path)) return null;
   const raw = text.slice(MARK_BYTES);
   const packet = recordOf(raw, threadId);
@@ -316,15 +319,25 @@ export function taskStateUpdateSchema(clipped: string[]) {
     clipped.push(`${path} (${text.length} > ${max})`);
     return clipText(text, max);
   };
+  const keep = <T>(path: string, items: T[], max: number, from: "first" | "last"): T[] => {
+    if (items.length <= max) return items;
+    clipped.push(`${path} (${items.length} > ${max})`);
+    return from === "first" ? items.slice(0, max) : items.slice(-max);
+  };
   const plan = z.array(z.object({
     step: z.string().trim().min(1),
     status: z.enum(["pending", "active", "done", "skipped"]),
-  }).strict()).max(20).transform((items) =>
-    items.map((item, index) => ({ ...item, step: clip(`plan.${index}.step`, item.step, LIMITS.step) })),
-  ).refine(
-    (items) => items.filter((item) => item.status === "active").length <= 1,
-    "at most one plan step may be active",
-  );
+  }).strict()).transform((items) => {
+    const kept = keep("plan", items, LIMITS.plan, "first");
+    const active = kept.filter((item) => item.status === "active").length;
+    if (active > 1) clipped.push(`plan (${active} active > 1, later ones set to pending)`);
+    let seen = false;
+    return kept.map((item, index) => {
+      const demote = item.status === "active" && seen;
+      if (item.status === "active") seen = true;
+      return { ...item, status: demote ? "pending" as const : item.status, step: clip(`plan.${index}.step`, item.step, LIMITS.step) };
+    });
+  });
   // Empty string clears. Whitespace-only is rejected before trim.
   const nextAction = z.string().refine(
     (value) => value === "" || /\S/.test(value),
@@ -332,14 +345,14 @@ export function taskStateUpdateSchema(clipped: string[]) {
   const blockers = z.array(z.object({
     kind: z.enum(["login", "input", "engine"]),
     note: z.string().trim().min(1),
-  }).strict()).max(10).transform((items) =>
-    items.map((item, index) => ({ ...item, note: clip(`blockers.${index}.note`, item.note, LIMITS.note) })),
+  }).strict()).transform((items) =>
+    keep("blockers", items, LIMITS.blockers, "last").map((item, index) => ({ ...item, note: clip(`blockers.${index}.note`, item.note, LIMITS.note) })),
   );
   const artifacts = z.array(z.object({
     ref: z.string().trim().min(1),
     label: z.string().trim().min(1),
-  }).strict()).max(20).transform((items) =>
-    items.map((item, index) => {
+  }).strict()).transform((items) =>
+    keep("artifacts", items, LIMITS.artifacts, "last").map((item, index) => {
       if (item.ref.length > LIMITS.ref) return item;
       return { ref: item.ref, label: clip(`artifacts.${index}.label`, item.label, LIMITS.label) };
     }),
@@ -349,7 +362,7 @@ export function taskStateUpdateSchema(clipped: string[]) {
     ask: z.string().trim().min(1).optional(),
     status: z.enum(ASK_STATUSES),
     ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
-  }).strict()).max(ASK_LIMITS.update).transform((items) =>
+  }).strict()).transform((items) =>
     items.map((item, index) => ({
       ...item,
       ...(item.ask === undefined ? {} : { ask: clip(`asks.${index}.ask`, item.ask, ASK_LIMITS.ask) }),

@@ -39,6 +39,14 @@ describe("packaged cold launch does not hide the window behind the harness", () 
     expect(quit.indexOf("keepAwake.stop()")).toBeLessThan(quit.indexOf("const cleanup = Promise.race("));
   });
 
+  it("restarts the packaged server when it dies after startup, but not on quit", () => {
+    const startOn = sourceBetween(main, "async function startServerOn(", "async function startServerPackaged(");
+    const adopted = sourceBetween(startOn, "if (serverProc === proc) {", "slog(`exited code=");
+    expect(adopted).toContain("reviveServer()");
+    expect(main).toContain('connectingPageHref(undefined, "packaged.restarting")');
+    expect(main).toMatch(/app\.on\("before-quit", \(e\) => \{\s+quitting = true;/);
+  });
+
   it("creates and shows the window before awaiting startServerPackaged", () => {
     const ready = sourceBetween(main, "app.whenReady().then(async () => {", "app.on(\"window-all-closed\"");
     const windowAt = ready.indexOf("createWindow()");

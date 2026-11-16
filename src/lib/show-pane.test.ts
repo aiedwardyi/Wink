@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, paneKind, picturedReplies, showableLinks, showItem, showKind, showMedia, togglePane, useAutoShow, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,11 +88,13 @@ let host: HTMLElement;
 let root: Root;
 let shown: ShowItem | null = null;
 let media: string | null = null;
+let map: string | null = null;
 
 function Probe({ thread, messages, free }: { thread: string; messages: Message[]; free: boolean }) {
   useAutoShow(thread, messages, free);
   shown = useShowItem();
   media = useMediaThread();
+  map = useMapThread();
   return null;
 }
 
@@ -103,8 +105,9 @@ beforeEach(() => {
   root = createRoot(host);
   shown = null;
   media = null;
+  map = null;
 });
-afterEach(() => { act(() => root.unmount()); act(() => closeShow()); });
+afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); });
 
 it("opens a new file in the open chat, and stays shut after the user closes it this turn", async () => {
   const turn = [user("u1")];
@@ -163,4 +166,63 @@ it("does not open on its own over the Media tab", async () => {
   await act(async () => showMedia("t1"));
   await render("t1", [user("u1"), deck]);
   expect([shown, media]).toEqual([null, "t1"]);
+});
+
+it("the header button opens the tab last picked in each chat", async () => {
+  await render("t1", []);
+  await act(async () => showMap("t7"));
+  await act(async () => showMedia("t8"));
+  await act(async () => closeShow());
+  await act(async () => togglePane("t7"));
+  expect([shown, media, map]).toEqual([null, null, "t7"]);
+  await act(async () => togglePane("t7"));
+  await act(async () => togglePane("t8", true));
+  expect([shown, media, map]).toEqual([null, "t8", null]);
+});
+
+it("with no pick the header button opens Map while a worker is live, else Media, and neither counts as a pick", async () => {
+  await render("t1", []);
+  await act(async () => togglePane("t10", true));
+  expect([media, map]).toEqual([null, "t10"]);
+  await act(async () => togglePane("t10", true));
+  await act(async () => togglePane("t10"));
+  expect([media, map]).toEqual(["t10", null]);
+  await act(async () => togglePane("t10"));
+  await act(async () => togglePane("t10", true));
+  expect([media, map]).toEqual([null, "t10"]);
+});
+
+it("a file that opens on its own is not a pick", async () => {
+  await render("t9", [user("u1")]);
+  await render("t9", [user("u1"), deck]);
+  expect(shown?.path).toBe(pdf.path);
+  await act(async () => closeShow());
+  await act(async () => togglePane("t9", true));
+  expect([shown, map]).toEqual([null, "t9"]);
+});
+
+it("keeps each chat's pick across a restart", async () => {
+  await render("t1", []);
+  await act(async () => showMap("t11"));
+  await act(async () => showItem({ ...pdf, threadId: "t12" }));
+  await act(async () => closeShow());
+  vi.resetModules();
+  const restarted = await import("./show-pane");
+  let seen: unknown[] = [];
+  const After = () => { seen = [restarted.useShowItem(), restarted.useMapThread()]; return null; };
+  await act(async () => root.render(createElement(After)));
+  await act(async () => restarted.togglePane("t11"));
+  expect(seen).toEqual([null, "t11"]);
+  await act(async () => restarted.togglePane("t12", true));
+  expect(seen).toEqual([{ ...pdf, threadId: "t12" }, null]);
+});
+
+it("keeps the pick for the session when storage refuses it", async () => {
+  const refuse = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+  await render("t1", []);
+  await act(async () => showMap("t13"));
+  await act(async () => closeShow());
+  await act(async () => togglePane("t13"));
+  expect(map).toBe("t13");
+  refuse.mockRestore();
 });

@@ -258,9 +258,11 @@ describe("GroupWizard members", () => {
         row: { key: 1, name: "Research", instanceId: "muse", model: "muse-ember-1.0", saving: false, error: null },
         preferIndex: 0, instances: [muse], onPatch: () => undefined, onAdd,
       })));
-      const ember = host.querySelector('option[value="muse-ember-1.0"]') as HTMLOptionElement;
-      expect(ember.textContent).toBe("Meta Muse Ember");
-      expect(ember.selected).toBe(true);
+      const modelTrigger = menuTrigger(host, locale === "en" ? "Change model" : "모델 변경");
+      expect(modelTrigger.textContent).toBe("Meta Muse Ember");
+      const ember = (await menuOptions(modelTrigger)).find((option) => option.textContent === "Meta Muse Ember");
+      expect(ember?.getAttribute("aria-checked")).toBe("true");
+      await closeMenu();
       await act(async () => button(host, locale === "en" ? "Add bot" : "봇 추가").click());
       expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("muse");
     } finally {
@@ -281,7 +283,7 @@ describe("GroupWizard members", () => {
       expect(input).toBeDefined();
       expect(host.querySelector(`label[for="${input!.id}"]`)?.textContent).toBe(label);
       expect(input!.placeholder).toBe(placeholder);
-      expect(input!.maxLength).toBe(40);
+      expect(input!.hasAttribute("maxlength")).toBe(false);
       await act(async () => button(host, add).click());
       expect(host.querySelector('[role="alert"]')?.textContent).toBe(required);
       expect(apiCalls).toHaveLength(0);
@@ -331,6 +333,29 @@ describe("GroupWizard members", () => {
       await act(async () => {
         root.unmount();
       });
+    }
+  });
+
+  it("moves on to the bots on Enter in the name with no bot picked, and never on an IME confirm", async () => {
+    const fetched = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetched);
+    const { host, root } = await renderWizard();
+    try {
+      // SAFETY: the wizard always renders the labelled name input.
+      const name = host.querySelector('input[aria-label="Name your group"]') as HTMLInputElement;
+      name.focus();
+      await act(async () => { name.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+      expect(fetched).not.toHaveBeenCalled();
+      expect(dispatched).toEqual([]);
+      expect(document.activeElement).toBe(pickRow(host, "Ada"));
+      await act(async () => pickRow(host, "Ada").click());
+      await act(async () => { name.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true })); });
+      expect(dispatched).toEqual([]);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      vi.unstubAllGlobals();
     }
   });
 

@@ -769,7 +769,6 @@ export function SettingsPanel({
                     watchMetrics
                     aria-label={t("bot.description")}
                     className={cn(DETAILS_INPUT, "min-h-[96px]")}
-                    maxLength={BOT_PROFILE_LIMITS.description}
                     placeholder={t("bot.descriptionPlaceholder")}
                     value={bot.description}
                     onChange={(e) => patch({ description: e.target.value })}

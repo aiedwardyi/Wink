@@ -164,23 +164,15 @@ it("C3 sends to a desktop terminal with sharing off and hides the control with s
   expect(button("Send to terminal")).toBeUndefined();
 });
 
-it("C4 blocks approval sends, retries and attachment intake, and stops active dictation", async () => {
+it("C4 keeps typing, retry, attachments and dictation open while an approval waits", async () => {
   const draftId = botDraftId(bot.id, bot.threadId);
   setDraft(localStorage, draftId, "draft waiting for approval");
   rememberFailedComposerSend(draftId, { sendId: "failed", text: "failed draft", requestText: "failed draft", threadId: bot.threadId });
   await render(createElement(Composer, { bot: { ...bot, messages: [approval] } }));
-  expect(host.querySelector("textarea")?.disabled).toBe(true);
-  expect(button("Send message")).toBeUndefined();
-  expect(button("Attach a file")).toBeUndefined();
-  expect(button("Retry")?.disabled).toBe(true);
-  expect([...host.querySelectorAll<HTMLInputElement>('input[type="file"]')].every((input) => input.disabled)).toBe(true);
-  const fileDrop = new Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(fileDrop, "dataTransfer", { value: { types: ["Files"], files: [new File(["hello"], "note.txt", { type: "text/plain" })] } });
-  await act(async () => { window.dispatchEvent(fileDrop); });
-  expect(fileDrop.defaultPrevented).toBe(true);
-  expect(host.textContent).not.toContain("note.txt");
-  await act(async () => host.querySelector("textarea")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })));
-  expect(mock.dispatch.mock.calls.some(([action]) => action.type === "send")).toBe(false);
+  expect(host.querySelector("textarea")?.disabled).toBe(false);
+  expect(button("Attach a file")).toBeDefined();
+  expect(button("Retry")?.disabled).toBe(false);
+  expect([...host.querySelectorAll<HTMLInputElement>('input[type="file"]')].every((input) => !input.disabled)).toBe(true);
   const speechStop = vi.fn(async () => {});
   window.ogb = {
     speechStart: vi.fn(async () => {}), speechStop,
@@ -190,9 +182,8 @@ it("C4 blocks approval sends, retries and attachment intake, and stops active di
   await render(createElement(Composer, { key: "mic", bot: { ...bot, id: "mic", threadId: "mic-thread" } }));
   await click(button("Start dictation"));
   await render(createElement(Composer, { key: "mic", bot: { ...bot, id: "mic", threadId: "mic-thread", messages: [approval] } }));
-  expect(speechStop).toHaveBeenCalled();
-  expect(button("Start dictation")).toBeUndefined();
-  expect(button("Stop dictation")).toBeUndefined();
+  expect(speechStop).not.toHaveBeenCalled();
+  expect(button("Stop dictation")).toBeDefined();
 });
 
 it("C5 reserves speech interruption for an unhandled Space outside controls and modals in both call views", async () => {
