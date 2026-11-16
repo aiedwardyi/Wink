@@ -21,7 +21,6 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
-import { FREE_ACCESS } from "./turn-access.ts";
 
 const DRIVER_KIND = "boxAgent";
 const BOX_API = "https://ascii.dev/api/box/v1";
@@ -255,8 +254,6 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
         provider: DRIVER_KIND,
         capabilities: { sessionModelSwitch: "in-session", resumeCursor: false },
         sendTurn,
-        // the agent runs on its own cloud box, which has no asks
-        access: () => FREE_ACCESS,
         interruptTurn: async (threadId) => active.get(threadId)?.cancel(),
         respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
         hasSession: (threadId) => active.has(threadId),

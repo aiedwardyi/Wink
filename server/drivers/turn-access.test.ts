@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { antigravityAccess, buildAntigravityTurnArgv } from "./antigravity.ts";
@@ -49,5 +52,16 @@ describe("turn access", () => {
     expect(accessRules(routedAccess({ approval: "ask", readOnly: true }), undefined)).toContain("Read-only turn: no file edits or commands.");
     expect(accessRules(FREE_ACCESS, undefined)).toContain("You can read files; you can edit files and run commands without asking. Commands can also fetch web pages (curl). Your tools are exactly your tool list (built-in).");
     for (const word of ["worker", "pane", "card"]) expect(accessRules(routedAccess({ approval: "ask" }), { agents, terminal: agents, computer: { boxId: "", token: "" } })).not.toMatch(new RegExp(`\\b${word}`, "i"));
+  });
+
+  it("every driver that starts turns says what they may do", () => {
+    const server = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const sources = ["drivers", "testing"].flatMap((dir) => (readdirSync(join(server, dir), { recursive: true }) as string[]).map((file) => join(server, dir, file)))
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
+    const starters = sources.filter((file) => /^\s+sendTurn[,:]/m.test(readFileSync(file, "utf8"))).map((file) => relative(server, file).replaceAll("\\", "/"));
+    expect(starters.length).toBeGreaterThan(5);
+    // the box agent's own box never asks, so accessRules' FREE_ACCESS default is its grant
+    const missing = starters.filter((file) => file !== "drivers/boxagent.ts" && !/^\s+access[:(]/m.test(readFileSync(join(server, file), "utf8")));
+    expect(missing, "add access(turn) to the adapter, read off the values its sendTurn launches with").toEqual([]);
   });
 });

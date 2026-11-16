@@ -5884,7 +5884,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           DEFAULT_RULES +
-          accessRules(live.adapter.access({ approval, cwd, leanStartup, integrations }), integrations) +
+          accessRules(live.adapter.access?.({ approval, cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
@@ -6954,7 +6954,7 @@ async function runClaimedGroupMemberTurn(
     installedPlaybookInstructions(text, bot.playbooks) +
     harnessPlaybookPrompt(Boolean(integrations.terminal)) +
     // last, so a read-only side lane shares the idle room's cached prefix
-    accessRules(instance.adapter.access({ ...access, cwd, integrations, leanStartup: memberTurnSelection(selection, bot.leanStartup).leanStartup }), integrations);
+    accessRules(instance.adapter.access?.({ ...access, cwd, integrations, leanStartup: memberTurnSelection(selection, bot.leanStartup).leanStartup }), integrations);
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards

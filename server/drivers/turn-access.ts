@@ -39,7 +39,7 @@ function can(what: string, grant: Grant): string {
 }
 
 /** One block per turn, built from the same grants the driver launches with. */
-export function accessRules(access: TurnAccess, integrations: SendTurnInput["integrations"]): string {
+export function accessRules(access: TurnAccess = FREE_ACCESS, integrations: SendTurnInput["integrations"]): string {
   const { edits, commands } = access;
   const level = edits === commands
     ? edits === "off" ? "Read-only turn: no file edits or commands." : `You can read files; you ${can("edit files and run commands", edits)}.`
