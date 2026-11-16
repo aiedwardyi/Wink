@@ -133,7 +133,7 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
   }, []);
   useEffect(() => {
     if (!reveal?.length) return;
-    const tile = grid.current?.querySelector(reveal.map((id) => `[data-skin-tile="${id}"]`).join());
+    const tile = grid.current?.querySelector(reveal.map((id) => `[data-skin-tile="${id}"]`).join(", "));
     tile?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "instant" : "smooth" });
   }, [reveal]);
 
