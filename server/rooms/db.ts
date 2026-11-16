@@ -10,7 +10,6 @@ import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
 import { checkedRoomName, joinerName } from "./names.ts";
 
-export type RoomLevel = "chat" | "ask" | "trusted";
 export type RoomGrant = "words" | "work";
 
 export interface RoomAuthor {
@@ -30,7 +29,6 @@ export interface RoomRecord {
 export interface RoomPerson {
   id: string;
   name: string;
-  level: RoomLevel;
   joinedAt: number;
 }
 
@@ -60,7 +58,8 @@ export interface RoomEntry {
 export type RoomEntryDraft = Omit<RoomEntry, "seq" | "id" | "at">;
 
 export const PERSON_TEXT_MAX = 4_000;
-export const BOT_TEXT_MAX = 20_000;
+// Every joiner build parses entry text up to this; one longer line fails their whole snapshot.
+export const ROOM_TEXT_MAX = 20_000;
 
 export class RoomError extends Error {
   readonly status: 400 | 404 | 409;
@@ -94,6 +93,7 @@ function open(): DatabaseSync {
       room_id TEXT NOT NULL,
       id TEXT NOT NULL,
       name TEXT NOT NULL,
+      -- retired: every member is a full collaborator; older files keep it NOT NULL
       level TEXT NOT NULL,
       joined_at INTEGER NOT NULL,
       PRIMARY KEY (room_id, id)
@@ -175,9 +175,9 @@ export function roomById(id: string): RoomRecord | null {
 }
 
 export function roomPeople(roomId: string): RoomPerson[] {
-  const rows = db().prepare("SELECT id, name, level, joined_at FROM people WHERE room_id = ? ORDER BY joined_at, rowid").all(roomId) as
-    Array<{ id: string; name: string; level: RoomLevel; joined_at: number }>;
-  return rows.map((row) => ({ id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at }));
+  const rows = db().prepare("SELECT id, name, joined_at FROM people WHERE room_id = ? ORDER BY joined_at, rowid").all(roomId) as
+    Array<{ id: string; name: string; joined_at: number }>;
+  return rows.map((row) => ({ id: row.id, name: row.name, joinedAt: row.joined_at }));
 }
 
 export function renameRoomPerson(roomId: string, personId: string, value: string, taken: readonly string[]): string {
@@ -187,16 +187,16 @@ export function renameRoomPerson(roomId: string, personId: string, value: string
 }
 
 /** `taken` is the host's and the bots' names; people are checked here. */
-export function addPerson(roomId: string, name: unknown, level: RoomLevel, taken: readonly string[]): RoomPerson {
+export function addPerson(roomId: string, name: unknown, taken: readonly string[]): RoomPerson {
   const database = db();
   database.exec("BEGIN IMMEDIATE");
   try {
     if (!roomById(roomId)) throw new RoomError(404, "no such room");
     const checked = checkedRoomName(name, [...taken, ...roomPeople(roomId).map((person) => person.name)]);
     if (!checked.ok) throw new RoomError(400, checked.error);
-    const person = { id: newId(), name: checked.name, level, joinedAt: Date.now() };
-    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, ?, ?)")
-      .run(roomId, person.id, person.name, person.level, person.joinedAt);
+    const person = { id: newId(), name: checked.name, joinedAt: Date.now() };
+    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, 'member', ?)")
+      .run(roomId, person.id, person.name, person.joinedAt);
     database.exec("COMMIT");
     return person;
   } catch (error) {
@@ -272,10 +272,10 @@ export function committedRoomText(author: RoomAuthor["kind"], text: string): str
   const clean = cleanText(text);
   if (author !== "bot") {
     if (ATTACHED.test(clean)) throw new RoomError(400, "team rooms don't take attachments");
-    return clean.slice(0, PERSON_TEXT_MAX);
+    return clean.slice(0, author === "host" ? ROOM_TEXT_MAX : PERSON_TEXT_MAX);
   }
   // Mask before the cap, so the cut can never leave half a secret unmasked.
-  return redactSecretsInText(clean.replace(/<(attached-)/gi, "[$1")).slice(0, BOT_TEXT_MAX);
+  return redactSecretsInText(clean.replace(/<(attached-)/gi, "[$1")).slice(0, ROOM_TEXT_MAX);
 }
 
 /** The only insert into the room log. Entries are never updated. `at` is set only for carried history. */

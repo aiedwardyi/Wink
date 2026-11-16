@@ -164,13 +164,77 @@ describe("pinned ask_user question", () => {
     expect(textarea()?.disabled).toBe(false);
   });
 
-  it("caps the card at a third of the chat and scrolls a long question inside it", async () => {
+  it("caps the card at a third of the chat and scrolls only a long question's text, with the choices under it", async () => {
     await mount({ bot: bot([ask({ subtitle: Array.from({ length: 40 }, (_, line) => `Line ${line}`).join("\n") })]) });
     expect(card()!.className).toContain("max-h-[30dvh]");
     const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
     expect(body.className).toContain("overflow-y-auto");
     expect(body.textContent).toContain("Line 39");
-    expect(body.querySelector("[data-term-choices]")).not.toBeNull();
+    expect(body.querySelector("[data-term-choices]")).toBeNull();
+    expect(body.className).toContain("min-h-[1lh]");
+    const choices = body.nextElementSibling!;
+    expect(choices.matches("[data-term-choices]")).toBe(true);
+    expect(choices.className).toContain("shrink-0");
+    expect([...choices.querySelectorAll("button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
+  });
+
+  it("lets the cap give way for the choices under three lines of the question, or two when it has two", async () => {
+    let resized = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
+    let tall = 262;
+    let text = 88;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
+    // a box is never shorter than its own min-height
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? Math.max(text, parseFloat(this.style.minHeight) || 0) : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 390px)");
+    expect(body.style.minHeight).toBe("66px");
+    tall = 54;
+    text = 44;
+    resized();
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 160px)");
+    expect(body.style.minHeight).toBe("44px");
+  });
+
+  it("stops the card at the composer's room: the question gives lines back first, then the choices scroll", async () => {
+    let resized = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
+    const computed = globalThis.getComputedStyle;
+    const isPane = (el: Element) => el.classList.contains("overflow-y-auto") && !!el.querySelector("[data-pending-question]");
+    vi.spyOn(globalThis, "getComputedStyle").mockImplementation((el, pseudo) => (isPane(el) ? { overflowY: "auto" } as CSSStyleDeclaration : computed(el, pseudo)));
+    let tall = 252;
+    let over = 84;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? tall + 128 : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? 304 + over : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? 304 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["168px", "auto"]);
+    tall = 200;
+    over = 32;
+    resized();
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    over = 900;
+    resized();
+    expect(card()!.style.maxHeight).toBe("106px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("fades a cut question at its foot until it is scrolled to its end", async () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).toContain("data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]");
+    expect(body.hasAttribute("data-cut")).toBe(true);
+    vi.spyOn(body, "scrollTop", "get").mockReturnValue(88);
+    await act(async () => body.dispatchEvent(new Event("scroll")));
+    expect(body.hasAttribute("data-cut")).toBe(false);
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
@@ -194,12 +258,52 @@ describe("pinned ask_user question", () => {
     expect(row()).not.toBeNull();
   });
 
-  it("shrinks to its row when a new message lands after it", async () => {
+  it("shrinks to its row when the asking bot replies after it", async () => {
     await mount({ bot: bot([question]) });
     expect(row()).toBeNull();
     await rerender({ bot: bot([question, { id: "b2", role: "bot", kind: "text", at: 5, text: "Still checking the logs." }]) });
     expect(row()).not.toBeNull();
     expect(row()!.textContent).toContain("Ship to prod or staging?");
+  });
+
+  it("shrinks to its row when the person sends a message after it", async () => {
+    const open = ask({ staysOpen: true });
+    await mount({ bot: bot([open]) });
+    await rerender({ bot: bot([open, { id: "u1", role: "user", kind: "text", at: 5, text: "what's for lunch?" }]) });
+    expect(row()).not.toBeNull();
+  });
+
+  it.each([
+    ["a worker's note", { id: "n1", role: "bot", kind: "note", at: 5, text: "[pane 1a2b3c4d] [ALPHA] DONE ALPHA branch=fix/a sha=abc1234 dirty=0" }],
+    ["a tool run", { id: "a1", role: "bot", kind: "activity", at: 5, tool: { name: "Read file", ok: true } }],
+    ["a peer's line", { id: "p1", role: "user", kind: "text", at: 5, text: "From a peer", from: { botId: "peer", name: "Peer", color: "blue" } }],
+    ["a queued line landing by itself", { id: "u1", role: "user", kind: "text", at: 5, text: "also check the logs", queueId: "queue-1" }],
+  ] satisfies Array<[string, Message]>)("stays the full card when %s lands after it", async (_name, later) => {
+    const open = ask({ staysOpen: true });
+    await mount({ bot: bot([open]) });
+    await rerender({ bot: bot([open, later]) });
+    await settle();
+    expect(card()).not.toBeNull();
+    expect(row()).toBeNull();
+  });
+
+  it("in a room, stays the full card through another member's line and shrinks when its asker replies", async () => {
+    const asker = bot([]);
+    const other: Bot = { ...bot([]), id: "other", threadId: "other-thread", name: "Bea" };
+    const members = [asker, other];
+    const open: Message = { ...ask({ staysOpen: true }), from: { botId: asker.id, name: asker.name, color: asker.color } };
+    const line = (id: string, by: Bot): Message => ({ id, role: "bot", kind: "text", at: 5, text: "On it.", from: { botId: by.id, name: by.name, color: by.color } });
+    const room = (messages: Message[]): Group => ({
+      id: "room", threadId: "room-thread", name: "War room", memberIds: [asker.id, other.id], bulletin: "",
+      defaultResponder: { kind: "everyone" }, unread: false, createdAt: 1, messages,
+    });
+    await mount({ group: room([open]), members });
+    await rerender({ group: room([open, line("b1", other)]), members });
+    await settle();
+    expect(card()).not.toBeNull();
+    expect(row()).toBeNull();
+    await rerender({ group: room([open, line("b1", other), line("b2", asker)]), members });
+    expect(row()).not.toBeNull();
   });
 
   it("shrinks to one row: the count, who asks, the question's first line, its choices and an x", async () => {
@@ -212,7 +316,7 @@ describe("pinned ask_user question", () => {
     expect(row()!.textContent).not.toContain("Staging has last week's data.");
     expect([...row()!.querySelectorAll(".truncate")].at(-1)?.textContent).toBe("Ship to prod or staging?");
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
-    expect([...row()!.querySelectorAll("[data-row-choices] button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
+    expect([...row()!.querySelectorAll("[data-row-choices] button:not([hidden])")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
     expect(rowButton("Prod").className).toContain("whitespace-nowrap");
     expect(pinButton("Hide question")).toBeTruthy();
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
@@ -223,7 +327,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     await act(async () => rowButton("Staging").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id }]);
   });
 
   it("glows once when it arrives, then never again", async () => {
@@ -308,8 +412,8 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     const dismiss = pinButton("Dismiss question").className;
     expect(dismiss).toContain("p-1 ");
-    expect(dismiss).toContain("pointer-coarse:-my-3");
-    expect(dismiss).toContain("pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4");
+    expect(dismiss).toContain("pointer-coarse:after:-inset-y-[11px]");
+    expect(dismiss).not.toMatch(/pointer-coarse:-?(p|m)[xytb]?-/);
   });
 
   it("asks to type the answer while an open question is pinned", async () => {
@@ -326,7 +430,7 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id }]);
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
@@ -391,11 +495,11 @@ describe("pinned ask_user question", () => {
     expect(dot()).toBeNull();
   });
 
-  it("waits behind a pending approval, which keeps its composer takeover", async () => {
+  it("waits behind a pending approval and leaves the box typeable", async () => {
     await mount({ bot: bot([question, approval]) });
     expect(pin()).toBeNull();
     expect(host!.querySelector('[role="region"][aria-label="Pending approval"]')).not.toBeNull();
-    expect(textarea()?.disabled).toBe(true);
+    expect(textarea()?.disabled).toBe(false);
   });
 
   it("names the room member who asked and answers in the room", async () => {

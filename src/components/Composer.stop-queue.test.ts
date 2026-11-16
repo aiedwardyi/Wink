@@ -89,10 +89,10 @@ async function mount(target: { bot?: Bot; group?: Group }) {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  const send = async (value: string) => {
+  const send = async (value: string, after = false) => {
     await type(value);
     await act(async () =>
-      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, ctrlKey: after, bubbles: true, cancelable: true })));
   };
   const stop = async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + STOP_AFTER_SEND_MS);
@@ -144,8 +144,8 @@ describe("stop with queued sends", () => {
 
   it("hands held room lines back instead of flushing them when the room settles", async () => {
     const ui = await mount({ group: room });
-    await ui.send("held one");
-    await ui.send("held two");
+    await ui.send("held one", true);
+    await ui.send("held two", true);
     expect(getRoomHolds(localStorage, `group:${room.id}:${room.threadId}`)).toHaveLength(2);
     await ui.stop();
     expect(ui.box.value).toBe("held one\n\nheld two");

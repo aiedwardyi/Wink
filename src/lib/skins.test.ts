@@ -1717,6 +1717,26 @@ describe("Lagoon and Snow scene themes", () => {
     for (const [name, value] of Object.entries(night)) expect(cssToken("lagoon-night", `--color-${name}`), name).toBe(value);
   });
 
+  it("adds Neon Grid as a dark theme with its own indigo, pink and cyan palette", () => {
+    expect(SKIN_IDS).toContain("neon-grid");
+    expect(LIGHT_SKIN_IDS.has("neon-grid")).toBe(false);
+    expect(SKINS.find((skin) => skin.id === "neon-grid")?.name).toBe("Neon Grid");
+    const grid = { app: "#100c25", card: "#161233", ink: "#f2edff", accent: "#ff4fd8", focus: "#5ce1f5", "bubble-user": "#1d3fa8" };
+    for (const [name, value] of Object.entries(grid)) expect(cssToken("neon-grid", `--color-${name}`), name).toBe(value);
+  });
+
+  it.each([
+    ["samurai-ink", "Samurai Ink", { app: "#0c0c0d", card: "#151516", ink: "#f1efea", accent: "#e8e4dc", focus: "#ffffff", "bubble-user": "#2e2e31" }],
+    ["night-rain", "Night Rain", { app: "#0a0b1a", card: "#131429", ink: "#eef0ff", accent: "#ff5277", focus: "#4fe3ff", "bubble-user": "#0f4f66" }],
+    ["warp", "Warp", { app: "#080a18", card: "#0e1126", ink: "#edf2ff", accent: "#7aa8ff", focus: "#9ad7ff", "bubble-user": "#2b3a8f" }],
+    ["circuit", "Circuit", { app: "#08111f", card: "#0b1628", ink: "#eaf4ff", accent: "#2e9bff", focus: "#44e0ff", "bubble-user": "#0f3a73" }],
+  ] as const)("adds %s as a dark theme with its own palette", (id, name, palette) => {
+    expect(SKIN_IDS).toContain(id);
+    expect(LIGHT_SKIN_IDS.has(id)).toBe(false);
+    expect(SKINS.find((skin) => skin.id === id)?.name).toBe(name);
+    for (const [token, value] of Object.entries(palette)) expect(cssToken(id, `--color-${token}`), token).toBe(value);
+  });
+
   it("dresses Snow in Wink Day's palette and Snow Night in Precision's, everywhere those skins are styled", () => {
     for (const [twin, base] of [["snow", "wink-day"], ["snow-night", "precision"]] as const) {
       const lists = [...css.matchAll(/[^{}]*\{/g)].map(([selector]) => selector).filter((selector) => selector.includes(`[data-skin="${base}"]`));

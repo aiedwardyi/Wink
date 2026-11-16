@@ -32,11 +32,11 @@ function harness(store?: LimitWaitStore) {
   const deps: Deps = { file: join(dir, "limit-waits.json"), ...(store ? { store } : {}), now: () => state.now,
     deviceId: () => state.device, current: () => state.exists ? state : null, usage, dispatch, changed };
   let waits = new LimitWaits(deps);
-  function arm(reset: number | null = state.now + 60 * MINUTE, waitId?: string, origin: LimitWait["origin"] = {}) {
+  function arm(reset: number | null = state.now + 60 * MINUTE, waitId?: string, origin: LimitWait["origin"] = {}, model = false) {
     waits.track("bot", "chat", selection, waitId, origin);
     const turn = `turn-${waits.store.all()[0]?.attempts ?? 0}`;
     waits.bind("chat", turn);
-    waits.failed("chat", turn, reset, "limit-row", ["five_hour", "seven_day"]);
+    waits.failed("chat", turn, { resetsAt: reset, model }, "limit-row", ["five_hour", "seven_day"]);
     waits.settled("chat", turn, false);
     return waits.store.all()[0]!;
   }
@@ -187,6 +187,40 @@ describe("durable usage waits", () => {
     expect(h.dispatch).toHaveBeenCalledTimes(3);
   });
 
+  it("never continues a model cap with no reset on the room in the account windows", async () => {
+    const h = harness();
+    h.arm(null, undefined, {}, true);
+    expect(h.waits.held("bot")).toBe(false);
+    h.state.now += 5 * MINUTE;
+    await h.waits.tick();
+    expect(h.usage).not.toHaveBeenCalled();
+    expect(h.dispatch).not.toHaveBeenCalled();
+    expect(h.waits.store.all()).toEqual([]);
+  });
+
+  it("continues a model cap at its own reset", async () => {
+    const h = harness();
+    h.arm(START + 60 * MINUTE, undefined, {}, true);
+    h.state.now = START + 5 * MINUTE;
+    await h.waits.tick();
+    expect(h.dispatch).not.toHaveBeenCalled();
+    h.due();
+    await h.waits.tick();
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a continuation that meets a model cap with no reset is left to the user", async () => {
+    const h = harness();
+    const original = h.arm();
+    h.due();
+    await h.waits.tick();
+    h.arm(null, original.id, {}, true);
+    expect(h.waits.store.all()[0]).toMatchObject({ id: original.id, state: "manual" });
+    h.state.now += 24 * 60 * MINUTE;
+    await h.waits.tick();
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+  });
+
   it("expires eight days after the original interruption", async () => {
     const h = harness();
     const row = h.arm();
@@ -312,7 +346,7 @@ describe("durable usage waits", () => {
     h.state.now += KEEP_GOING_INTERVAL_MS;
     expect(await kg.check("bot")).toEqual({ skipped: "wakes-paused" });
     const wake = vi.fn();
-    const panes = new PaneWakeScheduler({ enabled: () => true, busy: () => h.waits.held("bot"), hasNotes: () => true, wake, warn: vi.fn() });
+    const panes = new PaneWakeScheduler({ enabled: () => true, busy: () => h.waits.held("bot"), hasNotes: () => true, wake });
     panes.noteArrived("bot", "chat"); panes.noteArrived("bot", "chat");
     await vi.advanceTimersByTimeAsync(3_001);
     expect(wake).not.toHaveBeenCalled();

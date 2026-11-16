@@ -201,7 +201,7 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", "cli-missing": "engines.notInstalled", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
 /** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
 const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 const BUTTON = "border-hairline bg-raised text-ink hover:bg-raised-hover";
@@ -238,7 +238,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
       className={cn(ACCOUNT_ROW, !reorder && "outline-none")}>
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
-          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex"].includes(engine.engine)} />}
+          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex", "grok"].includes(engine.engine)} />}
           {email && <span data-account-email="" className="usage-email">{email}</span>}
         </div>
         {control}

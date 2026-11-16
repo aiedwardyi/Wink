@@ -7,7 +7,6 @@ import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFol
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { usePresence } from "@/lib/use-presence";
@@ -17,7 +16,7 @@ import { isRoomPicture, ownerName, roomFileUrl, roomMessage, type JoinedPerson, 
 import type { Message } from "@/state/store-types";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
-import { BotAvatar } from "./Avatar";
+import { RoomBotAvatar } from "./Avatar";
 import { CopyButton, TimestampLabel } from "./ChatBubble";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { LinkedText } from "./LinkedText";
@@ -93,14 +92,18 @@ export function RoomTranslateButton({ translation }: { translation: LineTranslat
   );
 }
 
-export function RoomTranslationText({ translation }: { translation: LineTranslation }) {
+/** `markdown` matches the original's renderer: bot lines are Markdown, person lines are linked text. */
+export function RoomTranslationText({ translation, markdown }: { translation: LineTranslation; markdown: boolean }) {
   const { t } = useI18n();
   if (!translation.visible) return null;
+  const text = translation.text ?? "";
   return (
     <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
       {translation.pending ? t("teamRoom.translating") : translation.failed
         ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
-        : translation.text}
+        : markdown
+          ? <MessageBoundary fallbackText={text}><ChatMarkdown text={text} localLinks={false} /></MessageBoundary>
+          : <LinkedText text={text} />}
     </div>
   );
 }
@@ -143,7 +146,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
       {newDay && <DaySeparator at={line.at} />}
       {named && line.author.kind === "bot" ? (
         <div className="mt-1 flex items-center gap-1.5 pl-0.5" data-team-room-bot>
-          <BotAvatar bot={{ name: line.author.name, color: (line.color ?? DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
+          <RoomBotAvatar bot={{ name: line.author.name, color: line.color, mascotStyle: line.mascotStyle }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
           <span className="text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</span>
         </div>
       ) : named && <PersonLabel name={authorName ?? line.author.name} />}
@@ -206,7 +209,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
               {line.author.kind === "bot" && line.text.trim()
                 ? <MessageBoundary fallbackText={line.text}><ChatMarkdown text={line.text} localLinks={false} /></MessageBoundary>
                 : <LinkedText text={line.text} />}
-              <RoomTranslationText translation={translation} />
+              <RoomTranslationText translation={translation} markdown={line.author.kind === "bot"} />
               <RoomFileRows base={base} files={line.files} className={cn(line.text && "mt-2")} />
             </div>
           </div>
@@ -244,6 +247,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   const previousTop = useRef(0);
   const previousSize = useRef({ height: 0, viewport: 0 });
   const touchY = useRef(0);
+  // A finger, wheel or key asking for older lines. It breaks follow only through a scroll that leaves the end.
+  const reaching = useRef(false);
   const beforePage = useRef<TranscriptScroll | null>(null);
   const loadPage = useCallback(() => loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); }), [loadOlder]);
   const fill = useCallback(() => {
@@ -317,15 +322,17 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         data-team-room-transcript
         data-orbit-transcript
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
-        onWheel={(event) => { if (event.deltaY < 0) atEnd.current = false; }}
-        onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; }}
+        onWheel={(event) => { reaching.current = event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight; }}
+        onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; reaching.current = false; }}
         onTouchMove={(event) => {
           const y = event.touches[0]?.clientY ?? touchY.current;
-          if (y > touchY.current) atEnd.current = false;
+          if (y > touchY.current) reaching.current = true;
           touchY.current = y;
         }}
+        onTouchEnd={() => { reaching.current = false; }}
+        onTouchCancel={() => { reaching.current = false; }}
         onKeyDown={(event) => {
-          if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) atEnd.current = false;
+          if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) reaching.current = event.currentTarget.scrollHeight > event.currentTarget.clientHeight;
         }}
         tabIndex={0}
         onClick={(e) => {
@@ -335,7 +342,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         onScroll={(e) => {
           const el = e.currentTarget;
           const size = { height: el.scrollHeight, viewport: el.clientHeight };
-          if (el.scrollTop < previousTop.current && size.height === previousSize.current.height && size.viewport === previousSize.current.viewport) atEnd.current = false;
+          if (reaching.current ? el.scrollHeight - el.scrollTop - el.clientHeight > 0 : el.scrollTop < previousTop.current && size.height === previousSize.current.height && size.viewport === previousSize.current.viewport) atEnd.current = false;
+          reaching.current = false;
           if (shouldResumeBottomFollow({ following: atEnd.current, previousScrollTop: previousTop.current, scrollTop: el.scrollTop, distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight })) atEnd.current = true;
           previousTop.current = el.scrollTop;
           previousSize.current = size;

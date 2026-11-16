@@ -226,6 +226,24 @@ for (const status of ["pending", "resume failed", "unexpected menu"]) {
   });
 }
 
+test("old chat that reads like a menu does not close a worker the start hook then confirms", async (t) => {
+  const f = fixture(t);
+  const seen = ["unexpected menu", "resumed"];
+  f.host.workerResumeStatus = () => seen.shift() ?? "resumed";
+  await recovery.recoverWorkers(f.options);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.notes[0].text, /^RESUMED: codex/);
+});
+
+test("a resume the start hook confirms during the last poll wait is kept", async (t) => {
+  const f = fixture(t);
+  const seen = ["pending", "pending", "resumed"];
+  f.host.workerResumeStatus = () => seen.shift() ?? "resumed";
+  await recovery.recoverWorkers(f.options);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.notes[0].text, /^RESUMED: codex/);
+});
+
 test("a failed replacement close never sends FRESH guidance", async (t) => {
   const f = fixture(t);
   f.host.workerResumeStatus = () => "pending";
@@ -409,4 +427,73 @@ test("managed recovery preserves teacher and binds a new pane, generation and fr
   assert.equal(host.workerResumeStatus(pane.sessionId), "resumed");
   await assert.rejects(host.openForBot(row.botId, { cwd: ROOT, command: "claude" }, row), /claimed/);
   assert.equal(children.length, 1);
+});
+
+test("a recovered BLOCKED worker launches with its question", async (t) => {
+  const row = record("claude", { blocked: "FIX-B which key?" });
+  const f = fixture(t, [row]);
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const inputs = [];
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 8 * 1024 ** 3, setPriority() {},
+    mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh" }),
+    workerLaunch: async (input) => {
+      inputs.push(input);
+      return { kind: "managed", executable: "claude", args: ["-r", row.session.nativeId, NUDGE], environment: {}, account: { id: "claude", generation: 0 },
+        session: { engine: "claude", nativeId: row.session.nativeId, launchGeneration: randomUUID(), template: row.session.template } };
+    },
+    loadPty: () => ({ spawn() { return { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }; } }),
+  });
+  t.after(() => host.dispose());
+  const pane = await host.openForBot(row.botId, { label: row.label, cwd: ROOT, command: "claude" }, row);
+  assert.equal(inputs[0].resume.blocked, "FIX-B which key?");
+  assert.equal(JSON.parse(fs.readFileSync(f.file, "utf8")).find((run) => run.id === pane.sessionId).blocked, "FIX-B which key?");
+});
+
+function gatedRecovery(t, count, freeMemory) {
+  const rows = Array.from({ length: count }, (_, index) => record("claude", { label: `W${index + 1}` }));
+  const f = fixture(t, rows);
+  const g = { ...f, rows, children: [], clock: 0, opens: 0 };
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT, now: () => g.clock,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => freeMemory(g), setPriority() {},
+    mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh" }),
+    workerLaunch: async (input) => ({ kind: "managed", executable: "claude", args: ["-r", input.resume.nativeId, NUDGE], environment: {}, account: { id: "claude", generation: 0 },
+      session: { engine: "claude", nativeId: input.resume.nativeId, launchGeneration: randomUUID(), template: input.resume.template } }),
+    loadPty: () => ({ spawn() {
+      const child = { onData(fn) { this.data = fn; }, onExit(fn) { this.exit = fn; }, write() {}, resize() {}, kill() {} };
+      g.children.push(child);
+      return child;
+    } }),
+  });
+  t.after(() => host.dispose());
+  g.options = { ...f.options, wait: async (ms) => { f.waits.push(ms); g.clock += ms; },
+    host: { openForBot: (...args) => { g.opens += 1; return host.openForBot(...args); }, workerResumeStatus: () => "resumed", closeForBot: (...args) => host.closeForBot(...args) } };
+  return g;
+}
+
+test("recovered workers refused only while earlier ones load wait for them, and all 16 resume", async (t) => {
+  assert.ok(recovery);
+  // The reading lags: no resumed worker has loaded yet, so it stays at 6 GB.
+  const g = gatedRecovery(t, 16, () => 6 * 1024 ** 3);
+  await recovery.recoverWorkers(g.options);
+  assert.equal(g.children.length, 16);
+  assert.equal(g.opens, 16 + 20);
+  assert.equal(g.clock, 70_000);
+  assert.equal(g.notes.length, 1);
+  assert.equal(g.notes[0].text, `RESUMED: ${g.rows.map((row) => `${row.label} (claude)`).join(", ")}.`);
+});
+
+test("a recovered worker that still does not fit once the others have loaded is listed with the memory reason", async (t) => {
+  assert.ok(recovery);
+  const g = gatedRecovery(t, 3, (run) => (1.5 - run.children.length * 0.6) * 1024 ** 3);
+  await recovery.recoverWorkers(g.options);
+  assert.equal(g.children.length, 2);
+  assert.equal(g.clock, 124_000);
+  const [resumed, heading, listed, guidance] = g.notes[0].text.split("\n");
+  assert.equal(resumed, "RESUMED: W1 (claude), W2 (claude).");
+  assert.match(heading, /^RESTARTED: /);
+  assert.match(listed, /^- W3 \(resume failed: not enough free memory\) \[pane /);
+  assert.match(guidance, /Spawn a FRESH worker to continue, or tell the user\.$/);
+  assert.equal(g.runs.restarted().size, 0);
 });

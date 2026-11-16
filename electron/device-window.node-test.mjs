@@ -304,6 +304,31 @@ test("ignores a 403 from another origin", () => {
   assert.deepEqual(logs, []);
 });
 
+test("an error answer shows the unreachable page and keeps retrying, as a closed Wink behind Tailscale Serve gives", () => {
+  for (const code of [502, 500, 404]) {
+    const { webContents, logs, timers } = watched();
+    webContents.emit("did-navigate", {}, URL_, code);
+    webContents.emit("did-navigate", {}, "data:failure", -1);
+    assert.deepEqual(webContents.loads, ["data:failure"]);
+    assert.deepEqual(logs, [`device window home.tail1234.ts.net: answered ${code}`]);
+    timers.tick();
+    webContents.emit("did-navigate", {}, URL_, code);
+    webContents.emit("did-navigate", {}, "data:failure", -1);
+    assert.ok(timers.tick);
+    assert.equal(logs.length, 1);
+    timers.tick();
+    webContents.emit("did-navigate", {}, URL_, 200);
+    assert.equal(timers.tick, null);
+  }
+});
+
+test("a 401 answer is left to the link page", () => {
+  const { webContents, logs } = watched();
+  webContents.emit("did-navigate", {}, URL_, 401);
+  assert.deepEqual(webContents.loads, []);
+  assert.deepEqual(logs, []);
+});
+
 test("retries every 10 s for 2 min, then stops", () => {
   const { webContents, timers } = watched();
   webContents.emit("did-fail-load", {}, -118, "ERR_CONNECTION_TIMED_OUT", URL_, true);
@@ -435,13 +460,20 @@ async function assertRefused(hosts) {
 test("openDeviceWindow opens a team relay host in the default browser with no tailnet", async () => {
   const device = openDevice();
   assert.equal(await device.open(RELAY_PC, "Home"), true);
-  assert.deepEqual(device.external, [`https://${RELAY_PC}/`]);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
+  assert.deepEqual(device.windows, []);
+});
+
+test("one open of a relay PC is one browser tab, straight to its Google sign-in, and no PC window", async () => {
+  const device = openDevice({ tailnet: "tail1234.ts.net" });
+  assert.equal(await device.open(RELAY_PC, "Home"), true);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
   assert.deepEqual(device.windows, []);
 });
 
 test("reads the team base from a baked base or relay origin", () => {
   for (const baked of ["wink.test", "relay.wink.test", "https://relay.wink.test", "https://relay.wink.test/"]) {
-    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/`, baked);
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/pair?g=1`, baked);
   }
   for (const baked of [undefined, "", "http://relay.wink.test", "relay.", "wink test", 42]) {
     assert.equal(relayDeviceUrl(RELAY_PC, baked), "", String(baked));

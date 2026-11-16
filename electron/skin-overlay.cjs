@@ -80,6 +80,11 @@ const SKIN_CHROME = Object.freeze({
   "lagoon-night": Object.freeze({ color: "#0b242a", symbolColor: "#9fc2c0" }),
   snow: Object.freeze({ color: "#eeebf7", symbolColor: "#545b7c" }),
   "snow-night": Object.freeze({ color: "#121316", symbolColor: "#a3a7b3" }),
+  "neon-grid": Object.freeze({ color: "#100c25", symbolColor: "#b6abdc" }),
+  "samurai-ink": Object.freeze({ color: "#0c0c0d", symbolColor: "#b3b0a8" }),
+  "night-rain": Object.freeze({ color: "#0a0b1a", symbolColor: "#aeb3dd" }),
+  warp: Object.freeze({ color: "#080a18", symbolColor: "#a9b4dc" }),
+  circuit: Object.freeze({ color: "#08111f", symbolColor: "#a3bedf" }),
 });
 
 const DEFAULT_SKIN = "ledger";
@@ -88,7 +93,7 @@ const SKIN_PREFERENCE_FILE = "skin-preference.json";
 const LOCAL_STORAGE_DIR = path.join("Local Storage", "leveldb");
 const OMB_SKIN_MARKER = Buffer.from("omb-skin");
 const KNOWN_SKIN_RE =
-  /^(wink-cyber|wink-violet|wink-black|wink-day|wink|midnight|atelier|foundry|lagoon-night|lagoon|ledger|catppuccin-frappe|catppuccin-mocha|tokyo-night|vesper|onyx|peach|coral|dracula|cobalt|gruvbox|kanagawa|hurtado|rose-pine|nord|github-dimmed|tui-black|tui-amber|tui-ice|tui-slate|tui-smoke|tui|terminal-dracula|terminal-ice|terminal|paper-tape|logfile|multiplexer|modal|vscode-dark|studio-gray|steel-gray|claude|precision-dimmed|precision|mono-hud|servo-gray|notebook|messenger|community-light|community|code-review|blueprint|blueprint-gray|blueprint-charcoal|instrument|matte|carbon|pewter|pewter-dusk|pewter-night|coal|folio|inkwell|graphite|merlot|moss|bronze|dim-sand|snow-night|snow)(?![A-Za-z0-9_-])/;
+  /^(wink-cyber|wink-violet|wink-black|wink-day|wink|midnight|atelier|foundry|lagoon-night|lagoon|ledger|catppuccin-frappe|catppuccin-mocha|tokyo-night|vesper|onyx|peach|coral|dracula|cobalt|gruvbox|kanagawa|hurtado|rose-pine|nord|github-dimmed|tui-black|tui-amber|tui-ice|tui-slate|tui-smoke|tui|terminal-dracula|terminal-ice|terminal|paper-tape|logfile|multiplexer|modal|vscode-dark|studio-gray|steel-gray|claude|precision-dimmed|precision|mono-hud|servo-gray|notebook|messenger|community-light|community|code-review|blueprint|blueprint-gray|blueprint-charcoal|instrument|matte|carbon|pewter|pewter-dusk|pewter-night|coal|folio|inkwell|graphite|merlot|moss|bronze|dim-sand|snow-night|snow|neon-grid|samurai-ink|night-rain|warp|circuit)(?![A-Za-z0-9_-])/;
 const MAX_SKIN_ID_LEN = Math.max(...Object.keys(SKIN_CHROME).map((id) => id.length));
 
 function migrateSkin(skin) {

@@ -152,7 +152,7 @@ describe("task resume packets", () => {
     expect(writeTaskResumePacket(packet(), { dir })).not.toHaveProperty("asks");
   });
 
-  it("drops closed asks first to fit 16 KiB and never an open one", () => {
+  it("drops closed asks first to fit 16 KiB beside the open ones and never an open one", () => {
     const many = Array.from({ length: 40 }, (_, index): TaskAsk => ({
       id: `A${index + 1}`,
       ask: `${index}:${"가".repeat(70)}`,
@@ -165,9 +165,31 @@ describe("task resume packets", () => {
 
     const saved = writeTaskResumePacket(packet({ asks: many, completed }), { dir });
 
-    expect(statSync(join(dir, "thread-1.json")).size).toBeLessThanOrEqual(TASK_STATE_MAX_BYTES);
-    expect(saved.asks?.map((ask) => ask.id)).toEqual(many.filter((ask) => ask.status === "open").map((ask) => ask.id));
+    const rest = { ...saved, asks: saved.asks?.filter((ask) => ask.status !== "open") };
+    expect(Buffer.byteLength(JSON.stringify(rest, null, 2), "utf8")).toBeLessThanOrEqual(TASK_STATE_MAX_BYTES);
+    const dropped = many.filter((ask) => !saved.asks?.some((kept) => kept.id === ask.id));
+    expect(dropped.length).toBeGreaterThan(0);
+    expect(dropped).toEqual(many.filter((ask) => ask.status === "done").slice(0, dropped.length));
     expect(saved.completed.length).toBeGreaterThan(0);
+  });
+
+  it("saves and reads back 100 open asks past the 16 KiB budget", () => {
+    const open = Array.from({ length: 100 }, (_, index): TaskAsk => ({
+      id: `A${index + 1}`, ask: `${index}:${"가".repeat(70)}`, status: "open", ref: "r".repeat(80), at: index, changedAt: index,
+    }));
+
+    const saved = writeTaskResumePacket(packet({ asks: open }), { dir });
+
+    expect(statSync(join(dir, "thread-1.json")).size).toBeGreaterThan(TASK_STATE_MAX_BYTES);
+    expect(saved.asks).toEqual(open);
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(open);
+  });
+
+  it("keeps the highest ask id across saves after that ask is gone", () => {
+    const top: TaskAsk = { id: "A7", ask: "old", status: "done", at: 1, changedAt: 1 };
+    expect(writeTaskResumePacket(packet({ asks: [top] }), { dir }).lastAskId).toBe(7);
+    writeTaskResumePacket({ ...readTaskResumePacket("thread-1", { dir })!, asks: [] }, { dir });
+    expect(readTaskResumePacket("thread-1", { dir })?.lastAskId).toBe(7);
   });
 
   it("replaces an old packet without leaving temporary files", () => {
@@ -599,12 +621,44 @@ describe("task state clipping", () => {
     const schema = taskStateUpdateSchema([]);
     const ids = { fromBotId: "bot-1", fromThreadId: "thread-1" };
     expect(rejection(schema.safeParse({ ...ids, notes: "x" }))).toContain("unknown field notes");
-    expect(rejection(schema.safeParse({ ...ids, plan: [{ step: "a", status: "active" }, { step: "b", status: "active" }] }))).toContain("at most one plan step may be active");
     expect(rejection(schema.safeParse({ ...ids, goal: "   " }))).toContain("goal");
     expect(rejection(schema.safeParse({ ...ids, plan: [{ step: "", status: "pending" }] }))).toContain("plan.0.step");
     expect(rejection(schema.safeParse({ ...ids, goal: 5 }))).toContain("goal");
     expect(rejection(schema.safeParse({ ...ids, plan: "step one" }))).toContain("plan");
     expect(rejection(schema.safeParse(ids))).toContain("at least one task field is required");
-    expect(rejection(schema.safeParse({ ...ids, plan: Array.from({ length: 21 }, () => ({ step: "a", status: "pending" })) }))).toContain("limit 20");
+  });
+
+  it("trims long lists with a note instead of refusing the update", () => {
+    const clipped: string[] = [];
+    const parsed = taskStateUpdateSchema(clipped).safeParse({
+      fromBotId: "bot-1",
+      fromThreadId: "thread-1",
+      plan: Array.from({ length: 25 }, (_, index) => ({ step: `step ${index}`, status: index < 2 ? "active" : "pending" })),
+      blockers: Array.from({ length: 12 }, (_, index) => ({ kind: "input", note: `blocker ${index}` })),
+      artifacts: Array.from({ length: 22 }, (_, index) => ({ ref: `file-${index}.md`, label: `File ${index}` })),
+      asks: Array.from({ length: 30 }, (_, index) => ({ ask: `ask ${index}`, status: "open" })),
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.plan?.map((item) => item.step)).toEqual(Array.from({ length: 20 }, (_, index) => `step ${index}`));
+    expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(1);
+    expect(parsed.data.blockers?.[0]?.note).toBe("blocker 2");
+    expect(parsed.data.artifacts).toHaveLength(20);
+    expect(parsed.data.asks).toHaveLength(30);
+    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
+  });
+
+  it("keeps every plan step and leaves only the first active one active", () => {
+    const clipped: string[] = [];
+    const parsed = taskStateUpdateSchema(clipped).safeParse({
+      fromBotId: "bot-1",
+      fromThreadId: "thread-1",
+      plan: [{ step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "active" }, { step: "d", status: "active" }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.plan).toEqual([
+      { step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "pending" }, { step: "d", status: "pending" },
+    ]);
+    expect(clipped).toEqual(["plan (3 active > 1, later ones set to pending)"]);
   });
 });

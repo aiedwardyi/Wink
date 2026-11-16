@@ -13,7 +13,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { DEFAULT_MAUS_COLOR, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
 import { mascotLayerMarkup, mascotSvgMarkup, scopeMascotSvgIds } from "@/lib/mascot-art";
 import {
   botAvatarAssetPath,
@@ -247,6 +247,14 @@ export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotP
       {face}
     </OrbitRingFrame>
   );
+}
+
+/** A bot as a room knows it: a teammate's or the host's carries only these, from its owner. */
+export type RoomBotLook = { name: string; color?: string | null; mascotStyle?: string | null };
+
+/** Every room view draws a bot here, so a room bot looks the same in every spot and on every PC. */
+export function RoomBotAvatar({ bot, ...props }: Omit<BotAvatarProps, "bot"> & { bot: RoomBotLook | BotAvatarProps["bot"] }) {
+  return <BotAvatar {...props} bot={{ ...bot, color: (bot.color || DEFAULT_MAUS_COLOR) as MausColor }} />;
 }
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */

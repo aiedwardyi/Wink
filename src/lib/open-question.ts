@@ -3,7 +3,8 @@
 // Nothing extra is stored: the state is derived from the transcript, so the
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
-import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
+import { isShownMessage } from "./shown-message";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, lineSettles, typedReply, type AskState } from "../../shared/open-question";
 
 export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
@@ -41,6 +42,12 @@ export function openQuestions(messages: readonly Message[]): readonly Message[] 
   return needsYou(messages).questions;
 }
 
+/** The open question a typed `text` settles at once, what with, and whether the line alone settles it once it lands. */
+export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string; byLine: boolean } | null {
+  const question = openQuestion(messages);
+  return question ? { question, answered: typedReply(question, text), byLine: lineSettles(messages, question, text) } : null;
+}
+
 /** An open permission ask: it takes the composer over, so it hides the pin. */
 function isOpenApproval(message: Message): boolean {
   return isOpenRequest(message) && Boolean(message.card?.tool);
@@ -50,6 +57,16 @@ function isOpenApproval(message: Message): boolean {
  * where an approval waits; the question comes from the whole chat. */
 export function pinnedQuestion(messages: readonly Message[], visible: readonly Message[] = messages): Message | null {
   return visible.some(isOpenApproval) ? null : openQuestion(messages);
+}
+
+/** The chat moved on from `question`: the person sent a message after it (a queued line landing by itself is not one), or its asker replied. */
+export function chatMovedOn(messages: readonly Message[], question: Message): boolean {
+  const at = messages.indexOf(question);
+  const asker = question.from?.botId;
+  return at >= 0 && messages.slice(at + 1).some((message) =>
+    message.role === "bot"
+      ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
+      : isSentByPerson(message) && !message.queueId);
 }
 
 /** True when a sidebar row for this chat should glow. */

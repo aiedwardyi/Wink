@@ -81,6 +81,19 @@ describe("WorkerRow", () => {
     expect(markup).toMatch(/^<div data-worker-run="[^"]*" class="flex w-full flex-col">/);
   });
 
+  it("hovers with a rounded, padded fill like a sidebar bot row, clear of the divider", () => {
+    const page = document.createElement("div");
+    page.innerHTML = renderToStaticMarkup(createElement(WorkerRow, { run: run("A | Opus 5.5 | high"), state: "working", live: null }));
+    const row = page.querySelector<HTMLElement>("[data-worker-run] > button")!;
+    const fill = row.firstElementChild!;
+    expect(row.className.split(" ")).toEqual(expect.arrayContaining(["group", "border-b"]));
+    expect(row.className).not.toMatch(/(^|\s)(rounded|hover:bg-)/);
+    expect(fill.className.split(" ")).toEqual(expect.arrayContaining(["rounded-xl", "px-3", "group-hover:bg-raised/50"]));
+    expect(fill.className).not.toMatch(/(^|\s)border/);
+    expect(fill.querySelector("[data-worker-state]")).not.toBeNull();
+    expect(fill.lastElementChild!.getAttribute("class")).toContain("lucide-chevron-down");
+  });
+
   it("gives a script a quiet scroll glyph, not a brand or terminal glyph", () => {
     const markup = renderToStaticMarkup(createElement(WorkerRow, { run: run("POST-166 | script"), state: "working", live: null }));
     expect(markup).toContain("lucide-scroll-text");

@@ -21,6 +21,7 @@
 .show-stage[data-ready] > * { opacity: 1; }
 .show-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .show-stage iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.show-stage pre { align-self: stretch; flex: 1; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 var(--font-mono, monospace); color: var(--color-ink); user-select: text; scrollbar-width: thin; }
 .show-pdf { flex: 1; min-height: 0; width: 100%; padding: 12px; object-fit: contain; }
 .show-pager { display: flex; flex-shrink: 0; align-items: center; gap: 6px; padding: 4px 0 8px; color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
@@ -51,7 +52,8 @@
   .verify-watch.show-pane { position: fixed; inset: 0; z-index: 50; width: 100%; margin: 0; padding-top: env(safe-area-inset-top); border-left-width: 0; box-shadow: none; }
   .show-pane-head { height: auto; padding: 6px 0 0 12px; }
   .show-pane-tabs button, .show-media-kinds button { height: 32px; }
-  .show-pane-tabs button { padding-inline: 9px; }
+  .show-pane-tabs button { position: relative; padding-inline: 9px; }
+  .show-pane-tabs button::after { content: ""; position: absolute; inset: -6px 0; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
   /* a thumb a finger can catch */
   .show-media-rail { width: 28px; }

@@ -15,7 +15,7 @@ export interface TreeIndex {
   size: number;
 }
 
-export type TreeFont = "root" | "dir" | "count" | "file";
+export type TreeFont = "root" | "dir" | "count" | "hidden" | "file";
 
 export interface TreeItem {
   id: string;
@@ -28,6 +28,7 @@ export interface TreeItem {
   hidden?: number;
   per?: number;
   squaresHeight?: number;
+  line?: number;
   dirs?: number;
   count?: number;
   filesOnly?: boolean;
@@ -46,6 +47,8 @@ export interface TreeItem {
 export interface TreeOptions {
   width: number;
   phone: boolean;
+  /** file row pitch: a touch screen asks for TREE.TOUCH so a finger lands on one row */
+  line?: number;
   changed: ReadonlySet<string>;
   current?: string;
   team?: { named: ReadonlySet<string>; marks: ReadonlySet<string>; rank(path: string): number };
@@ -56,7 +59,7 @@ export interface TreeOptions {
 
 export interface Point { x: number; y: number }
 
-export const TREE = { BOX: 26, VGAP: 22, LINE: 17, SGAP: 7, GAP: 10, SMALL: 40, SQ: 9 };
+export const TREE = { BOX: 26, VGAP: 22, LINE: 17, TOUCH: 44, SGAP: 7, GAP: 10, SMALL: 40, SQ: 9 };
 const { BOX, VGAP, LINE, SGAP, GAP, SMALL, SQ } = TREE;
 const byPath = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const dirOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
@@ -148,7 +151,8 @@ function build(index: TreeIndex, o: TreeOptions, crowded: boolean) {
 function measure(it: TreeItem, o: TreeOptions, maxStack: number) {
   if (it.dir && it.kind !== "stack") {
     const label = it.kind === "root" ? it.dir.name : it.dir.name + "/";
-    it.bw = Math.ceil(o.measure(label, it.kind === "root" ? "root" : "dir") + o.measure(fmt(it.dir.total), "count") + 24);
+    // 28 is what .map-tree-box draws around the two: 9px padding and a 1px border each side, and an 8px gap.
+    it.bw = Math.ceil(o.measure(label, it.kind === "root" ? "root" : "dir") + o.measure(fmt(it.dir.total), "count") + 28);
     if (it.kind !== "col") { it.w = it.bw; it.h = BOX; return; }
     const [w, h] = measureStack(it, o, maxStack);
     it.w = Math.max(it.bw, w); it.h = BOX + SGAP + h;
@@ -162,17 +166,18 @@ function measure(it: TreeItem, o: TreeOptions, maxStack: number) {
 }
 
 function measureStack(it: TreeItem, o: TreeOptions, maxStack: number): [number, number] {
+  const line = it.line = o.line ?? LINE;
   let w = 0;
   for (const file of it.files!) w = Math.max(w, o.measure(file.slice(file.lastIndexOf("/") + 1), "file") + (o.team?.marks.has(file) ? 26 : 0));
-  if (it.hidden) w = Math.max(w, o.measure(o.files(it.hidden), "count"));
+  if (it.hidden) w = Math.max(w, o.measure(o.files(it.hidden), "hidden"));
   if (it.squares) {
     w = Math.max(w, Math.min(it.squares.length, 10) * SQ - 2);
     const sw = Math.min(maxStack, Math.ceil(w + 36));
     it.per = Math.max(4, Math.min(it.squares.length, Math.floor((sw - 22) / SQ)));
     it.squaresHeight = Math.ceil(it.squares.length / it.per) * SQ + 2;
-    return [sw, it.squaresHeight + it.files!.length * LINE + 4];
+    return [sw, it.squaresHeight + it.files!.length * line + 4];
   }
-  return [Math.min(maxStack, Math.ceil(w + 36)), it.files!.length * LINE + (it.hidden ? LINE - 2 : 0) + 4];
+  return [Math.min(maxStack, Math.ceil(w + 36)), it.files!.length * line + (it.hidden ? LINE - 2 : 0) + 4];
 }
 
 export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
@@ -260,7 +265,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
 
 const centerX = (it: TreeItem, at: Point) => at.x + it.bw / 2;
 const stackTop = (it: TreeItem, at: Point) => it.kind === "col" ? at.y + BOX + SGAP : at.y;
-export const rowY = (it: TreeItem, at: Point, index: number) => stackTop(it, at) + 2 + (it.squaresHeight ?? 0) + index * LINE + LINE / 2;
+export const rowY = (it: TreeItem, at: Point, index: number) => stackTop(it, at) + 2 + (it.squaresHeight ?? 0) + (index + 0.5) * (it.line ?? LINE);
 const topOf = (it: TreeItem, at: Point) => it.kind === "stack" ? { x: at.x + 7, y: at.y } : { x: centerX(it, at), y: at.y };
 const half = (n: number) => Math.round(n) + 0.5;
 

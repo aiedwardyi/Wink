@@ -8,6 +8,7 @@ import {
   idleReopenStampReason,
   isRecoveringPacket,
   lastUserInstruction,
+  owedRoomResponders,
   packetAfterInterruption,
   shouldStampRecoveryDismiss,
   shutdownStampsForClose,
@@ -70,6 +71,33 @@ describe("task recovery interruption flush", () => {
       flushReason: "stop",
     });
     expect(packetAfterInterruption(null, "crash", { now: 1, turnsAtWrite: 0 })).toBeNull();
+  });
+});
+
+describe("room answers owed after a restart", () => {
+  const members = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const text = (id: string, botId?: string) => ({ id, role: botId ? "bot" : "user", kind: "text", text: id, ...(botId ? { from: { botId } } : {}) });
+  const all = () => members;
+
+  it("owes the responders that never answered, bar the one being resumed", () => {
+    const rows = [text("old", "c"), text("line"), text("a1", "a"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
+    expect(owedRoomResponders([...rows, text("c1", "c")], "line", all, "b")).toEqual([]);
+  });
+
+  it("counts a question card as an answer, but not a tool row", () => {
+    const row = (id: string, kind: string, botId: string) => ({ id, role: "bot", kind, from: { botId } });
+    const rows = [text("line"), row("a-card", "options", "a"), text("b-half", "b"), row("c-tool", "activity", "c")];
+    expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
+  });
+
+  it("owes nobody when the line is gone", () => {
+    expect(owedRoomResponders([text("line"), text("b-half", "b")], "missing", all, "b")).toEqual([]);
+  });
+
+  it("owes the rest when a member brought in by a mention was the one cut off", () => {
+    const rows = [text("line"), text("a1", "a"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "line", () => [{ id: "a" }, { id: "c" }], "b")).toEqual([{ id: "c" }]);
   });
 });
 

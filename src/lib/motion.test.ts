@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // Wink's motion rules: one arrow rule, every collapse and expand on IBM Carbon's
-// productive motion (src/motion.css), the terminal instant, reduced motion instant.
+// productive motion (src/motion.css), the terminal's quick slide, reduced motion instant.
 const src = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path: string) => (existsSync(join(src, path)) ? readFileSync(join(src, path), "utf8") : "");
 const motionCss = read("motion.css");
@@ -82,11 +82,18 @@ describe("shared motion tokens", () => {
 });
 
 describe("collapse and expand", () => {
-  it("opens and closes the terminal instantly, with no motion", () => {
-    const overlay = styles.match(/\.orbit-terminal-overlay \{[^}]*\}\s*\.orbit-terminal-overlay\[data-open="true"\] \{[^}]*\}/)?.[0] ?? "";
-    expect(overlay).toContain("translateX(0)");
-    expect(overlay).not.toMatch(/transition|animation/);
-    expect(styles).not.toContain("terminal-enter");
+  it("slides the terminal in from the right and back out in 120ms, instant under reduced motion", () => {
+    const closed = styles.match(/\.orbit-terminal-overlay \{([^}]*)\}/)?.[1] ?? "";
+    const open = styles.match(/\.orbit-terminal-overlay\[data-open="true"\] \{([^}]*)\}/)?.[1] ?? "";
+    expect(closed).toContain("transform: translateX(100%);");
+    expect(closed).toContain("transition: transform 120ms ease-out, visibility 0s 120ms;");
+    expect(open).toContain("transform: translateX(0);");
+    expect(open).toContain("transition-delay: 0s;");
+    expect(open).toContain("animation: terminal-enter 120ms ease-out;");
+    expect(styles).toMatch(/@keyframes terminal-enter \{\s*from \{ transform: translateX\(100%\); \}\s*to \{ transform: translateX\(0\); \}\s*\}/);
+    const reset = styles.match(/@media \(prefers-reduced-motion: reduce\) \{[^@]*:where\(:not\(\[data-progress\]\)\),\s*::before,\s*::after \{([^}]*)\}/)?.[1] ?? "";
+    for (const line of ["animation: none !important;", "transition-duration: 0s !important;", "transition-delay: 0ms !important;"]) expect(reset).toContain(line);
+    expect(read("App.tsx")).toMatch(/<div className="orbit-terminal-overlay [^"]*"(?![^>]*data-progress)[^>]*>/);
   });
 
   it("slides a closing side panel out toward its edge while the chat takes its width back at once", () => {
@@ -108,7 +115,7 @@ describe("collapse and expand", () => {
   });
 
   it.each([
-    "ActivityRun", "ChatView", "EngineConnect", "EnginesSettings", "InspectorPanel", "MemoryMap",
+    "ActivityRun", "ChatView", "EngineConnect", "EnginesSettings", "InspectorPanel",
     "MemorySaveChip", "PhoneLinkSettings", "SettingsModal", "SettingsPanel", "SkinPicker", "WorkerRows",
   ])("folds %s's disclosure content instead of snapping it", (name) => {
     expect(read(`components/${name}.tsx`)).toMatch(/<Fold open=\{/);

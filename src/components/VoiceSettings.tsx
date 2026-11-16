@@ -12,6 +12,7 @@ import { credentialErrorMessage, saveCredential } from "@/lib/credentials";
 import { useI18n } from "@/lib/i18n";
 import { speaker } from "@/lib/tts";
 import { cn } from "@/lib/cn";
+import { AccountPicker } from "./UsageAccounts";
 
 const SAMPLE = "Morning. Overnight the tests went green, and I left two notes for you in the thread.";
 
@@ -167,29 +168,14 @@ export function VoiceSettings({
         <div className="mt-4">
           <div className="mb-1.5 text-[13px] text-ink-secondary">Voice</div>
           <div className="flex gap-2">
-            <select
-              value={selectedVoice}
-              onChange={(e) => onPatch({ voice: e.target.value })}
-              aria-label={`${bot.name}'s voice`}
-              className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink focus:border-hairline focus:outline-none"
-            >
-              <option value="">
-                {loadingVoices
-                  ? "Loading voices…"
-                  : tts.voice
-                    ? "Workspace Default"
-                    : "Pick a voice"}
-              </option>
-              {selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && (
-                <option value={selectedVoice}>Current Agent Voice</option>
-              )}
-              {voices.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.label}
-                  {v.description ? ` - ${v.description}` : ""}
-                </option>
-              ))}
-            </select>
+            <AccountPicker field label={`${bot.name}'s voice`}
+              viewedId={selectedVoice} select={(value) => onPatch({ voice: value })}
+              className="flex-1" triggerClassName="border border-hairline/40 bg-inset px-3 py-2 focus:border-hairline focus:outline-none"
+              accounts={[
+                { id: "", name: loadingVoices ? "Loading voices…" : tts.voice ? "Workspace Default" : "Pick a voice" },
+                ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) ? [{ id: selectedVoice, name: "Current Agent Voice" }] : []),
+                ...voices.map((voice) => ({ id: voice.id, name: `${voice.label}${voice.description ? ` - ${voice.description}` : ""}` })),
+              ]} />
             <button
               onClick={() => void speaker.speak(SAMPLE, { voiceId: bot.voice, botId: bot.id })}
               disabled={!ready}

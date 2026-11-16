@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
 import { BOT_AVATAR_PICKER_ORDER, botAvatarChoiceSchema, botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
-import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
@@ -107,7 +106,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (body.job !== undefined) {
         const parsedJob = botJobSchema.safeParse(body.job);
         if (!parsedJob.success) {
-          return json(res, 400, { error: `job must be 1-${BOT_PROFILE_LIMITS.description} characters` });
+          return json(res, 400, { error: "job must not be empty" });
         }
         job = parsedJob.data;
       }

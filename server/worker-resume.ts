@@ -5,7 +5,13 @@ import type { AccountContext } from "./account-policy.ts";
 import type { AccountService } from "./accounts.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 
-export const RESUME_NUDGE = "Wink restarted and resumed this conversation. Your last step may not have finished. Check the real state first (git status, git log, remote branch, test output) and skip anything already done. Never redo a push, merge or release unless you confirm it did not happen; if unsure, report BLOCKED with what you found. Then continue the card.";
+const RESUME_CHECK = "Wink restarted and resumed this conversation. Your last step may not have finished. Check the real state first (git status, git log, remote branch, test output) and skip anything already done. Never redo a push, merge or release unless you confirm it did not happen; if unsure, report BLOCKED with what you found.";
+export const RESUME_NUDGE = `${RESUME_CHECK} Then continue the card.`;
+
+function blockedNudge(question: string) {
+  const asked = question.replace(/\s+/g, " ").trim();
+  return `${RESUME_CHECK} You were BLOCKED on: ${asked}${/[.!?]$/.test(asked) ? "" : "."} Wait for an answer; do not continue the card.`;
+}
 
 export interface WorkerResume {
   engine: "claude" | "codex";
@@ -14,12 +20,14 @@ export interface WorkerResume {
   accountGeneration: number;
   template: { executable: string; args: string[] };
   unrouted?: true;
+  /** The question a worker reported BLOCKED on and nobody has answered yet. */
+  blocked?: string;
 }
 
 export function baseAccount(id: string, driver: string, environment: NodeJS.ProcessEnv): AccountContext {
-  const selector = driver === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+  const [selector, folder] = driver === "codex" ? ["CODEX_HOME", ".codex"] : driver === "grokAgent" ? ["GROK_HOME", ".grok"] : ["CLAUDE_CONFIG_DIR", ".claude"];
   const home = Object.entries(environment).find(([key]) => key.toUpperCase() === selector)?.[1]
-    || join(driver === "codex" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(), driver === "codex" ? ".codex" : ".claude");
+    || join(driver === "codex" || driver === "grokAgent" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(), folder);
   return Object.freeze({ id, of: id, generation: 0, home });
 }
 
@@ -73,5 +81,5 @@ export function resumeArgs(resume: WorkerResume) {
     else if (prompt) throw new Error("Ambiguous worker resume prompt");
     else prompt = true;
   }
-  return [...(resume.engine === "codex" ? ["resume", resume.nativeId, ...args] : [...args, "-r", resume.nativeId]), RESUME_NUDGE];
+  return [...(resume.engine === "codex" ? ["resume", resume.nativeId, ...args] : [...args, "-r", resume.nativeId]), resume.blocked ? blockedNudge(resume.blocked) : RESUME_NUDGE];
 }

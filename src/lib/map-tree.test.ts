@@ -1,6 +1,19 @@
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { MapWorker } from "../../shared/map-pane";
-import { mapClashes, treeIndex, treeLayout } from "./map-tree";
+import { fmt, mapClashes, rowY, treeIndex, treeLayout } from "./map-tree";
+
+it("sizes a folder box for the padding, border and gap its name and count are drawn with", () => {
+  const box = readFileSync("src/components/MapTree.css", "utf8").match(/\.map-tree-box \{([^}]*)\}/)![1];
+  const px = (rule: RegExp) => Number(box.match(rule)![1]);
+  const around = 2 * px(/ padding: 0 (\d+)px;/) + 2 * px(/ border: (\d+)px /) + px(/ gap: (\d+)px;/);
+  expect(around).toBe(28);
+  const paths = ["README.md", "src/index.ts", "src/lib/util.ts", "integration-fixtures/a.ts", ...Array.from({ length: 1111 }, (_, i) => `docs/page-${i}.md`)];
+  const { items } = treeLayout(treeIndex("repo", paths), { width: 900, phone: false, changed: new Set(["src/lib/util.ts"]), measure: text => text.length * 7, folders: n => `+${n} folders`, files: n => `+${n} files` });
+  const boxes = items.filter(it => it.dir && it.kind !== "stack");
+  expect(boxes.map(it => [it.kind, it.dir!.name, fmt(it.dir!.total)])).toEqual([["root", "repo", "1,115"], ["dir", "src", "2"], ["box", "docs", "1,111"], ["box", "integration-fixtures", "1"], ["col", "lib", "1"]]);
+  for (const it of boxes) expect(it.bw - ((it.kind === "root" ? 0 : 1) + it.dir!.name.length + fmt(it.dir!.total).length) * 7).toBe(around);
+});
 
 it("keeps boxes in a row apart when every worker's branches cannot fit side by side", () => {
   const tops = ["src", "packages", "server", "tests", "docs", "assets"];
@@ -92,4 +105,13 @@ it("lists a file many workers share as one clash", () => {
   workers[9].files[0].ranges = [[1, 2]];
   expect(mapClashes(workers)).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.map(worker => worker.id), same: true }]);
   expect(mapClashes(workers.slice(1, 9))).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.slice(1, 9).map(worker => worker.id), same: false }]);
+});
+
+it("spaces a stack's file rows by the given pitch, so a phone can give each a finger's height", () => {
+  const paths = ["src/a.ts", "src/b.ts", "src/c.ts"];
+  const stack = (line?: number) => treeLayout(treeIndex("repo", paths), { width: 600, phone: false, line, changed: new Set(paths), measure: text => text.length * 7, folders: n => `+${n} folders`, files: n => `+${n} files` }).items.find(it => it.files)!;
+  const [mouse, finger] = [stack(), stack(44)];
+  expect(rowY(mouse, mouse, 1) - rowY(mouse, mouse, 0)).toBe(17);
+  expect(rowY(finger, finger, 1) - rowY(finger, finger, 0)).toBe(44);
+  expect(finger.h - mouse.h).toBe(3 * (44 - 17));
 });

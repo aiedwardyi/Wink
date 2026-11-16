@@ -7,12 +7,13 @@ import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
-import type { ResumeSeed, SessionPrompt } from "./turn-context.ts";
+import type { ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
   CONTEXT_COMPACTION_VERSION,
   readContextCompaction,
   type ContextCompactionV1,
 } from "../shared/context-compaction.ts";
+import { VOICE_SAID } from "../shared/live-call.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 
 export const MODEL_CONTEXT_FALLBACK = 128_000;
@@ -33,6 +34,8 @@ const SUMMARY_BUDGET_SHARE = 0.35;
 // Both count user turns: bot bubbles and tool lines are bounded by tokens.
 const MAX_CONTEXT_MESSAGES = 60;
 const MAX_TAIL_MESSAGES = 24;
+// The token trigger's gap, as 24 of 60 is the turn trigger's: a full tail put the next summary one long turn away.
+const TAIL_FILL_SHARE = 0.4;
 const MAX_SUMMARY_TOKENS = 8_192;
 // Haiku overshoots a token ask by 6-18%, so the prompt asks for words well under the budget.
 const SUMMARY_ASK_SHARE = 0.7;
@@ -57,11 +60,9 @@ const CARD_TEXT_CHARS = 200;
 const CARD_CHOICE_CHARS = 40;
 const CARD_CHOICES = 6;
 
-interface ReplayUnit {
+interface ReplayUnit extends ReplayMessage {
   id: string;
   pathIndex: number;
-  role: "user" | "assistant";
-  text: string;
   /** summarizer line prefix; a room line's text already names its speaker */
   label?: string;
   atomic?: boolean;
@@ -74,10 +75,7 @@ interface ReplayUnit {
   mailUpto?: number;
 }
 
-interface ModelContextMessage {
-  role: "user" | "assistant";
-  text: string;
-}
+type ModelContextMessage = ReplayMessage;
 
 interface TailSelection {
   old: ReplayUnit[];
@@ -94,7 +92,7 @@ export interface ApplicableCompaction {
 export type PreparedModelContext =
   | {
       status: "ready";
-      transcript: Array<{ role: "user" | "assistant"; text: string }>;
+      transcript: ReplayMessage[];
       budgetTokens: number;
       estimatedTokens: number;
       compacted: boolean;
@@ -203,7 +201,7 @@ export function estimateContextTokens(messages: Array<{ text: string }>): number
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */
-function fittingHead(text: string, fits: (head: string) => boolean): string {
+export function fittingHead(text: string, fits: (head: string) => boolean): string {
   let low = 0;
   let high = text.length;
   while (low < high) {
@@ -571,23 +569,30 @@ function replayUnits(
   return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = from + index;
     if (pathIndex < offset && !pending.has(message.id)) return [];
-    if (excludeIds.has(message.id)) return [];
+    if (excludeIds.has(message.id) || message.restated) return [];
     const mail = mailReplayText(message, pending.get(message.id) ?? 0, through.get(message.id));
     if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "", mailUpto: through.get(message.id) ?? message.comm?.read?.upto ?? message.text?.length ?? 0 }] : [];
     // a queued handoff's drained line carries the same words
     if (message.quick?.state === "handoff" && message.queueId) return [];
+    // the app's own call notice: the bot never said it and never got the send
+    if (message.call?.notice) return [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
-      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : body;
+      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${VOICE_SAID} ${body}` : body;
       const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
-      return [{
+      const unit: ReplayUnit = {
         id: message.id,
         pathIndex,
         role: message.role === "user" ? "user" : "assistant",
         text: redactSecretsInText(includeSpeakers ? `${speaker}: ${text}` : text),
         label: message.role === "user" ? (includeSpeakers ? "User " : "User: ") : includeSpeakers ? "" : "Assistant: ",
-        ...(message.role === "user" ? { turn: true } : {}),
-      }];
+      };
+      if (message.role === "user") unit.turn = true;
+      if (message.role === "bot" && message.engine) {
+        unit.engine = message.engine;
+        if (includeSpeakers && message.from) unit.speaker = { botId: message.from.botId, name: message.from.name };
+      }
+      return [unit];
     }
     if (message.verify && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(message.text), label: "Assistant: ", card: true }];
@@ -655,6 +660,13 @@ function foldToolRuns(units: ReplayUnit[], includeSpeakers: boolean): ReplayUnit
   }
   flush();
   return folded;
+}
+
+function replayMessage({ role, text, engine, speaker }: ReplayUnit): ReplayMessage {
+  const message: ReplayMessage = { role, text };
+  if (engine) message.engine = engine;
+  if (speaker) message.speaker = speaker;
+  return message;
 }
 
 function compactionAt(
@@ -1078,7 +1090,7 @@ export function planCompaction(input: {
   );
   const currentTranscript = [
     ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at)] : []),
-    ...units.map(({ role, text }) => ({ role, text })),
+    ...units.map(replayMessage),
   ];
   const currentTokens = estimateContextTokens(currentTranscript);
   // Counting bot bubbles made compaction a function of the bot's chattiness;
@@ -1095,7 +1107,7 @@ export function planCompaction(input: {
   const typedLines = typedValueLines(input.messages, input.excludeIds);
   const valuesRoom = valuesRoomFor(typedLines, budgetTokens);
   const tailBudget = budgetTokens - summaryBudget - valuesRoom;
-  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : tailBudget);
+  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : Math.floor(tailBudget * TAIL_FILL_SHARE));
   if (near && !old.length) return fits;
   if (!old.length && !previous && units.length) {
     old = units;
@@ -1333,7 +1345,7 @@ export async function prepareModelContext(input: {
   }
 
   const record = compactionRecord(plan, summary);
-  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(({ role, text }) => ({ role, text }))];
+  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(replayMessage)];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
     return failedContext("Context summarization could not fit the selected model window.", previous);
@@ -1381,7 +1393,7 @@ export async function buildCompaction(input: {
   if (segment.status === "too-large") return { status: "failed", result: "error" };
   if (segment.status === "error") return { status: "failed", result: segment.result };
   const record = compactionRecord(plan, segment.summary);
-  const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(({ role, text }) => ({ role, text }))];
+  const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(replayMessage)];
   if (estimateContextTokens(transcript) > plan.budgetTokens) return { status: "failed", result: "over-budget" };
   const validated = readContextCompaction({ value: record });
   return validated.status === "valid" ? { status: "ready", compaction: validated.value } : { status: "failed", result: "error" };

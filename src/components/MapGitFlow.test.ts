@@ -68,6 +68,29 @@ it("keeps Coding, Commit, Push and the line up to the PR white-gray, with color 
   expect(css).toMatch(/:is\(\[data-k="code"\], \[data-k="commit"\], \[data-k="push"\]\)\[data-state\] > i \{ background: var\(--flow-ink\); \}/);
 });
 
+it("keeps the stops clear of the PR summary at every pane width, giving way from the far end", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  const columns = [...css.matchAll(/\.map-flow-list \{[^}]*grid-template-columns: ([^;]+);/g)].map(match => match[1]);
+  expect(columns).toHaveLength(3);
+  for (const each of columns) expect(each).toMatch(/ minmax\(min-content, 1fr\) auto$/);
+  expect(css).toMatch(/\.map-flow-list \{[^}]*overflow: hidden auto;/);
+  // measured in the pane beside a scrollbar: the full row needs 683px, the row with the short right side 553px
+  expect(css).toMatch(/@container map-pane \(max-width: 690px\) \{\s+\.map-flow-end > small\[data-short\], \.map-flow-clash \{ font-size: 0; \}/);
+  expect(css).toMatch(/@container map-pane \(max-width: 560px\) \{\s+\.map-flow-rows \{ padding-left: 10px;/);
+  expect(css).toMatch(/@container map-pane \(max-width: 372px\) \{ \.map-flow-clash \{ display: none; \} \}/);
+});
+
+it("keeps a worker's own summary words where the right side shortens to the PR number, until the narrow row runs out of room", async () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).toMatch(/\.map-flow-end > small\[data-short\]::after, \.map-flow-clash::after \{ content: attr\(data-short\);/);
+  expect(css).not.toMatch(/\.map-flow-end > small(::after)?[,{ ][^}]*(font-size: 0|attr\(data-short\))/);
+  // measured in the pane: the narrow row with a full summary, a conflict count and a scrollbar needs 436px
+  expect(css).toMatch(/@container map-pane \(max-width: 440px\) \{ \.map-flow-end > small:not\(\[data-short\]\) \{ font-size: 0; \} \}/);
+  flows.b = flow({ pr: null });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
+  expect([...host.querySelectorAll<HTMLElement>(".map-flow-end > small")].map(end => [end.textContent, end.getAttribute("data-short")])).toEqual([["#1529 · 1 running", "#1529"], ["pushed 2 of 2", null]]);
+});
+
 it("puts a square per check in the checks box and the details in each stop's tip", async () => {
   flows.a = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }, { name: "vitest 1", state: "pending" }, { name: "lint", state: "fail" }, { name: "docs", state: "skip" }] }) });
   await render({ workers: [edited("src/a.ts")] });
@@ -82,7 +105,47 @@ it("puts a square per check in the checks box and the details in each stop's tip
   expect(host.querySelector(".map-flow-tip")?.textContent).toBe("1 file changed");
   expect(host.querySelector(".map-flow-list .map-flow-tip")).toBeNull();
   expect(host.querySelector(".map-flow-rows > .map-flow-tip")).not.toBeNull();
-  expect(host.querySelector(".map-flow-row")?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
+});
+
+it("opens the PR, its checks and its files from their own stops, and nothing from Coding, Commit, Push or the row", async () => {
+  const url = "https://github.com/o/r/pull/1529";
+  flows.b = flow({ pr: null });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
+  const [open, bare] = [...host.querySelectorAll<HTMLElement>(".map-flow-row")];
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: `${url}/files`, merge: url });
+  expect(host.querySelectorAll(".map-flow-rows a[href]:not([target='_blank'])")).toHaveLength(0);
+  expect(open.tagName).toBe("DIV");
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("tabindex")]))).toEqual({ code: "0", commit: "0", push: "0", pr: null, checks: null, review: null, merge: null });
+  expect([...bare.querySelectorAll<HTMLElement>("[data-k]")].map(stop => stop.getAttribute("tabindex"))).toEqual(Array(7).fill("0"));
+  expect(bare.querySelectorAll("[data-k]")).toHaveLength(7);
+  expect(bare.querySelector("[href]")).toBeNull();
+  expect(readFileSync("src/components/MapGitFlow.css", "utf8")).not.toMatch(/cursor: pointer/);
+});
+
+it("gives the clash mark the PR number's own 6px on its right, so it never sits on the list's edge", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).toContain(".map-flow-end { display: flex; align-items: center; gap: 6px;");
+  expect(css).toContain(".map-flow-clash { padding-right: 6px;");
+});
+
+it("draws passed checks, the done line and added lines in one fixed git green on every theme", () => {
+  const flowCss = readFileSync("src/components/MapGitFlow.css", "utf8");
+  const paneCss = readFileSync("src/components/MapPane.css", "utf8");
+  expect(paneCss).toContain(".map-pane { container: map-pane / inline-size; --map-green: light-dark(#047857, #34d399); }");
+  expect(flowCss).toContain("--flow-open: var(--map-green);");
+  expect(paneCss).toContain('.map-code-row[data-kind="add"] b { color: var(--map-green); }');
+  expect(flowCss + paneCss).not.toContain("--color-success");
+});
+
+it("draws running checks in one cool blue and keeps the warning color for the clash mark only", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).toContain("--flow-run: light-dark(#1d4ed8, #60a5fa);");
+  expect(css).toMatch(/\.map-flow-box i \{[^}]*background: var\(--flow-run\);/);
+  expect(css).toContain('.map-flow-box[data-state="run"] > b > span { color: var(--flow-run); }');
+  expect(css).toContain('.map-flow-box[data-state="run"] > b { color: var(--flow-run); }');
+  expect(css).toContain('.map-flow-end > small[data-tone="run"] { color: var(--flow-run); }');
+  expect(css.match(/--color-warning/g)).toHaveLength(1);
+  expect(css).toMatch(/\.map-flow-clash \{[^}]*color: var\(--color-warning\);/);
 });
 
 it("shows the detail on a long press without opening the link", async () => {
@@ -94,6 +157,25 @@ it("shows the detail on a long press without opening the link", async () => {
   const click = new MouseEvent("click", { bubbles: true, cancelable: true });
   await act(async () => { checks.dispatchEvent(click); });
   expect(click.defaultPrevented).toBe(true);
+});
+
+it("shows the clash detail on a tap, and a tap again or elsewhere closes it", async () => {
+  flows.b = flow({ pr: null });
+  await render({ workers: [{ ...edited("src/a.ts"), id: "a", nick: "ALPHA" }, { ...edited("src/a.ts"), id: "b", nick: "BETA" }], all: true });
+  const tap = async (target: Element) => {
+    for (const type of ["pointerdown", "pointerup", "pointerout"]) await act(async () => { target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" })); });
+    await act(async () => { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
+  };
+  const clash = host.querySelector(".map-flow-clash")!;
+  await tap(clash);
+  expect(host.querySelector(".map-flow-tip")?.textContent).toBe("Also edited by BETAsrc/a.ts");
+  await tap(clash);
+  expect(host.querySelector(".map-flow-tip")).toBeNull();
+  await tap(clash);
+  await tap(document.body);
+  expect(host.querySelector(".map-flow-tip")).toBeNull();
+  await tap(host.querySelector('a[data-k="pr"]')!);
+  expect(host.querySelector(".map-flow-tip")).toBeNull();
 });
 
 it("shows the row's details on keyboard focus", async () => {
@@ -164,5 +246,5 @@ it("puts one row per worker in its color, failing CI first, in Korean too", asyn
   expect(rows[0].querySelector(".map-flow-box > b")?.textContent).toBe("체크2개 실패");
   expect(rows[0].style.getPropertyValue("--flow-line")).toMatch(/^light-dark\(/);
   expect(new Set(rows.map(row => row.style.getPropertyValue("--flow-line"))).size).toBe(3);
-  expect(rows[0].getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
+  expect(rows[0].querySelector('[data-k="pr"]')?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
 });

@@ -79,6 +79,11 @@ export const SKIN_IDS = [
   "lagoon-night",
   "snow",
   "snow-night",
+  "neon-grid",
+  "samurai-ink",
+  "night-rain",
+  "warp",
+  "circuit",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -159,6 +164,11 @@ export const SKINS: readonly Skin[] = [
   { id: "lagoon-night", name: "Lagoon Night", nameKey: "settings.skin.lagoonNight" },
   { id: "snow", name: "Snow", nameKey: "settings.skin.snow" },
   { id: "snow-night", name: "Snow Night", nameKey: "settings.skin.snowNight" },
+  { id: "neon-grid", name: "Neon Grid", nameKey: "settings.skin.neonGrid" },
+  { id: "samurai-ink", name: "Samurai Ink", nameKey: "settings.skin.samuraiInk" },
+  { id: "night-rain", name: "Night Rain", nameKey: "settings.skin.nightRain" },
+  { id: "warp", name: "Warp", nameKey: "settings.skin.warp" },
+  { id: "circuit", name: "Circuit", nameKey: "settings.skin.circuit" },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */
@@ -267,6 +277,10 @@ export function applySkin(id: SkinId, via?: "hotkey"): void {
     style.textContent = kind === "tool" ? toolSkinsCss : monoHudCss;
     document.head.append(style);
   }
+  // A phone paints its status bar from this tag, not from the page.
+  const bar = document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  const app = bar && getComputedStyle(document.documentElement).getPropertyValue("--color-app").trim();
+  if (bar && app) bar.content = app;
   try {
     getStore()?.setItem(KEY, id);
     const tried = readTriedSkins();

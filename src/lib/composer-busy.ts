@@ -1,10 +1,9 @@
 // How the composer should look while a turn is in flight, and what Enter
 // does with the live box.
 //
-// Rooms hold client-side lines while a member speaks and flush them FIFO
-// on settle. A second Enter used to no-op after the first hold, so
-// only the first line survived. A room's plain Enter now steers like a 1:1
-// send when the working member can take it; the rest still enqueue.
+// A room's plain Enter posts at once like a 1:1: the working member steers it
+// in, anyone else answers after the live turn. Only Ctrl+Enter holds a line
+// client-side, flushed FIFO on settle.
 // Lecturing the empty box about "the turn" made forever-chat feel like
 // supervising an agent. Keep the queue; drop the gate-y chrome.
 import { roomRespondersForComposer } from "./group-routing";
@@ -13,18 +12,16 @@ import type { MessageKey } from "./i18n";
 export type ComposerBusySendAction = "block" | "dispatch" | "enqueue";
 
 /** What Enter should do. `heldCount` is informational — a room that
- * already holds a line still enqueues the next one. */
+ * already holds a line still enqueues the next Ctrl+Enter. */
 export function composerBusySendAction(input: {
   locked: boolean;
   isRoom: boolean;
   busy: boolean;
-  /** The working member takes this line into its running turn. */
-  canSteer?: boolean;
   after?: boolean;
   heldCount?: number;
 }): ComposerBusySendAction {
   if (input.locked) return "block";
-  if (input.isRoom && input.busy && (input.after || !input.canSteer)) return "enqueue";
+  if (input.isRoom && input.busy && input.after) return "enqueue";
   return "dispatch";
 }
 

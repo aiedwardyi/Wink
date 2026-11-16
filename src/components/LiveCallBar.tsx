@@ -5,7 +5,7 @@ import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
-import { dropCall, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
+import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
 import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
@@ -83,13 +83,20 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
 // Known outcome reasons; anything else (a server error) shows as sent in English and is dropped elsewhere.
 const REASONS: Record<LocaleId, Record<string, string>> = {
   en: {},
-  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨" },
+  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨", "call ended": "통화 종료" },
 };
 
 export function noticeText(notice: NonNullable<CallState["notice"]>, locale: LocaleId): string {
   const words = WORDS[locale] ?? WORDS.en;
   const why = notice.why && (REASONS[locale]?.[notice.why] ?? (locale === "en" ? notice.why : ""));
   return `${words[notice.kind]}: ${notice.text}${why ? ` (${why})` : ""}`;
+}
+
+/** "Call failed: X. Not sent: Y"; a server error may bring its own period. */
+export function failedText(snap: CallState, locale: LocaleId): string {
+  const words = WORDS[locale] ?? WORDS.en;
+  const error = snap.error?.endsWith(".") ? snap.error.slice(0, -1) : snap.error;
+  return [error ? `${words.failed}: ${error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ");
 }
 
 async function post(path: string, body: object): Promise<Posted> {
@@ -166,6 +173,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       engine: () => new GeminiLive(),
       audio,
       post,
+      opener: active.opener,
     });
     return { call, level: (mic) => audio.level(mic) };
   });
@@ -190,8 +198,10 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   useEffect(() => {
     if (!state.config || kicked.current) return;
     kicked.current = true;
+    // A rung call with no key only opens the chat, so the server keeps ringing until the blocker clears.
+    if (active.opener && !state.config.gemini?.configured) return onEnd();
     if (!intro) void call.start();
-  }, [call, intro, state.config]);
+  }, [active.opener, call, intro, onEnd, state.config]);
 
   useEffect(() => {
     mounted.current = true;
@@ -231,6 +241,8 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   useEffect(() => {
     call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });
   }, [bot.busy, bot.threadId, call, messages]);
+
+  useEffect(() => onQueueCancelled((sendIds) => call.dequeued(sendIds)), [call]);
 
   return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
 }
@@ -279,7 +291,7 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
   const snap = useSyncExternalStore(live.call.subscribe, live.call.state, live.call.state);
   const [privacy] = useState(() => !seenPrivacy());
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
+  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? failedText(snap, locale) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
   useEffect(() => {

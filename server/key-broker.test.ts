@@ -117,31 +117,31 @@ describe("call_api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(["file", "request", "count"])("caps multipart %s uploads with 413", async (kind) => {
+  it.each(["file", "request"])("caps multipart %s uploads with 413", async (kind) => {
     const path = join(root, "large.bin");
     writeFileSync(path, "x");
     truncateSync(path, 25 * 1024 * 1024 + (kind === "file" ? 1 : 0));
-    const files = Array.from({ length: kind === "count" ? 9 : kind === "request" ? 3 : 1 }, () => ({ field: "file", path }));
+    const files = Array.from({ length: kind === "request" ? 3 : 1 }, () => ({ field: "file", path }));
     const fetchMock = reply("");
     await expect(callApi(request({ method: "POST", form: { files } }), keys, [root], fetchMock))
       .rejects.toMatchObject({ status: 413, message: expect.stringContaining("exceeds") });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("accepts multipart limits of 25 MB per file, 50 MB total, and eight files", async () => {
+  it("accepts multipart limits of 25 MB per file and 50 MB total, with any number of files", async () => {
     const path = join(root, "limit.bin");
     writeFileSync(path, "x");
     truncateSync(path, 25 * 1024 * 1024);
     const empty = join(root, "empty.bin");
     writeFileSync(empty, "");
-    const files = Array.from({ length: 8 }, (_, i) => ({ field: `file${i}`, path: i < 2 ? path : empty }));
+    const files = Array.from({ length: 20 }, (_, i) => ({ field: `file${i}`, path: i < 2 ? path : empty }));
     const fetchMock = reply("");
     await callApi(request({ method: "POST", form: { files } }), keys, [root], fetchMock);
     const form = fetchMock.mock.calls[0]![1]!.body as FormData;
-    expect([...form.keys()]).toHaveLength(8);
+    expect([...form.keys()]).toHaveLength(20);
     expect((form.get("file0") as File).size).toBe(25 * 1024 * 1024);
     expect((form.get("file1") as File).size).toBe(25 * 1024 * 1024);
-    expect((form.get("file7") as File).size).toBe(0);
+    expect((form.get("file19") as File).size).toBe(0);
   });
 
   it.each(["text", {}, null])("rejects multipart with body %j in the schema and broker", async (body) => {

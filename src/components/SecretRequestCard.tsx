@@ -164,7 +164,7 @@ export function SecretRequestCard({
                 placeholder={secret.placeholder}
                 disabled={saving || savedLocally}
                 aria-label={secret.label}
-                className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-60"
+                className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-60 max-md:text-[16px]"
               />
               <button
                 type="submit"
