@@ -15,12 +15,15 @@ import {
   joinedKey,
   joinedRoom,
   joinedRooms,
+  joinedWorks,
   myRoomBots,
+  removeJoined,
   resetJoined,
   roomTaskThreads,
   saveJoined,
   saveMyRoomBot,
   setJoinedState,
+  setJoinedWorks,
   setMyRoomBotTurn,
   type JoinedEntry,
   type JoinedState,
@@ -116,6 +119,23 @@ describe("joined.db", () => {
     expect(myRoomBots("r1").map((bot) => bot.botId)).toEqual(["local-pete"]);
     saveJoined("r1", HOST, { id: "p2", name: "Mina" }, KEY);
     expect(myRoomBots("r1")).toEqual([]);
+  });
+
+  it("switches only the host or someone else in a live room, and a new seat or Remove forgets the switches", () => {
+    saveJoined("rw", HOST, ME, KEY);
+    setJoinedState("rw", { ...state(1), people: [ME, { id: "p2", name: "Joon" }] });
+    expect([setJoinedWorks("rw", "host", true), setJoinedWorks("rw", "p2", true), setJoinedWorks("rw", ME.id, true), setJoinedWorks("rw", "p9", true)]).toEqual([true, true, false, false]);
+    expect([...joinedWorks("rw")].sort()).toEqual(["host", "p2"]);
+    saveJoined("rw", HOST, ME, KEY);
+    expect(joinedWorks("rw").size).toBe(2);
+    saveJoined("rw", HOST, { id: "p5", name: "Mina" }, KEY);
+    expect(joinedWorks("rw").size).toBe(0);
+    setJoinedState("rw", { ...state(1), me: { id: "p5", name: "Mina" }, people: [{ id: "p5", name: "Mina" }] });
+    setJoinedWorks("rw", "host", true);
+    endJoined("rw", "left");
+    expect(setJoinedWorks("rw", "host", false)).toBe(false);
+    removeJoined("rw");
+    expect(joinedWorks("rw").size).toBe(0);
   });
 
   it("remembers a room task thread after its bot leaves the room", () => {

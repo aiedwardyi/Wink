@@ -5,8 +5,8 @@ import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "..
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
-import { joinedEntries, joinedEntry, joinedRoom, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
-import { COLLAB_LINE } from "./multiplayer.ts";
+import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
+import { collabLine } from "./multiplayer.ts";
 import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 
 export type MyBotTurn = { working?: boolean; since?: number; waiting?: boolean; error?: "failed" };
@@ -18,8 +18,10 @@ export interface MyRoomBotDeps {
   /** The bot's task thread still exists. */
   hasTask(botId: string, threadId: string): boolean;
   createTask(botId: string, title: string): { threadId: string } | null;
-  /** `prompt` goes to the model; `typed` is the task's user row. */
-  startTurn(botId: string, threadId: string, prompt: string, typed: string, failed: () => void): Promise<unknown>;
+  /** `prompt` goes to the model; `typed` is the task's user row. `readOnly` when someone other than this PC's person asked. */
+  startTurn(botId: string, threadId: string, prompt: string, typed: string, failed: () => void, readOnly: boolean): Promise<unknown>;
+  /** The bot's engine can run a read-only turn. */
+  readOnlyTurns(botId: string, threadId: string): boolean;
   messagesFor(threadId: string): Message[];
   changed(roomId: string): void;
   interrupt(botId: string, threadId: string): Promise<void>;
@@ -218,10 +220,20 @@ export class MyRoomBotTurns {
         ...(state.teamBots ?? []).filter((other) => other.id !== bot.id).map((other) => [other.name, ownerOf(other.owner)] as const),
       ].flatMap(([name, owner]) => (owner ? [`${JSON.stringify(name)} (${JSON.stringify(owner)})`] : []));
       const me = JSON.stringify(room.me.name);
+      const works = joinedWorks(roomId);
+      const readOnly = entry.author.kind === "bot" || (entry.author.id !== room.me.id && !works.has(entry.author.id));
+      if (readOnly && !this.deps.readOnlyTurns(local.id, threadId)) {
+        const posted = await this.deps.client.botSend(roomId, bot.id, `${roomName} can't take requests from you yet. ${room.me.name} has to turn on "Can make bots work" for you.`, entry.id);
+        setMyRoomBotTurn(roomId, bot.id, threadId, posted.ok ? posted.value.seq : entry.seq);
+        this.active.delete(bot.botId);
+        this.set(roomId, bot.id, posted.ok ? undefined : { error: "failed" });
+        return queueMicrotask(() => this.drain());
+      }
+      const trusted = [...(works.has("host") ? [state.host] : []), ...state.people.filter((person) => works.has(person.id)).map((person) => person.name)].map((name) => JSON.stringify(name));
       const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
       const asker = `${JSON.stringify(entry.author.name)}${owner ? ` (${JSON.stringify(owner)}'s bot)` : ""}`;
       const prompt = [
-        `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you. ${COLLAB_LINE}${others.length
+        `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only. ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
           ? ` Bots here: ${others.join(", ")}. @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
           : ""})`,
         ...(window.length ? ["Room lines since your last answer:", ...window.map(lineOf)] : []),
@@ -232,7 +244,7 @@ export class MyRoomBotTurns {
       this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
         if (this.running.get(threadId) === mine) void this.settled(threadId, false);
-      });
+      }, readOnly);
       // a Stop before dispatch cancels the turn without a turn.completed
       if (this.stopped.has(threadId) && this.running.get(threadId) === mine && !this.deps.busy(local.id)) void this.settled(threadId, false);
     } catch (error) {

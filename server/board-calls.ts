@@ -37,6 +37,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
     solvedOnly: true,
     minShare: MIN_SHARE,
     limit: BOARD_HITS,
+    withoutRoom: true,
   });
 
   return {
