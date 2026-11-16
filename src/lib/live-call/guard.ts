@@ -148,7 +148,7 @@ const FOR_A_BIT = /for (?:a|one|a few|a couple(?: of)?|two|three|five|ten|\d+) (
 
 const escaped = (name: string) => name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // How speech-to-text spells a shown voice name. A whole word only: "Jenkins" and "에디터" are not names.
-const SPELLED: Record<string, string> = { Jenn: "Jen|젠|제니퍼", Eddie: "Eddy|에디" };
+const SPELLED: Record<string, string> = { Jenn: "Jen|Jennifer|젠|제니퍼", Eddie: "Eddy|에디" };
 const spelled = (aliases: readonly string[]) => aliases.flatMap((alias) => SPELLED[alias] ? [`(?:${SPELLED[alias]})(?:야|아)?(?![a-z0-9가-힣])`] : []);
 
 /** The person telling the voice to stop talking for now, which is not a no to a job. */
@@ -166,8 +166,8 @@ const BACK = /are you (?:still )?there|you (?:still )?there|can you hear me|you 
 
 /** Talking to the voice again: the whole line is its name, or the name the picker shows for its voice, with at most a hello or a "you there?". A name inside other talk is talk. */
 export function callsVoice(heard: string, name: string, aliases: readonly string[] = []): boolean {
-  // A Korean particle may follow the name ("Nova야"); the shown name may run on ("Jennifer").
-  const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`), ...aliases.flatMap((alias) => SPELLED[alias] ?? [])].filter(Boolean).join("|");
+  // A Korean particle may follow the name ("Nova야"); every other spelling is listed, so "Korean" never calls Kore.
+  const own = [escaped(name), ...aliases.map(escaped), ...aliases.flatMap((alias) => SPELLED[alias] ?? [])].filter(Boolean).join("|");
   return own !== "" && new RegExp(`^(?:(?:${HELLO})[\\s,]*)*(?:(?:${BACK})[\\s,]+)?(?:${own})(?:야|아)?(?:[\\s,]+(?:${BACK}))?[\\s~….,!?]*$`, "i").test(heard.trim());
 }
 

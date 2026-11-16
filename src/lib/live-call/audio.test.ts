@@ -209,6 +209,22 @@ describe("CallAudio", () => {
     audio.close();
   });
 
+  it("keeps an earlier reply still queued when the speed changes during the next one", async () => {
+    const { audio, ctx, sources } = setup();
+    await audio.capture(() => {});
+    audio.play(new Int16Array(24_000).fill(1000));
+    audio.play(new Int16Array(24_000).fill(1000));
+    audio.endTurn();
+    audio.play(new Int16Array(2_400).fill(1000));
+    ctx.currentTime = 1.5;
+    audio.tune(0.8, 1);
+    audio.endTurn();
+    expect(sources[1]!.stop).not.toHaveBeenCalled();
+    const seconds = sources.filter((source) => source.stop.mock.calls.length === 0).reduce((sum, source) => sum + (source.buffer as { duration: number }).duration, 0);
+    expect(seconds).toBeGreaterThan(2 + 0.1 / 0.8 - 0.02);
+    audio.close();
+  });
+
   it("plays at speed 1 exactly as it arrives", async () => {
     const { audio, buffers } = setup();
     await audio.capture(() => {});

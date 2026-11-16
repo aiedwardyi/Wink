@@ -51,11 +51,16 @@ function usePreview(language: "en" | "ko") {
     setPlaying(null);
   };
   useEffect(() => () => clip.current?.pause(), []);
+  const volume = useCallVolume();
+  useEffect(() => {
+    if (clip.current) clip.current.volume = volume;
+  }, [volume]);
   const preview = (name: LiveVoice) => {
     const was = playing;
     stop();
     if (was === name) return;
     const audio = new Audio(`/voice-preview/${name}-${language}.mp3`);
+    audio.volume = volume;
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);

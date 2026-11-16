@@ -20,7 +20,9 @@ export class CallAudio {
   private closed = false;
   private sources = new Set<AudioBufferSourceNode>();
   // Where each queued buffer starts, on the clock and in the turn, so a new speed remakes only what is not yet heard.
-  private queued = new Map<AudioBufferSourceNode, { at: number; from: number }>();
+  // The stretch holds one turn; a remake touches only that turn's audio, never an earlier turn still queued.
+  private queued = new Map<AudioBufferSourceNode, { at: number; from: number; turn: number }>();
+  private turn = 0;
   private readonly stretch = new Stretch();
   private nextAt = 0;
   private startedAt = 0;
@@ -164,7 +166,10 @@ export class CallAudio {
 
   play(pcm: Int16Array) {
     if (!pcm.length) return;
-    if (this.stretch.ended) this.stretch.reset();
+    if (this.stretch.ended) {
+      this.stretch.reset();
+      this.turn += 1;
+    }
     const raw = new Float32Array(pcm.length);
     // Only the call's first words ease in; every later reply starts at full level.
     for (let i = 0; i < pcm.length; i++) raw[i] = (pcm[i]! / 32768) * (this.faded < FADE_SAMPLES ? this.faded++ / FADE_SAMPLES : 1);
@@ -185,7 +190,7 @@ export class CallAudio {
     const now = this.ctx.currentTime;
     let first: { at: number; from: number } | undefined;
     for (const [source, spot] of this.queued) {
-      if (spot.at <= now) continue;
+      if (spot.at <= now || spot.turn !== this.turn) continue;
       if (!first || spot.at < first.at) first = spot;
       source.onended = null;
       source.stop();
@@ -215,7 +220,7 @@ export class CallAudio {
       this.queuedSec = 0;
     }
     source.start(this.nextAt);
-    this.queued.set(source, { at: this.nextAt, from });
+    this.queued.set(source, { at: this.nextAt, from, turn: this.turn });
     this.nextAt += buffer.duration;
     this.queuedSec += buffer.duration;
     this.sources.add(source);

@@ -316,7 +316,7 @@ export class LiveCall {
   private voiceAt = 0;
   private draining?: LiveEngine;
   // A new voice, style or language: its session opens beside the live one and takes over in the next quiet.
-  private standby?: { engine: LiveEngine; ready: boolean; app: "en" | "ko"; picks: string };
+  private standby?: { engine: LiveEngine; ready: boolean; app: "en" | "ko"; picks: string; handle?: string };
   // Voice, style and language: what the live session speaks with, and what was last asked for.
   private live?: { voice: string; style: string; language: string };
   private picks?: string;
@@ -447,8 +447,9 @@ export class LiveCall {
     this.restyle();
   }
 
+  // Only a session that finished starting is replaced; one still connecting picks this up from its ready.
   private restyle() {
-    if (!this.live || !this.prefs) return;
+    if (!this.live || !this.prefs || !this.connected || this.ended) return;
     const want = [this.prefs.voice ?? this.live.voice, this.prefs.style ?? "normal", this.prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")].join();
     if (want === (this.picks ?? Object.values(this.live).join())) return;
     this.picks = want;
@@ -459,13 +460,13 @@ export class LiveCall {
     const run = ++this.swaps;
     this.standby?.engine.close();
     this.standby = undefined;
-    if (!this.engine || this.ended) return;
+    if (!this.engine || !this.connected || this.ended) return this.dropStandby();
     this.since = [];
     const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), callId: this.callId, swap: true, call: this.prefs }).catch(() => null);
     if (run !== this.swaps) return;
     if (this.ended || posted?.status !== 200) return this.dropStandby();
     const engine = this.deps.engine();
-    const standby = { engine, ready: false, app: posted.data.locale === "ko" ? "ko" as const : "en" as const, picks: this.picks ?? "" };
+    const standby: NonNullable<LiveCall["standby"]> = { engine, ready: false, app: posted.data.locale === "ko" ? "ko" : "en", picks: this.picks ?? "" };
     this.standby = standby;
     const mine = () => this.standby === standby;
     const timer = setTimeout(() => { if (mine()) this.dropStandby(); }, READY_MS);
@@ -473,6 +474,10 @@ export class LiveCall {
     const events = this.events(engine, session);
     engine.connect(session, {
       ...events,
+      resumable: (handle) => {
+        if (mine()) standby.handle = handle;
+        else events.resumable(handle);
+      },
       ready: () => {
         if (!mine()) return;
         clearTimeout(timer);
@@ -495,12 +500,13 @@ export class LiveCall {
   // Never mid-word: what the old session is saying or hearing finishes there, then the next words go to the new one.
   private takeOver() {
     const next = this.standby;
-    if (!next?.ready || this.ended || this.playing || this.generating || this.deps.audio.playing || spokenText(this.heardBuf)) return;
+    // loudAt: they started talking and no words have come back yet.
+    if (!next?.ready || this.ended || this.playing || this.generating || this.deps.audio.playing || this.loudAt || spokenText(this.heardBuf)) return;
     const old = this.engine;
     this.standby = undefined;
     this.engine = next.engine;
     this.connected = true;
-    this.handle = undefined;
+    this.handle = next.handle;
     this.app = next.app;
     const [voice = "", style = "", language = ""] = next.picks.split(",");
     this.live = { voice, style, language };
@@ -537,7 +543,6 @@ export class LiveCall {
     this.aliases = posted.data.voice ? liveVoiceNames(posted.data.voice as LiveVoice) : [];
     if (posted.data.locale === "en" || posted.data.locale === "ko") this.app = posted.data.locale;
     if (posted.data.voice) this.live = { voice: String(posted.data.voice), style: String(posted.data.style ?? "normal"), language: this.app };
-    this.restyle();
     return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(resume && this.handle ? { handle: this.handle } : {}) };
   }
 
@@ -576,6 +581,7 @@ export class LiveCall {
         if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
         if (early?.talked) this.pause();
         this.release();
+        this.restyle();
       },
       audio: (pcm) => {
         if (!mine()) return;
@@ -734,7 +740,7 @@ export class LiveCall {
         for (const id of ids) this.cancelled.add(id);
         if (this.pending?.toolIds.some((id) => ids.includes(id))) this.stats.orders.cancelled += 1;
       },
-      resumable: (handle) => { this.handle = handle; },
+      resumable: (handle) => { if (mine()) this.handle = handle; },
       goAway: () => { if (mine()) void this.reconnect(); },
       usage: (total) => { this.stats.usage += total; },
       closed: (code, reason) => {
@@ -749,6 +755,8 @@ export class LiveCall {
   }
 
   private async reconnect() {
+    this.swaps += 1;
+    this.dropStandby();
     const old = this.engine;
     this.engine = null;
     this.connected = false;
@@ -1603,6 +1611,7 @@ export class LiveCall {
     if (this.loudAt && now - this.loudAt > UNHEARD_MS) {
       this.stats.unheard += 1;
       this.loudAt = 0;
+      this.takeOver();
     }
     if (!this.snapshot.micSilent && now - this.soundAt >= MIC_SILENT_MS) this.set({ micSilent: true });
     if (now - this.frameAt < MIC_GAP_MS) return;

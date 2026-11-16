@@ -43,7 +43,7 @@ function fakeAudio() {
 const flush = () => vi.advanceTimersByTimeAsync(0);
 const token = (body: Record<string, unknown>): Posted => ({ status: 200, data: { callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m", voice: "Aoede", locale: "en", ...body } });
 
-async function started(voice = "Alnilam") {
+async function started(voice = "Alnilam", ready = true) {
   vi.useFakeTimers();
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
@@ -61,6 +61,7 @@ async function started(voice = "Alnilam") {
   });
   call.retune({});
   await call.start();
+  if (!ready) return { call, engines, posts, audio };
   engines[0]!.events.ready();
   engines[0]!.events.turnDone();
   return { call, engines, posts, audio };
@@ -128,6 +129,48 @@ describe("call menu picks mid-call", () => {
     expect(engines[0]!.closed).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(engines[1]!.contexts.join(" ")).toContain("Voice: The build is green.");
+  });
+
+  it("holds a pick made while the call connects until it is up, then swaps", async () => {
+    const { call, engines, posts } = await started("Alnilam", false);
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    expect(posts.filter((post) => post.body.swap)).toHaveLength(0);
+    engines[0]!.events.ready();
+    expect(call.state().status).toBe("listening");
+    await flush();
+    expect(posts.filter((post) => post.body.swap)).toHaveLength(1);
+    engines[0]!.events.turnDone();
+    engines[1]!.events.ready();
+    expect(engines[0]!.closed).toBe(true);
+  });
+
+  it("drops a pending new session when the line drops, and leaves no socket open after hang-up", async () => {
+    const { call, engines } = await started();
+    engines[0]!.events.resumable("h1");
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    engines[1]!.events.resumable("h2");
+    engines[0]!.events.closed(1006, "");
+    expect(engines[1]!.closed).toBe(true);
+    await flush();
+    engines[1]!.events.ready();
+    expect(engines).toHaveLength(3);
+    engines[2]!.events.ready();
+    call.end();
+    expect(engines.every((engine) => engine.closed)).toBe(true);
+  });
+
+  it("waits for their sentence to finish before the new voice takes over", async () => {
+    const { call, engines, audio } = await started();
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    audio.frame(new Int16Array(480).fill(5_000).buffer);
+    engines[1]!.events.ready();
+    expect(engines[0]!.closed).toBe(false);
+    engines[0]!.events.heard("Read me the plan.");
+    engines[0]!.events.turnDone();
+    expect(engines[0]!.closed).toBe(true);
   });
 
   it("keeps the live session when the new one never sets up", async () => {
