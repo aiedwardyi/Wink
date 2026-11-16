@@ -3075,11 +3075,12 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
 
 function roomAlert(alert: RoomAlert) {
   broadcast({ kind: "notify", notification: roomNotification(alert), at: Date.now() });
-  void sendWebPushToDevices(DATA_DIR, pushPayload(roomPing(alert), { botId: alert.chat, threadId: alert.threadId }, alert.chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  void sendWebPushToDevices(DATA_DIR, pushPayload(roomPing(alert), { botId: alert.chat, threadId: alert.threadId }, alert.chat), webPushSubject(), phoneSignedIn).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
+const phoneSignedIn = (phone: string) => phoneAccess.paired(phone);
 
 function boardProject(threadId: string): string {
   const bot = store.botByThread(threadId);
@@ -3095,7 +3096,7 @@ const boardCalls = createBoardCalls({
 });
 
 const botCalls = createBotCalls({
-  send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`)),
+  send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject(), phoneSignedIn).catch((cause) => console.warn(`web-push: ${cause}`)),
   current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
@@ -3109,7 +3110,7 @@ store.onChange((change) => {
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
   const chat = store.groupByThread(open.threadId)?.id;
-  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open, chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open, chat), webPushSubject(), phoneSignedIn).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
@@ -8364,7 +8365,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const icon = botNotifyIconPath(body.data.botId === undefined ? undefined : store.bot(body.data.botId));
       const test = { title: "Wink", body: "Test notification. Your phone is set up.", tag: "orbit:test", url: "/", icon };
-      const [result] = await sendWebPushToDevices(DATA_DIR, test, webPushSubject(), body.data.endpoint);
+      const [result] = await sendWebPushToDevices(DATA_DIR, test, webPushSubject(), phoneSignedIn, body.data.endpoint);
       return result?.ok ? json(res, 200, { ok: true }) : json(res, 502, { error: result?.error ?? "push failed" });
     }
     if (method === "POST" && path === "/api/diag/cold-open") {

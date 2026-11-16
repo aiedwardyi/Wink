@@ -19,6 +19,7 @@ import {
   pushServiceEndpoint,
   removePhonePushSubscriptions,
   removePushSubscription,
+  sendWebPush,
   sendWebPushToDevices,
   vapidAuthorization,
 } from "./web-push.ts";
@@ -119,8 +120,9 @@ describe("vapid", () => {
 
 describe("subscription store", () => {
   let dir: string;
-  const sub = (id: string) => ({ endpoint: `https://push.example/${id}`, keys: { p256dh: rfc.uaPublic, auth: rfc.auth } });
+  const sub = (id: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${id}`, keys: { p256dh: rfc.uaPublic, auth: rfc.auth } });
   const payload = { title: "t", body: "b", tag: "x", url: "/", icon: "/app-icon-192.png?v=2" };
+  const signedIn = () => true;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "omb-web-push-"));
   });
@@ -134,11 +136,11 @@ describe("subscription store", () => {
     addPushSubscription(dir, sub("b"));
     addPushSubscription(dir, { ...sub("a"), keys: { p256dh: rfc.uaPublic, auth: "bmV3" } });
     expect(loadPushSubscriptions(dir).map((s) => [s.endpoint, s.keys.auth])).toEqual([
-      ["https://push.example/b", rfc.auth],
-      ["https://push.example/a", "bmV3"],
+      ["https://fcm.googleapis.com/fcm/send/b", rfc.auth],
+      ["https://fcm.googleapis.com/fcm/send/a", "bmV3"],
     ]);
-    removePushSubscription(dir, "https://push.example/b");
-    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://push.example/a"]);
+    removePushSubscription(dir, "https://fcm.googleapis.com/fcm/send/b");
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/a"]);
   });
 
   it("accepts only browsers' push services as endpoints", () => {
@@ -152,16 +154,36 @@ describe("subscription store", () => {
     addPushSubscription(dir, { ...sub("a"), phone: "forged" }, "phone-1");
     addPushSubscription(dir, sub("b"), "phone-2");
     addPushSubscription(dir, { ...sub("c"), phone: "phone-1" });
-    expect(loadPushSubscriptions(dir).map((s) => [s.endpoint, s.phone])).toEqual([["https://push.example/a", "phone-1"], ["https://push.example/b", "phone-2"], ["https://push.example/c", undefined]]);
+    expect(loadPushSubscriptions(dir).map((s) => [s.endpoint, s.phone])).toEqual([["https://fcm.googleapis.com/fcm/send/a", "phone-1"], ["https://fcm.googleapis.com/fcm/send/b", "phone-2"], ["https://fcm.googleapis.com/fcm/send/c", undefined]]);
     removePhonePushSubscriptions(dir, "phone-1");
-    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://push.example/b", "https://push.example/c"]);
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/b", "https://fcm.googleapis.com/fcm/send/c"]);
   });
 
   it("ignores corrupt files and invalid entries", () => {
     writeFileSync(join(dir, WEB_PUSH_SUBS_FILE), "{nope");
     expect(loadPushSubscriptions(dir)).toEqual([]);
-    writeFileSync(join(dir, WEB_PUSH_SUBS_FILE), JSON.stringify({ subscriptions: [{ endpoint: "http://x/y", keys: sub("a").keys }, sub("ok")] }));
-    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://push.example/ok"]);
+    writeFileSync(join(dir, WEB_PUSH_SUBS_FILE), JSON.stringify({ subscriptions: [{ endpoint: "http://x/y", keys: sub("a").keys }, { ...sub("ok"), pc: true }] }));
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/ok"]);
+  });
+
+  it("drops entries nobody holds and entries aimed off the push services", async () => {
+    const offService = { endpoint: "https://attacker.example/x", keys: sub("x").keys };
+    const stored = [sub("legacy"), { ...sub("pc"), pc: true }, { ...sub("phone"), phone: "phone-1" }, { ...offService, pc: true }];
+    writeFileSync(join(dir, WEB_PUSH_SUBS_FILE), JSON.stringify({ subscriptions: stored }));
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual([sub("pc").endpoint, sub("phone").endpoint]);
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
+    expect(await sendWebPush(offService, payload, loadOrCreateVapidKeys(dir), "https://pc.tail.ts.net", fetchImpl)).toMatchObject({ ok: false, gone: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("sends to a phone only while it is signed in, and forgets it after", async () => {
+    addPushSubscription(dir, sub("live"), "phone-live");
+    addPushSubscription(dir, sub("gone"), "phone-gone");
+    addPushSubscription(dir, sub("pc"));
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
+    await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", (phone) => phone === "phone-live", undefined, fetchImpl);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([sub("live").endpoint, sub("pc").endpoint]);
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual([sub("live").endpoint, sub("pc").endpoint]);
   });
 
   it("drops subscriptions the push service answers 404 or 410, keeps the rest", async () => {
@@ -169,9 +191,9 @@ describe("subscription store", () => {
     const status: Record<string, number> = { ok: 201, gone: 410, missing: 404, busy: 503 };
     const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: status[String(url).split("/").pop()!] }));
     const warn = vi.fn();
-    const results = await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", undefined, fetchImpl, warn);
+    const results = await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", signedIn, undefined, fetchImpl, warn);
     expect(results.map((r) => r.ok)).toEqual([true, false, false, false]);
-    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://push.example/ok", "https://push.example/busy"]);
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/ok", "https://fcm.googleapis.com/fcm/send/busy"]);
     expect(warn).toHaveBeenCalledTimes(1);
     const init = fetchImpl.mock.calls[0]![1]!;
     expect(init.headers).toMatchObject({ "content-encoding": "aes128gcm", ttl: "86400", urgency: "high" });
@@ -182,18 +204,18 @@ describe("subscription store", () => {
     addPushSubscription(dir, { ...sub("quiet"), off: ["group-1"] });
     addPushSubscription(dir, sub("loud"));
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
-    await sendWebPushToDevices(dir, { ...payload, chat: "group-1" }, "https://pc.tail.ts.net", undefined, fetchImpl);
-    await sendWebPushToDevices(dir, { ...payload, chat: "group-2" }, "https://pc.tail.ts.net", undefined, fetchImpl);
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://push.example/loud", "https://push.example/quiet", "https://push.example/loud"]);
+    await sendWebPushToDevices(dir, { ...payload, chat: "group-1" }, "https://pc.tail.ts.net", signedIn, undefined, fetchImpl);
+    await sendWebPushToDevices(dir, { ...payload, chat: "group-2" }, "https://pc.tail.ts.net", signedIn, undefined, fetchImpl);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://fcm.googleapis.com/fcm/send/loud", "https://fcm.googleapis.com/fcm/send/quiet", "https://fcm.googleapis.com/fcm/send/loud"]);
   });
 
   it("sends a test to one device only", async () => {
     addPushSubscription(dir, sub("a"));
     addPushSubscription(dir, sub("b"));
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
-    await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", "https://push.example/b", fetchImpl);
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://push.example/b"]);
-    expect(await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", "https://push.example/none", fetchImpl)).toEqual([]);
+    await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", signedIn, "https://fcm.googleapis.com/fcm/send/b", fetchImpl);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://fcm.googleapis.com/fcm/send/b"]);
+    expect(await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", signedIn, "https://fcm.googleapis.com/fcm/send/none", fetchImpl)).toEqual([]);
   });
 });
 

@@ -331,6 +331,11 @@ export class PhoneAccess {
     return this.handler !== null && relayMode(this.options.config() ?? {}, this.options.env).kind === "on" && this.presenceHost() !== null;
   }
 
+  /** A relay phone still signed in. */
+  paired(id: string): boolean {
+    return this.phones.paired(id);
+  }
+
   /** The base a relay phone's device picker is limited to. */
   base(): string | null {
     const mode = relayMode(this.options.config() ?? {}, this.options.env);
