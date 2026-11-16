@@ -85,6 +85,36 @@ export async function sweepWorkerHostRuntime(root, keep) {
   }
 }
 
+const literal = (text) => `'${text.replaceAll("'", "''")}'`;
+
+// Node creates every process with all of the app's inheritable handles (a --remote-debugging-port socket among them), and the host would keep them for good; a shell launch passes none.
+async function startOutside(gate, runtime, args, env) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$start = New-Object System.Diagnostics.ProcessStartInfo",
+    `$start.FileName = ${literal(runtime.executable)}`,
+    `$start.Arguments = ${literal(args.map((arg) => `"${arg}"`).join(" "))}`,
+    `$start.WorkingDirectory = ${literal(runtime.bin)}`,
+    "$start.UseShellExecute = $true",
+    "$start.WindowStyle = 'Hidden'",
+    "[Console]::Out.Write([System.Diagnostics.Process]::Start($start).Id)",
+  ].join("\n");
+  const shell = path.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const child = startProcess(gate, () => spawn(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env }));
+  let out = "";
+  let err = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  child.stderr.on("data", (chunk) => { err += chunk; });
+  const code = await new Promise((resolve, reject) => {
+    child.once("close", resolve);
+    child.once("error", reject);
+  });
+  const pid = Number(out.trim());
+  if (code !== 0 || !Number.isInteger(pid) || pid <= 0) throw new Error(`Worker host start failed: ${err.trim() || `exit ${code}`}`);
+  return pid;
+}
+
 /** Stages and starts the host from a worker thread, so the main thread never copies or spawns. */
 export async function launchWorkerHost({ root, executable, ptyModule, slot, launch, env }) {
   const sources = await Promise.all(SOURCES.map(async (name) => [name, await fs.promises.readFile(fileURLToPath(new URL(name, import.meta.url)), "utf8")]));
@@ -103,13 +133,8 @@ if (!isMainThread && workerData?.workerHostLaunch) {
     writeWorkerHostRecord(path.join(slot, "launch.json"), { ...launch, ptyModule: runtime.ptyModule });
     // A freshly copied exe takes seconds to start once; that run happens here, so no terminal waits for it at the gate.
     await new Promise((resolve) => spawn(runtime.executable, ["--version"], { windowsHide: true, stdio: "ignore", cwd: runtime.bin, env }).once("exit", resolve).once("error", resolve));
-    const child = startProcess(gate, () => spawn(runtime.executable, [runtime.entry, slot], { detached: true, windowsHide: true, stdio: "ignore", cwd: runtime.bin, env }));
-    await new Promise((resolve, reject) => {
-      child.once("spawn", resolve);
-      child.once("error", reject);
-    });
-    child.unref();
-    parentPort.postMessage({ pid: child.pid, staged: runtime.staged });
+    const pid = await startOutside(gate, runtime, [runtime.entry, slot], env);
+    parentPort.postMessage({ pid, staged: runtime.staged });
     await sweepWorkerHostRuntime(root, [runtime.bin, runtime.js]);
   } catch (error) {
     parentPort.postMessage({ error: error?.message ?? String(error) });
