@@ -26,6 +26,7 @@ const aboutYouFile = () => join(DATA_DIR, "about-you", "MEMORY.md");
 // a saved line comes from text another AI wrote, so nothing in it may read as markup or as Wink's own framing
 function clean(text: string): string {
   return text
+    .replace(/^\s*(?:(?:[-*+•]|\d{1,3}[.)])\s+)?(?:human|assistant|system)\s*:\s*/i, "")
     .replace(/<\/?[a-zA-Z!][^<>]*>/g, " ")
     .replace(/<(?=[a-zA-Z/!])/g, " ")
     .replace(/\[\/?\s*(?:wink|orbit|memory|system|recall)\b[^\]]*\]?/gi, " ")
@@ -55,7 +56,17 @@ function pieces(line: string): string[] {
     } else piece = next;
   }
   if (piece) out.push(piece);
-  return out.flatMap((part) => (bytes(part) > FACT_MAX_BYTES ? [Buffer.from(part).subarray(0, FACT_MAX_BYTES).toString("utf8").replace(/�+$/, "")] : [part]));
+  return out.flatMap(chunks);
+}
+
+// a word longer than a fact, cut between characters
+function chunks(part: string): string[] {
+  const out = [""];
+  for (const char of part) {
+    if (bytes(out.at(-1)! + char) > FACT_MAX_BYTES) out.push("");
+    out[out.length - 1] += char;
+  }
+  return out;
 }
 
 export function sourceOf(paste: string): string {
@@ -72,10 +83,9 @@ export function factsOf(paste: string): { facts: string[]; hidden: number } {
   for (const raw of paste.split(/\r?\n/)) {
     const line = clean(raw);
     if (!line || SKIP.test(raw.trim()) || /[:：]$/.test(line)) continue;
-    for (const fact of pieces(line)) {
-      if (secretLike(fact) || redactRoomMemory(fact) !== fact) hidden++;
-      else facts.push(fact);
-    }
+    // a split could part a label from its value, so the whole line is checked
+    if (secretLike(line) || redactRoomMemory(line) !== line) hidden++;
+    else facts.push(...pieces(line));
   }
   return { facts, hidden };
 }
@@ -194,7 +204,13 @@ export const aboutYouRoutes = {
     if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
     return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
   },
-  remove(res: ServerResponse, source: string) {
+  remove(res: ServerResponse, encoded: string) {
+    let source: string;
+    try {
+      source = decodeURIComponent(encoded);
+    } catch {
+      return json(res, 400, { error: "bad source name" });
+    }
     removeAboutYouSource(source);
     return json(res, 200, { sources: aboutYouSources() });
   },

@@ -6986,7 +6986,7 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
-    aboutYouPrompt().trimEnd() +
+    aboutYouPrompt() +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -8708,7 +8708,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res);
     if (path === "/api/about-you" && method === "POST") return await aboutYouRoutes.add(req, res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
-    if (m && method === "DELETE") return aboutYouRoutes.remove(res, decodeURIComponent(m[1]));
+    if (m && method === "DELETE") return aboutYouRoutes.remove(res, m[1]);
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to
