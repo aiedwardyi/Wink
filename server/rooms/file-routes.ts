@@ -19,9 +19,25 @@ export const FILE_PATH = /^\/rooms\/([\w-]{1,64})\/files(?:\/([A-Za-z0-9_-]{24})
 
 export const fileAction = (match: RegExpExecArray): FileAction => (match[3] ? "preview" : match[2] ? "download" : "upload");
 
-function reply(res: ServerResponse, status: number, body: unknown, close = false): void {
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...(close ? { connection: "close" } : {}) });
-  res.end(JSON.stringify(body));
+const LINGER_BYTES = 64 * 1024 ** 2;
+const LINGER_MS = 10_000;
+
+function reply(res: ServerResponse, status: number, body: unknown, unread?: IncomingMessage): void {
+  const text = JSON.stringify(body);
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...(unread ? { connection: "close", "content-length": Buffer.byteLength(text) } : {}) });
+  if (!unread) return void res.end(text);
+  // Closing on unread upload bytes resets the socket, and the client can lose this reply with it.
+  res.write(text);
+  let left = LINGER_BYTES;
+  const timer = setTimeout(() => res.destroy(), LINGER_MS);
+  const done = () => {
+    clearTimeout(timer);
+    if (!res.destroyed) res.end();
+  };
+  unread.on("data", (chunk: Buffer) => {
+    if ((left -= chunk.length) < 0) res.destroy();
+  });
+  unread.once("end", done).once("close", done);
 }
 
 /** Upload, download or preview for one room member: "host" or a person id. `match` is FILE_PATH's. */
@@ -40,7 +56,7 @@ export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, re
     const status = (error as { status?: number }).status;
     if (status === undefined) throw error;
     // The rest of a refused body may still be on its way.
-    reply(res, status, { error: (error as Error).message }, !req.readableEnded);
+    reply(res, status, { error: (error as Error).message }, req.readableEnded ? undefined : req);
   }
 }
 
