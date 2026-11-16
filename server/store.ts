@@ -721,17 +721,21 @@ export function normalizeGroupDefaultResponder(
   return { kind: "member", botId: memberIds[0] };
 }
 
-/** Resolve the bots invoked by a human room message. Explicit targets win;
- * otherwise the room policy chooses one member, everyone, or nobody. */
+/** Resolve the bots invoked by a human room message. Explicit targets win,
+ * then the member it replies to; otherwise the room policy chooses one
+ * member, everyone, or nobody. */
 export function roomResponders<T extends { id: string; name: string; hidden?: boolean }>(
   text: string,
   members: T[],
   defaultResponder: GroupDefaultResponder,
+  replyTo?: Pick<Message, "from">,
 ): T[] {
   const available = members.filter((member) => !member.hidden);
   if (/(?:^|\s)@everyone\b/i.test(text)) return available;
   const mentioned = mentionedBots(text, available);
   if (mentioned.length) return mentioned;
+  const replied = available.find((member) => member.id === replyTo?.from?.botId);
+  if (replied) return [replied];
   if (defaultResponder.kind === "everyone") return available;
   if (defaultResponder.kind === "member") {
     const lead = available.find((member) => member.id === defaultResponder.botId);
