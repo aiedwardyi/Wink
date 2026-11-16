@@ -36,11 +36,11 @@ export interface UnlandedPr {
 }
 
 /** PRs named in the newest orbit-msg reports, by URL, "PR n", or else the report's branch. */
-export function reportedPrs(messages: ReadonlyArray<{ kind?: string; text?: string; at?: number }>): ReportedPr[] {
+export function reportedPrs(newestFirst: Iterable<{ kind?: string; text?: string; at?: number }>): ReportedPr[] {
   const refs: ReportedPr[] = [];
   let reports = 0;
-  for (let index = messages.length - 1; index >= 0 && reports < REPORTS_READ; index--) {
-    const message = messages[index]!;
+  for (const message of newestFirst) {
+    if (reports >= REPORTS_READ) break;
     if (message.kind !== "note" || message.at === undefined || !message.text) continue;
     const note = parsePaneNote(message.text);
     if (!note.status) continue;
@@ -80,7 +80,8 @@ export function unlandedHeader(prs: readonly UnlandedPr[], now: number): string 
 }
 
 export interface UnlandedWorkDeps {
-  reports: (threadId: string) => ReadonlyArray<{ kind?: string; text?: string; at?: number }>;
+  /** the thread's notes newest first, read lazily so a long thread is never parsed whole */
+  reportsBack: (threadId: string) => Iterable<{ kind?: string; text?: string; at?: number }>;
   /** where gh resolves a PR the report names without its repo: the folder this task pinned */
   repoDir: (botId: string, threadId: string) => string | undefined;
   /** the installed app version; empty when unknown */
@@ -144,7 +145,7 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
   async function run(botId: string, threadId: string) {
     const dir = deps.repoDir(botId, threadId);
     const found = new Map<string, UnlandedPr>();
-    for (const ref of reportedPrs(deps.reports(threadId))) {
+    for (const ref of reportedPrs(deps.reportsBack(threadId))) {
       if (!ref.repo && !dir) continue;
       const key = `${ref.repo ?? dir}|${ref.number ?? ref.branch}`;
       let entry = lookups.get(key);

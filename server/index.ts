@@ -2884,7 +2884,7 @@ const projectNotesCheck = createProjectNotesCheck({
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
 const unlandedWork = createUnlandedWork({
-  reports: (threadId) => store.messagesFor(threadId),
+  reportsBack: (threadId) => store.notesBack(threadId),
   // a task keeps the folder it pinned; lastProjectCwd is the next task's
   repoDir: (botId, threadId) => {
     const pinned = store.taskByThread(botId, threadId)?.cwd;
@@ -2892,8 +2892,8 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
-// one bot at a time, so a restart after an update has the list before the first typed turn
-void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); })();
+// one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
+startupTiming.afterPaint("unlanded", async () => void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); })());
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });

@@ -1334,6 +1334,11 @@ export class Store {
     return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
   }
 
+  /** Note rows newest first, read lazily from disk when the thread is not loaded. */
+  notesBack(threadId: string): Iterable<Message> {
+    return this.threads.has(threadId) ? this.thread(threadId).messages.filter((m) => m.kind === "note").reverse() : mdb.notesBack(threadId);
+  }
+
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     const t = this.thread(threadId);
     if (message.comm?.mailKey) {
