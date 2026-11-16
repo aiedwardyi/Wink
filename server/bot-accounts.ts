@@ -158,7 +158,8 @@ export class BotAccounts {
   // Same order as the Usage board: a blocked account is only signed out once its CLI answers and its sign-in was checked.
   private blocked(id: string) {
     const account = this.accounts.get(id);
-    if (this.registry.cliMissing(id) || this.registry.cliMissing(account?.of ?? id)) return cliMissing(this.registry.get(id)?.driverKind === "codex" ? "Codex" : "Claude");
+    const of = account?.of ?? id;
+    if (this.registry.cliMissing(id) || this.registry.cliMissing(of)) return cliMissing(this.registry.get(of)?.driverKind === "codex" ? "Codex" : "Claude");
     return account?.state === "ready" ? SIGN_IN_UNCONFIRMED : SIGNED_OUT;
   }
 

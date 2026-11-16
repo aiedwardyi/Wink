@@ -526,6 +526,16 @@ describe("account removal drain", () => {
     expect(f.resolve).toThrow(/^Claude isn't installed or isn't answering on this PC\.$/);
   });
 
+  it("names Codex when a Codex Main's CLI is missing", async () => {
+    const f = await fixture(false, "codex");
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.registry.get("codex")!.snapshot = async () => ({ state: "unavailable", reason: "`codex` CLI not found", cliMissing: true });
+    await f.registry.describe({ refresh: true });
+    await f.controller.observe(main.id, { state: "unavailable", reason: "`codex` CLI not found", cliMissing: true });
+    expect(f.resolve).toThrow(/^Codex isn't installed or isn't answering on this PC\.$/);
+  });
+
   it("keeps last-account sign-out available without changing portable selections", async () => {
     const f = await fixture(true);
     const before = JSON.stringify(f.bot.modelSelection);
