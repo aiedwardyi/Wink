@@ -132,6 +132,7 @@ import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
+import { usageStatusText } from "./usage-status.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
@@ -7895,6 +7896,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (method === "GET" && path === "/api/internal/agents") {
         return await internalRoutes.agents(res, url);
+      }
+      if (method === "GET" && path === "/api/internal/usage") {
+        if (!store.bot(url.searchParams.get("self") ?? "")) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, { text: usageStatusText(await usageBoard.read(), routineTimeZone()) });
       }
       if (method === "GET" && path === "/api/internal/routines") {
         return await internalRoutes.listRoutines(res, url);
