@@ -1,5 +1,5 @@
 /* one git green on every theme: passed checks, the done Git line, added lines */
-.map-pane { container: map-pane / inline-size; --map-green: light-dark(#1a7f37, #3fb950); }
+.map-pane { container: map-pane / inline-size; --map-green: light-dark(#047857, #34d399); }
 .map-pane > :is(.map-head, .map-top, .map-flow-rows, .map-crumbs, .map-code, .map-example) { animation: fade-in var(--motion-moderate) var(--ease-standard); }
 .map-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-shrink: 0; padding: 10px 12px; border-bottom: 1px solid var(--color-hairline); }
 .map-worker-menu { position: relative; min-width: 0; flex-shrink: 0; max-width: 50%; }

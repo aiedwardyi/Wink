@@ -1,5 +1,5 @@
 /* one row per worker: the same seven stops in the same places, joined by one straight line; --flow-ease and 480ms are SWING (lib/motion-character.ts) */
-.map-flow-rows { --flow-merged: light-dark(#7a45d3, #b48cff); --flow-open: var(--map-green); --flow-ink: var(--color-ink-secondary); --flow-off: color-mix(in srgb, var(--color-ink-secondary) 38%, transparent); --flow-ease: cubic-bezier(.25,.1,.25,1);
+.map-flow-rows { --flow-merged: light-dark(#7a45d3, #b48cff); --flow-open: var(--map-green); --flow-run: light-dark(#1d4ed8, #60a5fa); --flow-ink: var(--color-ink-secondary); --flow-off: color-mix(in srgb, var(--color-ink-secondary) 38%, transparent); --flow-ease: cubic-bezier(.25,.1,.25,1);
   position: relative; flex-shrink: 0; padding: 5px 12px 6px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
 .map-flow-list { display: grid; grid-template-columns: 8px minmax(40px, 76px) minmax(min-content, 1fr) auto; column-gap: 8px; row-gap: 2px; max-height: 158px; overflow: hidden auto; scrollbar-width: thin; }
 .map-flow-row { position: relative; display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 36px; color: inherit; text-decoration: none; -webkit-touch-callout: none; }
@@ -8,7 +8,7 @@
 .map-flow-end { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .map-flow-end > small { font: 10.5px var(--font-mono, monospace); color: var(--color-ink-secondary); }
 .map-flow-end > small[data-tone="bad"] { color: var(--color-danger); }
-.map-flow-end > small[data-tone="run"] { color: var(--color-warning); }
+.map-flow-end > small[data-tone="run"] { color: var(--flow-run); }
 .map-flow-end > small[data-tone="merged"] { color: var(--flow-merged); }
 /* the same 6px the PR number keeps on its right, so the mark never sits on the list's scrollbar */
 .map-flow-clash { padding-right: 6px; font: 10.5px var(--font-mono, monospace); font-style: normal; color: var(--color-warning); }
@@ -46,11 +46,11 @@
 .map-flow-box { flex: none; display: flex; flex-direction: column; gap: 3px; box-sizing: border-box; width: 104px; margin-top: -3px; padding: 3px 6px 4px; border: 1px solid var(--color-hairline); border-radius: 5px; background: var(--color-panel); }
 .map-flow-box > b { display: flex; justify-content: space-between; gap: 6px; overflow: hidden; font: 10px/12px var(--font-sans, sans-serif); color: var(--color-ink-secondary); white-space: nowrap; }
 .map-flow-box > b > span { overflow: hidden; text-overflow: ellipsis; }
-.map-flow-box[data-state="run"] > b > span { color: var(--color-warning); }
+.map-flow-box[data-state="run"] > b > span { color: var(--flow-run); }
 .map-flow-box[data-state="bad"] > b > span { color: var(--color-danger); }
 .map-flow-box[data-state="ok"] > b > span { color: var(--flow-open); }
 .map-flow-box > span { display: flex; gap: 2px; height: 6px; overflow: hidden; }
-.map-flow-box i { flex: 0 1 6px; min-width: 2px; height: 6px; border-radius: 1px; background: var(--color-warning); transition: background-color 480ms var(--flow-ease); }
+.map-flow-box i { flex: 0 1 6px; min-width: 2px; height: 6px; border-radius: 1px; background: var(--flow-run); transition: background-color 480ms var(--flow-ease); }
 .map-flow-box i[data-state="pass"] { background: var(--flow-open); }
 .map-flow-box i[data-state="fail"] { background: var(--color-danger); }
 
@@ -75,7 +75,7 @@
   .map-flow-box { width: auto; padding: 3px 5px 4px; }
   .map-flow-box > span { width: 0; min-width: 100%; gap: 1px; }
   .map-flow-box > b > span { display: none; }
-  .map-flow-box[data-state="run"] > b { color: var(--color-warning); }
+  .map-flow-box[data-state="run"] > b { color: var(--flow-run); }
   .map-flow-box[data-state="bad"] > b { color: var(--color-danger); }
   .map-flow-box[data-state="ok"] > b { color: var(--flow-open); }
   .map-flow-end { gap: 5px; }
