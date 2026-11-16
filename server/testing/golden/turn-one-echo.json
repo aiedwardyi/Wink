@@ -44,6 +44,8 @@
       "--include-partial-messages",
       "--permission-mode",
       "bypassPermissions",
+      "--disallowedTools",
+      "AskUserQuestion",
       "--model",
       "claude-fake",
       "--append-system-prompt-file",

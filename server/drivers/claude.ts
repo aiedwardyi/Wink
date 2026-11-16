@@ -1046,6 +1046,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
+      // `--tools ""` already removes it, so no deny entry there.
       const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };

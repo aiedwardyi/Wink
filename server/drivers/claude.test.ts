@@ -1223,11 +1223,15 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const server = seen.mcpConfig.mcpServers.agents;
     const child = spawnChild(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
     let out = "";
-    const listed = new Promise<{ name: string; description: string; inputSchema: object; _meta?: Record<string, unknown> }[]>((resolve) => {
+    const listed = new Promise<{ name: string; description: string; inputSchema: object; _meta?: Record<string, unknown> }[]>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("agents proxy never answered tools/list")), 10_000);
       child.stdout!.on("data", (chunk) => {
         out += chunk;
-        const line = out.split("\n").find((row) => row.includes('"id":2'));
-        if (line) resolve(JSON.parse(line).result.tools);
+        const line = out.split("\n").find((row) => row.includes('"id":2,'));
+        if (line) {
+          clearTimeout(timer);
+          resolve(JSON.parse(line).result.tools);
+        }
       });
     });
     child.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } })}\n`);
