@@ -478,13 +478,32 @@ describe("usage board", () => {
     expect(account(await s.board.read(), added).signIn).toBe("signed-out");
     s.rows()[1].state = "ready";
     s.rows()[1].blocked = true;
-    expect(account(await s.board.read(), added).signIn).toBe("signed-out");
+    expect(account(await s.board.read(), added).signIn).toBe("unknown");
     s.rows()[0].status = undefined;
     expect(account(await s.board.read()).signIn).toBe("unknown");
     s.rows()[0].status = { state: "available", authenticated: false };
     expect(account(await s.board.read()).signIn).toBe("signed-out");
     s.drains.claude = { destinationId: added, phase: "draining" };
     expect(account(await s.board.read()).signIn).toBe("draining");
+  });
+
+  it("reads a missing CLI as not installed and an unchecked account as unknown, never as signed out", async () => {
+    const s = setup();
+    const missing = { state: "unavailable" as const, reason: "`claude` CLI not found", cliMissing: true };
+    s.setRows([
+      { ...s.rows()[0], status: missing },
+      { ...s.rows()[1], blocked: true, status: missing },
+      { id: second, of: "claude", driverKind: "claudeAgent", generation: 1, existing: false, state: "ready", blocked: true, status: { state: "unavailable" } },
+    ]);
+    s.accept(added, report(88));
+    const signIns = async () => (await s.board.read()).engines[0].accounts.map((row) => row.signIn);
+    expect(await signIns()).toEqual(["cli-missing", "cli-missing", "cli-missing"]);
+    s.rows()[0].status = { state: "available", authenticated: true };
+    s.rows()[1].status = undefined;
+    expect(await signIns()).toEqual(["ready", "unknown", "unknown"]);
+    s.rows()[0].blocked = true;
+    s.rows()[2].state = "stopped";
+    expect(await signIns()).toEqual(["signed-out", "unknown", "signed-out"]);
   });
 
   it("commits monotonic revisions even when time stays still or moves backwards", async () => {

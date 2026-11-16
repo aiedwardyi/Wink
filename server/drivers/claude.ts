@@ -2122,7 +2122,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           resolve(err ? null : stdout.trim()),
         );
       });
-      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
+      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
       const { signedIn: authenticated, account, identity, engineSignedIn } = await authStatus(opts?.rescan || opts?.refresh);
       if (input.account) admitted = authenticated === true;
       // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
