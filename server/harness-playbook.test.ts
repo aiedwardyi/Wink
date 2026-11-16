@@ -14,7 +14,7 @@ const MODEL_NAME = /\b(?:Opus|Sonnet|Haiku|Fable|GPT|Muse|Grok|Gemini)\b.*?(?=[,
 
 function stalePicks(picks: string): string[] {
   const labels = [...LAUNCHABLE.values()].flat().sort((a, b) => b.length - a.length);
-  const left = labels.reduce((text, label) => text.replace(new RegExp(`${label.replaceAll(".", "\\.")}(?!\\w|\\.\\d)`, "g"), ""), picks);
+  const left = labels.reduce((text, label) => text.replace(new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\w|\\.\\d)`, "g"), ""), picks);
   const unknown = [...left.matchAll(MODEL_NAME)].map((match) => `not launchable: ${match[0]}`);
   const missing = [...LAUNCHABLE].filter(([, names]) => !names.some((name) => picks.includes(name))).map(([engine]) => `no pick for ${engine}`);
   return [...unknown, ...missing];
