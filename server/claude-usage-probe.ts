@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { z } from "zod";
 
 import type { AccountContext } from "./account-policy.ts";
+import { scrubbedEnv } from "./config.ts";
 import type { RateLimitWindow } from "./contracts.ts";
 import { killCliTree, spawnCli } from "./procs.ts";
 
@@ -22,7 +23,7 @@ type Report = { windows: RateLimitWindow[]; observedAt: string };
 export function readClaudeUsage(cli: string, env: NodeJS.ProcessEnv, account: AccountContext): Promise<RateLimitWindow[]> {
   return new Promise((resolve, reject) => {
     const child = spawnCli(cli, ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"], {
-      cwd: account.home, env, stdio: ["pipe", "pipe", "pipe"], account, accountDriver: "claudeAgent",
+      cwd: account.home, env: scrubbedEnv(env), stdio: ["pipe", "pipe", "pipe"], account, accountDriver: "claudeAgent",
     });
     const lines = createInterface({ input: child.stdout });
     let settled = false;

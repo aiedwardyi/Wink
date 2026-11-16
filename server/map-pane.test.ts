@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
-import { mapFileDiff, mapFiles as mapChanges, mapFork, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
+import { mapFileDiff, mapFiles as mapChanges, mapFork, mapGit, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
 import { createMapPane, type MapPaneRecord } from "./map-pane.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { watchMapPanes } from "./map-events.ts";
@@ -98,6 +98,19 @@ it("runs no command a repo's own config names", async () => {
   await mapRepoFiles(root);
   expect(files.map(file => file.path).sort()).toEqual([".gitattributes", "file.ts"]);
   expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
+});
+
+it("starts git without saved keys or Wink's token", async () => {
+  const { root } = repo();
+  vi.stubEnv("GEMINI_API_KEY", "saved");
+  vi.stubEnv("OMB_COMMS_TOKEN", "boot");
+  try {
+    const env = await mapGit(root, ["-c", "alias.wink-env=!env", "wink-env"]);
+    expect(env).toContain("GIT_OPTIONAL_LOCKS=0");
+    expect(env).not.toMatch(/GEMINI_API_KEY|OMB_COMMS_TOKEN/);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("keeps a deleted file diff separate from its replacement directory", async () => {
