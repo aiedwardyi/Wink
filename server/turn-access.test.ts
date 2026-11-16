@@ -103,13 +103,18 @@ describe("every engine states what it may do", () => {
     mkdirSync(dumpDir(engine), { recursive: true });
     expect((await api("POST", path, { text })).status).toBe(202);
     const deadline = Date.now() + 20_000;
-    while (!files(engine).some((f) => f.text.includes(text))) {
+    // fake-acp rewrites dump.json on every run, probes included: only the copy holding the prompt has the turn's argv
+    const ready = (snap: { file: string; text: string }[]) =>
+      snap.some((f) => f.text.includes(text)) && (engine !== "grok" || Boolean(snap.find((f) => f.file === "dump.json")?.text.includes(text)));
+    let snap = files(engine);
+    while (!ready(snap)) {
       if (Date.now() > deadline) throw new Error(`${engine} never received "${text}". stderr: ${stderr.slice(-2000)}`);
       await new Promise((resolve) => setTimeout(resolve, 100));
+      snap = files(engine);
     }
-    const main = files(engine).find((f) => f.file === "dump.json");
+    const main = snap.find((f) => f.file === "dump.json");
     return {
-      prompt: files(engine).map((f) => f.text).join("\n").replaceAll("\\'", "'").replaceAll('\\"', '"'),
+      prompt: snap.map((f) => f.text).join("\n").replaceAll("\\'", "'").replaceAll('\\"', '"'),
       dump: (main ? JSON.parse(main.text) : {}) as Dump,
     };
   };
