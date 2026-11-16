@@ -94,10 +94,12 @@ export function turnSummaries(hide?: (threadId: string, ids: string[], restated?
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
       turns.delete(threadId);
-      const restated = turn.said.filter((row, i) => turn.said.slice(i + 1).some((later) => restates(later, row))).map((row) => row.id);
-      const commentary = turn.final ? turn.commentary.filter((id) => !restated.includes(id)) : [];
+      // commentary a final hides cannot stand in for an earlier row
+      const hidden = new Set(turn.final ? turn.commentary : []);
+      const restated = new Set(turn.said.filter((row, i) => turn.said.slice(i + 1).some((later) => !hidden.has(later.id) && restates(later, row))).map((row) => row.id));
+      const commentary = [...hidden].filter((id) => !restated.has(id));
       if (commentary.length) hide?.(threadId, commentary);
-      if (restated.length) hide?.(threadId, restated, true);
+      if (restated.size) hide?.(threadId, [...restated], true);
       return turn.replied || quiet ? [] : turn.ids;
     },
   };

@@ -197,6 +197,15 @@ describe("turnSummaries", () => {
     expect(settled([`${long} It took 14 minutes.`, `${ask} Took 14 minutes.`])).toEqual(["r0"]);
   });
 
+  it("keeps a final answer whose restatement is commentary the final hides", () => {
+    const hidden: Array<[string[], true | undefined]> = [];
+    const summaries = turnSummaries((_threadId, ids, restated) => hidden.push([ids, restated]));
+    summaries.note("t1", "turn-1", "f0", false, "final_answer", answer);
+    summaries.note("t1", "turn-1", "c0", false, "commentary", `${answer} Checking the logs.`);
+    summaries.settle("t1", "turn-1");
+    expect(hidden).toEqual([[["c0"], undefined]]);
+  });
+
   it("keeps a row noted without text", () => {
     expect(settled([undefined, answer])).toEqual([]);
     expect(settled([answer, undefined])).toEqual([]);
