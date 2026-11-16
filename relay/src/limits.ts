@@ -15,6 +15,11 @@ export interface RelayLimits {
   /** Control channel auth attempts per source IP. */
   controlAuthPerIpPerMin: number;
   enrollPerIpPerHour: number;
+  /** POST /v1/enroll/google: new labels per rolling 7 days, relay-wide. Each one costs a certificate. */
+  googleEnrollPerWeek: number;
+  /** New labels per Google account, ever and per rolling day. */
+  googleEnrollPerAccount: number;
+  googleEnrollPerAccountPerDay: number;
   /** POST /v1/account, when the google block is set. */
   accountPerIpPerHour: number;
   /** GET /v1/pcs, when the google block is set. */
@@ -24,6 +29,8 @@ export interface RelayLimits {
   authTimeoutMs: number;
   joinTimeoutMs: number;
   pingIntervalMs: number;
+  /** A sender's pokes reach its account's other PCs at most once per this, plus one trailing. */
+  pokeIntervalMs: number;
   /** Spliced phone connections per label. */
   maxSplicedPerLabel: number;
   /** Parked data channels per label. */
@@ -63,12 +70,16 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   connPerIpBurst: 60,
   controlAuthPerIpPerMin: 6,
   enrollPerIpPerHour: 5,
+  googleEnrollPerWeek: 35,
+  googleEnrollPerAccount: 5,
+  googleEnrollPerAccountPerDay: 2,
   accountPerIpPerHour: 30,
   pcsPerIpPerMin: 30,
   statusPerIpPerMin: 60,
   authTimeoutMs: 10_000,
   joinTimeoutMs: 10_000,
   pingIntervalMs: 30_000,
+  pokeIntervalMs: 2_000,
   maxSplicedPerLabel: 256,
   maxIdlePerLabel: 16,
   maxWaitingPerLabel: 32,

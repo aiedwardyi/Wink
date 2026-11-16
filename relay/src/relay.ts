@@ -14,6 +14,7 @@ import { CertManager, type AcmeClientLike } from "./acme.ts";
 import { BASE_RE } from "./config.ts";
 import { handleControl, handleData, type ChannelContext } from "./channels.ts";
 import { Enroller, TICKET_TTL_SEC } from "./enroll.ts";
+import { GoogleEnroller, GoogleEnrollJournal } from "./google-enroll.ts";
 import { createApiServer } from "./http.ts";
 import { Hub } from "./hub.ts";
 import { InviteStore } from "./invites.ts";
@@ -147,12 +148,24 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
         ticketTtlSec,
       })
     : undefined;
+  const googleEnroller = accounts
+    ? new GoogleEnroller({
+        accounts,
+        journal: await GoogleEnrollJournal.open(opts.dataDir),
+        operatorPrivateKey: opts.operatorPrivateKey,
+        isRevoked: (label) => revoked.has(label),
+        limits,
+        now,
+        ticketTtlSec,
+      })
+    : undefined;
   const api = createApiServer({
     base,
     relayHost,
     hub,
     enroller,
     accounts,
+    googleEnroller,
     signinOrigin: opts.google?.signinOrigin,
     team,
     teamOwnerEmail,

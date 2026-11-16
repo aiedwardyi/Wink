@@ -15,6 +15,7 @@ import type { TeamLog } from "./team.ts";
 export interface ControlLink {
   notice(code: NoticeCode): void;
   want(n: number): void;
+  poked(): void;
   close(): void;
 }
 
@@ -27,6 +28,10 @@ export class Session {
   readonly control: ControlLink;
   /** Set when this session's auth carried a wka1. Null after sign-out or before that. */
   account: { subHash: string; name: string } | null = null;
+  /** Its auth asked for `poked` frames. */
+  pokes = false;
+  lastPoke = -Infinity;
+  pokeTimer: NodeJS.Timeout | undefined;
   live = true;
 
   constructor(label: string, control: ControlLink, since: number) {
@@ -128,6 +133,7 @@ export class Hub {
   end(session: Session, code?: NoticeCode): void {
     if (!session.live) return;
     session.live = false;
+    clearTimeout(session.pokeTimer);
     this.byId.delete(session.id);
     for (const socket of session.idle) socket.destroy();
     session.idle.clear();
@@ -170,6 +176,21 @@ export class Hub {
 
   active(session: Session): void {
     if (this.byLabel.get(session.label) === session) this.opts.team?.active(session.label);
+  }
+
+  /** Forwards a poke at most once per pokeIntervalMs per sender; pokes inside the interval collapse into one trailing forward. */
+  poke(session: Session): void {
+    if (!session.account || session.pokeTimer) return;
+    const wait = session.lastPoke + this.opts.limits.pokeIntervalMs - this.now();
+    if (wait <= 0) {
+      this.forwardPoke(session);
+      return;
+    }
+    session.pokeTimer = setTimeout(() => {
+      session.pokeTimer = undefined;
+      this.forwardPoke(session);
+    }, wait);
+    session.pokeTimer.unref();
   }
 
   /** Kills everything for a label: control, pool, waiting phones and live splices. */
@@ -350,6 +371,20 @@ export class Hub {
     if (!bucket) return;
     bucket.delete(session.label);
     if (bucket.size === 0) this.bySub.delete(account.subHash);
+  }
+
+  private forwardPoke(sender: Session): void {
+    sender.lastPoke = this.now();
+    const subHash = sender.account?.subHash;
+    if (!sender.live || !subHash) return;
+    let count = 0;
+    for (const label of this.bySub.get(subHash)?.keys() ?? []) {
+      const peer = this.byLabel.get(label);
+      if (label === sender.label || !peer?.pokes || peer.account?.subHash !== subHash) continue;
+      peer.control.poked();
+      count += 1;
+    }
+    this.opts.log.log("poked", { count });
   }
 
   private markChanged(label: string): void {

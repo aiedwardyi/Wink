@@ -256,6 +256,7 @@ export async function openControl(
     sign?: (nonce: string) => string;
     account?: string | null;
     name?: string;
+    pokes?: boolean;
   } = {},
 ): Promise<Control> {
   const socket = await connectRelay(h, ALPN_CONTROL);
@@ -273,6 +274,7 @@ export async function openControl(
   };
   if (opts.account !== undefined) auth.account = opts.account;
   if (opts.name !== undefined) auth.name = opts.name;
+  if (opts.pokes) auth.pokes = true;
   socket.write(encodeFrame(auth));
   const ready = await reader.next();
   if (ready?.type !== "ready") {
