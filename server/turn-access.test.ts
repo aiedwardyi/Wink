@@ -59,7 +59,7 @@ function wireGrants(engine: Engine, approval: Approval, dump: Dump): { edits: Gr
       if (argv.includes("--dangerously-skip-permissions")) return { edits: "free", commands: "free" };
       return { edits: argv.includes("accept-edits") ? "free" : "off", commands: "off" };
     case "grok":
-      expect(argAfter(argv, "--permission-mode")).toBeTruthy();
+      expect(argAfter(argv, "--permission-mode"), JSON.stringify(dump).slice(0, 1500)).toBeTruthy();
       return argAfter(argv, "--permission-mode") === "bypassPermissions" ? { edits: "free", commands: "free" } : { edits: routed, commands: routed };
     case "muse":
       // fullAuto: false in this config, so every approval reaches Wink
