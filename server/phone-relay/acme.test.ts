@@ -725,7 +725,7 @@ describe("backoff after failures", () => {
     second.certs.start();
     second.certs.setConnected(true);
     for (let next = clock.nextAt; next !== null && next < retryAt; next = clock.nextAt) clock.advance(next - clock.now());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(second.certs.snapshot().issuing).toBe(false);
     expect(acme.log).toHaveLength(asked);
     clock.advance(retryAt - clock.now());
     await vi.waitFor(() => expect(second.certs.snapshot().issuing).toBe(false));
