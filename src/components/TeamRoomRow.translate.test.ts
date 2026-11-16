@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
+import { useTranslationAvailable } from "@/lib/room-translate";
 import type { RoomLine } from "@/lib/team-rooms";
 
 import { RoomLineTranslation, RoomTranslateButton, RoomTranslationText, TeamRoomTranscript } from "./TeamRoomRow";
@@ -30,6 +31,8 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("fetch", fetch);
   fetch.mockClear();
+  readiness.instances = [];
+  readiness.config = null;
   available = true;
   generate = async () => new Response(JSON.stringify({ text: "The materials are ready.\nPlease review them together." }));
   applyLocale("en");
@@ -89,6 +92,33 @@ describe("teammate translation", () => {
     else readiness.config = { gemini: { configured: false } };
     await render();
     expect(button()).toBeNull();
+  });
+
+  it("keeps a host row's shown translation while an engine recheck is in flight, and skips the recheck on a usage report", async () => {
+    const engine = { instanceId: "claude", driverKind: "claudeAgent", snapshot: { state: "available" }, models: { default: "", options: [] } };
+    const HostRow = () => createElement(RoomLineTranslation, { base: "/api/rooms/r1", entryId: "m-b1", text: "준비됐어요.", canTranslate: useTranslationAvailable("/api/rooms/r1"), children: (translation) => translation && [
+      createElement(RoomTranslateButton, { key: "button", translation }),
+      createElement(RoomTranslationText, { key: "text", translation, markdown: true }),
+    ] });
+    readiness.instances = [engine];
+    await act(async () => root.render(createElement(HostRow)));
+    await act(async () => button()!.click());
+    const shown = () => host.querySelector("[data-room-translation]")?.textContent ?? "";
+    const checks = () => fetch.mock.calls.filter(([path]) => path === "/api/rooms/r1/translate").length;
+    let answer!: (response: Response) => void;
+    fetch.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    const engines = [engine, { ...engine, instanceId: "codex", driverKind: "codex" }];
+    readiness.instances = engines;
+    await act(async () => root.render(createElement(HostRow)));
+    expect(shown()).toContain("The materials are ready.");
+    await act(async () => answer(new Response(JSON.stringify({ available: true }))));
+    expect(shown()).toContain("The materials are ready.");
+    const before = checks();
+    readiness.instances = engines.map((row) => ({ ...row, rateLimits: { windows: [], observedAt: "2026-11-16T00:00:00Z" } }));
+    await act(async () => root.render(createElement(HostRow)));
+    expect(checks()).toBe(before);
+    expect(shown()).toContain("The materials are ready.");
+    expect(button()).not.toBeNull();
   });
 
   it("shows only the other-language button and keeps the original through show and hide", async () => {
