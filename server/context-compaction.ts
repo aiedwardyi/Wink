@@ -569,7 +569,7 @@ function replayUnits(
   return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = from + index;
     if (pathIndex < offset && !pending.has(message.id)) return [];
-    if (excludeIds.has(message.id)) return [];
+    if (excludeIds.has(message.id) || message.restated) return [];
     const mail = mailReplayText(message, pending.get(message.id) ?? 0, through.get(message.id));
     if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "", mailUpto: through.get(message.id) ?? message.comm?.read?.upto ?? message.text?.length ?? 0 }] : [];
     // a queued handoff's drained line carries the same words

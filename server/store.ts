@@ -179,6 +179,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Hidden: a later text of its turn says the same, so replay skips it. */
+  restated?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */
   engine?: string;
   call?: import("../shared/live-call.ts").CallTag;
