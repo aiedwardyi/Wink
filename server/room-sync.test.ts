@@ -236,6 +236,20 @@ describe("room records over profile sync", () => {
     expect(store.groups.map((other) => other.id)).toEqual([group.id]);
   });
 
+  it("drops a team room's copy even while chat sync still holds its thread", () => {
+    remote("room-1", created("room-1"), T0);
+    sync();
+    const holding = { ...host(), syncing: () => true };
+    remote("room-1", null, T0 + 1_000);
+    importRooms(holding, state(), folder);
+    expect(store.group("room-1")).toBeTruthy();
+    rmSync(join(folder, "changes"), { recursive: true });
+    remote("room-1", created("room-1"), T0);
+    remote("room-1", { hosted: true }, T0 + 1_000);
+    importRooms(holding, state(), folder);
+    expect(store.group("room-1")).toBeFalsy();
+  });
+
   it("publishes a route edit as only the fields it changed", async () => {
     const atlas = bot("Atlas", "sync-atlas");
     const nova = bot("Nova", "sync-nova");

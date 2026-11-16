@@ -477,6 +477,8 @@ import { BotTrash, type TrashEntry } from "./bot-trash.ts";
 import { createBotTrashActions } from "./bot-trash-actions.ts";
 import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "./bot-trash-sync.ts";
 import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
+import { createRoomThreads } from "./room-thread-sync.ts";
+import { syncHold } from "./sync-hold.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
 import { isVoiceLine, LIVE_VOICE, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
@@ -2229,6 +2231,15 @@ const threadSyncPoll = createThreadSyncPoll(() => {
 });
 
 let threadSyncV2: ReturnType<typeof createThreadSyncV2Store> = null;
+const roomThreads = createRoomThreads({
+  store, botMap: () => profileSyncSettings.botMap, syncId: syncBotId,
+  deleted: (groupId) => {
+    // a waiting room tombstone needs the next profile pass
+    profileSyncSeen.invalid = true;
+    const group = store.group(groupId);
+    if (group) broadcast({ kind: "group", group: groupWithThread(group) });
+  },
+});
 
 function initializeThreadSyncV2() {
   threadSyncV2 ??= createThreadSyncV2Store({
@@ -2238,6 +2249,7 @@ function initializeThreadSyncV2() {
     folder: () => profileSyncSettings.folder,
     enabled: () => profileSyncSettings.syncChats,
     target: (threadId) => {
+      if (store.groupByThread(threadId)) return roomThreads.target(threadId);
       const bot = store.botByThread(threadId);
       if (!bot || !store.taskByThread(bot.id, threadId) || store.groupByThread(threadId) || sideThreadIds().has(threadId)) return null;
       const botSyncId = profileSyncSettings.botMap[bot.id];
@@ -2247,7 +2259,10 @@ function initializeThreadSyncV2() {
       const botSyncId = chatSyncBotId(profileSyncSettings, bot.id);
       return botSyncId ? [{ botId: bot.id, botSyncId }] : [];
     }),
-    running: (threadId) => threadSyncHost(profileSyncSettings.folder ?? "").running(threadId),
+    running: (threadId) => {
+      const group = store.groupByThread(threadId);
+      return threadSyncHost(profileSyncSettings.folder ?? "").running(threadId) || Boolean(group?.threadId === threadId && groupIsWorking(group));
+    },
     openThread: () => threadRoutes.openThread(),
     project: clientMessage,
     imported: (botId) => {
@@ -2261,6 +2276,7 @@ function initializeThreadSyncV2() {
       };
       return pending instanceof Promise ? pending.then(prune) : prune();
     },
+    rooms: roomThreads,
   });
   return threadSyncV2;
 }
@@ -3504,7 +3520,9 @@ let botTrash: BotTrash | null = null;
 // the trash timer waits for the first profile sync pass of this run
 let profileSyncPassed = false;
 const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
-const roomSyncHost = (): RoomSyncHost => ({ dataDir: DATA_DIR, store, settings: () => profileSyncSettings, now: Date.now, working: groupIsWorking });
+const roomSyncHost = (): RoomSyncHost => ({
+  dataDir: DATA_DIR, store, settings: () => profileSyncSettings, now: Date.now, working: groupIsWorking, syncing: (threadId) => threadSyncV2?.holds(threadId) ?? false,
+});
 
 function publishRoomsSafely(folder: string): number {
   try {
@@ -7770,6 +7788,7 @@ const groupRoutes = createGroupRoutes({
       scheduleProfilePublish();
     },
   },
+  syncSettled: (threadId) => threadSyncGate.enabled ? syncHold.settle(threadId) : Promise.resolve(),
 });
 const boardRoutes = createBoardRoutes({
   board,
