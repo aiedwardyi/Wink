@@ -505,6 +505,27 @@ describe("account removal drain", () => {
     expect(f.registry.accountAvailable(f.added[0].id)).toBe(true);
   });
 
+  it("holds a Main whose sign-in check could not answer as unconfirmed, not signed out", async () => {
+    const f = await fixture();
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    await f.controller.observe(main.id, { state: "unavailable", reason: "auth status timed out" });
+    expect(f.accounts.get(main.id)?.state).toBe("ready");
+    expect(f.registry.accountBlocked(main.id)).toBe(true);
+    expect(f.resolve).toThrow(/^This account's sign-in isn't confirmed yet\.$/);
+  });
+
+  it("tells a Main whose Claude CLI is missing that Claude isn't installed, not signed out", async () => {
+    const f = await fixture();
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.registry.get("claude")!.snapshot = async () => ({ state: "unavailable", reason: "`claude` CLI not found", cliMissing: true });
+    await f.registry.describe({ refresh: true });
+    await f.controller.observe(main.id, { state: "unavailable", reason: "`claude` CLI not found", cliMissing: true });
+    expect(f.registry.accountBlocked(main.id)).toBe(true);
+    expect(f.resolve).toThrow(/^Claude isn't installed or isn't answering on this PC\.$/);
+  });
+
   it("keeps last-account sign-out available without changing portable selections", async () => {
     const f = await fixture(true);
     const before = JSON.stringify(f.bot.modelSelection);
