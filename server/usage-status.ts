@@ -6,12 +6,15 @@ const MIN = 60_000;
 
 const left = (window: UsageBoardWindow) => Math.round(Math.max(0, Math.min(100, 100 - window.usedPercent)));
 
-function label(window: UsageBoardWindow) {
+function windowSpan(window: UsageBoardWindow) {
   if (window.kind === "session") return "5h";
   if (window.kind === "week") return "7d";
   if (window.windowMinutes === null) return window.id;
   return window.windowMinutes >= 2880 && window.windowMinutes % 1440 === 0 ? `${window.windowMinutes / 1440}d` : `${Math.round(window.windowMinutes / 60)}h`;
 }
+
+// Same names as the Usage page bars (UsageBars windowLabel): a model-scoped window keeps its model.
+const label = (window: UsageBoardWindow) => (window.id.includes("opus") ? `Opus ${windowSpan(window)}` : windowSpan(window));
 
 function span(ms: number) {
   const minutes = Math.max(1, Math.ceil(ms / MIN));
@@ -22,9 +25,9 @@ function span(ms: number) {
 }
 
 function windowText(window: UsageBoardWindow, now: number, clock: Intl.DateTimeFormat) {
-  const head = `${label(window)} ${left(window)}% left`;
+  if (window.resetsAt !== null && window.resetsAt <= now) return `${label(window)} ${left(window)}% left, reset passed (awaiting a fresh report)`;
+  const head = `${label(window)} ${left(window)}% left${window.usedPercent >= 100 ? ", Limit reached" : ""}`;
   if (window.resetsAt === null) return `${head}, reset time unknown`;
-  if (window.resetsAt <= now) return `${head}, reset passed (awaiting a fresh report)`;
   return `${head}, resets ${clock.format(window.resetsAt)} (in ${span(window.resetsAt - now)})`;
 }
 
@@ -42,9 +45,8 @@ function accountLine(account: UsageBoardAccount, now: number, clock: Intl.DateTi
   if (off) return `- ${name}: ${off}`;
   if (account.credit) return `- ${name}: API credit, no plan limits`;
   if (!account.windows.length) return `- ${name}: no usage report yet`;
-  const reached = account.windows.some((window) => window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > now));
   const age = account.observedAt === null ? "" : `; reported ${span(now - account.observedAt)} ago`;
-  return `- ${name}: ${reached ? "Limit reached; " : ""}${account.windows.map((window) => windowText(window, now, clock)).join("; ")}${age}`;
+  return `- ${name}: ${account.windows.map((window) => windowText(window, now, clock)).join("; ")}${age}`;
 }
 
 export function usageStatusText(board: UsageBoard, timeZone: string) {
