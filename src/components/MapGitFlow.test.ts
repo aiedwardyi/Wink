@@ -131,10 +131,21 @@ it("gives the clash mark the PR number's own 6px on its right, so it never sits 
 it("draws passed checks, the done line and added lines in one fixed git green on every theme", () => {
   const flowCss = readFileSync("src/components/MapGitFlow.css", "utf8");
   const paneCss = readFileSync("src/components/MapPane.css", "utf8");
-  expect(paneCss).toContain(".map-pane { container: map-pane / inline-size; --map-green: light-dark(#1a7f37, #3fb950); }");
+  expect(paneCss).toContain(".map-pane { container: map-pane / inline-size; --map-green: light-dark(#047857, #34d399); }");
   expect(flowCss).toContain("--flow-open: var(--map-green);");
   expect(paneCss).toContain('.map-code-row[data-kind="add"] b { color: var(--map-green); }');
   expect(flowCss + paneCss).not.toContain("--color-success");
+});
+
+it("draws running checks in one cool blue and keeps the warning color for the clash mark only", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).toContain("--flow-run: light-dark(#1d4ed8, #60a5fa);");
+  expect(css).toMatch(/\.map-flow-box i \{[^}]*background: var\(--flow-run\);/);
+  expect(css).toContain('.map-flow-box[data-state="run"] > b > span { color: var(--flow-run); }');
+  expect(css).toContain('.map-flow-box[data-state="run"] > b { color: var(--flow-run); }');
+  expect(css).toContain('.map-flow-end > small[data-tone="run"] { color: var(--flow-run); }');
+  expect(css.match(/--color-warning/g)).toHaveLength(1);
+  expect(css).toMatch(/\.map-flow-clash \{[^}]*color: var\(--color-warning\);/);
 });
 
 it("shows the detail on a long press without opening the link", async () => {
