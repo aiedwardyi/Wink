@@ -129,6 +129,13 @@ export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
 }
 
+const READ_BACK = /\bwhat (?:did )?you (?:just |had )?(?:say|said|write|wrote|send|sent)\b|\bread (?:me |out |back )?(?:it|that|this|the|your)(?: last| latest| newest)? (?:message|reply|answer|text)\b|\bread (?:it|that) (?:out|back|to me)\b|\b(?:in|from) (?:the|that|your) (?:last |latest |newest )?(?:message|reply)\b|\bwhat (?:does|did|was) (?:the|that|your) (?:last |latest )?(?:message|reply)\b|(?:메시지|메세지|답장|답변)[^.!?]*(?:읽어|뭐라고|뭐였|뭐야|말해)|(?:방금|아까)\s*(?:뭐라고|뭐라)\s*(?:했|그랬|썼)/i;
+
+/** The person asking to hear what the bot wrote in the chat, which only the message itself answers. */
+export function readsBack(heard: string): boolean {
+  return READ_BACK.test(heard);
+}
+
 // Every clause of the line asks for quiet or says he is talking to someone else, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.
 const QUIET_EN = /(?:(?:be|stay|keep|remain) (?:quiet|quite|silent)|quiet down|keep it down|quiet|silence|stop (?:talking|responding|answering|speaking)|(?:don'?t|do not) (?:say anything|talk|respond|answer|reply|speak)|mute yourself|shut up|hush|shh+|zip it|(?:that'?s )?enough|no more (?:updates|talking)|pause|just listen|give me (?:a|one) (?:second|sec|minute|min|moment|bit))/.source;
 const QUIET_KO = /(?:가만히\s?(?:좀\s?)?있어|아무\s?말도\s?하지\s?마|대답\s?하지\s?마|말하지\s?말고\s?(?:가만히\s?)?있어|조용(?:해|히(?:\s?좀)?(?:\s?(?:해|하세요|있어))?)?|(?:말\s?)?그만(?:\s?(?:해|하세요|말해(?:도\s?(?:돼|되))?))?|말하지\s?마|닥쳐|쉿|시끄러(?:워)?|입\s?다물어)\s?(?:요|줘|봐|라|세요|주세요|줄래)?/.source;

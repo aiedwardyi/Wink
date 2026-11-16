@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, ordersOther, reasks, repeatsAsk, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -71,7 +71,7 @@ const TOOLS: Record<string, ToolRun> = {
 };
 
 /** One thing the person said: a request until something real accounts for it. */
-type Request = { text: string; accounted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>>; asked: string[]; misheard: boolean; overclaimed: boolean };
+type Request = { text: string; accounted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>>; asked: string[]; misheard: boolean; overclaimed: boolean; read: boolean };
 /** A [Wink] line waiting for the voice to be quiet. */
 // `fix` corrects the voice's own last turn, so it skips the quiet gap.
 // `kept` is context it leaves behind when dropped as no longer valid.
@@ -93,6 +93,7 @@ const QUIET_MS = 4_000;
 // A socket that never sets up would hold the call open and silent.
 const READY_MS = 15_000;
 const REPORT_CHARS = 1_500;
+const READ_CHARS = 8_000;
 const RETRY_MS = 1_500;
 const STATUS_MS = 30_000;
 // Speech the voice never stirred at; counted only, since noise gets no answer either.
@@ -125,10 +126,11 @@ const reached = (result: string) => result === "sent" || result === "queued";
 const HEARD = "They already heard you answer: say nothing more.";
 const CHANGE_ASK = "not sent: this changes something, so offer it with propose_work and wait for a yes";
 const HUSHED = "not sent: they told you to be quiet";
+const READ_NEXT = "not needed: they asked to hear the newest chat message, and it is read out to them next. Say nothing";
 // The voice told a bare "expired" says they declined.
 const UNANSWERED: Record<string, string> = { expired: "expired: no answer came in time. They did not decline." };
 const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /, "");
-const request = (text: string, offTongue = false): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map(), asked: [], misheard: offTongue, overclaimed: false });
+const request = (text: string, offTongue = false): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map(), asked: [], misheard: offTongue, overclaimed: false, read: false });
 const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should i)\s+/i;
 // The brief's short confirm of a clear instruction: "Opening it, okay?"
 const CONFIRM_EN = /,\s*(?:okay|ok|alright|all right)\s*\?\s*$/i;
@@ -291,6 +293,9 @@ export class LiveCall {
   private answer_ = "";
   private echoed = "";
   private checkAsk = false;
+  // The newest bot message in the chat, and the turn already answering a read-back ask from memory, which is thrown away.
+  private newest?: string;
+  private readNext = false;
 
   constructor(deps: Deps) {
     this.deps = deps;
@@ -487,7 +492,8 @@ export class LiveCall {
         this.stir();
         this.generating = true;
         this.flushHeard();
-        this.dropping = false;
+        this.dropping = this.readNext;
+        this.readNext = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
         this.echo = this.lastLine || this.offTongue || this.checkAsk ? [] : undefined;
         this.replyTo = this.stats.userLines;
@@ -657,6 +663,7 @@ export class LiveCall {
     if (!order) return this.toolResult(ids, "propose_work", order, "not sent: no order given");
     order = asRequest(order);
     if (this.req.misheard) return this.toolResult(ids, "propose_work", order, misheardMsg(this.app));
+    if (this.req.read) return this.toolResult(ids, "propose_work", "", READ_NEXT);
     // The bot's own question already takes the spoken answer; an order would ask twice.
     if (this.cardTakes) return this.toolResult(ids, "propose_work", order, this.notNeeded);
     const key = orderKey(order);
@@ -760,6 +767,7 @@ export class LiveCall {
   query(question: string, ids: string[], tool = "ask") {
     if (!question) return this.toolResult(ids, tool, question, "not sent: no question");
     if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.app));
+    if (this.req.read) return this.toolResult(ids, tool, "", READ_NEXT);
     if (this.cardTakes) return this.toolResult(ids, tool, question, this.notNeeded);
     if (ordersChange(question, [this.deps.botName, ...this.aliases])) return this.toolResult(ids, tool, question, CHANGE_ASK);
     const req = this.req;
@@ -893,6 +901,7 @@ export class LiveCall {
     if (woke) this.wake(0);
     if (!text) return;
     this.lastLine = "";
+    this.readNext = false;
     if (this.cutHold) this.cutHold = "heard";
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -941,6 +950,7 @@ export class LiveCall {
     this.postLines([{ who: "user", text, at: this.now() }]);
     // Talk while it was told to be quiet is not for it.
     if (!this.snapshot.hushed && (!unsure || takesBack(text))) this.open.add(this.stats.userLines, text);
+    if (ended && !unsure && !this.snapshot.hushed && !(this.card && asksToRepeat(text)) && readsBack(text) && this.readOut(req)) return;
     if (!this.pending || !ended || this.snapshot.hushed || offTongue) return;
     const reply = consentOf(text);
     const consent = reply === "yes" && ordersOther(text, this.pending.order) ? null : reply;
@@ -971,6 +981,7 @@ export class LiveCall {
   observe(input: { busy: boolean; messages: Message[]; threadId?: string; needs?: { id: string; short: string } }) {
     this.busy = input.busy;
     this.threadId = input.threadId;
+    this.newest = input.messages.findLast((row) => row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim())?.text;
     if (input.busy && this.awaiting) this.ran = true;
     if (!this.connected || this.snapshot.startedAt === undefined || this.ended) return this.refresh();
     const startedAt = this.snapshot.startedAt;
@@ -1165,6 +1176,26 @@ export class LiveCall {
     this.release();
   }
 
+  /** Asked what it said in the chat: the newest message goes out whole, so the voice never paraphrases its own short summary again. */
+  private readOut(req: Request): boolean {
+    const text = this.newest?.trim();
+    if (!text) return false;
+    req.accounted = req.read = true;
+    this.open.settle(this.stats.userLines);
+    this.readNext = true;
+    if (this.generating) this.discard();
+    void this.deps.post("/api/tts/prepare", { text }).then((prepared) => {
+      const utterances = prepared.data.utterances;
+      return Array.isArray(utterances) && utterances.length ? utterances.join(" ") : text;
+    }, () => text).then((spoken) => {
+      if (this.ended || this.req !== req) return;
+      const whole = spoken.length <= READ_CHARS ? spoken : `${spoken.slice(0, READ_CHARS).replace(/\s+\S*$/, "")}...`;
+      this.held.unshift({ text: `[Wink] They asked to hear ${this.deps.botName}'s newest chat message. Read it out in full, word for word, from the start, in its own language: no summary, no intro, nothing after.\n${whole}`, fix: true });
+      this.release();
+    });
+    return true;
+  }
+
   private remember(reply: string) {
     this.missed = true;
     this.context.push(`${IN_CHAT}${this.deps.botName}: ${reply.trim()}`.slice(0, REPORT_CHARS));
@@ -1186,6 +1217,7 @@ export class LiveCall {
     this.playing = { item, ended: false };
     this.riding = [];
     this.missed = false;
+    this.readNext = false;
     this.engine?.sendText(item.text);
   }
 
@@ -1252,13 +1284,17 @@ export class LiveCall {
 
   /** Throws the rest of this turn away unheard, and the fix line goes next. */
   private drop(fix: string) {
+    this.discard();
+    this.held.unshift({ text: fix, fix: true });
+  }
+
+  private discard() {
     if (this.echo) this.unhold(false);
     else this.deps.audio.flush();
     this.cutPlaying();
     this.saidBuf = "";
     this.lineIds.voice = 0;
     this.dropping = true;
-    this.held.unshift({ text: fix, fix: true });
   }
 
   private askedLine() {
