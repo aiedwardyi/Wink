@@ -72,8 +72,20 @@ export function readSnapshotCache(explicit?: Storage): CachedSnapshot | null {
   }
 }
 
-// SAFETY: redactSecrets keeps the shape and only rewrites string values.
-const redactMessages = (messages: Message[]) => messages.map((m) => redactSecrets(m) as Message);
+// Store messages are never edited in place, so each is redacted once, not on every save.
+const redacted = new WeakMap<Message, Message>();
+
+function redactMessage(message: Message): Message {
+  let clean = redacted.get(message);
+  if (!clean) {
+    // SAFETY: redactSecrets keeps the shape and only rewrites string values.
+    clean = redactSecrets(message) as Message;
+    redacted.set(message, clean);
+  }
+  return clean;
+}
+
+const redactMessages = (messages: Message[]) => messages.map(redactMessage);
 
 export function writeSnapshotCache(snapshot: CachedSnapshot, explicit?: Storage): void {
   try {
