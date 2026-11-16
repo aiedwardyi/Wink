@@ -1,5 +1,6 @@
 // Every engine gets the code-fix rules, on the 1:1 and the room route, with
-// the line that lets the user's own instructions override them. Boots the
+// the line that lets the user's own instructions override them, plus the
+// plain-words rule for talking to people. Boots the
 // real server on each engine's fake CLI and reads what the CLI received.
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -25,6 +26,7 @@ const RULES = [
   "running the code yourself",
   "A report is a claim, not proof.",
 ];
+const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'";
 
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok", "muse"] as const;
 type Engine = (typeof ENGINE_NAMES)[number];
@@ -72,6 +74,7 @@ describe("code-fix rules on every engine", () => {
   const expectRules = (prompt: string) => {
     expect(prompt).toContain(OVERRIDE);
     for (const rule of RULES) expect(prompt).toContain(rule);
+    expect(prompt).toContain(PLAIN_WORDS);
   };
 
   beforeAll(async () => {
