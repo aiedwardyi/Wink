@@ -16,12 +16,13 @@ import {
   neighborId,
   saveVibration,
   sheetSwipeCloses,
-  sidebarChatIds,
+  swipeChatIds,
   swipeBlocked,
   swipeStep,
   vibrationEnabled,
 } from "./phone-swipe";
 import { useDrawerSwipe, usePhoneSwipe } from "./use-phone-swipe";
+import { userSectionId } from "./sidebar-layout";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -156,29 +157,25 @@ describe("dragOffset", () => {
   });
 });
 
-describe("sidebarChatIds", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
+describe("swipeChatIds", () => {
+  const work = userSectionId("Work");
+  const order = { sectionOrder: ["unassigned", work], itemOrder: { unassigned: ["bot:b", "group:room", "bot:a"], [work]: ["bot:d", "bot:c"] } };
+  const bots = [
+    { id: "a" },
+    { id: "b" },
+    { id: "c", section: "Work" },
+    { id: "d", section: "Work" },
+    { id: "e", pinned: true },
+    { id: "old", hidden: true },
+    { id: "older", hidden: true },
+  ];
+
+  it("lists bots and rooms in sidebar order with sections and tiers, skipping archived bots", () => {
+    expect(swipeChatIds(bots, [{ id: "room" }], order, "a")).toEqual(["e", "b", "room", "a", "d", "c"]);
   });
 
-  it("reads bot and room rows in DOM order", () => {
-    document.body.innerHTML = `
-      <div data-sidebar-row-kind="bot" data-sidebar-row-id="a"></div>
-      <div data-sidebar-row-kind="group" data-sidebar-row-id="room"></div>
-      <div data-sidebar-row-kind="bot" data-sidebar-row-id="b"></div>`;
-    expect(sidebarChatIds()).toEqual(["a", "room", "b"]);
-  });
-
-  it("keeps pinned and section order and ignores rows that are not chats", () => {
-    document.body.innerHTML = `
-      <div data-sidebar-row-kind="group" data-sidebar-row-id="pinned-room"></div>
-      <section>
-        <div data-sidebar-row-kind="bot" data-sidebar-row-id="second-bot"></div>
-        <div data-sidebar-row-kind="section" data-sidebar-row-id="heading"></div>
-        <div data-sidebar-row-kind="group" data-sidebar-row-id="section-room"></div>
-      </section>
-      <div data-sidebar-row-kind="bot" data-sidebar-row-id="first-bot"></div>`;
-    expect(sidebarChatIds()).toEqual(["pinned-room", "second-bot", "section-room", "first-bot"]);
+  it("moves between archived bots from an archived bot", () => {
+    expect(swipeChatIds(bots, [{ id: "room" }], order, "old")).toEqual(["old", "older"]);
   });
 });
 
@@ -321,9 +318,11 @@ describe("usePhoneSwipe", () => {
   let root: ReturnType<typeof createRoot>;
   let select: ReturnType<typeof vi.fn<(id: string) => void>>;
   let vibrate: ReturnType<typeof vi.fn>;
+  let ids: string[];
+  const order = () => ids;
 
   function Harness({ botId, showStage = true }: { botId: string; showStage?: boolean }) {
-    const stage = usePhoneSwipe(botId, true, select);
+    const stage = usePhoneSwipe(botId, true, select, undefined, order);
     if (!showStage) return null;
     return createElement("div", { ref: stage, id: "stage" }, createElement("p", { id: "msg" }, "hello"));
   }
@@ -351,11 +350,7 @@ describe("usePhoneSwipe", () => {
     select = vi.fn<(id: string) => void>();
     vibrate = vi.fn();
     Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
-    document.body.innerHTML = `
-      <div data-sidebar-row-kind="bot" data-sidebar-row-id="a"></div>
-      <div data-sidebar-row-kind="group" data-sidebar-row-id="room"></div>
-      <div data-sidebar-row-kind="bot" data-sidebar-row-id="b"></div>
-      <div data-sidebar-row-kind="bot" data-sidebar-row-id="c"></div>`;
+    ids = ["a", "b", "c"];
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
@@ -367,10 +362,28 @@ describe("usePhoneSwipe", () => {
     setWidth(1024);
   });
 
-  it("switches from a bot to the next room on a left swipe", () => {
+  it("switches to the next bot on a left swipe", () => {
     render("a");
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("room");
+    expect(select).toHaveBeenCalledWith("b");
+  });
+
+  it("follows the store order, not the rows a menu search left in the page", () => {
+    const rows = document.createElement("div");
+    rows.innerHTML = `
+      <div data-sidebar-row-kind="bot" data-sidebar-row-id="a"></div>
+      <div data-sidebar-row-kind="bot" data-sidebar-row-id="c"></div>`;
+    document.body.prepend(rows);
+    render("a");
+    swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
+    expect(select).toHaveBeenCalledWith("b");
+  });
+
+  it("swipes inside a bot no row shows", () => {
+    ids = ["x", "y"];
+    render("x");
+    swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
+    expect(select).toHaveBeenCalledWith("y");
   });
 
   it("switches to the previous bot on a right swipe", () => {
@@ -397,7 +410,7 @@ describe("usePhoneSwipe", () => {
     document.body.append(menu);
     const rider = { current: menu };
     function Ridden() {
-      const stage = usePhoneSwipe("a", true, select, rider);
+      const stage = usePhoneSwipe("a", true, select, rider, order);
       return createElement("div", { ref: stage, id: "stage" }, createElement("p", { id: "msg" }, "hello"));
     }
     act(() => root.render(createElement(Ridden)));
@@ -410,8 +423,8 @@ describe("usePhoneSwipe", () => {
     expect(stage.style.transform).toBe("");
     expect(menu.style.transform).toBe("");
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
-    expect(app).toContain("usePhoneSwipe(id, enabled, select, rider, showPeek);");
-    expect(app).toContain("rider={menuButtonRef} onSelect={selectSwipe}");
+    expect(app).toContain("usePhoneSwipe(id, enabled, select, rider, order, showPeek);");
+    expect(app).toContain("rider={menuButtonRef} order={swipeOrder} onSelect={selectSwipe}");
   });
 
   it("stops at the last bot", () => {
@@ -435,7 +448,7 @@ describe("usePhoneSwipe", () => {
 
   it("stays off while disabled (drawer open) and works again once enabled", () => {
     function Gated({ enabled }: { enabled: boolean }) {
-      const stage = usePhoneSwipe("a", enabled, select);
+      const stage = usePhoneSwipe("a", enabled, select, undefined, order);
       return createElement("div", { ref: stage, id: "stage" }, createElement("p", { id: "msg" }, "hello"));
     }
     act(() => root.render(createElement(Gated, { enabled: false })));
@@ -443,7 +456,7 @@ describe("usePhoneSwipe", () => {
     expect(select).not.toHaveBeenCalled();
     act(() => root.render(createElement(Gated, { enabled: true })));
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("room");
+    expect(select).toHaveBeenCalledWith("b");
   });
 
   it("is turned off by the open drawer in App", () => {
@@ -456,14 +469,14 @@ describe("usePhoneSwipe", () => {
   it("rebinds after the stage node is replaced (e.g. Back from another view)", () => {
     act(() => root.render(createElement(Harness, { botId: "a" })));
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("room");
+    expect(select).toHaveBeenCalledWith("b");
     select.mockClear();
 
     act(() => root.render(createElement(Harness, { botId: "a", showStage: false })));
     act(() => root.render(createElement(Harness, { botId: "a", showStage: true })));
 
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("room");
+    expect(select).toHaveBeenCalledWith("b");
   });
 });
 

@@ -313,17 +313,16 @@ it("keeps room roots out of queued-sends.json", () => {
   expect(readFileSync(join(DATA_DIR, "queued-sends.json"), "utf8")).not.toContain("room-secret");
 });
 
-it("keeps four open asks and spends one root credit per started ask", async () => {
+it("spends one root credit per started ask, open asks past four included", async () => {
   const root = start()!;
   const commitPeer = vi.fn(async (..._args: unknown[]) => {
     const peer = _args[4] as { reservation?: Parameters<typeof commit>[0] };
     if (peer.reservation) commit(peer.reservation);
     return { replied: false, text: "", taskId: "adopted" };
   });
-  for (let index = 0; index < 4; index++) expect((await send(request(commitPeer))).error).toBeUndefined();
-  expect((await send(request(commitPeer))).limit).toBe("You already have 4 teammate messages waiting. Collect those replies first.");
-  expect(commitPeer).toHaveBeenCalledTimes(4);
-  for (let index = 4; index < ROOT_TURNS; index++) commit((reserve(root, "wake") as { reservation: Parameters<typeof commit>[0] }).reservation);
+  for (let index = 0; index < 6; index++) expect(await send(request(commitPeer))).not.toHaveProperty("limit");
+  expect(commitPeer).toHaveBeenCalledTimes(6);
+  for (let index = 6; index < ROOT_TURNS; index++) commit((reserve(root, "wake") as { reservation: Parameters<typeof commit>[0] }).reservation);
   expect(reserve(root, "ask")).toEqual({ ok: false, reason: "exhausted" });
 });
 

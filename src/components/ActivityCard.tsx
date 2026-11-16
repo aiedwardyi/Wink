@@ -192,7 +192,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
   return (
     <Card title={t("settings.activity.title")}>
       <div className="@container/activity">
-        <div className="flex flex-col-reverse gap-4 @[30rem]/activity:flex-row @[30rem]/activity:items-center @[30rem]/activity:gap-7">
+        <div className="flex flex-col gap-4 @[30rem]/activity:flex-row @[30rem]/activity:items-center @[30rem]/activity:gap-7">
           <div aria-hidden className="min-w-0 flex-1 @[30rem]/activity:max-w-[23rem]">
             <div className={cn(WEEK_GRID, "mb-1.5 text-[10px] leading-none text-ink-secondary")}>
               {months.map(({ week, label }) => {

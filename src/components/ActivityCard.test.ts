@@ -37,6 +37,23 @@ async function renderCard(counts: number[], start = "2026-05-10") {
 const weeks = (fill: (day: number) => number) => Array.from({ length: 182 }, (_, day) => fill(day));
 const squaresOf = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>("[data-day]")];
 
+it.each(["en", "ko"] as const)("puts the month labels and squares before the numbers on narrow cards in %s", async (locale) => {
+  persistPreference(locale);
+  const { host, unmount } = await renderCard(weeks(() => 1));
+  try {
+    const calendar = squaresOf(host)[0]!.closest<HTMLElement>("[aria-hidden]")!;
+    const layout = calendar.parentElement!;
+    expect(layout.classList.contains("flex-col")).toBe(true);
+    expect(layout.classList.contains("flex-col-reverse")).toBe(false);
+    expect(layout.classList.contains("@[30rem]/activity:flex-row")).toBe(true);
+    expect(layout.firstElementChild).toBe(calendar);
+    expect(calendar.firstElementChild?.querySelectorAll("span").length).toBeGreaterThan(0);
+    expect(layout.children[1]?.children).toHaveLength(4);
+  } finally {
+    await unmount();
+  }
+});
+
 it("spreads small days across shades when one day spikes", async () => {
   const { host, unmount } = await renderCard(weeks((day) => (day === 100 ? 212 : day % 3 === 0 ? 0 : (day % 20) + 1)));
   try {

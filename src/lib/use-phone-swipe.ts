@@ -14,7 +14,6 @@ import {
   neighborId,
   reducedMotion,
   sheetSwipeCloses,
-  sidebarChatIds,
   swipeBlocked,
   swipeStep,
   type SwipeAxis,
@@ -50,12 +49,13 @@ function settle(stages: (HTMLElement | null | undefined)[], from: number, to: nu
 
 export type PhoneSwipePeek = { from: string; id: string; step: SwipeStep };
 
-/** Phone-only paging in sidebar order. `rider` moves with the stage; `onPeek` retains the neighbor through the spring. */
+/** Phone-only paging between the chats `order` lists. `rider` moves with the stage; `onPeek` retains the neighbor through the spring. */
 export function usePhoneSwipe(
   botId: string | undefined,
   enabled: boolean,
   select: (id: string) => void,
-  rider?: RefObject<HTMLElement | null>,
+  rider: RefObject<HTMLElement | null> | undefined,
+  order: () => string[],
   onPeek?: (peek: PhoneSwipePeek | null) => void,
 ): (node: HTMLElement | null) => void {
   const [el, setEl] = useState<HTMLElement | null>(null);
@@ -64,10 +64,10 @@ export function usePhoneSwipe(
   const enterFrom = useRef<number | null>(null);
   const landed = useRef<string | null>(null);
   const shownBot = useRef(botId);
-  const latest = useRef({ botId, select, onPeek });
+  const latest = useRef({ botId, select, order, onPeek });
   const resetMotion = useRef(() => {});
   useLayoutEffect(() => {
-    latest.current = { botId, select, onPeek };
+    latest.current = { botId, select, order, onPeek };
   });
 
   useLayoutEffect(() => {
@@ -86,7 +86,7 @@ export function usePhoneSwipe(
       enterFrom.current = null;
       return;
     }
-    const ids = sidebarChatIds();
+    const ids = latest.current.order();
     const dir = Math.sign(ids.indexOf(botId) - ids.indexOf(from));
     settle([el, rider?.current], ids.includes(from) && ids.includes(botId) ? dir * TAP_ENTER_PX : 0, 0, 0);
   }, [botId, el, rider]);
@@ -177,7 +177,7 @@ export function usePhoneSwipe(
       move(caught ? `translateX(${caught}px)` : "");
       width = el.clientWidth || window.innerWidth;
       stages().forEach((stage) => stage?.getAnimations?.().forEach((animation) => animation.cancel()));
-      const ids = sidebarChatIds();
+      const ids = latest.current.order();
       const canMove = neighborId(ids, latest.current.botId ?? "", caught < 0 ? 1 : -1) !== null;
       startX = touch.clientX;
       drag = { x: touch.clientX - caught * (canMove ? 1 : 3), y: touch.clientY, lastX: touch.clientX, lastT: e.timeStamp, velocity: 0, axis: null, ids };

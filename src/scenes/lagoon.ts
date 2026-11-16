@@ -54,7 +54,7 @@ void main() {
   float b = cell(q * 1.63 + 4.2, uT * 0.42 + 1.7);
   float la = exp(-a * 11.0), lb = exp(-b * 13.0);
   float c = la * 0.55 + lb * 0.35 + la * lb * 1.2 + exp(-a * 3.5) * 0.16;
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = 1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX));
   float gain = mix(1.0, uCalm, lane);
   vec2 uv = px / uSize;
   float depth = clamp(uv.y * 0.55 + length((uv - vec2(0.5, 0.3)) * vec2(1.2, 1.0)) * 0.7, 0.0, 1.0);
@@ -155,11 +155,10 @@ function create(api: SceneApi) {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
 
-  // The water is soft, so one buffer px per css px upsamples cleanly.
+  // The water is soft, so one buffer px per css px upsamples cleanly. Layout size: a theme tile shrinks its layer with a transform.
   const resize = () => {
-    const r = api.layer.getBoundingClientRect();
-    width = Math.max(1, Math.round(r.width));
-    height = Math.max(1, Math.round(r.height));
+    width = Math.max(1, api.layer.clientWidth);
+    height = Math.max(1, api.layer.clientHeight);
     canvas.width = width;
     canvas.height = height;
     render();
@@ -189,7 +188,8 @@ function create(api: SceneApi) {
       for (const x of ripples) x.age += k;
       ripples = ripples.filter((x) => x.age < RIPPLE_LIFE);
       render();
-      return flow > 0 || ripples.length > 0;
+      // flowTarget too: a first frame with no time passed has not moved flow off 0 yet.
+      return flowTarget > 0 || flow > 0 || ripples.length > 0;
     },
     event(event) {
       if (!ready) return;
@@ -200,6 +200,11 @@ function create(api: SceneApi) {
       }
       if (event.name === "motion") return render();
       if (api.reduced()) return;
+      if (event.name === "loop") {
+        flowTarget = 1;
+        flowUntil = -1;
+        api.wake();
+      }
       if (event.name === "send") {
         const r = api.rectIn(event.at);
         ripple(r.cx, r.y + 6, 1);

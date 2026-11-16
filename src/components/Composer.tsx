@@ -5,6 +5,7 @@ import { useStore, visibleMessages, type Bot, type Group, type Message, api } fr
 import { cn } from "@/lib/cn";
 import {
   botDraftId,
+  claimRoomHolds,
   draftRevision,
   forgetFailedComposerSend,
   getRoomHolds,
@@ -36,14 +37,15 @@ import {
   isImageFile,
   isLongPaste,
   pasteAttachment,
-  pasteImageAttachment,
   rereadEmptyImages,
   shrinksImage,
   uploadAttachment,
+  uploadAttachmentFile,
   visibleComposerNotice,
   type Attachment,
   type ComposerThreadNotice,
   type FileAttachment,
+  type ImageAttachment,
   type PasteAttachment,
   type UploadAttachment,
 } from "@/lib/composer-attachments";
@@ -117,17 +119,14 @@ export type RoomBotStatus = { id: string; text: string; failed?: boolean };
 /** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` backs the box's Stop. `chain` counts a live bot handoff. */
 export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number };
 
-const MAX_UPLOADS_PER_MESSAGE = 5;
 
 const roomPicture = (id: string) => {
   const file = roomFile(id);
   return file && { file, picture: isRoomPicture(file) };
 };
 
-const fromUpload = (attachment: Attachment) =>
-  attachment.kind === "upload" || (attachment.kind === "file" && Boolean(attachment.uploadId));
-
-function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAttachment {
+function uploadedFile(id: string, result: UploadDone, uploadId?: string, picture?: UploadAttachment["picture"]): FileAttachment | ImageAttachment {
+  if (picture === "image") return { kind: "image", id, path: result.path, name: result.name, size: result.size, mime: result.type };
   const file = fileAttachment(result.name, result.path, result.size, result.type);
   file.id = id;
   file.uploadId = uploadId;
@@ -136,7 +135,12 @@ function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAt
 }
 
 const saveUpload = (draftId: string, chipId: string) => (result: UploadDone, uploadId?: string) =>
-  updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId) : a));
+  updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId, a.picture) : a));
+
+const sendPicture = (file: File, chip: UploadAttachment) => chip.picture ? async (signal: AbortSignal): Promise<UploadDone> => {
+  const saved = await uploadAttachmentFile(file, false, signal);
+  return { path: saved.path, name: file.name || "pasted image", size: saved.bytes, type: saved.mime };
+} : undefined;
 
 interface ComposerDraftSnapshot extends ComposerSendSnapshot {
   reply: Message | null;
@@ -258,9 +262,8 @@ export function Composer({
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
-  const sendBlocked = locked || Boolean(approval);
   // A bot's open ask_user question pins above the composer but never locks
-  // it; a pending approval keeps its takeover and the pin waits behind it.
+  // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
   const pinned = pinnedQuestion(chatMessages, threadMessages);
   const questions = pinned ? openQuestions(chatMessages) : [];
@@ -329,17 +332,14 @@ export function Composer({
   const addAttachments = useCallback(
     (next: Attachment[], uploads: { id: string; file: File }[] = [], startedAt = 0) => {
       if (startedAt > noticeAt.current) setAttachmentNotice(null);
-      let room = MAX_UPLOADS_PER_MESSAGE - attachmentsRef.current.filter(fromUpload).length;
-      const kept = next.filter((a) => a.kind !== "upload" || room-- > 0);
-      if (kept.length < next.length) showNotice(t("composer.uploadTooMany"));
-      if (kept.length) trackFeature("attach.add", { n: kept.length });
-      flushSync(() => editAttachments((prev) => [...prev, ...kept]));
+      if (next.length) trackFeature("attach.add", { n: next.length });
+      flushSync(() => editAttachments((prev) => [...prev, ...next]));
       for (const upload of uploads) {
-        const chip = kept.find((a) => a.id === upload.id);
-        if (chip) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.kind === "upload" && chip.shrink);
+        const chip = next.find((a) => a.id === upload.id);
+        if (chip?.kind === "upload") queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.shrink, sendPicture(upload.file, chip));
       }
     },
-    [draftId, editAttachments, showNotice, t],
+    [draftId, editAttachments],
   );
   const removeAttachment = useCallback(
     (id: string) => {
@@ -358,7 +358,7 @@ export function Composer({
   const jobs = useSyncExternalStore(onUploadJobs, uploadJobs, uploadJobs);
   useEffect(() => {
     if (preview) return;
-    for (const a of attachments) if (a.kind === "file" && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
+    for (const a of attachments) if ((a.kind === "file" || a.kind === "image") && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
     const changed = attachments.filter((a) => {
       const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
       return job && a.kind === "upload" && (job.phase === "done" || (job.uploadId && job.uploadId !== a.uploadId));
@@ -368,7 +368,7 @@ export function Composer({
       prev.map((a) => {
         const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
         if (a.kind !== "upload" || !job) return a;
-        if (job.phase === "done" && job.result) return uploadedFile(a.id, job.result, job.uploadId);
+        if (job.phase === "done" && job.result) return uploadedFile(a.id, job.result, job.uploadId, a.picture);
         return job.uploadId ? { ...a, uploadId: job.uploadId } : a;
       }),
     );
@@ -408,7 +408,7 @@ export function Composer({
     }
     // the saved session answers with its finished file or its offset
     if (file.name === target.name && file.size === target.size && file.lastModified === target.lastModified) {
-      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink);
+      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink, sendPicture(file, target));
       return;
     }
     dropUpload(target.id, target.uploadId);
@@ -503,7 +503,7 @@ export function Composer({
     if (!composerNeedsTap()) input.focus();
     requestBotPrewarm(bot.id);
     dispatch({ type: "composerFocused", botId: bot.id });
-  }, [bot, dispatch, focusBlocked, locked, approval, requestBotPrewarm, state.composerFocusBotId, preview]);
+  }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId, preview]);
 
   useEffect(() => {
     if (peopleRoom && !preview) focusComposerOnActivation({ composer: inputRef.current });
@@ -520,7 +520,7 @@ export function Composer({
     const input = inputRef.current;
     if (!input || input.disabled) return;
     input.focus();
-  }, [approval, focusBlocked, locked, replyTo, preview]);
+  }, [focusBlocked, locked, replyTo, preview]);
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
@@ -615,6 +615,8 @@ export function Composer({
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );
   const queuedRef = useRef<QueuedGroupSend[]>(queued);
+  const holdsRoom = Boolean(group);
+  useEffect(() => (holdsRoom ? claimRoomHolds(draftId) : undefined), [holdsRoom, draftId]);
   const roomFlushLock = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -681,7 +683,6 @@ export function Composer({
       t,
       allowImages: engineSupportsImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
       shrunkPath: shrunkPicture,
     });
     if (added.length) addAttachments(added, uploads, startedAt);
@@ -733,7 +734,7 @@ export function Composer({
     bot && !group && terminalBridge?.readBot && terminalBridge?.sendBot,
   );
   const retryFailedSend = (failed: FailedComposerSend) => {
-    if (sendBlocked) return;
+    if (locked) return;
     if (failed.requestText.includes("<attached-image ")) {
       const support = imageTargetsSupport(failed.requestText, failed.after);
       if (support !== "supported") {
@@ -766,9 +767,11 @@ export function Composer({
     }
     onSend?.();
   };
-  const send = (after = false) => {
+  const send = (requestedAfter = false) => {
+    // a turn waiting on an approval takes the line after it, not mid-decision
+    const after = requestedAfter || Boolean(approval);
     const action = composerBusySendAction({
-      locked: sendBlocked,
+      locked,
       isRoom: Boolean(group),
       busy,
       canSteer: roomSteers(composerSendSourceText(inputRef.current?.value, text)),
@@ -847,7 +850,7 @@ export function Composer({
     onSend?.();
   };
   const previewTerminalSend = async () => {
-    if (sendBlocked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
+    if (locked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (!liveText.trim()) return;
     if (attachments.length) {
@@ -873,8 +876,8 @@ export function Composer({
     }
   };
   const confirmTerminalSend = async () => {
-    if (sendBlocked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
-      if (sendBlocked || !canSendToTerminal) setTerminalSendPreview(null);
+    if (locked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
+      if (locked || !canSendToTerminal) setTerminalSendPreview(null);
       return;
     }
     setTerminalSendBusy(true);
@@ -903,7 +906,7 @@ export function Composer({
   };
   useEffect(() => {
     if (preview || !group) return;
-    if (sendBlocked) return;
+    if (locked) return;
     if (busy) {
       roomFlushLock.current = false;
       return;
@@ -936,13 +939,13 @@ export function Composer({
         commitQueued(rearmRoomFlushHold(queuedRef.current));
       },
     });
-  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, sendBlocked, preview]);
+  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, locked, preview]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
   useEffect(() => {
     if (!recording) return;
-    if (sendBlocked) {
+    if (locked) {
       setRecording(false);
       return;
     }
@@ -972,10 +975,10 @@ export function Composer({
       offEnd();
       void bridge.speechStop();
     };
-  }, [recording, editText, sendBlocked]);
+  }, [recording, editText, locked]);
 
   const toggleMic = () => {
-    if (sendBlocked) return;
+    if (locked) return;
     if (!capabilities.dictation.available || !window.ogb) {
       setSpeechError(t("composer.dictationUnavailable"));
       return;
@@ -1100,7 +1103,7 @@ export function Composer({
             <button
               type="button"
               onClick={() => retryFailedSend(failed)}
-              disabled={sendBlocked}
+              disabled={locked}
               className="shrink-0 rounded px-2 py-1 font-medium hover:bg-danger/10"
             >
               {t("composer.retry")}
@@ -1150,8 +1153,7 @@ export function Composer({
             </button>
           </div>
         ))}
-        {/* An approval takes over the composer: you answer it before you
-            can type again, so a waiting bot is impossible to miss. */}
+        {/* An approval sits on the composer so a waiting bot is impossible to miss. */}
         {approval && (
           <div data-pending-approval className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
             <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
@@ -1201,9 +1203,9 @@ export function Composer({
             />
           </div>
         )}
-        <div inert={sendBlocked}>
+        <div inert={locked}>
         <ComposerAttachments
-          disabled={sendBlocked}
+          disabled={locked}
           items={shownAttachments}
           onAdd={addAttachments}
           onRemove={removeAttachment}
@@ -1249,7 +1251,7 @@ export function Composer({
           {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
-            disabled={sendBlocked}
+            disabled={locked}
             type="file"
             multiple
             className="hidden"
@@ -1261,7 +1263,7 @@ export function Composer({
           />
           <input
             ref={repickInput}
-            disabled={sendBlocked}
+            disabled={locked}
             type="file"
             className="hidden"
             onChange={(e) => {
@@ -1269,7 +1271,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!sendBlocked && !room?.offline && (
+          {!locked && !room?.offline && (
             <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
               <button
                 type="button"
@@ -1383,12 +1385,10 @@ export function Composer({
             }
             if (e.key === "Escape" && recording) setRecording(false);
           }}
-          disabled={Boolean(approval) || locked}
+          disabled={locked}
           placeholder={
             locked
               ? t("composer.finishSetup")
-              : approval
-              ? t("composer.answerApproval")
               : recording
               ? t("composer.listening")
               : pinned && !pinned.card?.options.length
@@ -1396,7 +1396,7 @@ export function Composer({
               : busyChrome.placeholder
           }
           aria-label={t("composer.messageAria", { name: group ? group.name : room ? room.name : (bot?.name ?? "") })}
-            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
+            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none max-md:text-[16px]"
           />
         <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
           {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
@@ -1428,7 +1428,7 @@ export function Composer({
             <Square size={12} className="fill-current" />
           </button>
         )}
-        {!sendBlocked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
+        {!locked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.stopDictation") : t("composer.startDictation")}
@@ -1443,7 +1443,7 @@ export function Composer({
             <Mic size={18} />
           </button>
         )}
-        {hasContent && !sendBlocked && (
+        {hasContent && !locked && (
           <>
           {/* Hidden while sharing is on: the bot types into its own panes. */}
           {canSendToTerminal && bot?.shareTerminalWithChat === false && !busy && (
@@ -1469,7 +1469,7 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
+          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
             <button
               type="button"
               onClick={onCall}

@@ -433,6 +433,19 @@ function systemLines(text: string): string[] {
     .filter((line) => line.trim());
 }
 
+function retainedLinesReordered(before: string[], after: string[]): boolean {
+  const oldLines = new Set(before);
+  const newLines = new Set(after);
+  const retainedBefore = before.filter((line) => newLines.has(line));
+  const retainedAfter = after.filter((line) => oldLines.has(line));
+  return retainedBefore.length !== retainedAfter.length
+    || retainedBefore.some((line, index) => line !== retainedAfter[index]);
+}
+
+export function systemLinesReordered(delivered: string, system: string): boolean {
+  return retainedLinesReordered(systemLines(delivered), systemLines(system));
+}
+
 /** Lines of `from` that `other` does not also hold, in `from`'s order. */
 function linesOnlyIn(from: string[], other: string[]): string[] {
   const left = new Map<string, number>();
@@ -456,8 +469,9 @@ export function withSystemChanges(
   if (delivered === undefined || delivered === system) return text;
   const before = systemLines(delivered);
   const after = systemLines(system);
-  const removed = linesOnlyIn(before, after);
-  const added = linesOnlyIn(after, before);
+  const reordered = retainedLinesReordered(before, after);
+  const removed = reordered ? before : linesOnlyIn(before, after);
+  const added = reordered ? after : linesOnlyIn(after, before);
   if (!removed.length && !added.length) return text;
   if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
   // Untagged, Haiku kept the stale system prompt in about half of real-CLI

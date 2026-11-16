@@ -194,12 +194,15 @@ describe("cached chat preview", () => {
     scroll.scrollTop = 0;
     await act(async () => { notifications.forEach((notify) => notify()); });
     expect(host.querySelectorAll("[data-mid]")).toHaveLength(initial);
+    scroll.scrollTop = 400;
     await act(async () => {
       for (const [type, clientY] of [["touchstart", 100], ["touchmove", 150]] as const) {
         const event = new Event(type, { bubbles: true });
         Object.defineProperty(event, "touches", { value: [{ clientY }] });
         scroll.dispatchEvent(event);
       }
+      scroll.scrollTop = 0;
+      scroll.dispatchEvent(new Event("scroll"));
     });
     await act(async () => { notifications.forEach((notify) => notify()); });
     expect(host.querySelectorAll("[data-mid]").length).toBeGreaterThan(initial);

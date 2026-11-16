@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Group } from "@/state/store";
 import { ChatPeekPart } from "@/lib/chat-preview";
-import { SWIPE_MOTION_MS, sidebarChatIds } from "@/lib/phone-swipe";
+import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
 import { UNASSIGNED_SECTION_ID, sidebarItemKey } from "@/lib/sidebar-order";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
@@ -50,7 +50,7 @@ async function mount(selectedId: string, emptyId?: string, room = false) {
     selectedId,
   }));
   await act(async () => root.render(createElement(App)));
-  expect(sidebarChatIds()).toEqual(order);
+  expect([...document.querySelectorAll("[data-sidebar-row-id]")].map((row) => row.getAttribute("data-sidebar-row-id"))).toEqual(order);
   expect(mountedChats()).toEqual([selectedId]);
 }
 

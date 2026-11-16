@@ -286,3 +286,20 @@ it("runs no camera while the chat is hidden or motion is reduced", async () => {
     vi.restoreAllMocks();
   }
 });
+
+it.each(["wheel", "touchmove"])("stops the replay camera on %s without cancelling the gesture", async type => {
+  const pending: FrameRequestCallback[] = [];
+  const frame = vi.fn((callback: FrameRequestCallback) => { pending.push(callback); return 1; });
+  vi.stubGlobal("requestAnimationFrame", frame);
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  const { host, root, to } = await watchShort();
+  await to(1_000);
+  expect(pending).toHaveLength(1);
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  await act(async () => { host.querySelector(".verify-doc-stage")!.dispatchEvent(event); });
+  frame.mockClear();
+  pending.shift()!(performance.now());
+  expect(frame).not.toHaveBeenCalled();
+  expect(event.defaultPrevented).toBe(false);
+  await act(async () => root.unmount());
+});

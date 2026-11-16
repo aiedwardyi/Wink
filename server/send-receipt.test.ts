@@ -51,6 +51,13 @@ describe("send POST receipt", () => {
     });
   });
 
+  it("a turn stopped while it prepares is a cancelled send, never a plain receipt", () => {
+    const index = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
+    const stops = index.split("if (currentTurnEpoch(bot.id) !== epoch) {").slice(1).map((rest) => rest.slice(0, rest.indexOf("\n  }"))).filter((body) => body.includes("return startedTurn("));
+    expect(stops).toHaveLength(2);
+    expect(stops.filter((body) => body.includes("return startedTurn(userMessage, { cancelled: true });"))).toHaveLength(2);
+  });
+
   it("cancels before append without a user line or a 409", () => {
     expect(sendPostReceipt(startedTurn(undefined, { cancelled: true }), "thread-1")).toEqual({
       ok: true,

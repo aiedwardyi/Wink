@@ -542,7 +542,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // one active turn per thread; a second send while busy is a caller bug
     const active = new Map<string, { stop: () => void; interrupt: () => void; turnId: string }>();
     let disposed = false;
-    const systemHeld = systemLedger();
+    const systemHeld = systemLedger(true, instanceId);
     // every live agy child, tracked independently of `active`: a child can
     // hang AFTER emitting `result` (so it's already removed from `active`), and
     // dispose()/stopAll() must still be able to reap it. Removed on process exit.
@@ -603,9 +603,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // transport and is what blew Windows CreateProcess (~32k) with long
       // pastes / injected continuity. Continuity stays in system/text.
       const resumeCursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-      // A resumed conversation that holds this exact system text gets only the turn text.
-      const system = turn.system && (!resumeCursor || !systemHeld.holds(resumeCursor, turn.system)) ? turn.system : undefined;
+      const system = systemHeld.prompt(resumeCursor, turn.system);
       if (system && resumeCursor) systemHeld.forget(resumeCursor);
+      else if (resumeCursor) systemHeld.begin(resumeCursor);
       const prompt = composeAntigravityPrompt(system, turn.text);
 
       let settled = false;
@@ -629,7 +629,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         settled = true;
         const conversation = conversationId ?? resumeCursor;
         if (conversation && checkpointed) systemHeld.forget(conversation);
-        else if (conversation && system && promptAccepted) systemHeld.record(conversation, system);
+        else if (conversation && system && promptAccepted) systemHeld.record(conversation, turn.system!);
+        else if (conversation) systemHeld.keep(conversation);
         clearTimeout(watchdog);
         armPostSettleCleanup();
         return true;

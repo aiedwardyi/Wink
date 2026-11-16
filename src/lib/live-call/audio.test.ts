@@ -200,6 +200,36 @@ describe("CallAudio", () => {
     expect(muted.stop).toHaveBeenCalledOnce();
   });
 
+  it("opens a stopped speaker only behind the reopened mic, so Android keeps it on call volume", async () => {
+    const { audio, output, getUserMedia, micTrack } = setup();
+    await audio.capture(() => {});
+    micTrack.readyState = "ended";
+    output.pause();
+    output.play.mockClear();
+    const next = { stop: vi.fn(), readyState: "live", muted: false };
+    let grant!: (stream: unknown) => void;
+    getUserMedia.mockReturnValueOnce(new Promise((resolve) => { grant = resolve; }));
+    const healing = audio.heal();
+    expect(output.play).not.toHaveBeenCalled();
+    grant({ getTracks: () => [next], getAudioTracks: () => [next] });
+    await expect(healing).resolves.toBe(true);
+    expect(output.play).toHaveBeenCalledOnce();
+    expect(getUserMedia.mock.invocationCallOrder.at(-1)).toBeLessThan(output.play.mock.invocationCallOrder[0]!);
+    audio.close();
+  });
+
+  it("leaves a stopped speaker shut when the mic does not come back", async () => {
+    const { audio, output, getUserMedia, micTrack } = setup();
+    await audio.capture(() => {});
+    micTrack.readyState = "ended";
+    output.pause();
+    output.play.mockClear();
+    getUserMedia.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+    await expect(audio.heal()).resolves.toBe(false);
+    expect(output.play).not.toHaveBeenCalled();
+    audio.close();
+  });
+
   it("says so when the phone wants a tap before audio plays again", async () => {
     vi.useFakeTimers();
     try {

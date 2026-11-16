@@ -1161,6 +1161,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
+  const reaching = useRef(false);
+  const touchTop = useRef(0);
 
   const setBottomFollow = useCallback((next: boolean) => {
     followRef.current = next;
@@ -1247,7 +1250,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const modelSwitch = useNoReplySwitch(bot, lastUserMessage?.id, turnSignal !== undefined);
   const activityLabel = turnStageLabel(
     phase,
-    liveActivityLabel(lastMessage, showActivities),
+    liveActivityLabel(lastMessage, showActivities, bot.activity === "no-signal"),
     busyRetryLabel(lastMessage),
     noReply?.label,
   );
@@ -1528,7 +1531,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
     <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} sendRef={sceneSend} />}
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} hidden={hidden} sendRef={sceneSend} />}
       {/* Call mode covers the thread while the bot is on the line */}
       {!onLiveCall && <CallOverlay bot={bot} />}
       {/* Header */}
@@ -1733,19 +1736,27 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
         onWheel={(e) => followWheel(e.deltaY)}
-        onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
+        onTouchStart={(e) => {
+          touchY.current = e.touches[0]?.clientY ?? 0;
+          reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
+        }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) breakFollow();
+          if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
+        onTouchEnd={() => (reaching.current = false)}
+        onTouchCancel={() => (reaching.current = false)}
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,
@@ -1847,6 +1858,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             visible={waiting && !jump.messages && !dockLive && (!preview || messages.length > 0)}
             docked={dockLive}
             label={activityLabel}
+            instant={phase === "responding"}
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}

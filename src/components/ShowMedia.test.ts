@@ -381,6 +381,20 @@ it("lists a room again only when a new message brings files", async () => {
   expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
 });
 
+it("keeps a room's open picture open when someone posts a file", async () => {
+  const sent: Message = { id: "m2", role: "user", kind: "text", at: 4, text: "", roomFiles: [{ id: id(4), name: "new.pdf", type: "application/pdf", bytes: 1 }] };
+  await act(async () => showMedia("r-thread"));
+  await render({ threadId: "r-thread", roomId: "r1", messages: [] });
+  await settle();
+  await click(host.querySelector("[data-media-grid] button"));
+  expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
+  room = { files: [{ id: id(4), name: "new.pdf", type: "application/pdf", bytes: 1, at: 4, sender: "Mina" }, ...roomFiles] };
+  await render({ threadId: "r-thread", roomId: "r1", messages: [sent] });
+  await settle();
+  expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
+  expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
+});
+
 it("closes at its open width, with the same thumbs and no new fetch", async () => {
   const { showMedia } = await import("@/lib/show-pane");
   const source: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };

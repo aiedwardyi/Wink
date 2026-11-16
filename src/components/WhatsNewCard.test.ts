@@ -6,7 +6,33 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
+import { applySkin } from "@/lib/skins";
 import { WHATS_NEW } from "@/lib/whats-new";
+import type { SceneModule } from "@/scenes/scene-host";
+
+type Run = { frames: number; stopped: boolean };
+const { runs, scene } = vi.hoisted(() => {
+  const runs: Run[] = [];
+  const scene: SceneModule = {
+    pauseOnBlur: false,
+    create: (api) => {
+      const run = { frames: 0, stopped: false };
+      runs.push(run);
+      return {
+        frame: () => ((run.frames += 1), true),
+        event: (event) => {
+          if (event.name === "loop") {
+            api.after(60_000, () => (run.frames += 1));
+            api.wake();
+          }
+        },
+        dispose: () => void (run.stopped = true),
+      };
+    },
+  };
+  return { runs, scene };
+});
+vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("./ChatScene")>()), loadScene: async () => scene }));
 
 const api = vi.fn((..._args: unknown[]) => Promise.resolve({ ok: true }));
 const dispatch = vi.fn();
@@ -151,6 +177,164 @@ describe("whats new card", () => {
       expect((entry.tiles[1].show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
     }
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["en", "lagoon", "Lagoon moves while your bot works. It costs 0 tokens."],
+    ["en", "snow", "Snow moves while your bot works. It costs 0 tokens."],
+    ["en", "neon-grid", "Neon Grid moves while your bot works. It costs 0 tokens."],
+    ["ko", "lagoon", "라군 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "snow", "스노우 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "neon-grid", "네온 그리드 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+  ] as const)("shows an animated theme as one row in %s (%s), closed by its X", (locale, theme, line) => {
+    applyLocale(locale);
+    act(() => root.render(createElement(WhatsNewCard, { theme, closing: false, onClose })));
+    const row = host.querySelector(".whats-new-dock > .whats-new")!;
+    expect(row.textContent).toBe(line);
+    expect(row.getAttribute("aria-label")).toBe(line);
+    expect(row.querySelectorAll(".whats-new-tile, .whats-new-foot, .whats-new-done")).toHaveLength(0);
+    expect(row.querySelectorAll("button")).toHaveLength(1);
+    act(() => row.querySelector<HTMLButtonElement>(".whats-new-x")!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("starts the theme row with the miniature of the picked theme", () => {
+    act(() => applySkin("lagoon-night"));
+    act(() => root.render(createElement(WhatsNewCard, { theme: "lagoon", closing: false, onClose })));
+    const mini = host.querySelector(".whats-new-head")!.firstElementChild!;
+    expect(mini.className).toBe("whats-new-mini");
+    expect(mini.nextElementSibling?.tagName).toBe("P");
+    expect(mini.querySelector('[data-skin="lagoon-night"][aria-hidden="true"]')).not.toBeNull();
+    expect(mini.querySelector("[data-mini-scene]")).toBeNull();
+    expect(host.querySelector(".whats-new")!.textContent).toBe("Lagoon moves while your bot works. It costs 0 tokens.");
+    act(() => applySkin("precision"));
+    expect(mini.querySelector('[data-skin="lagoon"]')).not.toBeNull();
+  });
+
+  describe("theme preview", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      runs.length = 0;
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      document.documentElement.removeAttribute("data-orbit-idle");
+    });
+
+    const renderTheme = (theme: "lagoon" | "snow", close: () => void = onClose) =>
+      act(() => root.render(createElement(WhatsNewCard, { theme, closing: false, onClose: close })));
+    const advance = (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms));
+    const moving = () => host.querySelector("[data-mini-scene]");
+
+    it.each(["lagoon", "snow"] as const)("moves %s for three seconds on screen, then restores the exact still without replay", async (theme) => {
+      act(() => applySkin(theme));
+      renderTheme(theme);
+      const mini = host.querySelector(".whats-new-mini")!;
+      const still = mini.innerHTML;
+      await advance(5000);
+      expect(moving()).toBeNull();
+      scrollIntoView();
+      expect(moving()).not.toBeNull();
+      await advance(100);
+      expect(runs).toHaveLength(1);
+      expect(runs[0].frames).toBeGreaterThan(0);
+      await advance(2899);
+      expect(moving()).not.toBeNull();
+      await advance(1);
+      expect(mini.innerHTML).toBe(still);
+      expect(runs[0].stopped).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      const frames = runs[0].frames;
+      act(() => mini.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+      scrollIntoView();
+      await advance(60_000);
+      expect(runs).toHaveLength(1);
+      expect(runs[0].frames).toBe(frames);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(["X", "chat switch"])("cancels the preview timer and scene on %s inside three seconds", async (action) => {
+      renderTheme("lagoon", () => root.render(null));
+      scrollIntoView();
+      await advance(100);
+      expect(runs).toHaveLength(1);
+      expect(runs[0].frames).toBeGreaterThan(0);
+      act(() => {
+        if (action === "X") host.querySelector<HTMLButtonElement>(".whats-new-x")!.click();
+        else root.render(null);
+      });
+      expect(runs[0].stopped).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      const frames = runs[0].frames;
+      await advance(60_000);
+      expect(runs[0].frames).toBe(frames);
+    });
+
+    it.each([0, 16])("cancels a deferred scene start when unmounted at %i ms", async (ms) => {
+      renderTheme("lagoon");
+      scrollIntoView();
+      act(() => vi.advanceTimersByTime(ms));
+      act(() => root.render(null));
+      expect(vi.getTimerCount()).toBe(0);
+      await advance(100);
+      expect(runs).toHaveLength(0);
+    });
+
+    it("gives a replacement theme its own three seconds", async () => {
+      renderTheme("lagoon");
+      scrollIntoView();
+      await advance(3000);
+      expect(moving()).toBeNull();
+      renderTheme("snow");
+      expect(moving()?.getAttribute("data-mini-scene")).toBe("snow");
+      await advance(1000);
+      renderTheme("snow");
+      await advance(2000);
+      expect(moving()).toBeNull();
+      expect(runs).toHaveLength(2);
+      expect(runs.every((run) => run.stopped)).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("rests while hidden and never restarts after the original three seconds", async () => {
+      renderTheme("snow");
+      scrollIntoView();
+      await advance(100);
+      expect(runs[0].frames).toBeGreaterThan(0);
+      await act(async () => document.documentElement.setAttribute("data-orbit-idle", "hidden"));
+      const frames = runs[0].frames;
+      await advance(1000);
+      expect(runs[0].frames).toBe(frames);
+      await act(async () => document.documentElement.removeAttribute("data-orbit-idle"));
+      await advance(100);
+      expect(runs[0].frames).toBeGreaterThan(frames);
+      await advance(1800);
+      expect(runs[0].stopped).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      await act(async () => document.documentElement.removeAttribute("data-orbit-idle"));
+      scrollIntoView();
+      await advance(5000);
+      expect(moving()).toBeNull();
+      expect(runs).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("keeps the existing still under reduced motion", async () => {
+      vi.spyOn(window, "matchMedia").mockImplementation(
+        (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList,
+      );
+      renderTheme("snow");
+      const mini = host.querySelector(".whats-new-mini")!;
+      const still = mini.innerHTML;
+      scrollIntoView();
+      await advance(5000);
+      expect(mini.innerHTML).toBe(still);
+      expect(runs).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   it("holds a still frame while the app is idle or motion is reduced", async () => {

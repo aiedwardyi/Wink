@@ -190,8 +190,8 @@ describe("claudeUserContent", () => {
     expect(claudeUserContent(text, store)).toBe(text);
   });
 
-  it("sends the 8 newest native images, dropping the oldest", () => {
-    const paths = Array.from({ length: 9 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
+  it("sends the 20 newest native images, dropping the oldest", () => {
+    const paths = Array.from({ length: 21 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
     const content = claudeUserContent(paths.map(tag).join("\n"), store);
     if (!Array.isArray(content)) throw new Error("expected blocks");
     expect(content.slice(1).map((b) => (b.type === "image" ? b.source.data : ""))).toEqual(
@@ -200,8 +200,8 @@ describe("claudeUserContent", () => {
   });
 
   it("counts a duplicate path once, so it does not push out another image", () => {
-    const paths = Array.from({ length: 8 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
-    const text = [...paths, paths[7]].map(tag).join("\n");
+    const paths = Array.from({ length: 20 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
+    const text = [...paths, paths[19]].map(tag).join("\n");
     const content = claudeUserContent(text, store);
     if (!Array.isArray(content)) throw new Error("expected blocks");
     expect(content.slice(1).map((b) => (b.type === "image" ? b.source.data : ""))).toEqual(
@@ -1399,6 +1399,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     ["session not found", "resume-fails"],
     ["invalid session across lines", "resume-fails-multiline"],
     ["unknown conversation", "resume-fails-unknown"],
+    ["no conversation found, as the real CLI reports it", "resume-fails-real"],
   ])("starts fresh with portable context for %s", async (diagnostic, mode) => {
     await create(mode);
     const dump = join(scratch, "resume-fallback.json");
@@ -1440,6 +1441,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.interruptTurn("t-int");
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
+  });
+
+  it("interrupt ends a turn stuck on a tool that never returns and frees its thread", async () => {
+    await create("tool-hang");
+    await instance.adapter.sendTurn({ threadId: "t-tool-hang", text: "go" });
+    await recorder.until((e) => e.type === "item.started" && e.itemType === "tool");
+
+    await instance.adapter.interruptTurn("t-tool-hang");
+    expect(instance.adapter.hasSession("t-tool-hang")).toBe(false);
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: false });
   });
 
   it("releases the thread on interrupt so the next sendTurn is not rejected", async () => {

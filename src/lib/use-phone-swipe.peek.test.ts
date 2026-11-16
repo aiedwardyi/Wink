@@ -15,11 +15,13 @@ let peeks: ReturnType<typeof vi.fn<(peek: PhoneSwipePeek | null) => void>>;
 let animateDescriptor: PropertyDescriptor | undefined;
 let reply: ReturnType<typeof vi.fn<() => void>>;
 let translate: ReturnType<typeof vi.fn<() => void>>;
+let ids: string[];
+const order = () => ids;
 
 function Harness({ initial = "b", enabled = true, mounts = true }: { initial?: string; enabled?: boolean; mounts?: boolean }) {
   const [id, setId] = useState(initial);
   const [peek, setPeek] = useState<PhoneSwipePeek | null>(null);
-  const stage = usePhoneSwipe(id, enabled, (next) => { selected(next); setId(next); }, undefined, (next) => { peeks(next); if (mounts) setPeek(next); });
+  const stage = usePhoneSwipe(id, enabled, (next) => { selected(next); setId(next); }, undefined, order, (next) => { peeks(next); if (mounts) setPeek(next); });
   return createElement("div", { ref: stage, id: "stage" },
     createElement("p", { id: "message" }, id),
     peek && createElement("div", { "data-peek": peek.id }),
@@ -31,7 +33,7 @@ function RoomHarness() {
   const [peek, setPeek] = useState<PhoneSwipePeek | null>(null);
   const row = useRef<HTMLDivElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
-  const stage = usePhoneSwipe(id, true, (next) => { selected(next); setId(next); }, undefined, (next) => { peeks(next); setPeek(next); });
+  const stage = usePhoneSwipe(id, true, (next) => { selected(next); setId(next); }, undefined, order, (next) => { peeks(next); setPeek(next); });
   useBubbleSwipe({ row, bubble, canReply: true, canTranslate: true, onReply: reply, onTranslate: translate });
   return createElement("div", { ref: stage, id: "stage" },
     createElement("header", { id: "room-header" }, "Room"),
@@ -88,7 +90,7 @@ beforeEach(() => {
     motions.push({ node: this, frames: keyframes, finish });
     return { finished, cancel: () => cancel(new Error("cancelled")) } as unknown as Animation;
   } });
-  document.body.innerHTML = ["a", "b", "c"].map((id) => `<div data-sidebar-row-kind="bot" data-sidebar-row-id="${id}"></div>`).join("");
+  ids = ["a", "b", "c"];
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
 });
@@ -274,7 +276,7 @@ describe("phone swipe pager", () => {
   });
 
   it.each([[300, 140, "b"], [100, 260, "a"]] as const)("starts a swipe inside a room toward %s to %s", async (from, to, id) => {
-    document.querySelector('[data-sidebar-row-id="b"]')!.insertAdjacentHTML("beforebegin", '<div data-sidebar-row-kind="group" data-sidebar-row-id="room"></div>');
+    ids = ["a", "room", "b", "c"];
     mount("room");
     touch("touchstart", from, 300, 0);
     touch("touchmove", to, 300, 1000);
@@ -317,7 +319,7 @@ describe("phone swipe pager", () => {
 describe("room gesture ownership at touch start", () => {
   const element = (id: string) => host.querySelector<HTMLElement>(`#${id}`)!;
   function mountRoom() {
-    document.querySelector('[data-sidebar-row-id="b"]')!.insertAdjacentHTML("beforebegin", '<div data-sidebar-row-kind="group" data-sidebar-row-id="room"></div>');
+    ids = ["a", "room", "b", "c"];
     act(() => root.render(createElement(RoomHarness)));
   }
 

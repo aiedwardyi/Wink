@@ -2,15 +2,18 @@
 import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
+import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
+import { callAudio } from "./warm-audio";
 
-/** `bot` is the bot as it was when called, for a store that has not listed it yet. */
-export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext };
+/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about. */
+export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext; opener?: string };
 
 let calls = 0;
 let call: ActiveCall | null = null;
 let note: { botId: string; text: string } | null = null;
 let inView = 0;
+let releaseReload: (() => void) | null = null;
 const watchers = new Set<() => void>();
 
 function notify() {
@@ -27,18 +30,46 @@ export function callsSupported(): boolean {
   return typeof AudioContext !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
-export function placeCall(bot: Bot, ctx: AudioContext): ActiveCall {
-  call = { id: ++calls, botId: bot.id, bot, ctx };
+export function placeCall(bot: Bot, ctx: AudioContext, opener?: string): ActiveCall {
+  call = { id: ++calls, botId: bot.id, bot, ctx, opener };
+  releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;
   notify();
   return call;
 }
 
+/** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */
+export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
+  if (!bot || !opener || call || !callsSupported()) return null;
+  const ctx = callAudio();
+  if (ctx.state === "suspended") addEventListener("pointerdown", () => void ctx.resume(), { once: true });
+  void ctx.resume();
+  return placeCall(bot, ctx, opener);
+}
+
+type Rung = { botId: string; threadId: string; opener: string | null };
+const RUNG_MS = 30_000;
+let rung: (Rung & { at: number }) | null = null;
+
+/** The voice briefs from the bot's active thread, so a tapped call waits for the switch to its thread to land; one that never lands lapses. */
+export function answerOnThread(bots: readonly Bot[], next?: Rung): ActiveCall | null {
+  if (next) rung = next.opener ? { ...next, at: Date.now() } : null;
+  const want = rung;
+  if (!want) return null;
+  if (Date.now() - want.at > RUNG_MS) return (rung = null);
+  const bot = bots.find((candidate) => candidate.id === want.botId);
+  if (bot?.threadId !== want.threadId) return null;
+  rung = null;
+  return answerCall(bot, want.opener);
+}
+
 /** Only drops this call: a late teardown of an old one never hangs up a newer one. */
 export function dropCall(ended: ActiveCall, text?: string) {
   if (call !== ended) return;
   call = null;
+  releaseReload?.();
+  releaseReload = null;
   if (text) note = { botId: ended.botId, text };
   notify();
 }

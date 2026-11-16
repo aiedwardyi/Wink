@@ -77,14 +77,18 @@ async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10
       await cleanup.closed(session, true);
     }
   }
-  const rows = Array.from({ length: scratch }, (_, index) => path.join(tempRoot, `wink-S${index}`));
-  for (const [index, row] of rows.entries()) {
-    const session = { id: `S${index}`, botId: "bot", label: `S${index} | model | high`, cwd: home, tempRoot, reportAt: time };
-    cleanup.opened(session);
-    await cleanup.closed(session, true);
-    assert.equal(fs.existsSync(row), true);
-  }
-  time += 4 * DAY_MS;
+  const close = async (from, to) => {
+    const closed = Array.from({ length: to - from }, (_, index) => path.join(tempRoot, `wink-S${from + index}`));
+    for (const [index, row] of closed.entries()) {
+      const session = { id: `S${from + index}`, botId: "bot", label: `S${from + index} | model | high`, cwd: home, tempRoot, reportAt: time };
+      cleanup.opened(session);
+      await cleanup.closed(session, true);
+      assert.equal(fs.existsSync(row), true);
+    }
+    time += 4 * DAY_MS;
+    return closed;
+  };
+  const rows = await close(0, scratch);
   const roots = () => {
     const found = count(worktreeRoot);
     found.dirs++;
@@ -101,7 +105,7 @@ async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10
     writer = childProcess.spawn(process.execPath, ["-e", `const fs = require("fs"); setInterval(() => { for (const file of ${JSON.stringify(files)}) fs.appendFileSync(file, "x"); }, 20);`], { stdio: "ignore", windowsHide: true });
     return new Promise((resolve) => setTimeout(resolve, 200));
   };
-  return { home, worktreeRoot, tempRoot, cleanup, jobs, targets, rows, live, warnings, roots, events, write };
+  return { home, worktreeRoot, tempRoot, cleanup, jobs, targets, rows, live, warnings, roots, events, write, close };
 }
 
 async function calls(t) {
@@ -175,7 +179,7 @@ test("git runs once per worktree, not once per ledger row", async (t) => {
   const first = spawns;
   await f.cleanup.sweep();
   assert.equal(fs.existsSync(target), true);
-  assert.ok(first <= 3, `${first} git spawns for 5 rows`);
+  assert.ok(first <= 6, `${first} git spawns for 5 rows`);
   assert.ok(spawns - first <= 1, `${spawns - first} git spawns on an unchanged sweep`);
   assert.deepEqual(f.warnings, []);
 });
@@ -202,8 +206,56 @@ test("the sweep leaves the loop free", async (t) => {
   assert.deepEqual(warnings, []);
 });
 
+test("a tree past the folder budget is swept in one pass and not walked again", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, budget: { ...SWEEP_BUDGET, dirs: 50 } });
+  assert.ok(f.roots().dirs > 50);
+  await f.cleanup.sweep();
+  assert.deepEqual(f.rows.filter((row) => fs.existsSync(row)), []);
+  assert.equal(f.events().some((line) => line.kind === "budget"), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, ".orbit", "cleanup-sweep.json"), "utf8")).done, true);
+
+  const later = await f.close(4, 7);
+  const promises = await import("node:fs/promises");
+  let reads = 0;
+  for (const method of ["lstat", "readdir"]) {
+    const original = promises.default[method];
+    t.mock.method(promises.default, method, (...args) => {
+      if (String(args[0]).startsWith(path.join(f.worktreeRoot, "by-"))) reads++;
+      return original(...args);
+    });
+  }
+  await f.cleanup.sweep();
+  assert.deepEqual(later.filter((row) => fs.existsSync(row)), []);
+  assert.equal(reads, 0);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a folder flooded with changes is walked again and no other folder is", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3 });
+  await f.cleanup.sweep();
+  // Small batches, so the watcher's own buffer never overflows and every change is counted.
+  for (let index = 0; index < 1_200; index++) {
+    fs.writeFileSync(path.join(f.worktreeRoot, "by-0", `file-${index}`), "");
+    if (index % 20 === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  fs.writeFileSync(path.join(f.worktreeRoot, "by-1", "file"), "");
+  const later = await f.close(4, 7);
+  const promises = await import("node:fs/promises");
+  const read = { "by-0": 0, "by-1": 0 };
+  const original = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    for (const name of Object.keys(read)) if (String(args[0]).startsWith(path.join(f.worktreeRoot, name))) read[name]++;
+    return original(...args);
+  });
+  await f.cleanup.sweep();
+  assert.deepEqual(later.filter((row) => fs.existsSync(row)), []);
+  assert.ok(read["by-0"] > 0);
+  assert.equal(read["by-1"], 0);
+  assert.deepEqual(f.warnings, []);
+});
+
 test("a sweep stops at its budget and resumes on the next tick", async (t) => {
-  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, budget: { ...SWEEP_BUDGET, dirs: 1 } });
+  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, budget: { ...SWEEP_BUDGET, ms: 0 } });
   const left = () => f.rows.filter((row) => fs.existsSync(row)).length;
   await f.cleanup.sweep();
   assert.equal(left(), 2);

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { paneNotesForTurn, paneNotesSinceLastUserTurn } from "./context-compaction.ts";
-import { bootPaneWakes, hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_HOURLY_CAP, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
+import { bootPaneWakes, hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 
 const PANE_ONLY: WakeAdmission = { rootId: null, reservation: null };
@@ -13,7 +13,6 @@ function harness(overrides: { enabled?: boolean; busy?: boolean; hasNotes?: bool
   const state = { enabled: true, busy: false, hasNotes: true, paused: false, ...overrides };
   const closed = new Set<string>();
   const wake = vi.fn();
-  const warn = vi.fn();
   const skipped = vi.fn();
   const closedByBot = vi.fn(async (_botId: string, paneIds: string[]) => paneIds.every((id) => closed.has(id)));
   const scheduler = new PaneWakeScheduler({
@@ -25,10 +24,8 @@ function harness(overrides: { enabled?: boolean; busy?: boolean; hasNotes?: bool
     skipped,
     wake,
     admit,
-    warn,
-    now: () => Date.now(),
   });
-  return { state, closed, closedByBot, skipped, wake, warn, scheduler };
+  return { state, closed, closedByBot, skipped, wake, scheduler };
 }
 
 describe("PaneWakeScheduler", () => {
@@ -73,7 +70,6 @@ describe("PaneWakeScheduler", () => {
       paused: (id) => store.bot(id)?.paneWakePaused === true,
       hasNotes: () => true,
       wake,
-      warn: vi.fn(),
     });
     scheduler.noteArrived(bot.id, bot.threadId);
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
@@ -159,7 +155,6 @@ describe("PaneWakeScheduler", () => {
       busy: () => busy,
       hasNotes: () => paneNotesSinceLastUserTurn(messages, new Set()).length > 0,
       wake,
-      warn: vi.fn(),
     });
     scheduler.noteArrived("teacher", "t1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
@@ -177,50 +172,13 @@ describe("PaneWakeScheduler", () => {
     expect(wake).not.toHaveBeenCalled();
   });
 
-  it("caps wakes per bot per hour, warns, and wakes once a slot frees", async () => {
-    const { wake, warn, scheduler } = harness();
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP + 1; i++) {
+  it("wakes for every burst, however many land in an hour", async () => {
+    const { wake, scheduler } = harness();
+    for (let i = 0; i < 21; i++) {
       scheduler.noteArrived("teacher", "t1");
       await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     }
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-    expect(warn).toHaveBeenCalledOnce();
-
-    scheduler.noteArrived("teacher", "t1");
-    scheduler.settled();
-    await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS * 2);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP + 1);
-    expect(warn).toHaveBeenCalledOnce();
-  });
-
-  it("drops the capped retry when a user turn delivered the notes", async () => {
-    const { state, wake, scheduler } = harness();
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP + 1; i++) {
-      scheduler.noteArrived("teacher", "t1");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
-    state.hasNotes = false;
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-  });
-
-  it("holds a capped retry that finds the bot busy until it settles", async () => {
-    const { state, wake, scheduler } = harness();
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP + 1; i++) {
-      scheduler.noteArrived("teacher", "t1");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
-    state.busy = true;
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-
-    state.busy = false;
-    scheduler.settled();
-    await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP + 1);
+    expect(wake).toHaveBeenCalledTimes(21);
   });
 
   it("skips the wake when the bot closed every pane in the burst", async () => {
@@ -330,70 +288,31 @@ describe("PaneWakeScheduler", () => {
     expect(wake).not.toHaveBeenCalled();
   });
 
-  it("does not count a skip toward the hourly cap", async () => {
-    const { closed, skipped, wake, warn, scheduler } = harness();
-    closed.add("p1");
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP; i++) {
-      scheduler.noteArrived("teacher", "t1", "p1");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
-    expect(skipped).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP; i++) {
-      scheduler.noteArrived("teacher", "t1", "p2");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-    expect(warn).not.toHaveBeenCalled();
-    scheduler.noteArrived("teacher", "t1", "p2");
-    await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-    expect(warn).toHaveBeenCalledOnce();
-  });
-
-  it("wakes with the admission admit selected, and a refused admission spends no hourly slot", async () => {
+  it("wakes with the admission admit selected after a refused one", async () => {
     const admission: WakeAdmission = { rootId: "root-a", reservation: { id: "credit-1", rootId: "root-a", kind: "wake" } };
     const admit = vi.fn<(botId: string, threadId: string) => WakeAdmission | null>(() => null);
-    const { wake, warn, scheduler } = harness({}, admit);
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP; i++) {
-      scheduler.noteArrived("teacher", "t1");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
-    expect(admit).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
+    const { wake, scheduler } = harness({}, admit);
+    scheduler.noteArrived("teacher", "t1");
+    await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
+    expect(admit).toHaveBeenCalledOnce();
     expect(wake).not.toHaveBeenCalled();
     admit.mockReturnValueOnce(admission);
     scheduler.noteArrived("teacher", "t1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", admission);
     expect(wake.mock.calls[0]![2]).toBe(admission);
-    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("forgetBot cancels a capped retry", async () => {
+  it("forgetBot drops a pending wake", async () => {
     const { wake, scheduler } = harness();
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP + 1; i++) {
-      scheduler.noteArrived("teacher", "t1");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
-    scheduler.forgetBot("teacher");
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-  });
-
-  it("forgetBot drops a pending wake and the hourly tally", async () => {
-    const { wake, warn, scheduler } = harness();
-    for (let i = 0; i < PANE_WAKE_HOURLY_CAP; i++) {
-      scheduler.noteArrived("teacher", "t1");
-      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    }
     scheduler.noteArrived("teacher", "t1");
     scheduler.forgetBot("teacher");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
+    expect(wake).not.toHaveBeenCalled();
 
     scheduler.noteArrived("teacher", "t1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP + 1);
-    expect(warn).not.toHaveBeenCalled();
+    expect(wake).toHaveBeenCalledOnce();
   });
 });
 

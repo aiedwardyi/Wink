@@ -1006,6 +1006,23 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
     expect(await turn({ threadId: "t-changed", text: "three", system: changed, resumeCursor: CONV })).toBe("three");
   });
 
+  it("sends only the memory change while retaining every new fact", async () => {
+    const turn = await start();
+    const rules = `${persona}\n${"Keep every approval and tool rule. ".repeat(160)}`;
+    const before = `${rules}\nYour memory (MEMORY.md):\nOwner: Mina.\nBudget: 500 dollars.\nCrate: BLUE-19.`;
+    const after = `${rules}\nYour memory (MEMORY.md):\nOwner: Mina.\nBudget: 740 dollars.\nCrate: BLUE-19.`;
+    await turn({ threadId: "t-memory-diff", text: "one", system: before });
+    const prompt = await turn({ threadId: "t-memory-diff", text: "two", system: after, resumeCursor: CONV });
+    expect(prompt).toContain("<system-reminder>");
+    expect(prompt).toContain("[Removed:]\nBudget: 500 dollars.");
+    expect(prompt).toContain("[Added:]\nBudget: 740 dollars.");
+    expect(prompt).not.toContain(rules);
+    expect(before + prompt).toContain("Owner: Mina.");
+    expect(before + prompt).toContain("Crate: BLUE-19.");
+    expect(prompt.length).toBeLessThan(after.length / 2);
+    expect(await turn({ threadId: "t-memory-diff", text: "three", system: after, resumeCursor: CONV })).toBe("three");
+  });
+
   it("sends it with the fallback when the conversation cannot resume", async () => {
     const resumeFails = join(scratch, "resume-fails");
     const turn = await start({ FAKE_AGY_RESUME_FAIL_FILE: resumeFails });
@@ -1034,11 +1051,21 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
     expect(await turn({ threadId: "t-checkpoint", text: "four", system: persona, resumeCursor: CONV })).toBe("four");
   });
 
-  it("sends it once when a new driver instance resumes an existing conversation", async () => {
+  it("does not re-send it after a restart into a conversation that holds it", async () => {
     await (await start())({ threadId: "t-restart", text: "one", system: persona });
     const restarted = await start();
-    expect(await restarted({ threadId: "t-restart", text: "two", system: persona, resumeCursor: CONV })).toBe(`${persona}\n\ntwo`);
-    expect(await restarted({ threadId: "t-restart", text: "three", system: persona, resumeCursor: CONV })).toBe("three");
+    expect(await restarted({ threadId: "t-restart", text: "two", system: persona, resumeCursor: CONV })).toBe("two");
+    const changed = `${persona} Memory: likes tea.`;
+    expect(await (await start())({ threadId: "t-restart", text: "three", system: changed, resumeCursor: CONV })).toBe(`${changed}\n\nthree`);
+  });
+
+  it("re-sends it after a restart when the conversation checkpointed in its last turn", async () => {
+    const checkpoint = join(scratch, "checkpoint-restart");
+    await (await start())({ threadId: "t-restart-checkpoint", text: "one", system: persona });
+    writeFileSync(checkpoint, "");
+    await (await start({ FAKE_AGY_CHECKPOINT_FILE: checkpoint }))({ threadId: "t-restart-checkpoint", text: "two", system: persona, resumeCursor: CONV });
+    rmSync(checkpoint);
+    expect(await (await start())({ threadId: "t-restart-checkpoint", text: "three", system: persona, resumeCursor: CONV })).toBe(`${persona}\n\nthree`);
   });
 });
 

@@ -15,7 +15,7 @@ import { requestCredentials, roomDoorPath } from "../phone-auth.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { apiRequestAuthorized } from "../remote-access.ts";
 import { Store } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
+import { askById, closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import * as roomDoor from "./door.ts";
@@ -25,6 +25,7 @@ import { hostedRoomView } from "./guards.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites, shortRoomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
+import { hostedSend } from "./send.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 const ORIGIN = `https://${HOST}`;
@@ -176,7 +177,7 @@ function peopleRoom(name = "Team"): HostedGroup {
 }
 
 function code(group: HostedGroup, name: string): { code: string; inviteId: string; secret: string } {
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward"]);
   return { code: `wkr1:${HOST}:${invite.id}.${secret}`, inviteId: invite.id, secret };
 }
 
@@ -330,7 +331,7 @@ describe("door routes", () => {
     expect((await post("/room/v1/join", { code: code(botRoom, "Mina").code })).status).toBe(200);
     expect(roomPeople(botRoom.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
     const loose = createRoom("Loose");
-    const { invite, secret } = createInvite(loose.id, "Joon", "chat", ["Edward"]);
+    const { invite, secret } = createInvite(loose.id, "Joon", ["Edward"]);
     expect(await post("/room/v1/join", { code: `wkr1:${HOST}:${invite.id}.${secret}` })).toMatchObject({ status: 404, body: { error: "no-invite" } });
     expect(roomInvites(loose.id).map((row) => row.id)).toEqual([invite.id]);
   });
@@ -1032,6 +1033,19 @@ describe("remove, leave and revoke", () => {
     expect(recentRoomEntries(group.hosted.roomId, 5)).toEqual([]);
     agent.destroy();
     other.close();
+  });
+
+  it.each(["remove", "leave"])("%s stops that person's running request", async (how) => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
+    const group = store.createGroup("Team", [wink], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;
+    const mina = await joined(group, "Mina");
+    const { ask } = hostedSend(group, { kind: "person", id: mina.personId }, "@Wink fix the build");
+    expect(startAsk(ask!.id)).toBe(true);
+    if (how === "remove") expect(removeRoomPerson(group.hosted.roomId, mina.personId)).toBe(true);
+    else expect((await post(`/room/v1/rooms/${group.hosted.roomId}/leave`, {}, { key: mina.key })).status).toBe(200);
+    expect(deps.stopTurn).toHaveBeenCalledWith(expect.objectContaining({ id: ask!.id, state: "stopping" }), expect.any(Function));
+    await vi.waitFor(() => expect(askById(ask!.id)!.state).toBe("cancelled"));
+    expect(recentRoomEntries(group.hosted.roomId, 5).at(-1)).toMatchObject({ author: { kind: "bot", id: wink }, text: "Cancelled." });
   });
 
   it("revoke ends the person's streams and their key", async () => {

@@ -18,7 +18,7 @@ const MODELS = new Map<string, string[]>(Object.entries({
   claudeAgent: ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
   codex: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"],
   grokAgent: ["grok-4.7", "grok-4.6"],
-  museAgent: ["muse-spark-1.3", "muse-spark-1.3-contributor"],
+  museAgent: ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-ember-1.0"],
 }));
 const GEMINI_VERSIONS = ["3.8"];
 const GEMINI_4 = [["gemini-4-carbon", "Gemini 4 Carbon"], ["gemini-4-argon", "Gemini 4 Argon"], ["gemini-4-hydrogen", "Gemini 4 Hydrogen"]] as const;

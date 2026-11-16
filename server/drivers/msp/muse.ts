@@ -23,13 +23,13 @@ import {
 } from "../acp/muse.ts";
 import { createMspDriver } from "./runtime.ts";
 
-/** Live `model/list` on 1.2.1 advertises these four; the server default is
- * the contributor build. Kept static so boot never spawns for the catalog. */
+/** Static catalog keeps model discovery off the boot path. */
 export const MSP_MUSE_MODELS: ModelCatalog = {
   default: "muse-spark-1.3",
   options: [
     { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
     { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+    { id: "muse-ember-1.0", label: "Meta Muse Ember" },
     { id: "muse-spark-1.2", label: "Meta Muse 1.2" },
     { id: "muse-spark-1.2-contributor", label: "Meta Muse 1.2 Contributor" },
   ],

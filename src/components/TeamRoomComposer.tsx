@@ -13,16 +13,16 @@ export function useTeamRoomReply(base: string, draftId: string, messages: Messag
   return reply;
 }
 
-export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop, chain }: {
+export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop, chain, onSend }: {
   name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean;
   onConsumeReply: () => void; onRestoreReply: (message: Message, threadId: string) => void;
-  status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number;
+  status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number; onSend?: () => void;
 }) {
   const preview = useChatPreview();
   return (
     <ChatPeekPart part="composer">
       {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} focusBlocked={preview} replyTo={replyTo} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
+      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} focusBlocked={preview} replyTo={replyTo} onSend={onSend} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
     </ChatPeekPart>
   );
 }
