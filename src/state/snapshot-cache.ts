@@ -72,8 +72,15 @@ export function readSnapshotCache(explicit?: Storage): CachedSnapshot | null {
   }
 }
 
-// Store messages are never edited in place, so each is redacted once, not on every save.
+// Each message is redacted once, not on every save. A message edited in place after that would
+// reach storage with its new secret unredacted, so dev and test builds freeze it to make the edit throw.
 const redacted = new WeakMap<Message, Message>();
+
+function deepFreeze(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
+}
 
 function redactMessage(message: Message): Message {
   let clean = redacted.get(message);
@@ -81,6 +88,7 @@ function redactMessage(message: Message): Message {
     // SAFETY: redactSecrets keeps the shape and only rewrites string values.
     clean = redactSecrets(message) as Message;
     redacted.set(message, clean);
+    if (import.meta.env.DEV) deepFreeze(message);
   }
   return clean;
 }

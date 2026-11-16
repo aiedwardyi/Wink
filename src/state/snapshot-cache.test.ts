@@ -49,7 +49,15 @@ describe("snapshot cache", () => {
     // a save lands a beat after every chat open, inside the first scroll
     expect(redactions.count).toBe(1);
     expect(local.getItem(SNAPSHOT_CACHE_KEY)).not.toContain(KEY);
-    expect(readSnapshotCache(local)?.bots[0].messages.map((m) => m.text?.replace(/\d+ chars/, "n chars"))).toEqual([1, 2, 3, 4].map((i) => `step ${i} «redacted n chars»`));
+    const texts = readSnapshotCache(local)?.bots[0].messages.map((m) => m.text?.replace(/\d+ chars/, "n chars"));
+    expect(texts).toEqual([1, 2, 3, 4].map((i) => `step ${i} «redacted n chars»`));
+  });
+
+  it("throws on a message edited in place after a save, which would skip its redaction", () => {
+    const message: Message = { id: "m1", at: 1, role: "bot", kind: "activity", tool: { name: "Read", summary: "notes.md", ok: true } };
+    writeSnapshotCache({ bots: [bot([message])], groups: [], selectedId: "b1" }, storage());
+    expect(() => Object.assign(message, { text: `my key is ${KEY}` })).toThrow(TypeError);
+    expect(() => Object.assign(message.tool!, { summary: KEY })).toThrow(TypeError);
   });
 
   it("keeps the profile for the next paint and drops a malformed one", () => {
