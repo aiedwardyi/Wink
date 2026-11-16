@@ -48,6 +48,7 @@ const hash = (s: string) => {
   }
   return (h >>> 0).toString(36);
 };
+const highlightKey = (code: string, lang: string) => `${lang}:${hash(code)}`;
 
 // A markdown link whose target is a file on this machine: bots hand over
 // bot-created documents as absolute paths or file:// URLs. Web links stay
@@ -313,12 +314,12 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: 
 
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const streaming = useContext(StreamingContext);
-  const [html, setHtml] = useState<string | null>(null);
+  const [html, setHtml] = useState<string | null>(() => (streaming ? null : highlightCache.get(highlightKey(code, lang)) ?? null));
   const highlighted = useMemo(() => ({ __html: html ?? "" }), [html]);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const key = `${lang}:${hash(code)}`;
+    const key = highlightKey(code, lang);
     const cached = highlightCache.get(key);
     if (cached) return setHtml(cached);
     let alive = true;
@@ -332,13 +333,12 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
           }),
         )
         .then((out) => {
-          if (!alive) return;
           if (highlightCache.size >= CACHE_MAX) {
             const first = highlightCache.keys().next().value;
             if (first) highlightCache.delete(first);
           }
           highlightCache.set(key, out);
-          setHtml(out);
+          if (alive) setHtml(out);
         })
         .catch(() => {
           /* unknown language or shiki failed — the plain <pre> stays */
