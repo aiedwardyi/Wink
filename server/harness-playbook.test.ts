@@ -55,6 +55,30 @@ describe("harness playbook", () => {
     for (const command of ["", "pnpm test", "git status", "node claude-notes.js", "type docs\\codex.md"]) expect(gate.hold("s1", command), command).toBeUndefined();
   });
 
+  it("holds a card launch until its Already built section holds the prior-work search", () => {
+    const empty = String.raw`C:\cards\EMPTY.md`;
+    const missing = String.raw`C:\cards\MISSING.md`;
+    const filled = String.raw`C:\my cards\FILLED.md`;
+    const last = String.raw`C:\cards\LAST.md`;
+    const cards = new Map([
+      [empty, "# EMPTY\n## Acceptance\n- x\n\n## Already built\n\n## Files\n- a.ts\n"],
+      [missing, "# MISSING\n## Acceptance\n- x\n"],
+      [filled, "# FILLED\r\n## Already built\r\n- none found (searched: scoreboard, results page)\r\n## Files\r\n"],
+      [last, "# LAST\n## Already built\n- built.md: Scoreboard | web | site/ | #12"],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    const launch = (card: string) => `claude --model claude-opus-5-5 --effort high 'Read ${card} and do it.'`;
+    for (const card of [empty, missing]) {
+      expect(gate.hold("s1", launch(card)), card).toBe(`Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`);
+    }
+    expect(gate.hold("s1", launch(filled))).toBeUndefined();
+    expect(gate.hold("s1", `codex "Read ${last} and do it."`)).toBeUndefined();
+    expect(gate.hold("s1", launch(String.raw`C:\cards\GONE.md`))).toBeUndefined();
+    expect(gate.hold("s1", "claude --model x 'Fix the header.'")).toBeUndefined();
+    expect(gate.hold("s1", `type ${empty}`)).toBeUndefined();
+  });
+
   it("is wired ahead of the usage check on the spawn route", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const route = source.slice(source.indexOf('path === "/api/internal/spawn-usage"'));
@@ -104,7 +128,7 @@ describe("harness playbook", () => {
     expect(prompt).toContain("Keep one line per user-facing feature in `built.md`");
     expect(prompt).toContain("`- Name | where: device, size, setting | files | PRs`");
     expect(prompt).toContain("then read the code it names. No line: search the code.");
-    expect(prompt).toContain("When you land a user-facing change, add or edit its one line");
+    expect(prompt).toContain("- On each DONE report or landed change, PR or not, add or edit its line.");
   });
 
   it("verifies a scratch-copy review by its findings and deletes the copy", () => {
@@ -197,7 +221,7 @@ describe("harness playbook", () => {
   it("writes the built list before building and quotes it in cards", () => {
     const prompt = loadHarnessPlaybook().replace(/\s+/g, " ");
     expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
-    expect(prompt).toContain("## Already built - The built.md lines and status-board decisions this touches, and the live files to open first.");
+    expect(prompt).toContain("## Already built - Search built.md, the status board and earlier cards: lines it touches, or `none found (searched: <terms>)`. Then live files to open first.");
   });
 
   it("logs every walk snag to one shared list", () => {
