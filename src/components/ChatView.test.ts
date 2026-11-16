@@ -21,6 +21,11 @@ vi.mock("@/state/store", async (importOriginal) => ({
   useStreaming: () => live.current,
 }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
+// These scenarios page from a tail one whole window long; the short switch tail has its own suite.
+vi.mock("@/lib/transcript-window", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/transcript-window")>();
+  return { ...actual, TRANSCRIPT_TAIL_SIZE: actual.TRANSCRIPT_WINDOW_SIZE };
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
