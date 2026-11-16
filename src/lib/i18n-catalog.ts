@@ -1232,6 +1232,8 @@ export const en = {
   "bot.avatarWrongType": "Choose a PNG, JPEG, GIF, or WebP image",
   "bot.avatarUnusable": "The uploaded image could not be used as an avatar",
 
+  "room.fixStarted": "Fix started: {title}",
+  "room.fixedIn": "Fixed in {version}: {title}",
   "room.setupTitle": "Group settings: {name}",
   "room.setupBody": "Change who replies, add instructions, or choose a shared folder.",
   "room.workingFolder": "Shared folder (optional)",
@@ -3066,6 +3068,8 @@ export const ko = {
   "bot.avatarWrongType": "PNG, JPEG, GIF, WebP 이미지를 고르세요.",
   "bot.avatarUnusable": "올린 이미지를 아바타로 쓸 수 없어요.",
 
+  "room.fixStarted": "수정 시작: {title}",
+  "room.fixedIn": "{version}에서 수정됨: {title}",
   "room.setupTitle": "{name} 그룹 설정",
   "room.setupBody": "누가 답할지 정하고, 지침을 추가하거나, 공유 폴더를 고르세요.",
   "room.workingFolder": "공유 폴더 (선택)",

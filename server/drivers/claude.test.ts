@@ -1256,7 +1256,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     child.kill();
     const eager = tools.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] !== false);
     const chars = JSON.stringify(eager.map((tool) => ({ name: `mcp__agents__${tool.name}`, description: tool.description, input_schema: tool.inputSchema }))).length;
-    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status"]);
+    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix"]);
     expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_000);
   });
 
