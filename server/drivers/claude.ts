@@ -1038,9 +1038,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const autoAttended = auto && turn.attended === true;
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
-      // Wink's acceptEdits default yields to a defaultMode the user set in their own settings.
+      // Wink's acceptEdits default yields to a defaultMode the user set in their own settings;
+      // desktop control keeps it, since its guards live in the broker an inherited bypass would skip.
       const ownMode =
-        !asks && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+        !asks && !controlsHost && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
         hasOwnDefaultMode(input.account?.home ?? claudeConfigDir(turnEnvironment), turn.cwd ?? homedir());
       const permissionMode = asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode;
 

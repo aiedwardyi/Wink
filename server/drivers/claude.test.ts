@@ -3437,6 +3437,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === ask.turnId);
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("default");
+
+    rmSync(dump);
+    const desktop = await instance.adapter.sendTurn({
+      threadId: "t-own-mode-desktop",
+      text: "go",
+      cwd: scratch,
+      approval: "auto",
+      integrations: { localComputer: { command: "/cua-driver", args: ["mcp"], env: {}, platform: "linux", scope: "local-computer" } },
+    });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === desktop.turnId);
+    const desktopArgv = JSON.parse(readFileSync(dump, "utf8")).argv;
+    expect(desktopArgv[desktopArgv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
   });
 
   it("respawns a warm session under the new mode when the chip flips", async () => {
