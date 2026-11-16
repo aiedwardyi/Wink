@@ -124,6 +124,31 @@ describe("chat scene host", () => {
     expect(host.running()).toBe(false);
   });
 
+  it("draws nothing while its layer is scrolled out of view and picks up when it is back", () => {
+    let seen: (entries: { isIntersecting: boolean }[]) => void = () => undefined;
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof seen) {
+        seen = callback;
+      }
+      observe() {}
+      disconnect() {}
+    });
+    const view = (isIntersecting: boolean) => seen([{ isIntersecting }]);
+    const { drawn } = scene();
+    host!.emit({ name: "loop" });
+    host!.emit({ name: "busy" });
+    flush(2);
+    expect(drawn).toHaveLength(2);
+    view(false);
+    flush(5);
+    expect(drawn).toHaveLength(2);
+    expect(host!.running()).toBe(false);
+    expect(frames).toHaveLength(0);
+    view(true);
+    flush(1);
+    expect(drawn).toHaveLength(3);
+  });
+
   it("never starts a loop under reduced motion", () => {
     reduce = true;
     const { drawn, seen } = scene();
