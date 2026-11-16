@@ -212,9 +212,15 @@ describe("phone sign-in page", () => {
     expect(workflow).toContain('requested || "wink.edwardyi.dev"');
   });
 
+  it.each(["site/signin/index.html", "site/privacy/index.html"])("keeps %s's meta policy to directives a meta tag honors", (page) => {
+    // a browser ignores these from a meta tag and logs a console error on every load; they need a response header
+    const policy = readFileSync(join(ROOT, page), "utf8").match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/)![1];
+    expect(policy).not.toMatch(/(frame-ancestors|report-uri|sandbox)/);
+  });
+
   it("allows Google and relay requests, with PC images limited to the relay base", () => {
     const policy =
-      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.wink.edwardyi.dev; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.wink.edwardyi.dev; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
     expect(HTML).toContain(policy);
     const relay = "https://relay.example.dev";
     const shipped = HTML.replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", "https://*.example.dev");

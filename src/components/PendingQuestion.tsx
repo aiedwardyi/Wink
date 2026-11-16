@@ -342,7 +342,7 @@ function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (c
         all[all.length - cut].hidden = true;
         rest.hidden = false;
         rest.textContent = `+${cut}`;
-        rest.title = t("ask.moreChoices", { count: cut });
+        rest.title = t(cut === 1 ? "ask.moreChoicesOne" : "ask.moreChoices", { count: cut });
         rest.setAttribute("aria-label", rest.title);
       }
     };
