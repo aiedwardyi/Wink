@@ -302,7 +302,7 @@ test("a pane that ends before its app attaches tells the end only after its old 
   const pane = before.spawn(f.pane("ending"), noLocal);
   const seen = watch(pane);
   await pane.ready;
-  await pane.write('Write-Output ("END=" + (5 + 5))');
+  await pane.write('Write-Output ("END=" + (5 + 5))\r');
   await until(() => seen.text.includes("END=10"));
   assert.equal(pane.detach(), true);
   before.close();
@@ -317,7 +317,7 @@ test("a pane that ends before its app attaches tells the end only after its old 
       if (order.at(-1) !== "data") order.push("data");
     },
   });
-  await after.peer.write("ending", "exit 3");
+  await after.peer.write("ending", "exit 3\r");
   await until(async () => (await after.peer.request("list"))[0]?.exit === 3);
   assert.deepEqual(order, []);
   await after.peer.request("attach", [{ id: "ending" }]);
