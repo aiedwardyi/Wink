@@ -282,6 +282,19 @@ export function teammateAskTurn(roomId: string, threadId: string, botId: string)
   return teammateAsks(roomId, threadId, botId).length > 0;
 }
 
+/** The host, or a person the host turned "Can make bots work" on for. Keyed on who asked, never on the bot. */
+const askerWorks = (ask: RoomAsk) => ask.asker.kind === "host" || roomPeople(ask.roomId).some((person) => person.id === ask.asker.id && person.works);
+
+/** Every ask one turn answers may make the bot work; one read-only asker makes the whole turn read-only. */
+export function asksWork(asks: readonly RoomAsk[]): boolean {
+  return asks.every(askerWorks);
+}
+
+/** A teammate without the switch is this bot's live turn on the thread: nothing it asks for is approved. */
+export function readOnlyAskTurn(roomId: string, threadId: string, botId: string): boolean {
+  return teammateAsks(roomId, threadId, botId).some((ask) => !askerWorks(ask));
+}
+
 /** A deny that never reached the engine leaves a step open with no card; the request ends so the room moves on. */
 export function failTeammateAskTurn(roomId: string, threadId: string, botId: string): void {
   for (const ask of teammateAsks(roomId, threadId, botId)) void endAsk(ask.id, "failed");

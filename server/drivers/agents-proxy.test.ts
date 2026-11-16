@@ -1364,6 +1364,23 @@ describe("agents-proxy identity gate", () => {
     expect(call.result.isError).toBeFalsy();
   });});
 
+describe("agents-proxy read-only room turn", () => {
+  const identity = { OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0", OMB_READ_ONLY_TURN: "1" };
+
+  it("lists no saved keys, connected apps, bot asks, Forum posts or Agentic Mode", async () => {
+    const { list } = await probeWithIdentity(identity);
+    expect(list.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
+      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "update_task_state", "usage_status", "wait_delegation",
+    ]);
+  });
+
+  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post"])("refuses %s before calling the harness", async (name) => {
+    const { call } = await probeWithIdentity(identity, name);
+    expect(call.result.isError).toBe(true);
+    expect(call.result.content[0].text).toBe(`${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`);
+  });
+});
+
 describe("agents-proxy catalog", () => {
   const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
   const names = (list: any): string[] => list.result.tools.map((tool: { name: string }) => tool.name);
