@@ -123,7 +123,7 @@ describe("whats new card", () => {
     const [memory, verify] = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
     act(() => verify.click());
     expect(verify.getAttribute("aria-expanded")).toBe("true");
-    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1].show as { en: string }).en);
+    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1]!.show as { en: string }).en);
     expect(onClose).not.toHaveBeenCalled();
     act(() => memory.click());
     expect(dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "" } });
@@ -173,9 +173,29 @@ describe("whats new card", () => {
     }
     expect(entry.tiles[0].title.en).toContain("Map");
     for (const locale of ["en", "ko"] as const) {
-      expect(entry.tiles[1].title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
-      expect((entry.tiles[1].show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
+      expect(entry.tiles[1]!.title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
+      expect((entry.tiles[1]!.show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
     }
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("shows the four new themes as one tile in 1.0.273, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.273"];
+    expect(entry.tiles).toHaveLength(1);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.273");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(1);
+      expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
+      expect(tiles[0].textContent).toContain(entry.tiles[0].line[locale]);
+      act(() => tiles[0].querySelector<HTMLButtonElement>(".whats-new-show")!.click());
+      expect(tiles[0].textContent).toContain((entry.tiles[0].show as Record<typeof locale, string>)[locale]);
+    }
+    for (const name of ["Samurai Ink", "Night Rain", "Warp", "Circuit"]) expect(entry.tiles[0].line.en).toContain(name);
+    for (const name of ["사무라이 잉크", "나이트 레인", "워프", "서킷"]) expect(entry.tiles[0].line.ko).toContain(name);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
