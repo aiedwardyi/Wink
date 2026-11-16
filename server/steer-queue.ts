@@ -36,6 +36,9 @@ interface SteerItem {
   answersCard?: string;
 }
 
+/** A lane's hand-off: needs the bot free, never drains onto a lane. A string is the teammate's settled ask, rechecked as it starts. */
+export type Hands = true | string;
+
 interface RoomItem {
   kind: "room";
   messageId: string;
@@ -48,8 +51,7 @@ interface RoomItem {
   askId?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
-  /** Needs the bot free: never drains onto a lane. */
-  hands?: true;
+  hands?: Hands;
 }
 
 type QueueItem = SteerItem | RoomItem;
@@ -202,7 +204,7 @@ export interface RoomDrain {
   askId?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
-  hands?: true;
+  hands?: Hands;
 }
 
 export type DrainRun = (
@@ -281,11 +283,11 @@ export function queueRoomParticipation(
     askId?: string;
     ready?: () => Promise<boolean>;
     spoken?: Set<string>;
-    hands?: boolean;
+    hands?: Hands | false;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && Boolean(item.hands) === Boolean(options.hands));
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && item.hands === (options.hands || undefined));
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
@@ -316,7 +318,7 @@ export function queueRoomParticipation(
     ready: options.ready,
     spoken: options.spoken,
     ...(options.askId ? { askId: options.askId } : {}),
-    ...(options.hands ? { hands: true as const } : {}),
+    ...(options.hands ? { hands: options.hands } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
   return { id };
@@ -429,7 +431,7 @@ export function drainSteeredMessages(
     if (room.askId) roomDrain.askId = room.askId;
     if (room.ready) roomDrain.ready = room.ready;
     if (room.spoken) roomDrain.spoken = room.spoken;
-    if (room.hands) roomDrain.hands = true;
+    if (room.hands) roomDrain.hands = room.hands;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
   }
 }

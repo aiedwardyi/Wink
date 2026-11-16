@@ -154,8 +154,8 @@ it("keeps the comms depth cap and wires captured roots into every busy room path
   expect(source.text).toContain("const MAX_COMMS_DEPTH = 1;");
   const busy = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "queueBusyRoomMember");
   const busyPath = ["rootId", "authority", "hands"];
-  // the lane's hand-off: the teammate's ask is settled, so it runs as the host's own turn
-  expect(busy.map((call) => call.arguments.slice(8).map((arg) => arg.getText(source)))).toEqual([busyPath, busyPath, busyPath, ["rootId", "undefined", "true"]]);
+  // the lane's hand-off: the teammate's ask is settled, so it carries the ask only for its start recheck
+  expect(busy.map((call) => call.arguments.slice(8).map((arg) => arg.getText(source)))).toEqual([busyPath, busyPath, busyPath, ["rootId", "undefined", "authority ?? true"]]);
   const prepares = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "turnRegistry.prepare");
   expect(prepares).toHaveLength(2);
   for (const call of prepares) expect(call.arguments[0].getText(source)).toContain("rootId");

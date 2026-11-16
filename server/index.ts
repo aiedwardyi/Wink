@@ -60,7 +60,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askRiders, asksWork, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -222,6 +222,7 @@ import {
   queueRoomParticipation,
   queuedRoomBotIds,
   waitingSends,
+  type Hands,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
 import "./send-deliver.ts";
@@ -6543,7 +6544,7 @@ function queueBusyRoomMember(
   instructionId?: string,
   rootId?: string | null,
   askId?: string,
-  hands = false,
+  hands: Hands | false = false,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
@@ -6573,7 +6574,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; spoken?: Set<string>; hands?: true },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; spoken?: Set<string>; hands?: Hands },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (hostedTurnRefused(store.group(room.groupId), threadId, botId, room.askId) || !roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6594,6 +6595,7 @@ function enqueueDrainedRoomTurn(
       return;
     }
     if (room.ready && !(await room.ready())) return;
+    if (typeof room.hands === "string" && handOffRefused(room.hands)) return;
     // New participation, not a replay of the original user-message round.
     // Hop-1 @mentions from this reply are the same as any hop-0 room turn.
     // Self-summon is already excluded in the chain loop (`id !== bot.id`).
@@ -6738,7 +6740,7 @@ async function runGroupMemberTurn(
   rootId: string | null = null,
   authority?: string,
   // a lane's hand-off: waits for the bot to be free instead of taking a lane
-  hands = false,
+  hands: Hands | false = false,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6810,7 +6812,7 @@ async function runClaimedGroupMemberTurn(
   authority?: string,
   // the bot's second lane: no busy flag, no hands, and a Stop keyed apart from the 1:1
   lane = false,
-  hands = false,
+  hands: Hands | false = false,
 ): Promise<boolean> {
   const turnKey = lane ? laneKey(botId) : botId;
   const epoch = currentTurnEpoch(turnKey);
@@ -6948,7 +6950,7 @@ async function runClaimedGroupMemberTurn(
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !authority || Boolean(lead && asksWork([lead, ...riders]));
   if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
-    void endAsk(authority!, "failed", `${bot.name} can't take requests from you yet. ${userName} has to turn on "Can make bots work" for you.`);
+    void endAsk(authority!, "failed", cantWorkLine(bot.name, userName));
     return true;
   }
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
@@ -7206,7 +7208,7 @@ async function runClaimedGroupMemberTurn(
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
   if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
   if (outcome === "settled" && handedOff && !isCancelled?.()) {
-    queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handedOff.asker, handedOff.ask), undefined, dispatchedInstructionId, rootId, undefined, true);
+    queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handedOff.asker, handedOff.ask), undefined, dispatchedInstructionId, rootId, undefined, authority ?? true);
   }
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a

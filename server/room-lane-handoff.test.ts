@@ -3,7 +3,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLaneHandoffs, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote } from "./room-lane.ts";
-import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation, type SteerStore } from "./steer-queue.ts";
+import { _resetSteerQueue, cancelQueuedRoomParticipations, drainSteeredMessages, queueRoomParticipation, type SteerStore } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -63,6 +63,15 @@ describe("lane hand-off", () => {
     expect(settle.indexOf("laneHandoffs.close(bot.id, threadId)")).toBeGreaterThan(-1);
     expect(settle.indexOf("laneHandoffs.close(bot.id, threadId)")).toBeLessThan(settle.indexOf('return false;'));
     expect(settle).toContain('if (outcome === "settled" && handedOff && !isCancelled?.())');
+  });
+
+  it("queues a teammate's hand-off with its ask, rechecked right before the turn runs", () => {
+    const settle = section('  if (outcome === "settled" && handedOff && !isCancelled?.())', "  // turn.completed normally performs this cleanup.");
+    expect(settle).toContain("rootId, undefined, authority ?? true);");
+    const drained = section("function enqueueDrainedRoomTurn(", "  const tracked = next.finally(");
+    const check = drained.indexOf('if (typeof room.hands === "string" && handOffRefused(room.hands)) return;');
+    expect(check).toBeGreaterThan(drained.indexOf("if (operation.cancelled)"));
+    expect(check).toBeLessThan(drained.indexOf("await runGroupMemberTurn("));
   });
 
   it("frames the full turn as work asked in the room by its asker", () => {
@@ -129,6 +138,25 @@ describe("hand-off queue", () => {
     pip.busy = false;
     drainSteeredMessages(fakeStore([pip]), run, undefined, () => true);
     expect(run.mock.calls[1][5]).toMatchObject({ hands: true, cardContinuation: "note" });
+  });
+
+  it("keeps a teammate's hand-off apart from the host's, so its recheck is never folded away", () => {
+    const pip = fakeBot("pip", false);
+    queueRoomParticipation(pip.id, "room", { groupId: "g", cardContinuation: "host", hands: true });
+    queueRoomParticipation(pip.id, "room", { groupId: "g", cardContinuation: "mina", hands: "ask-mina" });
+    const run = vi.fn();
+    drainSteeredMessages(fakeStore([pip]), run);
+    expect(run.mock.calls[0][5]).toMatchObject({ hands: true, cardContinuation: "host" });
+  });
+
+  it("drops a queued hand-off on the room's Stop", () => {
+    const pip = fakeBot("pip", true);
+    queueRoomParticipation(pip.id, "room", { groupId: "g", cardContinuation: "mina", hands: "ask-mina" });
+    expect(cancelQueuedRoomParticipations("g", "room")).toBe(1);
+    pip.busy = false;
+    const run = vi.fn();
+    drainSteeredMessages(fakeStore([pip]), run);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("folds two hand-offs for one room into one turn carrying both notes", () => {
