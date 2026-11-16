@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { holdWorkerHostLock, workerHostRecord, writeWorkerHostRecord } from "./worker-host-identity.mjs";
-import { WORKER_HOST_PROTOCOL, sameProof, textChunks, workerHostPeer, workerHostProof } from "./worker-host-protocol.mjs";
+import { WORKER_HOST_PROTOCOL, keepRing, sameProof, textChunks, workerHostPeer, workerHostProof } from "./worker-host-protocol.mjs";
 
 const RING_BYTES = 256 * 1024;
 const MAX_PANES = 64;
@@ -90,13 +90,7 @@ const record = (pane, text) => {
   pane.carry = open >= (last ? last.index + last[0].length : 0) && source.length - open <= 256 ? source.slice(open) : source.endsWith("\x1b") ? "\x1b" : "";
   for (const chunk of textChunks(text)) {
     const bytes = Buffer.from(chunk);
-    pane.ring.push({ seq: ++pane.seq, bytes });
-    pane.bytes += bytes.length;
-    while (pane.bytes > RING_BYTES && pane.ring.length - pane.head > 1) pane.bytes -= pane.ring[pane.head++].bytes.length;
-    if (pane.head > 1024) {
-      pane.ring.splice(0, pane.head);
-      pane.head = 0;
-    }
+    keepRing(pane, bytes, RING_BYTES);
     if (pane.attached) send(pane, pane.seq, bytes);
   }
 };

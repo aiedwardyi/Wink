@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { terminalEnvironment } from "./terminal-host.mjs";
 import { createWorkerHostClient } from "./worker-host-client.mjs";
 import { holdWorkerHostLock, workerHostLock, workerHostRecord, writeWorkerHostRecord } from "./worker-host-identity.mjs";
-import { WORKER_HOST_PROTOCOL, workerHostPeer, workerHostProof } from "./worker-host-protocol.mjs";
+import { WORKER_HOST_PROTOCOL, keepRing, workerHostPeer, workerHostProof } from "./worker-host-protocol.mjs";
 
 const require = createRequire(import.meta.url);
 const windows = process.platform === "win32" ? {} : { skip: "the worker host ships on Windows first" };
@@ -155,6 +155,13 @@ function raw(f, pipe) {
   });
   return caller;
 }
+
+test("a pane's ring holds only the output it still counts", () => {
+  const pane = { seq: 0, ring: [], head: 0, bytes: 0 };
+  for (let index = 0; index < 1024; index++) keepRing(pane, Buffer.alloc(64 * 1024), 256 * 1024);
+  const held = pane.ring.reduce((sum, item) => sum + (item?.bytes.length ?? 0), 0);
+  assert.deepEqual([pane.seq, pane.bytes, held, pane.ring[pane.head].seq], [1024, 256 * 1024, 256 * 1024, 1021]);
+});
 
 test("a real shell runs in the host: output, input once, resize, mark and exit code", { ...windows, timeout: 120_000 }, async (t) => {
   const f = fixture(t);

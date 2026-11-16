@@ -40,7 +40,7 @@ async function layer(root, final, write) {
   return true;
 }
 
-/** Copies the runtime out of the app folder. The key comes from names and sizes, never file contents. */
+/** Copies the runtime out of the app folder. Electron's files are keyed by name and size, node-pty's by content. */
 export async function stageWorkerHostRuntime({ root, executable, ptyModule, sources }) {
   const exeFolder = path.dirname(executable);
   const ptyFolder = path.dirname(ptyModule);
@@ -52,9 +52,10 @@ export async function stageWorkerHostRuntime({ root, executable, ptyModule, sour
     ...siblings.map((name) => [path.join(exeFolder, name), name]),
     ...pty.map((name) => [path.join(ptyPackage, name), path.join("node-pty", name)]),
   ];
-  const sizes = await Promise.all(copies.map(async ([from, to]) => `${to} ${(await fs.promises.stat(from)).size}`));
+  // The Electron version pins the exe and its siblings; node-pty can change at the same size and is small enough to read.
+  const identity = await Promise.all(copies.map(async ([from, to]) => `${to} ${to.startsWith("node-pty") ? createHash("sha256").update(await fs.promises.readFile(from)).digest("hex") : (await fs.promises.stat(from)).size}`));
   const version = process.versions.electron ? `e${process.versions.electron}` : `n${process.versions.node}`;
-  const bin = path.join(root, `bin-${version}-${process.arch}-${digest(sizes)}`);
+  const bin = path.join(root, `bin-${version}-${process.arch}-${digest(identity)}`);
   const js = path.join(root, `js-${digest(sources.flat())}`);
   await fs.promises.mkdir(root, { recursive: true });
   const staged = {
