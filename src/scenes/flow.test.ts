@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import circuit from "./circuit";
+import { flowScene } from "./flow";
 import nightRain from "./night-rain";
 import samuraiInk from "./samurai-ink";
 import warp from "./warp";
@@ -99,5 +100,41 @@ describe.each([["samurai ink", samuraiInk], ["night rain", nightRain], ["warp", 
     scene.event({ name: "send", at: layer });
     expect(wake).not.toHaveBeenCalled();
     scene.dispose();
+  });
+});
+
+describe("a scene's second texture", () => {
+  it("uploads to unit 1 as uTex2 and hands unit 0 back to the backdrop", () => {
+    const calls: string[] = [];
+    const img = new ImageData(1, 1);
+    const record = new Proxy(
+      {},
+      {
+        get: (_, key: string) =>
+          key === key.toUpperCase() ? key : key === "getProgramParameter" ? () => true : key === "getUniformLocation" ? (_p: WebGLProgram, name: string) => name : (...args: unknown[]) => void calls.push(`${key}(${args.map((x) => (x === img ? "img" : String(x))).join()})`),
+      },
+    );
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: () => record });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        cb: () => void;
+        constructor(cb: () => void) {
+          this.cb = cb;
+        }
+        observe() {
+          this.cb();
+        }
+        disconnect() {}
+      },
+    );
+    scenes = flowScene({ frag: "", colors: {}, period: 60, backdrop: () => undefined, extra: () => img });
+    start().dispose();
+    const upload = calls.indexOf("texImage2D(TEXTURE_2D,0,RGBA,RGBA,UNSIGNED_BYTE,img)");
+    const units = (from: number, to: number) => calls.slice(from, to).filter((c) => c.startsWith("activeTexture"));
+    expect(upload).toBeGreaterThan(-1);
+    expect(calls).toContain("uniform1i(uTex2,1)");
+    expect(units(0, upload).at(-1)).toBe("activeTexture(TEXTURE1)");
+    expect(units(upload, calls.length)[0]).toBe("activeTexture(TEXTURE0)");
   });
 });

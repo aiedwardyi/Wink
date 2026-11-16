@@ -14,10 +14,12 @@ export type FlowSpec = {
   sharp?: boolean;
   /** Painted once per size into uTex, at the buffer's density. */
   backdrop?: (g: CanvasRenderingContext2D, w: number, h: number) => void;
+  /** Built with the backdrop into uTex2 as raw RGBA, so all four channels carry data (a canvas would zero the colour wherever alpha is 0). */
+  extra?: (w: number, h: number, dpr: number) => ImageData | null;
 };
 
 const VERT = "attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }";
-const BASE = ["uSize", "uBuf", "uT", "uFlow", "uLaneX", "uLaneW", "uTex"];
+const BASE = ["uSize", "uBuf", "uT", "uFlow", "uLaneX", "uLaneW", "uTex", "uTex2"];
 const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 
 export function flowScene(spec: FlowSpec): SceneModule {
@@ -61,6 +63,13 @@ export function flowScene(spec: FlowSpec): SceneModule {
           for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, key, value);
           gl.uniform1i(U.uTex, 0);
         }
+        if (spec.extra) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+          for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, key, value);
+          gl.uniform1i(U.uTex2, 1);
+          gl.activeTexture(gl.TEXTURE0);
+        }
         ready = true;
       } else gl.deleteProgram(prog);
     }
@@ -83,7 +92,7 @@ export function flowScene(spec: FlowSpec): SceneModule {
 
     // Layout size: a theme tile shrinks its layer with a transform.
     const resize = () => {
-      const dpr = spec.sharp || spec.backdrop ? Math.min(2, devicePixelRatio || 1) : 1;
+      const dpr = spec.sharp || spec.backdrop || spec.extra ? Math.min(2, devicePixelRatio || 1) : 1;
       width = Math.max(1, api.layer.clientWidth);
       height = Math.max(1, api.layer.clientHeight);
       canvas.width = Math.round(width * dpr);
@@ -98,6 +107,12 @@ export function flowScene(spec: FlowSpec): SceneModule {
           spec.backdrop(g, width, height);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paper);
         }
+      }
+      const extra = gl && ready && spec.extra?.(width, height, dpr);
+      if (gl && extra) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, extra);
+        gl.activeTexture(gl.TEXTURE0);
       }
       render();
     };
