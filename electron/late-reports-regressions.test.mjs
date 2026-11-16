@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { createServerRevival } from "./server-revival.mjs";
@@ -245,6 +245,56 @@ it("a fresh terminal host authenticates a surviving pane against its saved launc
     expect(host.captureWorkerSession(`Bearer ${capture.auth}`, { ...input, launchGeneration: "wrong" })).toBe(false);
     expect(host.captureWorkerSession(`Bearer ${capture.auth}`, input)).toBe(true);
     expect(createPaneRuns(file).restarted().get("bot")[0].session.nativeId).toBe(input.session_id);
+  } finally { host.dispose(); }
+});
+
+const OSC = String.fromCharCode(27) + "]133;";
+const BEL = String.fromCharCode(7);
+const LINE = createHash("sha256").update("work").digest("base64");
+
+// A pane the worker host kept, taken back by a fresh terminal host; `replay` is its old output.
+async function adoptedPane({ replay = "", notes = [] } = {}) {
+  const f = await fixture();
+  const file = path.join(f.profile, "pane-runs.json");
+  const worker = { kind: "managed", args: [], account: { id: "account", generation: 1 }, session: { engine: "codex", launchGeneration: randomUUID(), nativeId: null } };
+  const capture = createWorkerSession(worker, "pane", f.profile, f.url);
+  createPaneRuns(file).started({ id: "pane", botId: "bot", teacher: "bot", cwd: f.profile, session: capture.run });
+  const runs = createPaneRuns(file);
+  const data = new Set();
+  const pty = { pid: 4242, onData: listener => data.add(listener), onExit() {}, onError() {}, ready: Promise.resolve(), exited: new Promise(() => {}), write: async () => {}, resize: async () => {}, kill: async () => {}, terminate() {}, hosted: () => true, detach: () => true };
+  const emit = text => { for (const listener of data) listener(text); };
+  const owner = { id: 7, mainFrame: {}, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({ authorize() {}, resolveCwd: async () => f.profile, owner: () => owner, paneRuns: runs, stallCheckMs: 5, notePane: async (_mail, _scope, text) => { notes.push(text); } });
+  let replayed;
+  const outcome = host.adoptPane(runs.left()[0], { cols: 80, rows: 24, start: 1, mark: { kind: "C", value: `pane;${LINE}` } }, { pty, replayed: new Promise(resolve => { replayed = resolve; }) }, {});
+  emit(replay);
+  replayed();
+  return { host, capture, emit, notes, profile: f.profile, result: await outcome };
+}
+
+it("a kept command that ended during its replay is not kept running", async () => {
+  const { host, result } = await adoptedPane({ replay: `${OSC}C;pane;${LINE}${BEL}work${OSC}D;pane;3${BEL}` });
+  try {
+    expect([result.running, result.exitCode]).toEqual([false, null]);
+  } finally { host.dispose(); }
+});
+
+it("a kept command that ends after adoption tells its bot it finished", async () => {
+  const { host, emit, notes, result } = await adoptedPane({ replay: `${OSC}D;pane;2${BEL}${OSC}C;pane;${LINE}${BEL}work` });
+  try {
+    expect(result.running).toBe(true);
+    emit(`done${OSC}D;pane;3${BEL}`);
+    await vi.waitFor(() => expect(notes.some(text => text.startsWith("FINISHED: command ended without a report."))).toBe(true));
+  } finally { host.dispose(); }
+});
+
+it("a kept worker's late start hook authenticates with the launch it was given", async () => {
+  const { host, capture, profile, result } = await adoptedPane();
+  const input = { pane: "pane", launchGeneration: capture.run.launchGeneration, session_id: randomUUID(), transcript_path: null, cwd: profile, source: "startup" };
+  try {
+    expect(result.running).toBe(true);
+    expect(host.captureWorkerSession("Bearer wrong", input)).toBe(false);
+    expect(host.captureWorkerSession(`Bearer ${capture.auth}`, input)).toBe(true);
   } finally { host.dispose(); }
 });
 
