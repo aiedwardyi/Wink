@@ -1086,6 +1086,12 @@ const reviveServer = createServerRevival({
     packagedBootPhase = state === "restarting" ? BOOT_CONNECTING : serverReady ? BOOT_READY : BOOT_FAILED;
     // A fresh child holds no Google session until this push.
     if (serverReady) void pushGoogleSession(secureCredentials.googleAccount ?? null);
+    // A revived server can land on another port, and reports queued while it was down would otherwise wait for the next app start.
+    if (serverReady && !verifyProbe) {
+      const mailboxUrl = `http://127.0.0.1:${SERVER_PORT}`;
+      const published = terminalBridgeAccess ? publishTerminalDiscovery(app.getPath("userData"), terminalBridgeAccess, mailboxUrl).catch(slog) : Promise.resolve();
+      void published.then(() => deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns)).catch(slog);
+    }
     livePackagedWindow()
       ?.loadURL(state === "restarting" ? connectingPageHref(undefined, "packaged.restarting") : packagedWindowHref())
       .catch(() => {});

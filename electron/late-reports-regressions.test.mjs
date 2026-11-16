@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, expect, it } from "vitest";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
+import { createServerRevival } from "./server-revival.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 import { createWorkerSession } from "./worker-session.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
@@ -173,6 +174,25 @@ it.skipIf(process.platform !== "win32")("keeps validation failures final even wi
   await fs.writeFile(path.join(current.profile, "terminal-discovery.json"), JSON.stringify({ mailboxUrl: current.url }));
   expect((await sendReport(current.profile, stale.url)).code).toBe(1);
   expect(posts).toBe(0);
+});
+
+async function revival(overrides = {}) {
+  const source = await fs.readFile(new URL("./main.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("const reviveServer = createServerRevival({");
+  const block = source.slice(start, source.indexOf("\n});\n", start) + "\n});\n".length);
+  const deps = { createServerRevival, quitting: false, verifyProbe: false, childEnvCredentials: null, absorbPackagedPlaintextSecrets() {}, secureCredentials: {}, startServerPackaged: async () => true, slog() {}, serverReady: false, serverKeptStopping: false, packagedBootPhase: null, BOOT_CONNECTING: 0, BOOT_READY: 1, BOOT_FAILED: 2, pushGoogleSession: async () => {}, livePackagedWindow: () => null, connectingPageHref() {}, packagedWindowHref() {}, app: { getPath: () => "profile" }, SERVER_PORT: 8799, terminalBridgeAccess: null, publishTerminalDiscovery: async () => {}, deliverMailboxOutbox: async () => ({}), paneRuns: { restarted: () => new Map() }, ...overrides };
+  return new Function(...Object.keys(deps), `${block}return reviveServer;`)(...Object.values(deps));
+}
+
+it("delivers reports queued while the server was down once it revives", async () => {
+  const f = await fixture();
+  await f.write();
+  const drains = [];
+  const revive = await revival({ app: { getPath: () => f.profile }, SERVER_PORT: Number(new URL(f.url).port), deliverMailboxOutbox: (...args) => { const drain = deliverMailboxOutbox(...args); drains.push(drain); return drain; } });
+  expect(await revive()).toBe(true);
+  await Promise.all(drains);
+  expect(drains).toHaveLength(1);
+  expect(await fs.readdir(f.dir)).toEqual([]);
 });
 
 it("does not run a follow-up drain when the server is unavailable", async () => {
