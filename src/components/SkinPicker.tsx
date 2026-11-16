@@ -156,8 +156,9 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
   }
   const extra = SKINS.filter((skin) => !featured.includes(skin));
   const groups = (skins: typeof SKINS) => [
-    { key: "settings.skin.dark", skins: skins.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)) },
-    { key: "settings.skin.light", skins: skins.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)) },
+    { key: "settings.skin.animated", skins: skins.filter((skin) => skin.animated) },
+    { key: "settings.skin.dark", skins: skins.filter((skin) => !skin.animated && !LIGHT_SKIN_IDS.has(skin.id)) },
+    { key: "settings.skin.light", skins: skins.filter((skin) => !skin.animated && LIGHT_SKIN_IDS.has(skin.id)) },
   ] as const;
 
   const renderGroups = (items: typeof SKINS, folded = false) => groups(items).filter(({ skins }) => skins.length > 0).map(({ key, skins }) => (

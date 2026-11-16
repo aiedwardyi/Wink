@@ -400,15 +400,18 @@ describe("SettingsModal friends chrome", () => {
     expect(markup("themes")).toContain('title="Corners"');
   });
 
-  it("splits featured skins into Dark then Light groups", () => {
+  it("splits featured skins into Animated, Dark then Light groups", () => {
     const html = markup("themes");
+    const animated = html.lastIndexOf(">Animated<");
     const dark = html.lastIndexOf(">Dark<");
     const light = html.lastIndexOf(">Light<");
-    expect(dark).toBeGreaterThan(-1);
+    expect(animated).toBeGreaterThan(-1);
+    expect(dark).toBeGreaterThan(animated);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon-night", "snow-night", "bronze", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot"]);
-    expect(ids(html.slice(light))).toEqual(["lagoon", "snow", "dim-sand", "wink-day", "notebook"]);
+    expect(ids(html.slice(animated, dark))).toEqual(["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night"]);
+    expect(ids(html.slice(dark, light))).toEqual(["bronze", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot"]);
+    expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook"]);
     expect(ids(html)).toHaveLength(20);
   });
 
