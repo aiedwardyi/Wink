@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 
 import { PACKAGED_FILES } from "./proxy-paths.ts";
 
@@ -62,8 +62,33 @@ export function harnessPlaybookBody(playbook = HARNESS_PLAYBOOK): string {
 // Loose on purpose: a wrongly held shell command costs one read, a missed launch skips the rules.
 const WORKER_COMMAND = /(?:^|[\s;&|\\/"'(])(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=$|[\s"')])/i;
 
+const CARD_LAUNCH = /\bRead (.+?\.md) and do it\./;
+
+function readCardFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/** The card a standard launch names, when it exists and its `## Already built` section is missing or blank. */
+function cardWithoutPriorWork(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined): string | undefined {
+  const named = CARD_LAUNCH.exec(command)?.[1]?.replace(/^["'`]+|["'`]+$/g, "");
+  const absolute = (path: string) => isAbsolute(path) || win32.isAbsolute(path);
+  // A relative card lives in the pane's cwd, never the server's.
+  const path = !named || absolute(named) ? named : cwd && absolute(cwd) ? join(cwd, named) : undefined;
+  const card = path ? readCard(path) : undefined;
+  if (card === undefined) return undefined;
+  const lines = card.split(/\r?\n/);
+  const at = lines.findIndex((line) => /^##\s+Already built\s*$/i.test(line));
+  const end = at < 0 ? -1 : lines.findIndex((line, index) => index > at && /^#{1,2}\s/.test(line));
+  const section = at < 0 ? "" : lines.slice(at + 1, end < 0 ? undefined : end).join("").trim();
+  return section ? undefined : path;
+}
+
 /** Provider sessions that were handed the on-demand part; a worker launch waits for it. */
-export function createPlaybookGate(body = harnessPlaybookBody()) {
+export function createPlaybookGate(body = harnessPlaybookBody(), readCard = readCardFile) {
   const read = new Set<string>();
   return {
     read(session: string): string {
@@ -71,9 +96,12 @@ export function createPlaybookGate(body = harnessPlaybookBody()) {
       return body;
     },
     // Never marks the session: spawns sent side by side must all be held.
-    hold(session: string, command: string): string | undefined {
-      if (!body || read.has(session) || !WORKER_COMMAND.test(command)) return undefined;
-      return "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
+    hold(session: string, command: string, cwd?: string): string | undefined {
+      if (!body || !WORKER_COMMAND.test(command)) return undefined;
+      if (!read.has(session)) return "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
+      const card = cardWithoutPriorWork(command, cwd, readCard);
+      if (card) return `Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`;
+      return undefined;
     },
   };
 }

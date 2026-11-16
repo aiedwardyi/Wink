@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, ReadStream, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
+import { createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -67,7 +67,10 @@ beforeEach(() => {
   replies.length = 0;
 });
 
-afterEach(() => closeRoomsDb());
+afterEach(() => {
+  closeRoomsDb();
+  vi.restoreAllMocks();
+});
 
 function call(method: string, path: string, init: { body?: Buffer | Buffer[]; owner?: string; headers?: Record<string, string> } = {}): Promise<Reply> {
   const chunks = init.body === undefined ? [] : Array.isArray(init.body) ? init.body : [init.body];
@@ -402,6 +405,27 @@ describe("room file writes, quota and retries", () => {
     const room = createRoom("Team").id;
     expect(await call("POST", `/rooms/${room}/files?name=a.txt`, { body: Buffer.from("hello") })).toMatchObject({ status: 400, json: { error: "bad uploadId" } });
     expect(existsSync(roomDir(room))).toBe(false);
+  });
+
+  it("read the rest of a body refused before it arrived, so the refusal isn't lost to a reset", async () => {
+    const room = createRoom("Team").id;
+    const chunk = Buffer.alloc(1024 * 1024, "a");
+    const served = new Promise<boolean>((resolve) => server.once("request", (req: IncomingMessage) => req.socket.once("close", () => resolve(req.readableEnded))));
+    const result = await new Promise<{ status: number; json: unknown; error: unknown }>((resolve) => {
+      const parts: Buffer[] = [];
+      let status = 0;
+      let error: unknown = null;
+      const req = request({ host: "127.0.0.1", port, method: "POST", path: `/rooms/${room}/files?uploadId=short`, headers: { "content-length": String(32 * chunk.length) }, agent: false }, (res) => {
+        status = res.statusCode ?? 0;
+        for (let i = 1; i < 32; i++) req.write(chunk);
+        req.end(() => res.on("data", (part: Buffer) => parts.push(part)));
+      });
+      req.on("error", (cause) => (error = cause));
+      req.on("close", () => resolve({ status, json: parts.length ? JSON.parse(Buffer.concat(parts).toString("utf8")) : null, error }));
+      req.write(chunk);
+    });
+    expect(result).toEqual({ status: 400, json: { error: "bad uploadId" }, error: null });
+    expect(await served).toBe(true);
   });
 
   it("fail the upload before its row when the folder won't sync, but not where folders can't sync", async () => {

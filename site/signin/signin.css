@@ -7,8 +7,8 @@
   --ink-secondary: #545b7c;
   --accent: #b91a61;
   --danger: #a5211a;
-  --edge: #ff4d9d;
-  --edge-glow: #ff4d9d40;
+  --edge: #929fff;
+  --edge-glow: #929fff40;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -20,7 +20,7 @@
     --ink-secondary: #a3a7b3;
     --accent: #929fff;
     --danger: #ff8c98;
-    --edge-glow: #ff4d9d80;
+    --edge-glow: #929fff80;
   }
 }
 * {

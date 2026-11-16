@@ -1097,7 +1097,9 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
   let install: { cli: string; exe: string };
   let mapped: Set<string>;
   let spawn: MockInstance<typeof procs.spawnCli>;
+  let exec: MockInstance<typeof procs.execCli>;
   const realSpawn = procs.spawnCli;
+  const realExec = procs.execCli;
   const serveCalls = () => spawn.mock.calls.filter((call) => call[1].includes("serve"));
   const start = async () => (instance ??= await MspMuseAgentDriver.create({
     instanceId: "muse-direct",
@@ -1125,6 +1127,8 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
     // A mapped placeholder exe runs the fake host; an unmapped one fails to start.
     mapped = new Set([install.exe]);
     spawn = vi.spyOn(procs, "spawnCli").mockImplementation((cli, args, opts) => realSpawn(mapped.has(cli) ? FAKE_CLI : cli, args, opts));
+    // A cold PowerShell start can outlast the 8 s version probe; the host start is what these tests drive.
+    exec = vi.spyOn(procs, "execCli").mockImplementation((cli, args, opts, cb) => realExec(cli === install.cli ? FAKE_CLI : cli, args, opts, cb));
   });
 
   afterEach(async () => {
@@ -1135,7 +1139,6 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
   });
 
   it("starts the engine exe itself with the env the launcher sets", async () => {
-    const exec = vi.spyOn(procs, "execCli");
     expect(await runTurn("t-direct")).toMatchObject({ ok: true });
     const [[command, , opts]] = serveCalls();
     expect(command).toBe(install.exe);

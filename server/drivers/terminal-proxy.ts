@@ -420,13 +420,13 @@ async function postLaunchNote(fetchImpl: typeof fetch, config: TerminalConfig, s
 async function spawnUsage(fetchImpl: typeof fetch, config: TerminalConfig, args: Record<string, unknown>): Promise<{ hold?: string; line?: string }> {
   const harness = config.harness ?? HARNESS;
   const token = config.commsToken ?? COMMS_TOKEN;
-  const { label, command } = args;
+  const { label, command, cwd } = args;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
   if (!harness || !token || typeof label !== "string" || !label.trim() || typeof command !== "string") return {};
   const response = await fetchImpl(`${harness}/api/internal/spawn-usage`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ fromBotId: config.botId ?? BOT_ID, label, command }),
+    body: JSON.stringify({ fromBotId: config.botId ?? BOT_ID, label, command, cwd }),
     signal: AbortSignal.timeout(USAGE_TIMEOUT_MS),
   }).catch(() => undefined);
   const payload: unknown = response?.ok ? await response.json().catch(() => undefined) : undefined;
