@@ -26,7 +26,7 @@ const RULES = [
   "running the code yourself",
   "A report is a claim, not proof.",
 ];
-const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'";
+const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok", "muse"] as const;
 type Engine = (typeof ENGINE_NAMES)[number];
