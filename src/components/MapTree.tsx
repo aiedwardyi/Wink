@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeOrder, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
+import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeFoot, treeLayout, treeOrder, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import "./MapTree.css";
@@ -47,7 +47,7 @@ function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: s
   if (!node) return null;
   const cut = (id: string, key: "bus" | "busOf") => down.slice(0, down.findIndex(point => point[key] === id) + 1).reverse();
   const g = at(node);
-  const points: Point[] = node.kind === "stack" ? [start] : [start, { x: top(node, g).x, y: g.y + TREE.BOX }];
+  const points: Point[] = node.kind === "stack" ? [start] : [start, treeFoot(node, g)];
   if (down.some(point => point.busOf === node!.id)) return [...points, ...cut(node.id, "busOf")];
   for (; node.parent; node = node.parent) {
     const parent: TreeItem = node.parent;
@@ -56,7 +56,7 @@ function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: s
     points.push(head, { x: head.x, y: bus });
     if (down.some(point => point.bus === parent.id)) return [...points, ...cut(parent.id, "bus")];
     const pg = at(parent);
-    points.push({ x: top(parent, pg).x, y: bus }, { x: top(parent, pg).x, y: pg.y + TREE.BOX });
+    points.push({ x: treeFoot(parent, pg).x, y: bus }, treeFoot(parent, pg));
   }
   return null;
 }
