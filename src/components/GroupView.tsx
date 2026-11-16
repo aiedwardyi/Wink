@@ -22,8 +22,8 @@ import {
   type GroupDefaultResponder,
   type Message,
 } from "@/state/store";
-import type { RoomJoin } from "@/state/store-types";
-import { BotAvatar } from "./Avatar";
+import type { RoomJoin, TeamBot } from "@/state/store-types";
+import { BotAvatar, RoomBotAvatar } from "./Avatar";
 import { CallWidgetSlot } from "./CallSlots";
 import { DockedPresence, MessageBoundary, TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -72,7 +72,7 @@ import { GroupArchiveBar } from "./GroupArchiveBar";
 import { PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
-import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, setHostNotice } from "@/lib/team-rooms";
+import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice } from "@/lib/team-rooms";
 import { groupActivityRuns, itemMatchesFind, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -146,7 +146,7 @@ export function RoomToolChip({
           title={t("chat.openConversation", { name: comm.withName })}
           className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
         >
-          <BotAvatar bot={peer ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} animated={false} />
+          <RoomBotAvatar bot={peer ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} animated={false} />
           <span className="min-w-0 max-w-[480px] truncate">{commLabel(message, t)}</span>
           <ChevronRight size={13} className="shrink-0" />
         </button>
@@ -186,11 +186,11 @@ export function RoomToolChip({
 }
 
 /** 16px maus + name, shown once per sender cluster. */
-function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: Bot["color"] }) {
+function ClusterLabel({ bot, teamBot, name, color }: { bot?: Bot; teamBot?: TeamBot; name: string; color: Bot["color"] }) {
   return (
     <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-      <BotAvatar
-        bot={bot ?? { name, color }}
+      <RoomBotAvatar
+        bot={bot ?? teamBot ?? { name, color }}
         state={normalizeState(bot?.mascotExpression) ?? "happy"}
         size={16}
         motion="none"
@@ -260,6 +260,7 @@ export const Transcript = memo(function Transcript({
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
+  const teamBotOf = (id?: string) => roomTeamBots(group).find((b) => b.id === id);
   const people = useMemo(() => {
     if (!group.hosted) return undefined;
     const names = reactionNames(roomPeople(group));
@@ -336,7 +337,7 @@ export const Transcript = memo(function Transcript({
               {newDay && <DaySeparator at={first.at} />}
               {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
               {first.from && cluster && (
-                <ClusterLabel bot={memberOf(first.from.botId)} name={first.from.name} color={first.from.color} />
+                <ClusterLabel bot={memberOf(first.from.botId)} teamBot={teamBotOf(first.from.botId)} name={first.from.name} color={first.from.color} />
               )}
               {item.kind === "memory" ? (
                 <MemorySaveRun messages={item.messages} forceOpen={forceOpen}>
@@ -586,7 +587,7 @@ export const Transcript = memo(function Transcript({
             {newDay && <DaySeparator at={m.at} />}
             {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
             {!user && m.from && cluster && (
-              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} />
+              <ClusterLabel bot={memberOf(m.from.botId)} teamBot={teamBotOf(m.from.botId)} name={m.from.name} color={m.from.color} />
             )}
             {person && cluster && <PersonLabel name={person.name} />}
             {row}
@@ -1145,7 +1146,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     avatar: (
-      <BotAvatar
+      <RoomBotAvatar
         bot={presenceSpeaker ?? { name: group.name, color: DEFAULT_MAUS_COLOR }}
         state={toolInFlight ? "working" : "thinking"}
         size={16}
@@ -1509,7 +1510,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
           {(speaker || waiting) && !jump.messages && (
             <TurnPresence
               avatar={
-                <BotAvatar
+                <RoomBotAvatar
                   bot={presenceSpeaker ?? { name: group.name, color: DEFAULT_MAUS_COLOR }}
                   state={toolInFlight ? "working" : "thinking"}
                   size={36}

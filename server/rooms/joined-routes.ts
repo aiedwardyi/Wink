@@ -21,7 +21,7 @@ const field = (body: unknown, name: string): unknown =>
 export async function joinedRoute(
   method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice" | "older" | "addBot" | "removeBot">, body: () => Promise<unknown>,
   query = new URLSearchParams(),
-  localBot: (botId: string) => { id: string; name: string; color: string } | null = () => null,
+  localBot: (botId: string) => { id: string; name: string; color: string; mascotStyle?: string | null } | null = () => null,
   stopMine: (roomId: string) => Promise<void> = async () => {},
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
@@ -40,7 +40,7 @@ export async function joinedRoute(
     if (method !== "POST") return notFound;
     const botId = field(await body(), "botId");
     const bot = typeof botId === "string" ? localBot(botId) : null;
-    return bot ? reply(await client.addBot(bots[1]!, bot.id, bot.name, bot.color), "bot") : { status: 404, body: { error: "no such bot" } };
+    return bot ? reply(await client.addBot(bots[1]!, bot.id, bot.name, bot.color, bot.mascotStyle), "bot") : { status: 404, body: { error: "no such bot" } };
   }
   const route = ROOM.exec(path);
   if (!route) return notFound;

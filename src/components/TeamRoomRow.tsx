@@ -7,7 +7,6 @@ import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFol
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { usePresence } from "@/lib/use-presence";
@@ -17,7 +16,7 @@ import { isRoomPicture, ownerName, roomFileUrl, roomMessage, type JoinedPerson, 
 import type { Message } from "@/state/store-types";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
-import { BotAvatar } from "./Avatar";
+import { RoomBotAvatar } from "./Avatar";
 import { CopyButton, TimestampLabel } from "./ChatBubble";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { LinkedText } from "./LinkedText";
@@ -143,7 +142,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
       {newDay && <DaySeparator at={line.at} />}
       {named && line.author.kind === "bot" ? (
         <div className="mt-1 flex items-center gap-1.5 pl-0.5" data-team-room-bot>
-          <BotAvatar bot={{ name: line.author.name, color: (line.color ?? DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
+          <RoomBotAvatar bot={{ name: line.author.name, color: line.color, mascotStyle: line.mascotStyle }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
           <span className="text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</span>
         </div>
       ) : named && <PersonLabel name={authorName ?? line.author.name} />}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, Bot as BotIcon, Clock, Mic, Paperclip, Phone, Square, TerminalSquare, User, Users, X } from "lucide-react";
+import { ArrowUp, Clock, Mic, Paperclip, Phone, Square, TerminalSquare, User, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import {
@@ -25,7 +25,7 @@ import {
   type FailedComposerSend,
   type PersistedRoomHold,
 } from "@/lib/drafts";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, RoomBotAvatar } from "./Avatar";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -1092,9 +1092,11 @@ export function Composer({
                     size={24}
                   />
                 ) : peer.agent ? (
-                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
-                    <BotIcon size={14} aria-hidden="true" />
-                  </span>
+                  <RoomBotAvatar
+                    bot={(room?.bots ?? (group ? roomTeamBots(group) : [])).find((roomBot) => roomBot.id === peer.id) ?? peer}
+                    state="happy"
+                    size={24}
+                  />
                 ) : (
                   <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
                     <Users size={14} aria-hidden="true" />

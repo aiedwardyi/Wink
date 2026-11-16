@@ -14,7 +14,7 @@ import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoine
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
 import { AppErrorBanner } from "./AppErrorBanner";
-import { BotAvatar } from "./Avatar";
+import { RoomBotAvatar } from "./Avatar";
 import { ChatScene, sceneOf } from "./ChatScene";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
@@ -76,7 +76,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
   const joined = phase === "connecting" || phase === "live" || phase === "offline";
   const myTurns = (status === null ? myBots ?? [] : []).map((bot) => {
     const listed = teamBots?.find((candidate) => candidate.id === bot.id);
-    return { ...bot, name: listed?.name ?? "", color: (listed?.color || DEFAULT_MAUS_COLOR) as MausColor };
+    return { ...bot, name: listed?.name ?? "", color: (listed?.color || DEFAULT_MAUS_COLOR) as MausColor, mascotStyle: listed?.mascotStyle };
   });
   const stoppable = myTurns.some((bot) => bot.working || bot.waiting);
   const chain = status === null ? room?.botChain : undefined;
@@ -128,7 +128,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
         presence={myTurns.map((bot) => (
           <TurnPresence
             key={bot.id}
-            avatar={<BotAvatar bot={state.bots.find((local) => local.id === bot.botId) ?? { name: bot.name, color: bot.color }} state="thinking" size={36} forward={false} lookAround={1} trackPointer={false} />}
+            avatar={<RoomBotAvatar bot={state.bots.find((local) => local.id === bot.botId) ?? { name: bot.name, color: bot.color, mascotStyle: bot.mascotStyle }} state="thinking" size={36} forward={false} lookAround={1} trackPointer={false} />}
             visible={Boolean(bot.working)}
             label={t("teamRoom.botWorking", { name: bot.name })}
             since={bot.since}
