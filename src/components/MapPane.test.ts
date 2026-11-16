@@ -758,3 +758,15 @@ it("says how many new files a capped worker left out", async () => {
   await emit([{ ...workers[0], more: 4800 }]);
   expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 중 2개 변경 · 외 파일 4,800개wink / ALPHA");
 });
+
+it("puts a second drag line between the tree and the Git rows, hidden when no Git rows follow", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ commits: [] }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await act(async () => {});
+  const order = [...host.querySelector(".map-pane")!.children].map(part => part.matches(".map-split") ? part.getAttribute("aria-label") : part.className);
+  expect(order.slice(0, 6)).toEqual(["map-head", "map-top", "Resize the file tree", "map-flow-rows", "Resize the code view", "map-crumbs"]);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toContain(".map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }");
+  expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
+});

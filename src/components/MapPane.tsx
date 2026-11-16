@@ -250,6 +250,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         {worker.error && !(worker.git && files.length > 0) && <p className="map-empty" role="status">{failure}</p>}
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
+      <MapSplit target={topRef} rows />
       <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
