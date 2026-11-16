@@ -56,10 +56,10 @@ import { ghRun } from "./map-pr.ts";
 import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
+import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
-import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
+import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
@@ -674,7 +674,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, handOff = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -687,6 +687,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       OMB_TURN_DEPTH: String(depth),
       OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
       ...(searchOwnerChats ? { OMB_OWNER_CHATS: "1" } : {}),
+      ...(handOff ? { OMB_HAND_OFF: "1" } : {}),
     },
   };
 }
@@ -4829,6 +4830,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
 const roomLanes = createRoomLanes();
+const laneHandoffs = createLaneHandoffs();
 
 /** Live ownership resolved BY BOT: this bot still holds the thread it was
  * working on, or the thread being asked about is held by someone. Both
@@ -6827,8 +6829,12 @@ async function runClaimedGroupMemberTurn(
   }
   const owned = group.dm ? [] : ownerChats(bot, notOwnerChats());
   const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
+  // hand_off is a tool, so only an engine with Wink's tools gets a lane hand-off
+  const handoff = instance.adapter.capabilities.agentsMcp === true
+    ? laneHandoff({ lane, hop, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority) } : {}) })
+    : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable);
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, Boolean(handoff));
   }
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -6946,18 +6952,19 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
-  const handoff = laneHandoff({ lane, hop, teammate: Boolean(authority), autoApprove: bot.autoApprove, rows: store.messagesFor(threadId).slice(0, messagesAtStart), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId });
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
-    (handoff ? LANE_HANDOFF_LINE : "") +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
-    harnessPlaybookPrompt(Boolean(integrations.terminal));
+    harnessPlaybookPrompt(Boolean(integrations.terminal)) +
+    // last, so a lane turn keeps the idle turn's cached prefix
+    (handoff ? `\n\n${LANE_HANDOFF_LINE}` : "");
 
+  if (handoff) laneHandoffs.open(bot.id, threadId);
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
   let replyText = "";
@@ -7061,6 +7068,7 @@ async function runClaimedGroupMemberTurn(
       });
   });
   if (lane) roomLanes.release(bot.id, threadId, outcome === "stalled" || outcome === "timed_out");
+  const handedOff = handoff && laneHandoffs.close(bot.id, threadId) ? handoff : null;
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
@@ -7068,8 +7076,8 @@ async function runClaimedGroupMemberTurn(
   if (outcome === "stalled" || outcome === "timed_out") return false;
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
   if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
-  if (outcome === "settled" && handoff && replyText.trim() && !isCancelled?.()) {
-    queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handoff.asker, handoff.ask), undefined, dispatchedInstructionId, rootId, undefined, true);
+  if (outcome === "settled" && handedOff && !isCancelled?.()) {
+    queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handedOff.asker, handedOff.ask), undefined, dispatchedInstructionId, rootId, undefined, true);
   }
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
@@ -7961,6 +7969,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
+      }
+      if (method === "POST" && path === "/api/internal/hand-off") {
+        const source = commsCallers.resolve(req.headers.authorization);
+        if (!source) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, {
+          text: laneHandoffs.call(source.botId, source.threadId)
+            ? "Handed off: it starts here once you're free. Tell them plainly, like 'On it.'"
+            : "Nothing to hand off from this turn.",
+        });
       }
       // The react tool: a bot leaving an emoji on the user's message, the
       // way the user already can on the bot's. Always targets the latest

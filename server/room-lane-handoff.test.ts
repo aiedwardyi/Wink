@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote } from "./room-lane.ts";
+import { createLaneHandoffs, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote } from "./room-lane.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation, type SteerStore } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
 
@@ -16,7 +16,8 @@ const section = (from: string, to: string) => {
 
 const row = (message: Partial<Message>): Message => ({ id: `m${Math.random()}`, at: 0, role: "user", kind: "text", ...message } as Message);
 const asked = [row({ text: "fix the header", id: "ask" })];
-const turn = { lane: true, hop: 0, teammate: false, autoApprove: false, rows: asked, botId: "pip", owner: "Edward" };
+const turn = { lane: true, hop: 0, autoApprove: false, rows: asked, botId: "pip", owner: "Edward" };
+const mina = { work: true, asker: "Mina", ask: "ship the footer" };
 
 describe("lane hand-off", () => {
   it("hands a person's room ask on the lane to a full turn, named by asker", () => {
@@ -30,15 +31,37 @@ describe("lane hand-off", () => {
     expect(laneHandoff({ ...turn, rows: [...asked, row({ role: "bot", text: "on it", from: { botId: "nova", name: "Nova", color: "blue" } })] })).toBeNull();
   });
 
-  it("hands a teammate's ask off only under the host's Auto setting", () => {
-    expect(laneHandoff({ ...turn, teammate: true, autoApprove: false })).toBeNull();
-    expect(laneHandoff({ ...turn, teammate: true, autoApprove: true })).not.toBeNull();
+  it("hands a teammate's ask off only as its own work grant under the host's Auto setting", () => {
+    expect(laneHandoff({ ...turn, teammate: mina, autoApprove: true })).toEqual({ asker: "Mina", ask: "ship the footer" });
+    expect(laneHandoff({ ...turn, teammate: mina, autoApprove: false })).toBeNull();
+    expect(laneHandoff({ ...turn, teammate: { ...mina, work: false }, autoApprove: true })).toBeNull();
+    expect(laneHandoff({ ...turn, teammate: null, autoApprove: true })).toBeNull();
+  });
+
+  it("queues work only when the lane turn itself called hand_off", () => {
+    const handoffs = createLaneHandoffs();
+    expect(handoffs.call("pip", "room")).toBe(false);
+    handoffs.open("pip", "room");
+    expect(handoffs.call("pip", "other-room")).toBe(false);
+    expect(handoffs.close("pip", "room")).toBe(false);
+    handoffs.open("pip", "room");
+    expect(handoffs.call("pip", "room")).toBe(true);
+    expect(handoffs.close("pip", "room")).toBe(true);
+    expect(handoffs.call("pip", "room")).toBe(false);
+    expect(handoffs.close("pip", "room")).toBe(false);
+  });
+
+  it("closes the hand-off window before any outcome returns, and queues only on a call", () => {
+    const settle = section("  if (lane) roomLanes.release(bot.id, threadId, outcome", "  // turn.completed normally performs this cleanup.");
+    expect(settle.indexOf("laneHandoffs.close(bot.id, threadId)")).toBeGreaterThan(-1);
+    expect(settle.indexOf("laneHandoffs.close(bot.id, threadId)")).toBeLessThan(settle.indexOf('return false;'));
+    expect(settle).toContain('if (outcome === "settled" && handedOff && !isCancelled?.())');
   });
 
   it("frames the full turn as work asked in the room by its asker", () => {
     const note = laneHandoffNote("Launch", "Mina", "fix the header");
-    expect(note).toContain('Mina asked you in "Launch": "fix the header"');
-    expect(note).toContain("no_reply_needed");
+    expect(note).toContain('"Mina" asked you in "Launch": "fix the header"');
+    expect(note).toContain("then report here");
   });
 
   it("puts the plain-words line only in a lane turn's room prompt", () => {
@@ -48,9 +71,10 @@ describe("lane hand-off", () => {
       projectFolderPrompt: () => "", detailedRepliesEnabled: () => false, DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "",
       memorySystemPrompt: () => "", memoryNotesEnabled: () => true, renderSkillInstructions: () => "", installedPlaybookInstructions: () => "", harnessPlaybookPrompt: () => "",
     }) as string;
-    expect(prompt({ asker: "Edward", ask: "fix it" })).toContain(LANE_HANDOFF_LINE);
+    expect(prompt({ asker: "Edward", ask: "fix it" })).toBe(`${prompt(null)}\n\n${LANE_HANDOFF_LINE}`);
     expect(prompt(null)).not.toContain(LANE_HANDOFF_LINE);
-    expect(LANE_HANDOFF_LINE.length).toBeLessThan(125);
+    expect(LANE_HANDOFF_LINE).toContain("hand_off");
+    expect(LANE_HANDOFF_LINE.length).toBeLessThan(135);
     expect(LANE_HANDOFF_LINE).not.toMatch(/1:1|read-only|lane|file|worker/i);
   });
 

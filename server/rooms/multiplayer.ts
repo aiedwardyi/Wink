@@ -15,6 +15,13 @@ export function askNote(askId: string | undefined, botName: string, riders: read
   return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
+/** A teammate's ask as a lane may hand it off: its own words, and whether the host granted work. */
+export function laneAsk(askId: string): { work: boolean; asker: string; ask: string } | null {
+  const ask = askById(askId);
+  const entry = ask && roomEntry(ask.roomId, ask.entryId);
+  return entry ? { work: ask.grant === "work", asker: entry.author.name, ask: entry.text } : null;
+}
+
 export const COLLAB_LINE = "Any member's request here is collab work for this team: help them as you would your owner, and never refuse because they aren't your owner.";
 
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {

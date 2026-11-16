@@ -39,15 +39,18 @@ export function createRoomLanes(max = MAX_ROOM_LANES) {
   };
 }
 
-/** A lane cannot edit, so a full room turn follows once the bot is free. */
-export const LANE_HANDOFF_LINE = " Edits or new work asked here start once you're free; confirm plainly, like 'On it.', and never mention this limit.";
+/** A lane cannot edit; its hand_off queues a full room turn for once the bot is free. */
+export const LANE_HANDOFF_LINE = "For edits or new work asked here, call hand_off; it starts once you're free. Confirm plainly, like 'On it.', never the limit.";
 
 const ASK_CHARS = 600;
 const said = (message: Message) => message.kind === "text" && !message.summarized && Boolean(message.text?.trim());
 
-/** The person's ask a lane turn answers, when a full turn must do its work; a teammate's runs only under the host's Auto setting, as on any room turn. */
-export function laneHandoff(turn: { lane: boolean; hop: number; teammate: boolean; autoApprove?: boolean; rows: readonly Message[]; botId: string; owner: string; instructionId?: string }): { asker: string; ask: string } | null {
-  if (!turn.lane || turn.hop || (turn.teammate && !turn.autoApprove)) return null;
+/** The ask a lane turn may hand off. A teammate's is its own ask, only with a work grant under the host's Auto setting; null when no ask is found. */
+export function laneHandoff(turn: { lane: boolean; hop: number; autoApprove?: boolean; rows: readonly Message[]; botId: string; owner: string; instructionId?: string; teammate?: { work: boolean; asker: string; ask: string } | null }): { asker: string; ask: string } | null {
+  if (!turn.lane || turn.hop) return null;
+  if (turn.teammate !== undefined) {
+    return turn.teammate?.work && turn.autoApprove ? { asker: turn.teammate.asker, ask: turn.teammate.ask.trim().slice(0, ASK_CHARS) } : null;
+  }
   const own = (message: Message) => message.role === "bot" && message.from?.botId === turn.botId;
   const asked = turn.rows.find((message) => message.id === turn.instructionId && said(message)) ?? turn.rows.findLast((message) => said(message) && !own(message));
   if (asked?.role !== "user") return null;
@@ -55,4 +58,25 @@ export function laneHandoff(turn: { lane: boolean; hop: number; teammate: boolea
 }
 
 export const laneHandoffNote = (room: string, asker: string, ask: string) =>
-  `[Wink note, automated: ${asker} asked you in ${JSON.stringify(room)}: ${JSON.stringify(ask)}. You answered while busy; now you can edit and run things. Do any edits or new work it asked for, then report here. If it needed nothing more, end with no text (call no_reply_needed first if you have it).]`;
+  `[Wink note, automated: ${JSON.stringify(asker)} asked you in ${JSON.stringify(room)}: ${JSON.stringify(ask)}. You handed this off while busy; now you can edit and run things. Do the edits or new work it asked for, then report here.]`;
+
+/** Lane turns that may hand off, and whether they did, per bot and room. */
+export function createLaneHandoffs() {
+  const open = new Map<string, boolean>();
+  const key = (botId: string, threadId: string) => `${botId}\0${threadId}`;
+  return {
+    open: (botId: string, threadId: string) => void open.set(key(botId, threadId), false),
+    /** The lane turn's own hand_off; false with no window open. */
+    call(botId: string, threadId: string): boolean {
+      if (!open.has(key(botId, threadId))) return false;
+      open.set(key(botId, threadId), true);
+      return true;
+    },
+    /** Ends the window; true when the turn handed off. */
+    close(botId: string, threadId: string): boolean {
+      const called = open.get(key(botId, threadId)) === true;
+      open.delete(key(botId, threadId));
+      return called;
+    },
+  };
+}

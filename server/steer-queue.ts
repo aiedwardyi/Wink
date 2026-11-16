@@ -285,7 +285,7 @@ export function queueRoomParticipation(
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && !item.hands === !options.hands);
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && Boolean(item.hands) === Boolean(options.hands));
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
