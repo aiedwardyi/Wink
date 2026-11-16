@@ -27,7 +27,7 @@ export function BotAlarms({ routines }: { routines: Routine[] }) {
   return (
     <div className={DETAILS_BOX}>
       <div className={DETAILS_ROW}>
-        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 text-left">
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="relative flex w-full items-center gap-2 text-left [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-3 [@media(pointer:coarse)]:after:inset-x-0">
           <span className="flex-1 text-[14px] font-medium text-ink">{t("bot.alarms")}</span>
           <span className="text-[12px] text-ink-secondary">{routines.length}</span>
           <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
