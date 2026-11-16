@@ -1,6 +1,6 @@
 // relay.<base> HTTP API over the outer TLS, ALPN http/1.1 (design sections 4 and 7):
 // GET /v1/healthz, GET /v1/status/<label>, POST /v1/enroll,
-// and, when config.google is set, POST /v1/account and GET /v1/pcs,
+// and, when config.google is set, POST /v1/enroll/google, POST /v1/account and GET /v1/pcs,
 // plus GET /v1/team and POST /v1/team/snags/{claim,ack} when teamOwnerEmail is set too,
 // GET /v1/room-codes/<code>,
 // and, when config.stats is set, POST /v1/stats and GET /v1/stats/day/<date>.
@@ -14,6 +14,7 @@ import { LABEL_RE, ROOM_CODE_RE, SNAG_ID_RE, hostFor } from "../../shared/relay-
 import { STATS_MAX_BYTES, STATS_MAX_INFLATED } from "../../shared/usage-stats.ts";
 import { BAD_ACCOUNT_REQUEST, accountRequestSchema, type Accounts } from "./accounts.ts";
 import { BAD_REQUEST, enrollRequestSchema, type Enroller } from "./enroll.ts";
+import { BAD_GOOGLE_ENROLL, googleEnrollRequestSchema, type GoogleEnroller } from "./google-enroll.ts";
 import type { Hub } from "./hub.ts";
 import { RateLimiter, type RelayLimits } from "./limits.ts";
 import type { Logger } from "./log.ts";
@@ -33,6 +34,8 @@ export interface ApiOptions {
   /** Set together. Without them, /v1/account and /v1/pcs are 404. */
   accounts?: Accounts;
   signinOrigin?: string;
+  /** Set with `accounts`. Without it, /v1/enroll/google is 404. */
+  googleEnroller?: GoogleEnroller;
   /** Set together, and only with `accounts`. Without them, /v1/team is 404. */
   team?: TeamLog;
   teamOwnerEmail?: string;
@@ -135,7 +138,7 @@ export function createApiServer(opts: ApiOptions): Server {
   const roomCodeAll = RateLimiter.perHour(limits.roomCodeLookupsPerHour, opts.now);
   const statsLimit = RateLimiter.perHour(limits.statsPerIpPerHour, opts.now);
   const statsReadLimit = RateLimiter.perMinute(limits.statsReadsPerIpPerMin, opts.now);
-  const { accounts, signinOrigin, team, teamOwnerEmail, snags, stats } = opts;
+  const { accounts, googleEnroller, signinOrigin, team, teamOwnerEmail, snags, stats } = opts;
 
   function directoryCors(origin: string | undefined) {
     const headers: Record<string, string> = {};
@@ -224,6 +227,35 @@ export function createApiServer(opts: ApiOptions): Server {
       }
       log.log("enrolled", { label: result.label, peer: peerPrefix(req.socket.remoteAddress) });
       return reply(res, 200, { ticket: result.ticket });
+    }
+
+    if (googleEnroller && url === "/v1/enroll/google") {
+      if (req.method !== "POST") return reply(res, 405, { error: "method" });
+      const peer = peerPrefix(req.socket.remoteAddress);
+      if (!enrollLimit.take(ip)) {
+        log.log("google-enroll-rejected", { peer, reason: "rate-limited" });
+        return reply(res, 429, { error: "rate-limited" });
+      }
+      if (!/^application\/json(;|$)/i.test(req.headers["content-type"] ?? "")) {
+        return reply(res, 415, { error: "content-type" });
+      }
+      const body = await readBody(req, ACCOUNT_MAX_BODY);
+      if (!body) return reply(res, 413, { error: "too-large" });
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        return reply(res, 400, { error: "bad-request" });
+      }
+      const request = googleEnrollRequestSchema.safeParse(parsed);
+      const result = request.success ? await googleEnroller.enroll(request.data) : BAD_GOOGLE_ENROLL;
+      if (!result.ok) {
+        log.log("google-enroll-rejected", { peer, reason: result.error });
+        if (result.retryAfter === undefined) return reply(res, result.status, { error: result.error });
+        return reply(res, result.status, { error: result.error, retryAfter: result.retryAfter }, { "retry-after": String(result.retryAfter) });
+      }
+      log.log("google-enrolled", { label: result.label, peer, reason: result.fresh ? "new" : "again" });
+      return reply(res, 200, { ticket: result.ticket, account: result.account });
     }
 
     if (stats && url === "/v1/stats") {

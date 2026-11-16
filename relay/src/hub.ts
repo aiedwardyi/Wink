@@ -15,6 +15,7 @@ import type { TeamLog } from "./team.ts";
 export interface ControlLink {
   notice(code: NoticeCode): void;
   want(n: number): void;
+  poked(): void;
   close(): void;
 }
 
@@ -27,6 +28,10 @@ export class Session {
   readonly control: ControlLink;
   /** Set when this session's auth carried a wka1. Null after sign-out or before that. */
   account: { subHash: string; name: string } | null = null;
+  /** Its auth asked for `poked` frames. */
+  pokes = false;
+  lastPoke = -Infinity;
+  pokeTimer: NodeJS.Timeout | undefined;
   live = true;
 
   constructor(label: string, control: ControlLink, since: number) {
@@ -49,6 +54,8 @@ export interface HubOptions {
   now?: () => number;
   /** Set only when the relay has a team owner. */
   team?: TeamLog;
+  /** Labels that joined with Google rather than the owner's setup code: never on the team log. */
+  joinedWithGoogle?: (label: string) => boolean;
 }
 
 export type JoinResult = "parked" | "spliced" | "unknown-session" | "bad-token" | "pool-full";
@@ -80,8 +87,13 @@ export class Hub {
     return this.byLabel.size;
   }
 
-  get recordsTeam(): boolean {
-    return this.opts.team !== undefined;
+  /** Only the owner's own PCs, the ones joined with a setup code, are on the team log or send snags. */
+  recordsTeam(label: string): boolean {
+    return this.opts.team !== undefined && !this.opts.joinedWithGoogle?.(label);
+  }
+
+  private teamFor(label: string) {
+    return this.recordsTeam(label) ? this.opts.team : undefined;
   }
 
   get splicedCount(): number {
@@ -118,7 +130,7 @@ export class Hub {
     if (old) this.end(old, "superseded");
     else {
       this.markChanged(label);
-      this.opts.team?.pcUp(label);
+      this.teamFor(label)?.pcUp(label);
     }
     this.opts.log.log("session-up", { label, reason: old ? "superseded-old" : "new" });
     return session;
@@ -128,6 +140,7 @@ export class Hub {
   end(session: Session, code?: NoticeCode): void {
     if (!session.live) return;
     session.live = false;
+    clearTimeout(session.pokeTimer);
     this.byId.delete(session.id);
     for (const socket of session.idle) socket.destroy();
     session.idle.clear();
@@ -136,7 +149,7 @@ export class Hub {
     if (this.byLabel.get(session.label) === session) {
       this.byLabel.delete(session.label);
       this.markChanged(session.label);
-      this.opts.team?.pcDown(session.label);
+      this.teamFor(session.label)?.pcDown(session.label);
       this.failWaiting(session.label);
     }
     this.unindex(session);
@@ -159,17 +172,33 @@ export class Hub {
     const bucket = this.bySub.get(subHash) ?? new Map<string, string>();
     bucket.set(session.label, name);
     this.bySub.set(subHash, bucket);
+    if (!this.recordsTeam(session.label)) return;
     this.opts.team?.setName(session.label, name);
     this.opts.team?.setAccount(session.label, subHash, person);
   }
 
   /** A control frame arrived on the label's current session. */
   seen(session: Session): void {
-    if (this.byLabel.get(session.label) === session) this.opts.team?.pcSeen(session.label);
+    if (this.byLabel.get(session.label) === session) this.teamFor(session.label)?.pcSeen(session.label);
   }
 
   active(session: Session): void {
-    if (this.byLabel.get(session.label) === session) this.opts.team?.active(session.label);
+    if (this.byLabel.get(session.label) === session && this.recordsTeam(session.label)) this.opts.team?.active(session.label);
+  }
+
+  /** Forwards a poke at most once per pokeIntervalMs per sender; pokes inside the interval collapse into one trailing forward. */
+  poke(session: Session): void {
+    if (!session.account || session.pokeTimer) return;
+    const wait = session.lastPoke + this.opts.limits.pokeIntervalMs - this.now();
+    if (wait <= 0) {
+      this.forwardPoke(session);
+      return;
+    }
+    session.pokeTimer = setTimeout(() => {
+      session.pokeTimer = undefined;
+      this.forwardPoke(session);
+    }, wait);
+    session.pokeTimer.unref();
   }
 
   /** Kills everything for a label: control, pool, waiting phones and live splices. */
@@ -299,7 +328,7 @@ export class Hub {
     this.parked.get(data)?.();
     this.parked.delete(data);
     this.splicedPerLabel.set(label, (this.splicedPerLabel.get(label) ?? 0) + 1);
-    const phoneId = this.opts.team?.phoneStart(label);
+    const phoneId = this.teamFor(label)?.phoneStart(label);
     const pair: LabeledPair = Object.assign(splice({
       phone,
       data,
@@ -350,6 +379,20 @@ export class Hub {
     if (!bucket) return;
     bucket.delete(session.label);
     if (bucket.size === 0) this.bySub.delete(account.subHash);
+  }
+
+  private forwardPoke(sender: Session): void {
+    const subHash = sender.account?.subHash;
+    if (!sender.live || !subHash) return;
+    sender.lastPoke = this.now();
+    let count = 0;
+    for (const label of this.bySub.get(subHash)?.keys() ?? []) {
+      const peer = this.byLabel.get(label);
+      if (label === sender.label || !peer?.pokes || peer.account?.subHash !== subHash) continue;
+      peer.control.poked();
+      count += 1;
+    }
+    this.opts.log.log("poked", { count });
   }
 
   private markChanged(label: string): void {
