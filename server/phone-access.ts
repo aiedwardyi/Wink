@@ -393,7 +393,7 @@ export class PhoneAccess {
     const phone = this.session(req, res);
     if (phone) return { handled: false, phone };
     const path = new URL(req.url ?? "/", "https://relay.invalid").pathname;
-    if (linkedFileGrant(req.method, path)) return { handled: false, phone: null };
+    if (linkedFileGrant(req.method, path, (holder) => this.phones.list().some((phone) => phone.id === holder))) return { handled: false, phone: null };
     if (path.startsWith("/api/")) {
       send(res, 401, { error: "unauthorized" });
       return HANDLED;

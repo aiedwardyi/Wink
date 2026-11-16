@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { PHONE_RELAY_OFF, buildSetupCode, mintInvite } from "../shared/relay-protocol.ts";
 import * as atomic from "./atomic.ts";
-import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, PC_HOLDER, serveLinkedFile } from "./linked-files.ts";
 import { PhoneAccess, loadRelayClient, type PhoneAccessOptions } from "./phone-access.ts";
 import { phoneSetCookie, requestCredentials } from "./phone-auth.ts";
 import { PAIRING_TTL_MS, PHONES_FILE, PhoneDevices } from "./phone-devices.ts";
@@ -104,7 +104,7 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
       !(method === "GET" && path === "/api/health") &&
       !credentials.phoneSession &&
       !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) &&
-      !linkedFileGrant(method, path)
+      !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)
     ) {
       return send(res, 401, { error: "unauthorized" });
     }
@@ -131,6 +131,7 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
     if (method === "GET" && /^\/api\/threads\/t1\/linked-file(?:\/.*)?$/.test(path)) {
       return serveLinkedFile(req, res, {
         ...credentials,
+        holder: phone?.id,
         threadId: "t1",
         messages: [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
         deviceId: "this-pc",
@@ -821,6 +822,18 @@ describe("relay request gate", () => {
     expect((await viaRelay(w.r, `${forged}body.woff2`)).status).toBe(401);
     expect((await viaRelay(w.r, `${forged}body.woff2`, { headers: { origin: "null" } })).status).toBe(403);
     expect((await viaRelay(w.r, "/api/bots", { headers: { origin: "null", cookie: session } })).status).toBe(403);
+  });
+
+  it("ends a linked page's grant when its phone is signed out", async () => {
+    const w = await world();
+    const session = await pairPhone(w);
+    const opened = await viaRelay(w.r, `/api/threads/t1/linked-file?path=${encodeURIComponent(join(w.linkedRoot, "page.html"))}`, { headers: { cookie: session } });
+    const scope = String(opened.headers.location);
+    expect((await viaRelay(w.r, `${scope}body.woff2`)).status).toBe(200);
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    expect((await w.local(`/api/phone/devices/${phones[0]!.id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await viaRelay(w.r, `${scope}body.woff2`)).status).toBe(401);
+    expect((await viaRelay(w.r, `${scope}body.woff2`, { headers: { origin: "null" } })).status).toBe(401);
   });
 
   it("applies the same rules to an upgrade request", async () => {

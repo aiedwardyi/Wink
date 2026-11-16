@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { linkedFileGrant, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
+import { linkedFileGrant, PC_HOLDER, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import {
   loadThreadSyncLedger,
@@ -502,21 +502,37 @@ describe("linked files", () => {
       }
       expect((await fetch(`${scope}${grant}/style.css`)).status).toBe(200);
       const asset = new URL(`${scope}${grant}/style.css`).pathname;
-      expect([linkedFileGrant("GET", asset), linkedFileGrant("POST", asset), linkedFileGrant("GET", asset.replace(grant, foreign))]).toEqual([true, false, false]);
+      const onPc = (holder: string) => holder === PC_HOLDER;
+      expect([linkedFileGrant("GET", asset, onPc), linkedFileGrant("POST", asset, onPc), linkedFileGrant("GET", asset.replace(grant, foreign), onPc)]).toEqual([true, false, false]);
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(Date.now() + 60 * 60_000 + 1);
       expect((await fetch(`${scope}${grant}/style.css`)).status).toBe(404);
-      expect(linkedFileGrant("GET", asset)).toBe(false);
+      expect(linkedFileGrant("GET", asset, onPc)).toBe(false);
     } finally {
       vi.useRealTimers();
       await server.close();
     }
   });
 
+  it("binds a page's grant to the PC or phone that opened it", async () => {
+    const { root, server, open } = await linkedSite({ "index.html": "<p>page</p>", "style.css": "body {}" });
+    const scope = `/api/threads/t1/linked-file/${encodeURIComponent(join(root, "index.html"))}/`;
+    try {
+      const asset = `${new URL((await open("index.html")).url).pathname}style.css`;
+      expect(asset.startsWith(scope)).toBe(true);
+      expect(linkedFileGrant("GET", asset, (holder) => holder === PC_HOLDER)).toBe(true);
+      expect(linkedFileGrant("GET", asset, (holder) => holder !== PC_HOLDER)).toBe(false);
+      const phone = asset.replace(/\/[^/]+\/style\.css$/, `/${asset.split("/").at(-2)!.replace(`.${PC_HOLDER}.`, ".phone-1.")}/style.css`);
+      expect(linkedFileGrant("GET", phone, () => true)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("admits a page's grant at the server's Origin and sign-in gates", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    expect(source.includes('!originAllowedByRemote(origin, REMOTE_HOST) && !(origin === "null" && linkedFileGrant(method, path))'), "Origin gate").toBe(true);
-    expect(source.includes("!apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)"), "sign-in gate").toBe(true);
+    expect(source.includes('!originAllowedByRemote(origin, REMOTE_HOST) && !(origin === "null" && linkedFileGrant(method, path, (holder) => holder === PC_HOLDER))'), "Origin gate").toBe(true);
+    expect(source.includes("!apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)"), "sign-in gate").toBe(true);
   });
 
   it("refuses an unlinked path, escapes, a file outside the roots, and an unauthenticated request", async () => {
