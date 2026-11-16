@@ -206,7 +206,7 @@ describe("summary grace dispatch", () => {
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false, joinRunningTurn, runningTurnIdByThread: new Map(),
+        leanStartup: false, isUnattended: () => false, joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);

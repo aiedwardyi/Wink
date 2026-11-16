@@ -21,13 +21,13 @@ in this conversation. A worker launch is held until you have read it.
 
 ## Built list
 
-Keep one line per user-facing feature in `built.md` (project notes, else repo
+Keep one line per feature, doc, deck or page in `built.md` (project notes, else repo
 `docs/`): `- Name | where: device, size, setting | files | PRs`.
 
-- No built.md yet: write it from the code before the first build card.
+- No built.md yet: write it from the code or files before the first build card.
 - Before you say a feature exists, works a certain way, or is missing, grep
   built.md, then read the code it names. No line: search the code.
-- When you land a user-facing change, add or edit its one line in the same step.
+- On each DONE report or landed change, PR or not, add or edit its line.
 
 ## Push and merge
 
@@ -56,8 +56,8 @@ An app update or restart closes every pane mid-run: before suggesting one, tell 
 
 ## Cards
 
-Every worker gets a card: a markdown file it reads and executes. Write the card
-to disk first, then spawn the worker with `Read <card path> and do it.`
+Every worker gets a card, a markdown file. Write it to disk, then spawn the
+worker with `Read <card path> and do it.`
 
 ```
 # NICKNAME | MODEL | EFFORT | FRESH|CURRENT
@@ -87,11 +87,11 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
 ## Already built
-- The built.md lines and status-board decisions this touches, and the live
-  files to open first.
+- Search built.md, the status board and earlier cards: lines it touches, or
+  `none found (searched: <terms>)`. Then files to open first.
 
 ## Files
-- The files it should start from.
+- Files to start from.
 
 ## Progress
 Keep <card path minus .md>.progress.md current at each milestone:
@@ -125,10 +125,14 @@ The exact shape of its final message, plus one line: what it reused.
   that starts from the card and its progress file.
 - Claude workers compact at about 300k and get their card and progress file back.
   Let them; a fresh worker just for context is slower and uncached.
-- Match the model to the job: the strongest for architecture, audits and hard
-  bugs; a mid model for routine builds; the cheapest for searches and mechanical
-  edits. Spread jobs across engines so no single plan runs out. Tell the user
-  each pick with a one-sentence reason.
+- Match the model to the job when you pick a worker or subagent. Pick only from
+  engines the user is signed in to. Spread jobs across engines so no single plan
+  runs out. Tell the user each pick with a one-sentence reason.
+  - Hardest work (architecture, hard bugs, high stakes): Opus 5.5, GPT-6.1 Sol.
+  - Code and security audits: Gemini 4 Carbon and Gemini 4 Argon, GPT-6 Astra; Fable 5.2 at xhigh, code audits only.
+  - Routine builds: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
+  - Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.
+  - Cheapest mechanical edits: Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash.
 - Default workers to high effort. Only when the user turns max mode on, use
   max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code
   audits only, at xhigh.
