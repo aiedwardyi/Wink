@@ -8,6 +8,7 @@
   Needs Node 24+ and gcloud on PATH. With -Dns namecom (default) DNS
   credentials come from the NAMECOM_USER and NAMECOM_TOKEN environment
   variables, never arguments. -Dns manual needs no credentials.
+  Any other cli.ts flag goes after these, written the way cli.ts takes it.
 
 .EXAMPLE
   .\wink-relay.ps1 provision -Project my-proj -Base wink.example.com -DnsZone example.com -OperatorKey C:\keys\operator.key -AcceptAcmeTerms
@@ -35,7 +36,8 @@ param(
   [string]$AcmeEmail,
   [switch]$AcceptAcmeTerms,
   [switch]$Offline,
-  [switch]$Apply
+  [switch]$Apply,
+  [Parameter(ValueFromRemainingArguments = $true)][string[]]$More
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +59,7 @@ if ($AcmeEmail) { $cliArgs += @('--acme-email', $AcmeEmail) }
 if ($AcceptAcmeTerms) { $cliArgs += '--accept-acme-terms' }
 if ($Offline) { $cliArgs += '--offline' }
 if ($Apply) { $cliArgs += '--apply' }
+if ($More) { $cliArgs += $More }
 
 & node (Join-Path $PSScriptRoot 'cli.ts') @cliArgs
 exit $LASTEXITCODE

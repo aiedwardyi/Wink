@@ -54,14 +54,12 @@ describe("buildTeamSnag", () => {
   const raw: SpooledSnag = { id: "9f2c41d07a5e4b6c8d1e3f2a0b9c7d6e", at: 1_793_425_560_000, event: "stalled", key: "pane-1", pane: "3fa91c02-aaaa", worker: "codex", label: "INVOICE-EXPORT", minutes: 102 };
   const meta = { ...ctx, build: "1.0.217", os: "win32", teacher: "claude:claude-opus-5-5" };
 
-  it("keeps the last 30 lines and fits the frame cap", () => {
-    const tail = Array.from({ length: 80 }, (_, i) => `작업 줄 ${i} ${"가".repeat(60)}`).join("\n");
-    const snag = buildTeamSnag({ ...raw, tail }, meta);
+  it("sends no terminal text and keeps the rest", () => {
+    const tail = Array.from({ length: 80 }, (_, i) => `D:\\clients\\acme\\billing.ts line ${i}`).join("\n");
+    const snag = buildTeamSnag({ ...raw, tail, detail: "3 STALLED notes" }, meta);
     expect(teamSnagSchema.safeParse(snag).success).toBe(true);
-    expect(snag.tail.split("\n").length).toBeLessThanOrEqual(30);
-    expect(snag.tail.endsWith(`작업 줄 79 ${"가".repeat(60)}`)).toBe(true);
+    expect(snag).toMatchObject({ tail: "", detail: "3 STALLED notes", event: "stalled", worker: "codex", label: "INVOICE-EXPORT", minutes: 102, pane8: "3fa91c02" });
     expect(Buffer.byteLength(JSON.stringify({ type: "snag", data: snag }))).toBeLessThanOrEqual(SNAG_MAX_BYTES);
-    expect(snag.pane8).toBe("3fa91c02");
   });
 });
 
@@ -114,7 +112,7 @@ describe("TeamSnags", () => {
     await snags.sync();
     expect(sent.map((s) => s.event)).toEqual(["stalled", "note-lost"]);
     expect(sent[1].teacher).toBe("claude:bot-1");
-    expect(sent[1].tail).toBe("~\\x");
+    expect(sent[1].tail).toBe("");
     expect(readdirSync(spool())).toEqual([]);
   });
 

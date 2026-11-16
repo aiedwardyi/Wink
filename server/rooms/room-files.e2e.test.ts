@@ -123,7 +123,7 @@ beforeAll(async () => {
     config: () => ({ base: BASE, enabled: true }),
     saveEnabled: () => {},
     start: () => relay,
-    loadClient: async () => ({ start: () => relay, enroll: async () => {}, peer: () => "203.0.113.7" }),
+    loadClient: async () => ({ start: () => relay, enroll: async () => {}, googleEnroll: async () => ({ ok: true }), peer: () => "203.0.113.7" }),
     room: handleRoomDoor,
   });
   await access.start(app);

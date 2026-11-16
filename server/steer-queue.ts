@@ -36,6 +36,9 @@ interface SteerItem {
   answersCard?: string;
 }
 
+/** A lane's hand-off: needs the bot free, never drains onto a lane. A string is the teammate's settled ask, rechecked as it starts. */
+export type Hands = true | string;
+
 interface RoomItem {
   kind: "room";
   messageId: string;
@@ -49,6 +52,7 @@ interface RoomItem {
   chainAsk?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
+  hands?: Hands;
 }
 
 type QueueItem = SteerItem | RoomItem;
@@ -202,6 +206,7 @@ export interface RoomDrain {
   chainAsk?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
+  hands?: Hands;
 }
 
 export type DrainRun = (
@@ -281,15 +286,18 @@ export function queueRoomParticipation(
     chainAsk?: string;
     ready?: () => Promise<boolean>;
     spoken?: Set<string>;
+    hands?: Hands | false;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId);
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && item.hands === (options.hands || undefined));
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
     existing.hop = Math.min(existing.hop, options.hop ?? 0);
-    if (!existing.cardContinuation && options.cardContinuation) {
+    if (options.hands && existing.cardContinuation && options.cardContinuation) {
+      existing.cardContinuation = `${existing.cardContinuation}\n\n${options.cardContinuation}`;
+    } else if (!existing.cardContinuation && options.cardContinuation) {
       existing.cardContinuation = options.cardContinuation;
     }
     existing.onDispatchError ??= options.onDispatchError;
@@ -314,6 +322,7 @@ export function queueRoomParticipation(
     ready: options.ready,
     spoken: options.spoken,
     ...(options.askId ? { askId: options.askId } : {}),
+    ...(options.hands ? { hands: options.hands } : {}),
     ...(options.chainAsk ? { chainAsk: options.chainAsk } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
@@ -363,7 +372,8 @@ export function drainSteeredMessages(
     }
     // busy, or startTurn has claimed this bot but has not flipped busy yet
     const busy = bot.busy || hasActiveTurn?.(entry.botId);
-    if ((busy && !(entry.items.every(isRoomItem) && laneFree?.(entry.botId))) || draining.has(entry.botId) || promotingBots.has(entry.botId)) continue;
+    const laneItem = entry.items.every(isRoomItem) && entry.items.some((item) => isRoomItem(item) && !item.hands) && laneFree?.(entry.botId);
+    if ((busy && !laneItem) || draining.has(entry.botId) || promotingBots.has(entry.botId)) continue;
     const first = entry.items.find((item) => !isRoomItem(item) && !isSendCancelled(item.sendId));
     if (first && !isRoomItem(first) && syncHold.waiting(entry.threadId, first.syncUntil)) continue;
     // committed to draining: the entry leaves the map before anything runs,
@@ -414,8 +424,9 @@ export function drainSteeredMessages(
     }
 
     saveQueuedSends();
-    const [room, ...waiting] = roomItems;
+    const room = busy ? roomItems.find((item) => !item.hands) : roomItems[0];
     if (!room) continue;
+    const waiting = roomItems.filter((item) => item !== room);
     if (waiting.length) queues.set(key, { botId: entry.botId, threadId: entry.threadId, items: waiting });
     const roomDrain: RoomDrain = { groupId: room.groupId, hop: room.hop };
     if (room.rootId) roomDrain.rootId = room.rootId;
@@ -426,6 +437,7 @@ export function drainSteeredMessages(
     if (room.chainAsk) roomDrain.chainAsk = room.chainAsk;
     if (room.ready) roomDrain.ready = room.ready;
     if (room.spoken) roomDrain.spoken = room.spoken;
+    if (room.hands) roomDrain.hands = room.hands;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
   }
 }

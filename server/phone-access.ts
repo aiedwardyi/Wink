@@ -28,10 +28,12 @@ import {
 import { PhoneDevices, type PairError, type PublicPhone } from "./phone-devices.ts";
 import { GPAIR_CLEAR_COOKIE, PhoneGoogle, gpairCookie, type GoogleSignInError } from "./phone-google.ts";
 import { realClock, type Clock } from "./phone-relay/clock.ts";
+import type { GoogleEnrollOptions, GoogleJoinResult } from "./phone-relay/google-enroll.ts";
 import type { PhoneRelay, PhoneRelayConfig, PhoneRelayEnrollOptions, PhoneRelayOptions } from "./phone-relay/index.ts";
 import { relayMode } from "./phone-relay/mode.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
+import { removePhonePushSubscriptions } from "./web-push.ts";
 
 const MINUTE_MS = 60_000;
 const MAX_BODY_BYTES = 4096;
@@ -61,7 +63,7 @@ const GOOGLE_STATUS = {
   "key-source": 503,
 } satisfies Record<GoogleSignInError, number>;
 const DEVICE_ROUTE = /^\/api\/phone\/devices\/([\w-]{1,64})$/;
-const MANAGEMENT_ROUTES = new Set(["/api/phone-relay", "/api/phone-relay/status", "/api/phone-relay/enroll", "/api/phone-relay/setup", "/api/phone/pairing", "/api/phone/devices"]);
+const MANAGEMENT_ROUTES = new Set(["/api/phone-relay", "/api/phone-relay/status", "/api/phone-relay/enroll", "/api/phone-relay/setup", "/api/phone-relay/google-enroll", "/api/phone/pairing", "/api/phone/devices"]);
 
 const pairBodySchema = z.object({
   credential: z.string(),
@@ -91,6 +93,9 @@ export interface PhoneAccessOptions {
   clock?: Clock;
   start?(options: PhoneRelayOptions): PhoneRelay;
   enroll?(options: PhoneRelayEnrollOptions): Promise<void>;
+  googleEnroll?(options: GoogleEnrollOptions): Promise<GoogleJoinResult>;
+  /** The relay this build joins with Google when none is saved. */
+  teamBase?: string | null;
   loadClient?(): Promise<RelayClient>;
   /** Phone sign-in with Google. Without it, or without a Web client id, the Google button stays hidden. */
   google?: PhoneGoogleAccount;
@@ -116,13 +121,14 @@ export interface PhoneGoogleAccount {
 interface RelayClient {
   start(options: PhoneRelayOptions): PhoneRelay;
   enroll(options: PhoneRelayEnrollOptions): Promise<void>;
+  googleEnroll(options: GoogleEnrollOptions): Promise<GoogleJoinResult>;
   peer(req: IncomingMessage): string | null;
 }
 
 /** Loaded only once the relay is on, so a PC without it never loads the client. */
 export async function loadRelayClient(): Promise<RelayClient> {
   const [client, ingress] = await Promise.all([import("./phone-relay/index.ts"), import("./phone-relay/ingress.ts")]);
-  return { start: client.startPhoneRelay, enroll: client.enrollPhoneRelay, peer: ingress.relayPeerForRequest };
+  return { start: client.startPhoneRelay, enroll: client.enrollPhoneRelay, googleEnroll: client.enrollPhoneRelayWithGoogle, peer: ingress.relayPeerForRequest };
 }
 
 export type RelayGate = { handled: true } | { handled: false; phone: PublicPhone | null };
@@ -137,6 +143,8 @@ export interface PhoneAccessStatus extends PhoneRelayStatus {
   base: string | null;
   enabled: boolean;
   problem: RelayProblem | null;
+  /** No relay saved, but this PC can join the team relay with its Google sign-in. */
+  joinable: boolean;
 }
 
 type Reply =
@@ -330,6 +338,11 @@ export class PhoneAccess {
     return this.handler !== null && relayMode(this.options.config() ?? {}, this.options.env).kind === "on" && this.presenceHost() !== null;
   }
 
+  /** A relay phone still signed in. */
+  paired(id: string): boolean {
+    return this.phones.paired(id);
+  }
+
   /** The base a relay phone's device picker is limited to. */
   base(): string | null {
     const mode = relayMode(this.options.config() ?? {}, this.options.env);
@@ -350,6 +363,7 @@ export class PhoneAccess {
       ...status,
       lastError: safeRelayError(status.lastError),
       problem: relayProblem(status.state, status.lastError),
+      joinable: available && !configured && Boolean(this.options.saveSetup && this.google && this.options.teamBase),
     };
   }
 
@@ -393,7 +407,7 @@ export class PhoneAccess {
     const phone = this.session(req, res);
     if (phone) return { handled: false, phone };
     const path = new URL(req.url ?? "/", "https://relay.invalid").pathname;
-    if (linkedFileGrant(req.method, path)) return { handled: false, phone: null };
+    if (linkedFileGrant(req.method, path, (holder) => this.phones.paired(holder))) return { handled: false, phone: null };
     if (path.startsWith("/api/")) {
       send(res, 401, { error: "unauthorized" });
       return HANDLED;
@@ -508,15 +522,27 @@ export class PhoneAccess {
   }
 
   /** Trades `invite` for a ticket. The failure reason, or null once enrolled. */
-  private async enroll(invite: string): Promise<EnrollError | null> {
+  /** `base` enrolls at a relay other than the saved one, before anything is saved. */
+  private async enroll(invite: string, base?: string): Promise<EnrollError | null> {
     try {
       this.client ??= await (this.options.loadClient ?? loadRelayClient)();
-      await (this.options.enroll ?? this.client.enroll)({ dataDir: this.options.dataDir, config: this.options.config() ?? {}, invite });
+      const saved = this.options.config() ?? {};
+      const config = base ? { ...saved, base, enabled: true } : saved;
+      await (this.options.enroll ?? this.client.enroll)({ dataDir: this.options.dataDir, config, invite });
       return null;
     } catch (cause) {
       const reason = safeRelayError(cause instanceof Error ? cause.message : String(cause)) ?? "enrollment failed";
       console.error(`[phone-relay] enroll failed: ${reason}`);
       return enrollError(reason);
+    }
+  }
+
+  private async googleEnroll(options: GoogleEnrollOptions): Promise<GoogleJoinResult> {
+    try {
+      this.client ??= await (this.options.loadClient ?? loadRelayClient)();
+      return await (this.options.googleEnroll ?? this.client.googleEnroll)(options);
+    } catch (cause) {
+      return { ok: false, error: "enroll-failed", reason: cause instanceof Error ? cause.message : String(cause) };
     }
   }
 
@@ -572,13 +598,35 @@ export class PhoneAccess {
       if (!code.ok) return reply(400, { error: SETUP_ERROR[code.reason] });
       const current = this.describe().base;
       if (current && current !== code.value.base && (await this.holdsTicket())) {
-        return reply(409, { error: `this PC already uses the relay at ${current}` });
+        // A move: the new relay takes this PC first, so a refused code leaves the working setup alone.
+        const refused = await this.enroll(code.value.invite, code.value.base);
+        if (refused) return reply(400, { error: refused });
+        this.options.saveSetup(code.value.base);
+        await this.restart();
+        return reply(200, this.describe());
       }
       this.options.saveSetup(code.value.base);
       // A failed enroll keeps the saved base, so Settings asks for a new code.
       const failed = await this.enroll(code.value.invite);
       await this.restart();
       return reply(failed ? 400 : 200, failed ? { error: failed } : this.describe());
+    }
+    if (method === "POST" && path === "/api/phone-relay/google-enroll") {
+      const google = this.options.google;
+      const current = this.describe().base;
+      const base = current ?? this.options.teamBase ?? null;
+      if (this.options.env.ORBIT_RELAY === "0" || !this.options.saveSetup || !this.google || !google || !base) return reply(409, { error: "relay-unavailable" });
+      if (current && (await this.holdsTicket())) {
+        return reply(409, { error: `this PC already uses the relay at ${current}` });
+      }
+      const joined = await this.googleEnroll({ dataDir: this.options.dataDir, base, sub: () => google.sub(), idToken: () => google.idToken(), freshIdToken: () => google.freshIdToken() });
+      if (!joined.ok) {
+        console.error(`[phone-relay] Google join failed: ${safeRelayError(joined.reason)}`);
+        return reply(409, { error: joined.error });
+      }
+      this.options.saveSetup(base);
+      await this.restart();
+      return reply(200, this.describe());
     }
     if (path === "/api/phone/pairing") {
       if (method === "DELETE") {
@@ -601,6 +649,7 @@ export class PhoneAccess {
         this.google?.dropPhone(id);
         for (const socket of this.sockets.get(id) ?? []) socket.destroy();
         this.sockets.delete(id);
+        removePhonePushSubscriptions(this.options.dataDir, id);
       }
       return reply(200, { ok: true });
     }

@@ -502,7 +502,7 @@ describe("the answer", () => {
     });
     // the host's own line already waits for Wink; the chain hop folds into it
     queueRoomParticipation(wink, group.threadId, { groupId: group.id, hop: 0 });
-    expect(await run(group.id, group.threadId, wink, 1, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, undefined, "ask-from-sora")).toBe(true);
+    expect(await run(group.id, group.threadId, wink, 1, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, undefined, undefined, "ask-from-sora")).toBe(true);
     const drained: RoomDrain[] = [];
     drainSteeredMessages({ bot: (id: string) => store.bot(id), messagesFor: () => [], appendMessage: vi.fn(), patchMessage: vi.fn() } as never, (_bot, _thread, _prompt, _user, _ex, room) => { drained.push(room!); });
     expect(drained).toEqual([expect.objectContaining({ hop: 0, chainAsk: "ask-from-sora" })]);

@@ -25,11 +25,13 @@
 //   list_routines()                       → inspect this bot's scheduled work
 //   propose_routine(...)                  → show a confirmation card for a new routine
 //   propose_routine_action(...)           → show a confirmation card for a routine change
+//   wake_me(at, note) / wake_me(cancel)   → one-off wake of this bot in this chat, no card
 //   update_task_state(...)                → save goal, progress, blockers, and next action
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
 //   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
+//   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -232,6 +234,12 @@ const SEARCH_MY_CHATS_TOOL = {
   },
 };
 
+const HAND_OFF_TOOL = {
+  name: "hand_off",
+  description: "You are busy elsewhere and can't edit or run things in this reply. Call this when the room asks for edits or new work: it starts here as soon as you are free.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
 export const BOARD_TOOLS = [
   {
     name: "board_search",
@@ -258,6 +266,7 @@ export const BOARD_TOOLS = [
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
+  ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   ...BOARD_TOOLS,
   {
@@ -611,6 +620,21 @@ const TOOLS = [
         },
       },
       required: ["routine_id", "action"],
+    },
+  },
+  {
+    name: "wake_me",
+    description:
+      "Wake yourself once in this chat later, with a note to yourself: use it for a one-off later step (check a deploy at 03:45, resume after a cooldown) instead of a countdown terminal pane. No confirmation card; the user sees a small chip and can cancel it. At that time you get an automated [Wake] turn with your note. Recurring work still needs propose_routine. list_routines shows your pending wakes (named Wake); pass cancel with an id to cancel one. Max 10 pending.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        at: { type: "string", description: "RFC3339 with offset, 1 minute to 7 days ahead. Call list_routines first for the current time if unsure." },
+        note: { type: "string", maxLength: 500, description: "What to pick up when you wake, up to 500 characters." },
+        cancel: { type: "string", description: "A pending wake id to cancel instead of setting one." },
+      },
+      required: [],
     },
   },
   {
@@ -1120,6 +1144,15 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     });
     return confirmationResult(r, `${action.replace("_", " ")} on routine ${routineId}`);
   }
+  if (name === "wake_me") {
+    if (typeof args.cancel === "string" && args.cancel.trim()) {
+      await api("/api/internal/wake", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, cancel: args.cancel.trim() }) });
+      return { text: `Wake ${args.cancel.trim()} is cancelled.` };
+    }
+    if (typeof args.at !== "string" || typeof args.note !== "string") return { text: "wake_me needs at and note, or cancel with a wake id.", isError: true };
+    const r = await api("/api/internal/wake", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, at: args.at, note: args.note }) });
+    return { text: `Wake ${String(r.id)} is set for ${String(r.local)}. You will get a [Wake] turn in this chat then.` };
+  }
   if (name === "set_keep_going") {
     if (typeof args.on !== "boolean") return { text: "set_keep_going needs on: true or false.", isError: true };
     if (args.start_after !== undefined && typeof args.start_after !== "string") return { text: "start_after must be RFC3339 with an offset.", isError: true };
@@ -1143,6 +1176,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   }
   if (name === "board_search" || name === "board_post") {
     const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
+  }
+  if (name === HAND_OFF_TOOL.name) {
+    const r = await api("/api/internal/hand-off", { method: "POST", body: "{}" });
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };

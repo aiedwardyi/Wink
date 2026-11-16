@@ -15,6 +15,14 @@ export interface RelayLimits {
   /** Control channel auth attempts per source IP. */
   controlAuthPerIpPerMin: number;
   enrollPerIpPerHour: number;
+  /** POST /v1/enroll/google: new labels per rolling 7 days, relay-wide. Each one costs a certificate, so a deploy sizes it to its CAs. */
+  googleEnrollPerWeek: number;
+  /** A full week holds a request this long for a spot about to free, this many requests at once. Keep it under the API's 5 s idle timeout. */
+  googleEnrollWaitMs: number;
+  googleEnrollMaxWaiting: number;
+  /** New labels per Google account, ever and per rolling day. */
+  googleEnrollPerAccount: number;
+  googleEnrollPerAccountPerDay: number;
   /** POST /v1/account, when the google block is set. */
   accountPerIpPerHour: number;
   /** GET /v1/pcs, when the google block is set. */
@@ -24,6 +32,8 @@ export interface RelayLimits {
   authTimeoutMs: number;
   joinTimeoutMs: number;
   pingIntervalMs: number;
+  /** A sender's pokes reach its account's other PCs at most once per this, plus one trailing. */
+  pokeIntervalMs: number;
   /** Spliced phone connections per label. */
   maxSplicedPerLabel: number;
   /** Parked data channels per label. */
@@ -63,12 +73,19 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   connPerIpBurst: 60,
   controlAuthPerIpPerMin: 6,
   enrollPerIpPerHour: 5,
+  // Let's Encrypt alone: 50 certificates a week per registered domain, renewals included.
+  googleEnrollPerWeek: 35,
+  googleEnrollWaitMs: 3_000,
+  googleEnrollMaxWaiting: 64,
+  googleEnrollPerAccount: 5,
+  googleEnrollPerAccountPerDay: 2,
   accountPerIpPerHour: 30,
   pcsPerIpPerMin: 30,
   statusPerIpPerMin: 60,
   authTimeoutMs: 10_000,
   joinTimeoutMs: 10_000,
   pingIntervalMs: 30_000,
+  pokeIntervalMs: 2_000,
   maxSplicedPerLabel: 256,
   maxIdlePerLabel: 16,
   maxWaitingPerLabel: 32,
@@ -82,7 +99,7 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   snagsPerLabelPerDay: 20,
   roomCodeLookupsPerIpPerMin: 10,
   roomCodeLookupsPerIpPerHour: 30,
-  roomCodeLookupsPerHour: 1_000,
+  roomCodeLookupsPerHour: 20_000,
   statsPerIpPerHour: 120,
   statsReadsPerIpPerMin: 30,
 });

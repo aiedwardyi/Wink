@@ -7,8 +7,9 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, LIVE_VOICE_NAMES, liveGeneration, type CallLine, type CallTag, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, STYLE_LINES, type CallLine, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
+import { callPrefsSchema } from "./bot-profile.ts";
 import type { AppConfig } from "./config.ts";
 import { aboutYouFacts } from "./about-you.ts";
 import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
@@ -139,7 +140,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return plainNames([
     `WHO: You are ${who}. Speak as I, never we or our. Never mention Gemini, a helper or a voice model.`,
-    `NAME: On screen your voice is called ${LIVE_VOICE_NAMES[voice].join(" or ")}; that name means you too. Told your voice changed or sounds different: say it glitched and you're still the same assistant.`,
+    `NAME: On screen your voice is called ${liveVoiceNames(voice).join(" or ")}; that name means you too. Told your voice changed or sounds different: they picked it in the call settings, and you're still the same assistant.`,
     "QUIET: Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.",
     "ANSWER: Answer what they asked, directly, first. Ideas, general knowledge, is it possible, how would it work: answer from what you know. WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic; any steering follows the answer in one short clause, once a call. Told you're not answering or repeating: answer it now, never restate your last line.",
     "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access; anything they want you to use, change or remember is work too. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A clear instruction gets a short confirm, like \"Opening it, okay?\" Unsure which they mean: ask them one short question (which file? use it now or save it?) instead of guessing, and never flip between readings. Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
@@ -199,14 +200,12 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
   return lines.length ? [[CALL_LINES_HEAD, ...lines].join("\n")] : [];
 }
 
-export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_VOICE) {
+export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_VOICE, style: CallStyle = "normal") {
   const app = locale === "ko" ? "ko" : "en";
   return {
     model: `models/${LIVE_MODEL}`,
     generationConfig: liveGeneration(voice),
-    systemInstruction: { parts: [{ text: LIVE_ACCENTS[voice] ? `${brief}
-
-${LIVE_ACCENTS[voice]}` : brief }] },
+    systemInstruction: { parts: [{ text: [brief, LIVE_ACCENTS[voice], STYLE_LINES[style]].filter(Boolean).join("\n\n") }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
     inputAudioTranscription: { languageCodes: [app, app === "ko" ? "en" : "ko"] },
     outputAudioTranscription: {},
@@ -225,15 +224,19 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const { cfg, store, dataDir } = deps;
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
-  const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; at: number }>();
+  const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; style: CallStyle; at: number }>();
 
-  const briefFor = async (bot: BotRecord, callId: string, locale: unknown) => {
+  // A pick changed mid-call opens a new session beside the live one: the call so far rides its brief.
+  // A swap carries the picks themselves: the bot's own save may still be in flight.
+  const briefFor = async (bot: BotRecord, callId: string, locale: unknown, swap: boolean, picks = bot.call) => {
+    const app = picks?.language ?? (locale === "ko" ? "ko" : "en");
+    const voice = picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE;
+    const style = picks?.style ?? "normal";
     const cached = briefs.get(callId);
-    if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
-    const app = locale === "ko" ? "ko" : "en";
-    const voice = cfg.liveCall?.voice ?? LIVE_VOICE;
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, voice, deps.catalog);
-    const entry = { botId: bot.id, brief, locale: app, voice, at: now() };
+    if (!swap && cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
+    const messages = store.activePath(bot.threadId);
+    const brief = await buildBrief(bot, messages, cfg.profile?.name?.trim() || "User", now(), app, voice, deps.catalog);
+    const entry = { botId: bot.id, brief: swap ? [brief, ...callLinesSinceLastUserTurn(messages, new Set())].join("\n\n") : brief, locale: app, voice, style, at: now() };
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
@@ -263,7 +266,10 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const { brief, locale, voice } = await briefFor(bot, callId, body.locale);
+    const swap = body.swap === true && callId === body.callId;
+    // A swap or a new call carries the picks; a resume keeps the session's own.
+    const picks = swap || body.callId === undefined ? callPrefsSchema.safeParse(body.call).data ?? bot.call : bot.call;
+    const { brief, locale, voice, style } = await briefFor(bot, callId, body.locale, swap, picks);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -276,7 +282,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: liveSetup(brief, locale, voice),
+          bidiGenerateContentSetup: liveSetup(brief, locale, voice, style),
         }),
         signal: AbortSignal.timeout(15_000),
       });
@@ -288,7 +294,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
     deps.answered?.(bot.id);
-    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice });
+    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice, locale, style });
   };
 
   const lines = async (req: IncomingMessage, res: ServerResponse, bot: BotRecord) => {

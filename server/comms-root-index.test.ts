@@ -88,8 +88,8 @@ it("lists every runGroupMemberTurn caller with its RootStart kind", () => {
   const starts: Array<{ call: string; kind: RootStart["kind"]; root: string; tail?: string[] }> = [
     { call: "group.id, threadId, botId", kind: "automatic", root: 'rootForStart(threadId, { kind: "automatic" })' },
     { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'rootForStart(source.threadId, { kind: "automatic" })' },
-    { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null", tail: ["room.askId", "room.chainAsk"] },
-    { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId", tail: ["undefined", "asked"] },
+    { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null", tail: ["room.askId", "room.hands", "room.chainAsk"] },
+    { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId", tail: ["undefined", "undefined", "asked"] },
     { call: "groupId, threadId, responder.id", kind: "human", root: "rootId" },
     { call: "current.group.id, entry.threadId, entry.botId", kind: "automatic", root: 'rootForStart(entry.threadId, { kind: "automatic" })' },
     { call: "current.group.id, entry.threadId, entry.botId", kind: "automatic", root: 'rootForStart(entry.threadId, { kind: "automatic" })' },
@@ -151,8 +151,9 @@ it.each(["folded", "queued"])("adopts every human at the production %s fold and 
 it("keeps the comms depth cap and wires captured roots into every busy room path", () => {
   expect(source.text).toContain("const MAX_COMMS_DEPTH = 1;");
   const busy = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "queueBusyRoomMember");
-  expect(busy).toHaveLength(3);
-  for (const call of busy) expect(call.arguments.slice(-3).map((arg) => arg.getText(source))).toEqual(["rootId", "authority", "chainAsk"]);
+  const busyPath = ["rootId", "authority", "hands", "chainAsk"];
+  // the lane's hand-off: the teammate's ask is settled, so it carries the ask only for its start recheck, plus the chain's asker
+  expect(busy.map((call) => call.arguments.slice(8).map((arg) => arg.getText(source)))).toEqual([busyPath, busyPath, busyPath, ["rootId", "undefined", "authority ?? true", "asked"]]);
   const prepares = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "turnRegistry.prepare");
   expect(prepares).toHaveLength(2);
   for (const call of prepares) expect(call.arguments[0].getText(source)).toContain("rootId");
