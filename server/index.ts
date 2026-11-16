@@ -658,7 +658,9 @@ googleAccount.onIdToken(googlePhotoChanged);
 const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
   const caller = commsCallers.resolve(header);
-  if (caller) return botRoute(path, caller.botId);
+  return caller ? botRoute(path, caller.botId) : bootToken(header);
+}
+function bootToken(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -7746,7 +7748,7 @@ const verifySite = createVerifySite({
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   logDecision: (row) => appendDecision(DATA_DIR, row),
   deviceId: () => profileSyncSettings.deviceId,
-  appToken: (header) => authorizedComms(header, ""),
+  appToken: bootToken,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
   toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
   docRun: runId => verifyDoc.run(runId),
