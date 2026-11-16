@@ -22,6 +22,7 @@ const SHORT_CODE_REFRESH_MS = 24 * 60 * 60_000;
 // Every joiner build parses room state with at most 100 people; a 101st leaves every joiner unable to load the room.
 const MAX_PEOPLE = 100;
 const JOINS_PER_MINUTE = 20;
+const ALL_JOINS_PER_MINUTE = 200;
 const SECRET_PREFIX = "wki_";
 const KEY_PREFIX = "wkg_";
 const MAX_CREDENTIAL_LENGTH = 128;
@@ -226,11 +227,13 @@ function joinByRoomCode(database: DatabaseSync, codeId: string, secret: string, 
   return { ok: true, roomId, person, key };
 }
 
-const joins = new RateLimiter(JOINS_PER_MINUTE, 60_000, () => Date.now(), 1);
+const joins = new RateLimiter(JOINS_PER_MINUTE, 60_000, () => Date.now());
+const allJoins = new RateLimiter(ALL_JOINS_PER_MINUTE, 60_000, () => Date.now(), 1);
 
 /** Swaps a live invite, or the room code, for a person and their guest key, in one transaction. */
-export function joinRoom(inviteId: string, secret: string, taken: readonly string[], joiner: Joiner = {}): JoinResult {
-  if (!joins.take("join")) return { ok: false, error: "busy" };
+/** `peer` is the joiner's rate key, so one stranger's tries leave everyone else's alone. */
+export function joinRoom(inviteId: string, secret: string, taken: readonly string[], joiner: Joiner = {}, peer = "local"): JoinResult {
+  if (!joins.take(peer) || !allJoins.take("join")) return { ok: false, error: "busy" };
   const result = transaction((database): JoinResult => {
     pruneExpired(database);
     const invite = database.prepare("SELECT * FROM invites WHERE id = ?").get(inviteId) as InviteRow | undefined;

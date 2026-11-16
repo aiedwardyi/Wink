@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { encodeFrame, readyMessageSchema, ROOM_CODE_RE, ROOM_CODE_TTL_MS, type RelayMessage } from "../../shared/relay-protocol.ts";
+import { DEFAULT_LIMITS } from "../src/limits.ts";
 import { ROOM_CODES_PER_LABEL, RoomCodeStore } from "../src/room-codes.ts";
 import { makePc, openControl, startRelay, type Control, type Harness } from "./fixtures.ts";
 
@@ -88,6 +89,10 @@ describe("room codes over the control channel", () => {
     h = await startRelay({ limits: { roomCodeLookupsPerHour: 2 } });
     for (let i = 0; i < 2; i++) expect((await lookup(h, "ABCDEF")).status).toBe(404);
     expect((await lookup(h, "ABCDEF")).status).toBe(429);
+  });
+
+  it("takes hundreds of addresses, not dozens, to use up the relay-wide lookups", () => {
+    expect(DEFAULT_LIMITS.roomCodeLookupsPerHour / DEFAULT_LIMITS.roomCodeLookupsPerIpPerHour).toBeGreaterThanOrEqual(500);
   });
 });
 
