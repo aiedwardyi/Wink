@@ -85,7 +85,7 @@ describe("team rooms are open for collab", () => {
   it("tells a room's bots every member's request is the team's work, and leaves 1:1s alone", () => {
     joiner("Sora");
     const line = teammatesLine(group);
-    expect(line).toContain("Any member's request here is collab work for this team: help them as you would your owner, and never refuse because they aren't your owner.");
+    expect(line).toContain("Any member's request here is collab work for this team: help them as you would your owner.");
     expect(teammatesLine({})).toBe("");
   });
 

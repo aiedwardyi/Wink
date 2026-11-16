@@ -3,12 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, setCanWork, setJoinedCanWork, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
 import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
+import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomCode } from "./RoomCode";
 import { RoomOwnName } from "./RoomOwnName";
@@ -77,11 +77,27 @@ export function HostPeople({ group }: { group: Group }) {
     }
     if (!alive.current) return;
     if (result.codeChanged) setCodeChanged(true);
-    // A retired code bars no one, so only a kept code lists them under Let back in.
-    const barred = [...removed.filter((person) => person.id !== gone.id), ...(result.codeChanged ? [] : [gone])];
+    // Only a PC the server barred is listed under Let back in.
+    const barred = [...removed.filter((person) => person.id !== gone.id), ...(result.barred ? [gone] : [])];
     if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, people: group.room.people.filter((person) => person.id !== gone.id), removed: barred } } });
     setCode(null);
     void invite(false);
+  };
+
+  const patchPeople = (id: string, works: boolean) => {
+    if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, people: group.room.people.map((person) => (person.id === id ? { ...person, works } : person)) } } });
+  };
+
+  const toggleWorks = async (person: { id: string; works?: boolean }) => {
+    if (!group.hosted) return;
+    const on = !person.works;
+    patchPeople(person.id, on);
+    try {
+      await setCanWork(group.hosted.roomId, person.id, on);
+    } catch {
+      patchPeople(person.id, !on);
+      setProblem("errors.request");
+    }
   };
 
   const letBack = async (personId: string) => {
@@ -99,7 +115,16 @@ export function HostPeople({ group }: { group: Group }) {
       <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
         <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} />
         {people.map((person) => (
-          <PersonRow key={person.id} name={person.name}>
+          <PersonRow
+            key={person.id}
+            name={person.name}
+            below={
+              <div className="mt-1 flex items-center justify-between gap-3 pl-[34px]">
+                <span className="min-w-0 text-[13px] text-ink-secondary">{t("teamRoom.canWork")}</span>
+                <DetailsSwitch on={Boolean(person.works)} label={t("teamRoom.canWorkNamed", { name: person.name })} onToggle={() => void toggleWorks(person)} />
+              </div>
+            }
+          >
             <button
               type="button"
               onClick={() => setRemoving(person)}
@@ -162,22 +187,60 @@ export function HostPeople({ group }: { group: Group }) {
 export function JoinedPeople({ room }: { room: JoinedView }) {
   const { t } = useI18n();
   const people = room.state?.people ?? [];
+  const [works, setWorks] = useState(() => new Set(room.works));
+  const [problem, setProblem] = useState(false);
+  useEffect(() => setWorks(new Set(room.works)), [room.works]);
+  // only this PC's bots are switched, so the switch shows once one of them is in the room
+  const mine = room.status === "joined" && Boolean(room.myBots?.length);
+  const toggle = async (id: string) => {
+    const on = !works.has(id);
+    const flip = (value: boolean) => setWorks((current) => {
+      const next = new Set(current);
+      if (value) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    flip(on);
+    setProblem(false);
+    try {
+      await setJoinedCanWork(room.roomId, id, on);
+    } catch {
+      flip(!on);
+      setProblem(true);
+    }
+  };
+  const canWork = (id: string, name: string) => mine && (
+    <div className="mt-1 flex items-center justify-between gap-3 pl-[34px]">
+      <span className="min-w-0 text-[13px] text-ink-secondary">{t("teamRoom.canWork")}</span>
+      <DetailsSwitch on={works.has(id)} label={t("teamRoom.canWorkNamed", { name })} onToggle={() => void toggle(id)} />
+    </div>
+  );
   return (
-    <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
-      <PersonRow name={room.state?.host ?? ""}>
-        <span className="shrink-0 text-[12px] text-ink-secondary">{t("teamRoom.host")}</span>
-      </PersonRow>
-      {people.map((person) => person.id === room.me.id ? <RoomOwnName key={person.id} name={person.name} /> : <PersonRow key={person.id} name={person.name} />)}
-    </ul>
+    <>
+      <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
+        <PersonRow name={room.state?.host ?? ""} below={canWork("host", room.state?.host ?? "")}>
+          <span className="shrink-0 text-[12px] text-ink-secondary">{t("teamRoom.host")}</span>
+        </PersonRow>
+        {people.map((person) => person.id === room.me.id ? <RoomOwnName key={person.id} name={person.name} /> : <PersonRow key={person.id} name={person.name} below={canWork(person.id, person.name)} />)}
+      </ul>
+      {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t("errors.request")}</p>}
+    </>
   );
 }
 
-function PersonRow({ name, gone = false, children }: { name: string; gone?: boolean; children?: React.ReactNode }) {
-  return (
-    <li data-room-removed={gone || undefined} className={`${DETAILS_ROW} flex items-center gap-2.5 py-2`}>
+function PersonRow({ name, gone = false, below, children }: { name: string; gone?: boolean; below?: React.ReactNode; children?: React.ReactNode }) {
+  const row = (
+    <>
       <InitialsAvatar initials={profileInitials({ name })} size={24} tone="bg-control" />
       <span className={`min-w-0 flex-1 truncate text-[14px] ${gone ? "text-ink-secondary" : "text-ink"}`}>{name}</span>
       {children}
+    </>
+  );
+  if (!below) return <li data-room-removed={gone || undefined} className={`${DETAILS_ROW} flex items-center gap-2.5 py-2`}>{row}</li>;
+  return (
+    <li className={`${DETAILS_ROW} py-2`}>
+      <div className="flex items-center gap-2.5">{row}</div>
+      {below}
     </li>
   );
 }

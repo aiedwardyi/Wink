@@ -80,6 +80,15 @@ describe("Alarms line in Bot details", () => {
     expect(rows[2]).toMatch(/3:00/);
   });
 
+  it("leaves out a bot's self-set wakes", () => {
+    render([routine({}), routine({ id: "w1", name: "Wake", wake: true, schedule: { type: "once", at: Date.now() + 60_000 } })]);
+    expect(toggle()!.textContent).toContain("1");
+    act(() => toggle()!.click());
+    expect([...host.querySelectorAll("[data-alarm]")].map((row) => row.textContent)).toEqual([expect.stringContaining("Morning brief")]);
+    render([routine({ id: "w1", name: "Wake", wake: true, schedule: { type: "once", at: Date.now() + 60_000 } })]);
+    expect(host.textContent).toBe("");
+  });
+
   it("speaks Korean", () => {
     render([routine({ enabled: false })], "ko");
     expect(toggle()!.textContent).toContain("알람");
