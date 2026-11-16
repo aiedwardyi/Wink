@@ -84,6 +84,10 @@ type Options = {
   kindsReady?: () => boolean;
   /** Pulls a chat whose peer head a pass just downloaded. */
   pull?: (threadId: string) => void | Promise<void>;
+  /** A pass just downloaded pictures/<name>. */
+  picture?: (name: string) => void;
+  /** A pass just downloaded a peer's memory snapshot for that bot. */
+  memory?: (botSyncId: string) => void;
   openThread?: () => string | null;
   ownIds?: () => DriveOwnIds;
   fetch?: typeof fetch;
@@ -136,6 +140,7 @@ function workspaceId(bytes: Buffer): string | null {
 }
 
 const peerHead = (path: string, ids: DriveOwnIds) => path.startsWith("threads-v2") && path.endsWith("/head.json") && drivePathRule(path, ids) === "peer" ? [path.split("/")[2]] : [];
+const peerMemory = (path: string, ids: DriveOwnIds) => path.startsWith("memory-v2") && drivePathRule(path, ids) === "peer" ? [path.split("/")[1]] : [];
 const blocksJoin = (path: string) => path === PROFILE_SYNC_WORKSPACE_FILE || path.startsWith("changes/") || path.startsWith("devices/");
 
 export function createGoogleSync(options: Options) {
@@ -159,6 +164,9 @@ export function createGoogleSync(options: Options) {
   let fullStrikes = 0;
   let uploadAt = 0;
   let running: Promise<void> | null = null;
+  // A kick that lands mid-pass may have written after that pass looked, so one more pass follows it, after any rate-limit wait.
+  let again = false;
+  let rateLimited = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let soon = false;
   let stopped = false;
@@ -386,7 +394,9 @@ export function createGoogleSync(options: Options) {
           syncHold.feed(bound.mirrorPath, runnable() ? files : null, ids);
         },
         downloaded: (path) => {
+          if (path.startsWith("pictures/")) options.picture?.(path.slice("pictures/".length));
           if (bound.phase !== "ready") return;
+          for (const botSyncId of peerMemory(path, ids)) options.memory?.(botSyncId);
           for (const threadId of peerHead(path, ids)) {
             const pulled = options.pull?.(threadId);
             if (!pulled || !chatFirst) continue;
@@ -430,11 +440,15 @@ export function createGoogleSync(options: Options) {
     const maintenance = summary.kindRescan && summary.failed.length === 0 && !retry.success;
     catching = (!maintenance && moved > 0) || summary.failed.length > 0 || retry.success || republishing;
     if (!catching) total = 0;
+    rateLimited = retry.success;
     if (retry.success) return retry.data.retryAfterMs;
     return !maintenance && moved > 0 ? 0 : republishing ? REPUBLISH_MS : passMs;
   }
 
-  const kick = () => run(false);
+  const kick = () => {
+    if (running) again = true;
+    return run(false);
+  };
 
   function run(quiet: boolean): Promise<void> {
     if (running) return running;
@@ -449,6 +463,7 @@ export function createGoogleSync(options: Options) {
     soon = false;
     running = (async () => {
       let delay = passMs;
+      rateLimited = false;
       try {
         delay = await pass(bound, quiet);
       } catch (error) {
@@ -456,7 +471,8 @@ export function createGoogleSync(options: Options) {
         log(`[google-sync] pass failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       running = null;
-      schedule(delay);
+      schedule(again && !rateLimited ? 0 : delay);
+      again = false;
     })();
     return running;
   }

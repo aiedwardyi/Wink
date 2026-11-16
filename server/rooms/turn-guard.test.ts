@@ -170,8 +170,8 @@ describe("every room runner caller on a hosted thread", () => {
     let sent: unknown;
     expect(() => { sent = start(group.id, "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"); }).not.toThrow();
     expect(sent).toEqual({ id: "m1" });
-    expect(hostSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"]);
-    expect(roomResponders).toHaveBeenCalledWith("@Wink hi", expect.anything(), group.defaultResponder);
+    expect(hostSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001", []]);
+    expect(roomResponders).toHaveBeenCalledWith("@Wink hi", expect.anything(), group.defaultResponder, { id: "x", roomEntryId: "e1" });
     expect(appendMessage).not.toHaveBeenCalled();
   });
 });
@@ -209,6 +209,8 @@ describe("room Stop on a hosted room", () => {
       flushInterruptedTask: vi.fn(),
       closeOpenApprovals: vi.fn(),
       releaseInterruptedBot,
+      broadcast: vi.fn(),
+      publicGroupState: (group: unknown) => group,
     } as unknown as Parameters<typeof createGroupRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };
     const stopped = routes.interrupt(Readable.from([]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);

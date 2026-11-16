@@ -10,7 +10,7 @@ import type { createUsageHistory } from "./usage-history.ts";
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
   blocked?: boolean; identity?: string; credit?: true;
-  status?: { state: "available" | "unavailable"; authenticated?: boolean; account?: string; accountIdentity?: string };
+  status?: { state: "available" | "unavailable" | "checking"; cliMissing?: boolean; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
 type WorkerRun = {
@@ -194,6 +194,7 @@ export function createUsageBoard(deps: Deps) {
     const full = !old || old.boot !== boot || old.accounts !== accountSet || old.epoch !== epoch || old.revision > revision;
     const history = deps.history.since(full ? undefined : old.counter);
     const board: UsageBoard = { version: 1, revision, cursor: "", full, at: now(), runs: "unknown", engines: [] };
+    const byId = new Map(rows.map((row) => [row.id, row]));
     for (const row of rows) {
       const engine = engines.get(row.driverKind)!;
       let group = board.engines.find((group) => group.base === row.of);
@@ -230,6 +231,9 @@ export function createUsageBoard(deps: Deps) {
       }
       let signIn: UsageBoardAccount["signIn"] = "unknown";
       if (Object.hasOwn(deps.accounts.drains, row.id)) signIn = "draining";
+      else if (row.status?.cliMissing || byId.get(row.of)?.status?.cliMissing) signIn = "cli-missing";
+      // A ready account is blocked while its sign-in is unconfirmed, not only after a sign-out.
+      else if (row.blocked && !row.existing && row.state === "ready") signIn = "unknown";
       else if (row.blocked || row.state === "stopped") signIn = "signed-out";
       else if (row.state === "pending") signIn = "signing-in";
       else if (!row.existing) signIn = "ready";

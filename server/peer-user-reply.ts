@@ -56,7 +56,7 @@ export function beginPeerUserReply(botId: string, threadId: string, prompt: stri
 export function foldPeerQueuedSends(store: Store, botId: string, threadId: string, since: number, steering: boolean): string[] {
   if (hasPeerWatch(threadId) && !steering) return [];
   const rows: Message[] = [];
-  const prompts = foldQueuedSends(store, botId, threadId, since, rows);
+  const prompts = foldQueuedSends(store, botId, threadId, since, rows, steering);
   return prompts.map((prompt, index) => {
     const input = beginPeerUserReply(botId, threadId, prompt);
     if (input) input.accept(rows[index]!);
@@ -111,7 +111,7 @@ export function persistPeerUserReply(
   for (const user of splitText(event.text).users) {
     const input = turn.inputs.get(user.id);
     if (!input || input.answered || !user.text) continue;
-    const message = store.appendMessage(event.threadId, { role: "bot", kind: "text", text: user.text });
+    const message = store.appendMessage(event.threadId, { role: "bot", kind: "text", text: user.text, engine: event.provider });
     input.answered = true;
     lastReply?.set(event.threadId, { text: user.text, messageId: message.id });
   }

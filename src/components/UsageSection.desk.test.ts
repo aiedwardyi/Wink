@@ -340,7 +340,8 @@ describe("Usage desk", () => {
     expect(text(column("main")?.querySelector("[data-main-check]"))).toBe("Main");
     await click(picker());
     expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 2"]);
-    expect(menuItems().map(text)).toEqual(["3Studio", "2Claude 2"]);
+    expect(menuItems().map(text)).toEqual(["Studio", "Claude 2"]);
+    expect(host.querySelector("[data-tile]")).toBeNull();
     const all = text(host);
     expect(all).not.toContain("Account 1");
     expect(all).not.toContain(CLAUDE_3);
@@ -1114,7 +1115,7 @@ describe("Usage desk", () => {
     expect(await walk(0, pages.length)).toEqual([...pages.slice(0, -1).reverse(), pages[0]]);
     expect(ends()).toEqual([true, false]);
     await click(picker());
-    expect(menuItems().map(text)).toEqual([...phone ? [`1Claude 1${say("accounts.main")}`] : [], "2Claude 2", "3Studio", "4Claude 4"]);
+    expect(menuItems().map(text)).toEqual([...phone ? [`Claude 1${say("accounts.main")}`] : [], "Claude 2", "Studio", "Claude 4"]);
     await click(menuItems().at(-1));
     expect(viewed()).toBe(CLAUDE_4);
     expect(heroName()).toBe("Claude 4");

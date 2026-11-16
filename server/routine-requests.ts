@@ -96,7 +96,7 @@ const storedDefinitionSchema = z.object({
   instructions: z.string().trim().min(1).max(20_000),
   schedule: storedScheduleSchema,
   runOn: z.enum(["maus", "cloud"]),
-  durationMinutes: z.number().int().min(15).max(240),
+  durationMinutes: z.number().int().positive(),
 }).strict();
 const storedChangesSchema = storedDefinitionSchema.partial().refine(
   (changes) => Object.values(changes).some((value) => value !== undefined),
@@ -254,8 +254,8 @@ function runOn(value: RoutineRequestRunOn | undefined): RoutineRequestRunOn {
 
 function duration(value: number | undefined): number {
   const normalized = value ?? 30;
-  if (!Number.isInteger(normalized) || normalized < 15 || normalized > 240) {
-    throw new RoutineRequestError("durationMinutes must be a whole number from 15 to 240");
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new RoutineRequestError("durationMinutes must be a whole number of minutes");
   }
   return normalized;
 }
@@ -332,13 +332,12 @@ function routineId(value: string): string {
   return value;
 }
 
-function ownedRoutine(manager: RoutineManager, id: string, botId: string): Routine | null {
-  return manager.listRoutines().find((routine) => routine.id === id && routine.botId === botId) ?? null;
+function existingRoutine(manager: RoutineManager, id: string): Routine | null {
+  return manager.listRoutines().find((routine) => routine.id === id) ?? null;
 }
 
 function normalizedOperation(
   manager: RoutineManager,
-  botId: string,
   validated: ParsedRoutineProposal,
   now: number,
 ): RoutineRequestOperation {
@@ -346,7 +345,7 @@ function normalizedOperation(
     return { action: "create", routine: normalizeDefinition(validated.routine, now) };
   }
   const id = routineId(validated.routineId);
-  const current = ownedRoutine(manager, id, botId);
+  const current = existingRoutine(manager, id);
   if (!current) throw new RoutineRequestError("That routine does not exist", 404);
   if (validated.action === "update") {
     return {
@@ -532,9 +531,8 @@ export function routineRequestFingerprint(
 function verifyManageSnapshot(
   operation: Exclude<RoutineRequestOperation, { action: "create" }>,
   manager: RoutineManager,
-  botId: string,
 ): Routine {
-  const current = ownedRoutine(manager, operation.routineId, botId);
+  const current = existingRoutine(manager, operation.routineId);
   if (!current) throw new RoutineRequestError("That routine no longer exists", 404);
   if (current.updatedAt !== operation.expectedUpdatedAt) {
     throw new RoutineRequestError(
@@ -557,10 +555,10 @@ function requestCommit(payload: RoutineRequestCardData, messageId: string): Rout
   };
 }
 
-function revalidateOperation(operation: RoutineRequestOperation, manager: RoutineManager, botId: string, now: number): void {
+function revalidateOperation(operation: RoutineRequestOperation, manager: RoutineManager, now: number): void {
   const current = operation.action === "create"
     ? null
-    : verifyManageSnapshot(operation, manager, botId);
+    : verifyManageSnapshot(operation, manager);
   const schedule = operation.action === "create"
     ? operation.routine.schedule
     : operation.action === "update"
@@ -605,13 +603,13 @@ export class RoutineRequestService {
     if (!parsedProposal.success) {
       throw new RoutineRequestError(schemaIssue(parsedProposal.error, "Invalid routine proposal"));
     }
-    const operation = normalizedOperation(this.routines, botId, parsedProposal.data, at);
+    const operation = normalizedOperation(this.routines, parsedProposal.data, at);
     await this.requireCloudReadiness(operation);
     // The readiness probe is asynchronous. Another request can edit or
     // delete the routine while it is in flight, so re-check the captured
     // revision before rendering and persisting the confirmation snapshot.
     const cardAt = this.now();
-    revalidateOperation(operation, this.routines, botId, cardAt);
+    revalidateOperation(operation, this.routines, cardAt);
     const requestId = newId();
     const payload: RoutineRequestCardData = {
       version: 1,
@@ -767,7 +765,7 @@ export class RoutineRequestService {
         this.store.patchMessage(args.threadId, message.id, { card: { ...card, answered: "deny", held: undefined } });
         return { claimed: true, state: "denied" };
       }
-      revalidateOperation(payload.operation, this.routines, payload.botId, this.now());
+      revalidateOperation(payload.operation, this.routines, this.now());
       const resultId = this.apply(payload, message.id, fingerprint);
       return this.settleApplied(args.threadId, message.id, card, payload, resultId);
     } catch (error) {
@@ -869,7 +867,7 @@ export class RoutineRequestService {
           fingerprint,
         }).id;
       case "update": {
-        verifyManageSnapshot(operation, this.routines, payload.botId);
+        verifyManageSnapshot(operation, this.routines);
         const updated = this.routines.update(operation.routineId, updateFromChanges(operation.changes), {
           requestId: payload.requestId,
           messageId,
@@ -884,7 +882,7 @@ export class RoutineRequestService {
       }
       case "pause":
       case "resume": {
-        verifyManageSnapshot(operation, this.routines, payload.botId);
+        verifyManageSnapshot(operation, this.routines);
         const updated = this.routines.update(operation.routineId, { enabled: operation.action === "resume" }, {
           requestId: payload.requestId,
           messageId,
@@ -898,7 +896,7 @@ export class RoutineRequestService {
         return updated.id;
       }
       case "run_now": {
-        verifyManageSnapshot(operation, this.routines, payload.botId);
+        verifyManageSnapshot(operation, this.routines);
         const run = this.routines.runNow(operation.routineId, {
           requestId: payload.requestId,
           messageId,
@@ -912,7 +910,7 @@ export class RoutineRequestService {
         return run.id;
       }
       case "delete":
-        verifyManageSnapshot(operation, this.routines, payload.botId);
+        verifyManageSnapshot(operation, this.routines);
         if (!this.routines.remove(operation.routineId, {
           requestId: payload.requestId,
           messageId,

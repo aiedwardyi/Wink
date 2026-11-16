@@ -7,7 +7,7 @@ import { dropUpload, uploadJobs } from "@/lib/big-upload";
 import { fileAttachment, uploadAttachment } from "@/lib/composer-attachments";
 import { getDraftAttachments, setDraftAttachments } from "@/lib/drafts";
 import { onHoldReleased, reloadHeld } from "@/lib/reload-hold";
-import { StoreProvider } from "@/state/store";
+import { StoreProvider, type Bot } from "@/state/store";
 
 import { Composer } from "./Composer";
 
@@ -27,12 +27,12 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-async function mountComposer() {
+async function mountComposer(props: Parameters<typeof Composer>[0] = {}) {
   let answer!: () => void;
   const uploaded = new Promise<void>((resolve) => (answer = resolve));
-  const fetch = vi.fn(async (url: string) => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     if (!String(url).includes("/api/attachments")) return Response.json({ error: "not in this test" }, { status: 404 });
-    await uploaded;
+    await Promise.race([uploaded, new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)))]);
     return Response.json({ path: "/tmp/shot.png", mime: "image/png", bytes: 3 });
   });
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -41,13 +41,14 @@ async function mountComposer() {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(StoreProvider, null, createElement(Composer, {}))));
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(Composer, props))));
   unmount = async () => {
     await act(async () => root.unmount());
     host.remove();
   };
   const uploads = () => fetch.mock.calls.filter(([url]) => String(url).includes("/api/attachments")).length;
-  return { host, answer, uploads };
+  const signals = () => fetch.mock.calls.flatMap(([url, init]) => String(url).includes("/api/attachments") ? [init?.signal] : []);
+  return { host, answer, uploads, signals };
 }
 
 const image = () => new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" });
@@ -85,6 +86,78 @@ describe("update reload during an upload", () => {
     stop();
     expect(draftAtRelease).toContain("/tmp/shot.png");
     expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+  });
+});
+
+describe("picture still uploading", () => {
+  const draft = () => getDraftAttachments(localStorage, "bot::");
+
+  it.each(intakes)("%s shows its chip at once and Send waits for it", async (_name, intake) => {
+    const { host, answer, uploads } = await mountComposer();
+    const box = host.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "look at this");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => intake(host));
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    expect(host.querySelector<HTMLButtonElement>('button[title="Send after the upload finishes"]')?.disabled).toBe(true);
+    await act(async () => box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
+    expect(box.value).toBe("look at this");
+    await act(async () => answer());
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
+    expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+  });
+
+  it("keeps its chip when the chat is left mid-upload", async () => {
+    const { host, answer, uploads } = await mountComposer();
+    await act(async () => intakes[0]![1](host));
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    await unmount?.();
+    unmount = null;
+    await act(async () => answer());
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
+  });
+
+  it("stops its request and frees the upload line when its chip is removed", async () => {
+    const { host, uploads, signals } = await mountComposer();
+    await act(async () => intakes[0]![1](host));
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    await act(async () => host.querySelector<HTMLElement>('[aria-label="Cancel upload"]')!.click());
+    expect(signals()[0]?.aborted).toBe(true);
+    await act(async () => intakes[0]![1](host));
+    await vi.waitFor(() => expect(uploads()).toBe(2));
+  });
+
+  it("lets go of a picture that finished while the chat was away", async () => {
+    const bot = { id: "b1", threadId: "t1", name: "Bot", busy: false, activity: "idle", messages: [], modelSelection: { instanceId: "inst", model: "m" } } as unknown as Bot;
+    const first = await mountComposer({ bot });
+    await act(async () => intakes[0]![1](first.host));
+    await vi.waitFor(() => expect(first.uploads()).toBe(1));
+    await unmount?.();
+    unmount = null;
+    await act(async () => first.answer());
+    await vi.waitFor(() => expect([...uploadJobs().values()][0]?.phase).toBe("done"));
+    expect(localStorage.getItem("omb-draft-attachments")).toContain('"kind":"image"');
+    await mountComposer({ bot });
+    await vi.waitFor(() => expect(uploadJobs().size).toBe(0));
+  });
+});
+
+describe("document still uploading", () => {
+  it("shows its chip at once and Send waits for it", async () => {
+    const { host, answer, uploads } = await mountComposer();
+    await act(async () => {
+      const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+      Object.defineProperty(input, "files", { value: [new File([new Uint8Array([1, 2, 3])], "plan.pdf", { type: "application/pdf" })], configurable: true });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    expect(host.querySelector<HTMLButtonElement>('button[title="Send after the upload finishes"]')?.disabled).toBe(true);
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/api/attachments"))!;
+    expect(new Headers(init?.headers).get("x-attachment-name")).toBe("plan.pdf");
+    await act(async () => answer());
+    await vi.waitFor(() => expect(getDraftAttachments(localStorage, "bot::")).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png", name: "plan.pdf" })]));
   });
 });
 

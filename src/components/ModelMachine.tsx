@@ -9,9 +9,10 @@ import { reducedMotion } from "@/lib/phone-swipe";
 import { useI18n } from "@/lib/i18n";
 import { MODEL_INDEX_AS_OF } from "../../shared/model-index-data.ts";
 import { ProviderMark } from "./ProviderIcons";
-import { needsCli, needsSignIn } from "./EngineSetup";
+import { engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import { charted, lineOf, locate, type Line, type Stop } from "./ModelChart";
 import { clunk } from "./model-machine-sound";
+import { altKeyLabel } from "./PickerStyleStrip";
 import "./ModelMachine.css";
 
 const LEVELS = ["low", "medium", "high", "xhigh", "max"];
@@ -137,10 +138,11 @@ type ModelMachineProps = {
   onDraft: (next: ModelSelection) => void;
   onSave: (next?: ModelSelection, fromKeyboard?: boolean, closeDelay?: number) => boolean;
   onClose: () => void;
+  corner?: ReactNode;
   children?: ReactNode;
 };
 
-export default function ModelMachine({ rows, draft, current, canCommit, onDraft, onSave, onClose, children }: ModelMachineProps) {
+export default function ModelMachine({ rows, draft, current, canCommit, onDraft, onSave, onClose, corner, children }: ModelMachineProps) {
   const { t } = useI18n();
   const lines = useMemo(() => pickerModels(rows).map(lineOf), [rows]);
   const products = useMemo(() => stock(rows, lines), [rows, lines]);
@@ -148,7 +150,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
   const cur = products.find((product) => product.line === line);
   const now = locate(lines, withPickerEffort(rows.find((row) => row.instance.instanceId === current.instanceId)?.instance, current));
   const nowProduct = products.find((product) => product.line === now.line);
-  const locked = (row: PickerRow) => needsCli(row.instance) || needsSignIn(row.instance);
+  const locked = (row: PickerRow) => !engineChecking(row.instance) && (needsCli(row.instance) || needsSignIn(row.instance));
   const same = Boolean(line && line === now.line && level === now.level);
   const pickable = canCommit(draft);
   const [vend, setVend] = useState<Vend | null>(null);
@@ -232,7 +234,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
     else if (k === "ArrowLeft" || k === "ArrowRight") { if (!vend) onDraft(dialShift(rows, draft, k === "ArrowLeft" ? -1 : 1)); }
     else if (k === "ArrowUp" || k === "ArrowDown") { if (!vend) onDraft(dialStep(rows, draft, k === "ArrowUp" ? -1 : 1)); }
     else if (k === "Enter") {
-      if (target?.closest("[data-machine-close]")) return;
+      if (target?.closest("[data-machine-close], [data-picker-style-button]")) return;
       flash("pick");
       pick(true);
     } else return;
@@ -264,6 +266,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
           </svg>
           <b>{t("model.machine.brand")}</b><i /><h2>{t("model.machine.title")}</h2>
           <em>{t("model.machine.stock", { labs: rows.length, models: lines.length })}</em>
+          {corner}
           <button type="button" className="vm-close" data-machine-close aria-label={t("createBot.cancel")} onClick={onClose}><X size={16} /></button>
         </header>
 
@@ -394,6 +397,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
           </button>
           <p className="vm-fine">
             <kbd>{LETTERS[0]}</kbd>-<kbd>{LETTERS[rows.length - 1]}</kbd> {t("model.chart.lab")} <kbd>1</kbd>-<kbd>{maxSlots}</kbd> {t("model.engineAxis")} <kbd>←</kbd><kbd>→</kbd> {t("model.modelAxis")} <kbd>Enter</kbd> {t("model.chart.pick")}
+            {corner && <> <kbd>{altKeyLabel()}</kbd><kbd>T</kbd> {t("model.style")}</>}
             <br />{t("model.dial.asOf", { date: MODEL_INDEX_AS_OF })}
           </p>
         </div>

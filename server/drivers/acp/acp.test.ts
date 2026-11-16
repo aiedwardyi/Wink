@@ -330,10 +330,12 @@ describe("Grok warm leases (recorded transport)", () => {
   });
 
   it("counts a no-shape handshake without creating a session", async () => {
+    const priority = vi.spyOn(procs, "setCliPriority");
     await start();
     await instance.prepare!();
     expect(pool.stats()).toMatchObject({ reserved: 1, idle: 1 });
     expect(methods(peers[0])).toEqual(["initialize", "authenticate"]);
+    expect(priority.mock.calls).toEqual([[peers[0].child, "low"]]);
   });
 
   it("Stop aborts authentication waits before any child exists", async () => {
@@ -2559,11 +2561,12 @@ describe("ACP system text once per session (fake CLI)", () => {
     expect(await prompted(grok, { threadId: "t-compact", text: "four", system: persona, resumeCursor: "fake-acp-session" })).toBe("four");
   });
 
-  it("sends it once when a new driver instance resumes an existing session", async () => {
+  it("does not re-send it after a restart into a session that holds it", async () => {
     await prompted(await start(), { threadId: "t-restart", text: "one", system: persona });
     const restarted = await start();
-    expect(await prompted(restarted, { threadId: "t-restart", text: "two", system: persona, resumeCursor: "fake-acp-session" })).toBe(`${persona}\n\ntwo`);
-    expect(await prompted(restarted, { threadId: "t-restart", text: "three", system: persona, resumeCursor: "fake-acp-session" })).toBe("three");
+    expect(await prompted(restarted, { threadId: "t-restart", text: "two", system: persona, resumeCursor: "fake-acp-session" })).toBe("two");
+    const changed = `${persona} Memory: likes tea.`;
+    expect(await prompted(await start(), { threadId: "t-restart", text: "three", system: changed, resumeCursor: "fake-acp-session" })).toBe(`${changed}\n\nthree`);
   });
 
   it("keeps it on every turn for an engine that never reports compaction", async () => {

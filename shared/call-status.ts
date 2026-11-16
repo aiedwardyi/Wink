@@ -51,9 +51,9 @@ export function workerReports(messages: readonly Row[]): string[] {
 }
 
 /** The STATUS lines, capped in UTF-8 bytes; the clock rides separately so a change is a real change. */
-export function callStatus(name: string, busy: boolean, messages: readonly Row[], queued = false): string {
+export function callStatus(name: string, busy: boolean, messages: readonly Row[], queued = false, withQuestion = true): string {
   const order = busy ? messages.findLast((row) => answersQuestion(row) && row.text?.trim())?.text : undefined;
-  const question = scanQuestion(messages);
+  const question = withQuestion ? scanQuestion(messages) : null;
   const options = question?.card?.options?.map((option) => clip(option, OPTION_CHARS)).join("; ");
   const workers = workerReports(messages);
   return capBytes([

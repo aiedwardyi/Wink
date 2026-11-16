@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { LiveLanguage, LiveVoice } from "../../shared/live-call";
+import type { LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -141,6 +141,8 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
+  answersCard?: string;
 }
 
 export type GroupDefaultResponder =
@@ -187,6 +189,8 @@ export interface Group {
   /** True while a member turn or queued room operation is in flight. */
   working?: boolean;
   waitingBotIds?: string[];
+  /** A team room's live bot handoff: bot lines since a person spoke. */
+  botChain?: number;
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;
@@ -201,6 +205,7 @@ export interface TeamBot {
   name: string;
   color: string;
   owner: string;
+  mascotStyle?: string;
 }
 
 /** A person's first join to a shared group, once per seat. */
@@ -371,7 +376,7 @@ export type TerminalAttentionMap = Record<string, TerminalAttention>;
 export interface ConfigStatus {
   xai?: { configured: boolean };
   gemini?: { configured: boolean; introSeen?: boolean };
-  liveCall?: { voice: LiveVoice; language: LiveLanguage };
+  liveCall?: { voice: LiveVoice };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
@@ -430,7 +435,7 @@ export interface InstanceInfo {
   pickerModels?: InstanceInfo["models"];
   displayName: string;
   snapshot: {
-    state: "available" | "unavailable";
+    state: "available" | "unavailable" | "checking";
     reason?: string;
     authenticated?: boolean;
     authChecked?: boolean;
@@ -502,6 +507,8 @@ export interface AppState {
   routines: Routine[];
   routineRuns: RoutineRun[];
   createBotOpen: boolean;
+  /** Bumps when a tapped notification asks for its chat, so whatever is open over the chat closes. */
+  revealed: number;
   composerFocusBotId: string | null;
   settingsOpen: boolean;
   /** Bumps when the chat avatar asks bot details to open the avatar picker. */
@@ -581,6 +588,7 @@ export type Action =
       groups: Group[];
       botsUnreadable?: boolean;
       computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
+      queued?: AppState["pendingQueued"];
       sidebarOrder: SidebarOrder;
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
@@ -608,6 +616,8 @@ export type Action =
       sendId?: string;
       replyToId?: string;
       threadId?: string;
+      /** The question card this line answers: its asker replies, not the room's default. */
+      cardId?: string;
       onError?: () => void;
     }
   | {
@@ -622,7 +632,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string }
+  | { type: "select"; id: string; reveal?: boolean }
   | {
       type: "send";
       botId: string;
@@ -640,7 +650,7 @@ export type Action =
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }
   | { type: "sendSettled"; threadId: string; sendId: string; queued?: boolean }
-  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string }
+  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string; held?: true }
   | { type: "editMessage"; botId: string; messageId: string; text: string; expectedSelection?: ModelSelection; onSettled?: (error?: unknown) => void }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }

@@ -33,9 +33,9 @@ afterEach(() => {
   }
 });
 
-// The value CSS defines for one custom property inside one skin's block.
+// The value CSS defines for one custom property inside one skin's block, alone or first in a shared list.
 function cssToken(skin, name) {
-  const block = css.match(new RegExp(`\\[data-skin="${skin}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  const block = (css.match(new RegExp(`\\[data-skin="${skin}"\\]\\s*\\{([^}]*)\\}`)) ?? css.match(new RegExp(`\\[data-skin="${skin}"\\](?:,\\s*\\[data-skin="[a-z-]+"\\])+\\s*\\{([^}]*)\\}`)))?.[1] ?? "";
   return block.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-fA-F]+)`))?.[1]?.toLowerCase() ?? null;
 }
 
@@ -43,7 +43,7 @@ describe("skin overlay chrome", () => {
   it("covers exactly the skins the renderer ships", () => {
     // SKIN_IDS is the source of truth (src/lib/skins.ts); a skin added there
     // without a chrome entry here would leave that skin's caption buttons on
-    // the previous colour — the issue #454 failure, but for a new skin.
+    // the previous colour: the black caption block again, but for a new skin.
     const registered = [...skinIds.matchAll(/"([a-z-]+)"/g)]
       .map(([, id]) => id)
       .filter((id) => css.includes(`[data-skin="${id}"]`));
@@ -223,6 +223,8 @@ describe("skin overlay chrome", () => {
     expect(skinThemeSource("onyx")).toBe("dark");
     expect(skinThemeSource("dracula")).toBe("dark");
     expect(skinThemeSource("cobalt")).toBe("dark");
+    expect(skinThemeSource("neon-grid")).toBe("dark");
+    for (const id of ["samurai-ink", "night-rain", "warp", "circuit"]) expect(skinThemeSource(id)).toBe("dark");
     expect(skinThemeSource("gruvbox")).toBe("dark");
     expect(skinThemeSource("precision")).toBe("dark");
     expect(skinThemeSource("community")).toBe("dark");

@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 
 const APP_STORE = "https://apps.apple.com/us/app/tailscale/id1470499037";
 const GOOGLE_PLAY = "https://play.google.com/store/apps/details?id=com.tailscale.ipn";
-export const button = "inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-control/70";
+export const button = "inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover";
 const quietLink = "text-[12px] text-ink-secondary underline hover:text-ink";
 
 function tailscaleDownload(): string {

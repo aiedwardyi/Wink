@@ -80,4 +80,31 @@ describe("Your PCs", () => {
     expect(rows(host)[0]?.textContent).toBe("Home열기");
     await act(async () => root.unmount());
   });
+
+  it("paints the last list before the PC answers, then updates it in place", async () => {
+    localStorage.setItem("omb-devices", JSON.stringify(DEVICES));
+    let answer = (_: Response) => {};
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+    expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOffline", "DenChecking"]);
+    const first = rows(host)[0];
+    await act(async () => answer(Response.json({ devices: DEVICES.map((device) => ({ ...device, offline: false, checking: false })) })));
+    expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOpen", "DenOpen"]);
+    expect(rows(host)[0]).toBe(first);
+    expect(JSON.parse(localStorage.getItem("omb-devices")!)[2].offline).toBe(false);
+    await act(async () => root.unmount());
+  });
+
+  it("holds one quiet row before the first answer with nothing saved", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+    expect(rows(host)).toHaveLength(1);
+    expect(rows(host)[0]!.textContent!.trim()).toBe("");
+    expect(host.querySelector(".animate-spin, .animate-pulse")).toBeNull();
+    await act(async () => root.unmount());
+  });
 });

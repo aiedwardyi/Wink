@@ -11,12 +11,12 @@ import {
   attachmentImageUrl,
   intakeFiles,
   formatSize,
-  pasteImageAttachment,
   pasteSummary,
   type Attachment,
   type PasteAttachment,
   type UploadAttachment,
 } from "@/lib/composer-attachments";
+import { shrunkPicture } from "@/lib/shrink-image";
 import { usePresence } from "@/lib/use-presence";
 import { AttachmentPreviewDialog, previewImage, type PreviewImage } from "./AttachmentPreview";
 import { FileDropOverlay } from "./FileDropOverlay";
@@ -69,7 +69,7 @@ export function ComposerAttachments({
       t,
       allowImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
+      shrunkPath: shrunkPicture,
     });
     if (!isActive()) return;
     if (attachments.length) onAdd(attachments, uploads, startedAt);

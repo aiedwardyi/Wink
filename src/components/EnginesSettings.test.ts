@@ -427,7 +427,7 @@ describe("EnginesSettings friends Connections list", () => {
 
   it.each([false, true])("gives a single-account email the Claude and Codex card row (phone=%s)", async (phone) => {
     vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
-    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "rocknblock.official@gmail.com" }, install: { logout: ["logout"] } });
+    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "person@example.test" }, install: { logout: ["logout"] } });
     const { root, row } = await renderList();
     try {
       const email = row("grok").querySelector("[data-account-email]")!;
@@ -610,6 +610,22 @@ describe("EnginesSettings friends Connections list", () => {
       expect(html).toContain("animate-pulse");
     } finally {
       mockInstances.push(...saved);
+    }
+  });
+
+  it("keeps a checking engine in its place with no Install or Sign In until its check lands", () => {
+    const saved = mockInstances.map((row) => row.snapshot);
+    mockInstances.find((row) => row.instanceId === "claude")!.snapshot = { state: "checking" };
+    mockInstances.find((row) => row.instanceId === "muse")!.snapshot = { state: "checking" };
+    try {
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
+      expect(html.match(/>Checking\.\.\.</g)).toHaveLength(2);
+      expect(html.indexOf("Claude")).toBeLessThan(html.indexOf("Codex"));
+      expect(html).not.toContain("More Engines");
+      expect(html).not.toContain("Not Installed");
+      expect(html.match(/>Connected</g)).toHaveLength(3);
+    } finally {
+      mockInstances.forEach((row, index) => { row.snapshot = saved[index]!; });
     }
   });
 

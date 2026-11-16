@@ -1,4 +1,4 @@
-import { ChevronRight, FolderOpen, Settings, X } from "lucide-react";
+import { FolderOpen, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
@@ -496,7 +496,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const edits = !loading && !loadFailed && !conflict ? startEdit : undefined;
 
   return (
-    <div ref={card} className="relative flex flex-col gap-3">
+    <div ref={card} className="mm-wrap relative flex flex-col gap-3">
       {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
@@ -665,23 +665,15 @@ export function SettingsPanel({
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
     <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel [&_:is(button:not(:disabled),summary)]:cursor-pointer md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <button
-          onClick={closeSettings}
-          aria-label={t("bot.collapseDetails")}
-          title={t("bot.collapseDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
-        >
-          <ChevronRight size={18} />
-        </button>
+      <div className="flex h-16 items-center justify-between pl-4 pr-1.5 max-md:pr-0">
         <span className="text-[15px] font-semibold text-ink">{t("bot.details")}</span>
         <button
           onClick={closeSettings}
           aria-label={t("bot.closeDetails")}
           title={t("bot.closeDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+          className="flex size-7 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink max-md:size-11"
         >
-          <X size={18} />
+          <X size={15} />
         </button>
       </div>
 
@@ -705,7 +697,7 @@ export function SettingsPanel({
       </div>
 
       <div ref={pagesRef} className={cn("relative min-h-0 flex-1 overflow-hidden", paging && "pointer-events-none")}>
-        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
+        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
           {rows > 0 && (
             <>
               <KeepGoingCard bot={bot} />
@@ -777,7 +769,6 @@ export function SettingsPanel({
                     watchMetrics
                     aria-label={t("bot.description")}
                     className={cn(DETAILS_INPUT, "min-h-[96px]")}
-                    maxLength={BOT_PROFILE_LIMITS.description}
                     placeholder={t("bot.descriptionPlaceholder")}
                     value={bot.description}
                     onChange={(e) => patch({ description: e.target.value })}
@@ -837,7 +828,7 @@ export function SettingsPanel({
             </>
           )}
         </div>
-        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
+        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
           {rows > 0 && <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />}
         </div>
       </div>

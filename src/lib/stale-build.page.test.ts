@@ -4,7 +4,10 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LazyView } from "@/components/LazyView";
+import type { Bot } from "@/state/store-types";
 import { STALE_RELOAD_KEY } from "../../shared/stale-reload";
+import { endCall, startCall } from "./call";
+import { dropCall, placeCall } from "./live-call/active";
 import { lazyView, useStaleBuildReload } from "./stale-build";
 
 // a module script would make happy-dom try to load it
@@ -65,6 +68,24 @@ describe("useStaleBuildReload", () => {
     await render(true);
     await render(false);
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<[string, () => () => void]>([
+    ["live call", () => {
+      const call = placeCall({ id: "atlas" } as Bot, {} as AudioContext);
+      return () => dropCall(call);
+    }],
+    ["call mode", () => {
+      startCall("atlas");
+      return () => endCall("atlas");
+    }],
+  ])("holds the reload through a %s and reloads once it ends", async (_name, start) => {
+    await mount(false);
+    const hangUp = start();
+    await foreground();
+    expect(reload).not.toHaveBeenCalled();
+    hangUp();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
   });
 
   it.each<[string, () => HTMLElement]>([

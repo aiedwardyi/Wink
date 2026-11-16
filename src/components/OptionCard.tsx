@@ -87,7 +87,7 @@ export function OptionCard({
             if (e.key === "Enter" && !e.nativeEvent.isComposing) answer(custom);
           }}
           placeholder={t("chat.ownAnswer")}
-          className="w-full max-w-[560px] rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+          className="w-full max-w-[560px] rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none max-md:text-[16px]"
         />
       )}
     </div>

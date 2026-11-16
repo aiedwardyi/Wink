@@ -3,17 +3,16 @@
 // after any error the client asks for it and carries on from there.
 import { z } from "zod";
 
-import { UPLOAD_MAX_BYTES } from "./composer-attachments.js";
 import { holdReload } from "./reload-hold.js";
+import { shrunkPicture } from "./shrink-image.js";
 
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 ** 2;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 30000];
 const MAX_FAILURES = 10;
 
 export type UploadPhase = "uploading" | "resuming";
-export type UploadDone = { path: string; name: string; size: number; type: string };
+export type UploadDone = { path: string; name: string; size: number; type: string; preview?: string };
 export type UploadErrorKey =
-  | "composer.uploadTooBig"
   | "composer.uploadDiskFull"
   | "composer.uploadBusy"
   | "composer.uploadFailed";
@@ -29,7 +28,6 @@ export class UploadError extends Error {
 }
 
 export function uploadErrorKey(code: string | undefined): UploadErrorKey {
-  if (code === "too_big") return "composer.uploadTooBig";
   if (code === "disk_full") return "composer.uploadDiskFull";
   if (code === "busy") return "composer.uploadBusy";
   return "composer.uploadFailed";
@@ -117,7 +115,6 @@ export async function cancelUpload(id: string): Promise<void> {
 
 async function run(file: UploadFile, options: UploadOptions): Promise<UploadDone> {
   const { onProgress, onPhase, onId, signal } = options;
-  if (file.size > UPLOAD_MAX_BYTES) throw new UploadError("composer.uploadTooBig");
   let id = options.uploadId ?? "";
   let offset = 0;
   let chunkBytes = UPLOAD_CHUNK_BYTES;
@@ -235,6 +232,9 @@ export type UploadJob = {
   controller: AbortController;
   /** Stores the finished chip in its draft before the reload hold lets go. */
   save?: (result: UploadDone, uploadId?: string) => void;
+  shrink?: boolean;
+  /** Sends the file some other way than in chunks. */
+  send?: (signal: AbortSignal) => Promise<UploadDone>;
 };
 
 // Module-level so an upload keeps going while its composer is unmounted;
@@ -269,16 +269,20 @@ function pump() {
   running = id;
   setJob(id, { phase: "uploading" });
   let uploadId = job.uploadId;
-  const upload = startUpload(job.file, {
-    uploadId,
-    signal: job.controller.signal,
-    onId: (next) => {
-      uploadId = next;
-      setJob(id, { uploadId });
-    },
-    onProgress: (sent) => setJob(id, { sent }),
-    onPhase: (phase) => setJob(id, { phase }),
-  }).then((result) => {
+  const base = job.send?.(job.controller.signal) ?? Promise.all([
+    startUpload(job.file, {
+      uploadId,
+      signal: job.controller.signal,
+      onId: (next) => {
+        uploadId = next;
+        setJob(id, { uploadId });
+      },
+      onProgress: (sent) => setJob(id, { sent }),
+      onPhase: (phase) => setJob(id, { phase }),
+    }),
+    job.shrink && job.file instanceof Blob ? shrunkPicture(job.file) : undefined,
+  ]).then(([done, preview]) => (preview ? { ...done, preview } : done));
+  const upload = base.then((result) => {
     if (jobs.has(id)) job.save?.(result, uploadId);
     return result;
   });
@@ -296,9 +300,9 @@ function pump() {
     });
 }
 
-export function queueUpload(id: string, file: UploadFile, uploadId?: string, save?: UploadJob["save"]): void {
+export function queueUpload(id: string, file: UploadFile, uploadId?: string, save?: UploadJob["save"], shrink = false, send?: UploadJob["send"]): void {
   const next = new Map(jobs);
-  next.set(id, { file, uploadId, sent: 0, phase: "queued", controller: new AbortController(), save });
+  next.set(id, { file, uploadId, sent: 0, phase: "queued", controller: new AbortController(), save, shrink, send });
   jobs = next;
   listeners.forEach((listener) => listener());
   pump();

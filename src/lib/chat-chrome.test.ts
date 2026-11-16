@@ -163,7 +163,6 @@ describe("transcript pills on a phone", () => {
   const slice = (source: string, from: string, to: string) => source.slice(source.indexOf(from), source.indexOf(to));
   it.each([
     ["ChatView", slice(chatView, "function ActivityChip", "function ScreenFrame")],
-    ["GroupView", slice(groupView, "export function RoomToolChip", "function ClusterLabel")],
   ])("lets every truncating row in %s shrink", (_name, source) => {
     const pills = classStrings(source, PILL);
     const labels = classStrings(source, LABEL);
@@ -173,15 +172,8 @@ describe("transcript pills on a phone", () => {
     for (const value of labels) expect(value).toMatch(/\bmin-w-0\b/);
   });
 
-  it("lets the room's step and usage-limit wrappers shrink with their pill", () => {
-    const wrapper = 'className="flex min-w-0 max-w-full flex-col items-start"';
-    expect(groupView.split(wrapper).length - 1).toBe(2);
-  });
-
-  it("wraps an expanded room error inside the pill", () => {
-    const [expanded] = classStrings(groupView, /whitespace-pre-wrap/).map((value) => new Set(value.split(/\s+/)));
-    expect(expanded.has("min-w-0")).toBe(true);
-    expect(expanded.has("break-words")).toBe(true);
+  it("draws room steps with the 1:1 chip, so its rules cover rooms", () => {
+    expect(slice(groupView, "export function RoomToolChip", "function ClusterLabel")).toContain("<ActivityChip message={message} notices={notices} />");
   });
 });
 
@@ -191,7 +183,6 @@ describe("server status lines in a tool chip", () => {
   const slice = (source: string, from: string, to: string) => source.slice(source.indexOf(from), source.indexOf(to));
   it.each([
     ["ChatView", slice(chatView, "function ActivityChip", "function ScreenFrame")],
-    ["GroupView", slice(groupView, "export function RoomToolChip", "function ClusterLabel")],
   ])("shows them whole in the UI font in %s and leaves commands as they were", (_name, source) => {
     expect(source).toContain("const status = isServerLine(tool.name);");
     expect(source).toMatch(/status\s*\? "min-w-0 max-w-\[480px\] break-words"\s*: "min-w-0 max-w-\[480px\] truncate font-mono"/);

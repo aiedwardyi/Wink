@@ -7,6 +7,7 @@ import { request } from "node:https";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
+import { handsOff } from "../../shared/bot-chain.ts";
 import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES, ROOM_FILE_TYPES } from "./files.ts";
@@ -54,7 +55,6 @@ const REQUEST_MS = 15_000;
 const REPLY_BYTES = 32 * 1024 * 1024;
 const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
-const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
 const MAX_VIEW_ENTRIES = 10_000;
 const UPLOAD_MS = 10 * 60_000;
@@ -95,8 +95,8 @@ const stateSchema = z.object({
   host: name,
   me: personSchema,
   people: z.array(personSchema).max(100),
-  bots: z.array(z.object({ id, name, color: z.string().max(64) })).max(100).default([]),
-  teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id })).max(200).optional(),
+  bots: z.array(z.object({ id, name, color: z.string().max(64), mascotStyle: z.string().max(64).optional() })).max(100).default([]),
+  teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id, mascotStyle: z.string().max(64).optional() })).max(200).optional(),
 });
 const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
@@ -106,6 +106,7 @@ const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("reactions"), reset: z.boolean().optional(), lines: z.array(z.object({ id, marks: marksSchema })).max(10_000) }),
   z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000), count: z.number().int().nonnegative().optional() }),
   z.object({ kind: z.literal("reset") }),
+  z.object({ kind: z.literal("stop") }),
   z.object({ kind: z.literal("ended") }),
 ]);
 
@@ -123,7 +124,9 @@ export interface JoinedView {
   /** The host's stream sent reactions, so it takes reactions and notices. */
   canReact: boolean;
   /** This PC's own bots the room still lists, by the host's id. */
-  myBots: Array<{ id: string; botId: string; working?: boolean; waiting?: boolean; error?: string }>;
+  myBots: Array<{ id: string; botId: string; working?: boolean; since?: number; waiting?: boolean; error?: string }>;
+  /** Bot lines in a live handoff, for the strip. */
+  botChain: number;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: true;
 }
@@ -141,8 +144,13 @@ export interface GuestClientDeps {
   onChange?(roomId: string): void;
   /** A line this PC sent, as the host stored it. */
   onSent?(roomId: string, entry: JoinedEntry): void;
+  /** A line stored here for the first time live, or this PC's own bot's line. */
+  onLine?(roomId: string, entry: JoinedEntry): void;
+  /** The host pressed the room's Stop. */
+  onStop?(roomId: string): void;
   /** What this PC's bots in the room are doing now. */
-  botTurn?(roomId: string, id: string): { working?: boolean; waiting?: boolean; error?: string } | undefined;
+  botTurn?(roomId: string, id: string): { working?: boolean; since?: number; waiting?: boolean; error?: string } | undefined;
+  botChain?(roomId: string): number;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */
@@ -364,7 +372,6 @@ export class GuestClient {
   /** One at a time per room. A caller retrying a failed send passes the same sendId back. */
   send(roomId: string, text: unknown, replyToId?: unknown, sendId?: unknown, fileIds?: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
     const waiting = this.pending.get(roomId) ?? 0;
-    if (waiting >= MAX_PENDING_SENDS) return Promise.resolve(failed(429, "too many messages waiting to send"));
     this.pending.set(roomId, waiting + 1);
     const next = (this.sending.get(roomId) ?? Promise.resolve()).then(() => this.sendNow(roomId, text, replyToId, sendId, fileIds));
     const tail = next.catch(() => {}).then(() => {
@@ -427,10 +434,10 @@ export class GuestClient {
   }
 
   /** Adds one of this PC's bots to the room; the host mints its room id. */
-  async addBot(roomId: string, botId: string, name: string, color: string): Promise<GuestResult<{ id: string }>> {
+  async addBot(roomId: string, botId: string, name: string, color: string, mascotStyle?: string | null): Promise<GuestResult<{ id: string }>> {
     const creds = joinedKey(roomId);
     if (!creds) return failed(joinedRoom(roomId) ? 409 : 404, joinedRoom(roomId) ? "this room is read-only" : "not found");
-    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bots`, creds.key, JSON.stringify({ name: [...name].slice(0, NAME_MAX).join(""), color }));
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bots`, creds.key, JSON.stringify({ name: [...name].slice(0, NAME_MAX).join(""), color, ...(mascotStyle ? { mascotStyle } : {}) }));
     if (!reply.ok) {
       if (reply.status === 401) this.end(roomId, creds.key);
       return reply;
@@ -468,7 +475,10 @@ export class GuestClient {
     }
     const entry = z.object({ entry: entrySchema }).safeParse(reply.value);
     if (!entry.success) return unavailable();
-    if (addJoinedEntries(roomId, [entry.data.entry])) this.changed(roomId);
+    if (addJoinedEntries(roomId, [entry.data.entry])) {
+      this.changed(roomId);
+      this.deps.onLine?.(roomId, entry.data.entry);
+    }
     return { ok: true, value: entry.data.entry };
   }
 
@@ -613,12 +623,15 @@ export class GuestClient {
     const myBots = room.status === "joined" && listed.size
       ? myRoomBots(room.roomId).filter((bot) => listed.has(bot.id)).map(({ id, botId }) => ({ id, botId, ...this.deps.botTurn?.(room.roomId, id) }))
       : [];
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, botChain: this.deps.botChain?.(room.roomId) ?? 0, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {
     const room = joinedRoom(roomId);
     if (!room || (entry.author.kind === "person" && entry.author.id === room.me.id)) return;
+    const state = room.state;
+    // a handoff pings no one; the line that closes it does
+    if (state && handsOff(entry, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)])) return;
     const chat = `joined:${roomId}`;
     const line = { chat, threadId: chat, room: room.state?.roomName ?? "", name: entry.author.name, text: roomLineText(entry.text, entry.files) };
     alertWhenUnread(line, () => joinedSummary(room).unread > 0, this.deps.alert, this.deps.timing?.alertMs, this.alerts);
@@ -771,6 +784,7 @@ export class GuestClient {
       if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) {
         this.changed(roomId);
         this.alertLine(roomId, parsed.entry);
+        this.deps.onLine?.(roomId, parsed.entry);
       }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
@@ -784,6 +798,8 @@ export class GuestClient {
       if (sync.stopped) return;
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
       if (parsed.count !== undefined && !sync.undropped) setJoinedDeletedCount(roomId, parsed.count);
+    } else if (parsed.kind === "stop") {
+      this.deps.onStop?.(roomId);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

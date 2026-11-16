@@ -16,6 +16,7 @@ export interface AutomaticCandidate {
   accountOf?: string;
   defaultModel: string;
   available: boolean;
+  authenticated?: boolean;
   capabilities: Partial<Record<AutomaticCapability, boolean>>;
   effortLevels?: readonly EffortLevel[];
   rateLimits?: readonly RateLimitWindow[];
@@ -41,6 +42,8 @@ export function resolveAutomaticSelection(input: {
       required.every((capability) => candidate.capabilities[capability] === true),
   );
   const preferredIds = [input.continuity?.instanceId, input.current?.instanceId];
+  const signedIn = eligible.filter((candidate) => candidate.authenticated !== false);
+  const pool = signedIn.length ? signedIn : eligible;
   const now = Date.now();
   const model = (entry: AutomaticCandidate) => entry.driverKind === AUTO_FIRST.driverKind ? AUTO_FIRST.model : entry.defaultModel;
   const exhausted = (entry: AutomaticCandidate) => entry.rateLimits?.some(
@@ -51,9 +54,9 @@ export function resolveAutomaticSelection(input: {
   );
   const candidate =
     preferredIds.flatMap((id) => (id ? eligible.filter((entry) => entry.instanceId === id) : []))[0] ??
-    eligible.find((entry) => entry.driverKind === AUTO_FIRST.driverKind && !exhausted(entry)) ??
-    eligible.find((entry) => !exhausted(entry)) ??
-    eligible[0];
+    pool.find((entry) => entry.driverKind === AUTO_FIRST.driverKind && !exhausted(entry)) ??
+    pool.find((entry) => !exhausted(entry)) ??
+    pool[0];
   if (!candidate) return null;
 
   const continuityModel =

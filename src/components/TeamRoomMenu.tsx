@@ -1,4 +1,4 @@
-// The sidebar's way in: Join with code (one code box), plus each room's own menu items.
+// The sidebar's way in: Join group (one code box), plus each room's own menu items.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Copy, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";

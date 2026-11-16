@@ -389,8 +389,11 @@ export interface ProviderAdapter {
 
 // ── provider snapshot (upstream ServerProviderShape, reduced) ────────────
 export interface ProviderSnapshot {
-  state: "available" | "unavailable";
+  /** "checking": the first probe has not answered yet; never saved. */
+  state: "available" | "unavailable" | "checking";
   reason?: string;
+  /** `--version` did not answer: the CLI is missing, broken or too slow, so sign-in state is unknown. */
+  cliMissing?: boolean;
   authenticated?: boolean;
   authChecked?: boolean;
   /** Email or account name of the sign-in, read from the CLI's own status or auth file. */

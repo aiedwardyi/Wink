@@ -94,7 +94,7 @@ export class BotAccounts {
     const account = this.accounts.list().find((row) => row.id === id);
     if (!account) throw new AccountError("Unknown account", 404);
     if (!this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections", 409, "main-unavailable");
-    for (const bot of this.store.bots) {
+    for (const bot of this.visibleBots()) {
       for (const selection of this.selections(bot)) if (selection.instanceId === account.of) this.validate(id, selection, bot);
     }
     return this.accounts.setDefault(account.of, id);
@@ -125,7 +125,7 @@ export class BotAccounts {
     const destination = this.accounts.list().find((row) => row.id === destinationId);
     if (!source || !destination || id === destinationId || source.of !== destination.of) throw new AccountError("Choose a different account of this profile by id", 400);
     if (!this.available(destinationId)) throw new AccountError("The destination account is unavailable or draining");
-    for (const bot of this.store.bots) {
+    for (const bot of this.visibleBots()) {
       for (const selection of this.selections(bot)) {
         if ((this.accounts.defaultFor(selection.instanceId) ?? selection.instanceId) === id) this.validate(destinationId, selection);
       }
@@ -133,11 +133,16 @@ export class BotAccounts {
     return { of: destination.of, accountId: destinationId };
   }
 
+  // Hidden bots never block Main: the user cannot see them, and resolve() refuses one un-hidden on a missing model.
+  private visibleBots() {
+    return this.store.bots.filter((bot) => !bot.hidden);
+  }
+
   private selections(bot: BotRecord) {
     return bot.pendingModelSelection ? [bot.modelSelection, bot.pendingModelSelection] : [bot.modelSelection];
   }
 
-  private routedAccount(of: string) {
+  routedAccount(of: string) {
     const id = this.accounts.defaultFor(of) ?? of;
     const drain = this.accounts.drains[id];
     return drain && drain.phase !== "failed" ? drain.destinationId : id !== of ? id : undefined;

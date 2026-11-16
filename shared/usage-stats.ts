@@ -31,7 +31,8 @@ export const SKINS = [
   "terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal", "vscode-dark", "studio-gray", "steel-gray",
   "claude", "precision", "mono-hud", "servo-gray", "notebook", "messenger", "community", "community-light", "code-review", "blueprint",
   "blueprint-gray", "blueprint-charcoal", "instrument", "matte", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
-  "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand",
+  "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand", "lagoon-night", "snow", "snow-night", "neon-grid",
+  "samurai-ink", "night-rain", "warp", "circuit",
   "other",
 ] as const;
 export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "auto"] as const;
@@ -55,7 +56,7 @@ export const SCREENS = [
 const FLAG = ["on", "off"] as const;
 /** Each setting with the values it can take. `from` may also be "default". */
 export const SETTINGS = {
-  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart"], pickerLook: ["follow", "dark", "light", "atelier"],
+  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart", "machine"], pickerLook: ["follow", "dark", "light", "atelier"],
   replyStyle: ["paragraphs", "live"], chatBox: ["off", "rainbow", "theme"], sidebarSide: ["left", "right"],
   toolCalls: FLAG, longerReplies: FLAG, autoNotes: FLAG, vibration: FLAG, language: ["en", "ko"], usageMode: ["used", "remaining"],
   terminalAlerts: FLAG, phoneNotifications: FLAG, approvals: ["auto", "ask"], syncChats: FLAG, phoneAccess: FLAG,

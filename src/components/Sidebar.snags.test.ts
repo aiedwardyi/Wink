@@ -237,8 +237,8 @@ it("rejoins a left room without a code field and opens it", async () => {
 });
 
 it.each([
-  ["en", "Rejoin", "Paste this room's code once. This PC will remember it."],
-  ["ko", "다시 참여", "이 채팅방의 코드를 한 번만 붙여 넣어 주세요. 이 PC에 저장돼요."],
+  ["en", "Rejoin", "Paste this group's code once. This PC will remember it."],
+  ["ko", "다시 참여", "이 그룹의 코드를 한 번만 붙여 넣어 주세요. 이 PC에 저장돼요."],
 ] as const)("asks once for an old copy's code in %s", async (locale, label, hint) => {
   persistPreference(locale);
   joined.rooms[0].status = "left";

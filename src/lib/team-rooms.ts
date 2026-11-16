@@ -2,7 +2,7 @@
 import type { Group, Message, RoomJoin, TeamBot } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
-import type { MessageKey } from "./i18n";
+import { t, type MessageKey } from "./i18n";
 
 export type RoomFile = NonNullable<Message["roomFiles"]>[number];
 export type RoomAuthor = NonNullable<Message["author"]>;
@@ -18,6 +18,7 @@ export interface RoomLine {
   reactions?: ReactionMark[];
   message?: Message;
   color?: string;
+  mascotStyle?: string;
 }
 
 export type ReactionMark = NonNullable<Message["reactions"]>[number];
@@ -45,13 +46,14 @@ const NO_JOINS: RoomJoin[] = [];
 // One empty list, so a memoized transcript keeps its props.
 export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
-export const hostLines = (messages: readonly Message[]): RoomLine[] =>
+export const hostLines = (messages: readonly Message[], bots: readonly TeamBot[] = []): RoomLine[] =>
   messages.flatMap((message) => {
     // A bot's answer row carries `from`, not `author`; it stays once the room is back to no bots.
     const bot = !message.author && message.from;
     const author = bot ? { kind: "bot" as const, id: bot.botId, name: bot.name } : message.author;
+    const mascotStyle = author?.kind === "bot" ? bots.find((candidate) => candidate.id === author.id)?.mascotStyle : undefined;
     return author && message.roomEntryId
-      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), message }]
+      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), ...(mascotStyle ? { mascotStyle } : {}), message }]
       : [];
   });
 
@@ -73,7 +75,9 @@ export interface JoinedView {
   /** False for an older host: no emoji row and no notice pin. */
   canReact?: boolean;
   /** This PC's own bots in the room: the host's id and the local bot's. */
-  myBots?: Array<{ id: string; botId: string; working?: boolean; waiting?: boolean; error?: "failed" }>;
+  myBots?: Array<{ id: string; botId: string; working?: boolean; since?: number; waiting?: boolean; error?: "failed" }>;
+  /** Bot lines in a live handoff, for the strip. */
+  botChain?: number;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: boolean;
 }
@@ -82,6 +86,7 @@ export interface JoinedBot {
   id: string;
   name: string;
   color: string;
+  mascotStyle?: string;
 }
 
 export interface JoinedEntry {
@@ -103,9 +108,9 @@ export const joinedPhase = (view: JoinedView): JoinedPhase =>
 /** Own marks read as "user", like the bot chat's. */
 export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = [], meId?: string): RoomLine[] =>
   entries.map((entry) => {
-    const color = entry.author.kind === "bot" ? bots.find((bot) => bot.id === entry.author.id)?.color : undefined;
+    const bot = entry.author.kind === "bot" ? bots.find((candidate) => candidate.id === entry.author.id) : undefined;
     const reactions = entry.reactions?.map((mark) => (mark.by === `person:${meId}` ? { ...mark, by: "user" } : mark));
-    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(reactions?.length ? { reactions } : {}), ...(color ? { color } : {}) };
+    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(reactions?.length ? { reactions } : {}), ...(bot?.color ? { color: bot.color } : {}), ...(bot?.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) };
   });
 
 /** Reactor names by mark `by`, for chip hovers. */
@@ -269,6 +274,14 @@ function uploadProblem(status: number, name: string, error?: string): RoomProble
   return { key: "teamRoom.sendFailed" };
 }
 
+/** A group send the room refused over the host's files, in a teammate upload's words; null for any other failure. */
+export function roomFileRefusal(error: unknown): string | null {
+  const { code, status, file, message } = error as { code?: string; status?: number; file?: string; message?: string };
+  if (code !== "ROOM_FILE") return null;
+  const problem = file === undefined ? { key: "teamRoom.tooMany" as const } : uploadProblem(status ?? 500, file, message);
+  return t(problem.key, problem.vars);
+}
+
 /** A retry skips files the room already took and resends the same uploadId for the rest. */
 const uploaded = new WeakMap<File, { base: string; uploadId: string; id?: string }>();
 
@@ -293,8 +306,7 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
     const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(replyToId !== undefined ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}) }) });
     if (res.ok) return null;
     if (res.status === 404) for (const file of files) uploaded.delete(file);
-    if (res.status !== 429) return { key: "teamRoom.sendFailed" };
-    return { key: (await responseBody(res))?.error === "wait for your last request to finish" ? "teamRoom.askBusy" : "teamRoom.askLimit" };
+    return { key: res.status === 429 ? "teamRoom.askLimit" : "teamRoom.sendFailed" };
   } catch {
     return { key: "teamRoom.sendFailed" };
   }

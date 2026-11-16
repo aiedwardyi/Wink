@@ -42,26 +42,64 @@ export function ownTurnReply(stale: (threadId: string, turnId: string | undefine
   };
 }
 
+// the 50 most common English words, those of 3+ letters
+const COMMON = new Set("the and that have for not with you this but his from they say her she will one all would there their what out about who get which".split(" "));
+const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => /^\p{N}+$/u.test(word) || (word.length >= 3 && !COMMON.has(word)));
+const numbers = (text: string) => new Set(text.match(/\p{N}+(?:[.,:]\p{N}+)*/gu) ?? []);
+// links, link or image targets, code, paths and file names
+const KEPT = /https?:\/\/[^\s<>()\]]*[^\s<>()\].,;:!?'"]|\]\([^)\s]+\)|```[\s\S]*?```|`[^`\n]+`|(?:[A-Za-z]:)?[\w.~-]*(?:[\\/][\w.~-]+)+|\b[\w-]+\.[A-Za-z]\w{1,4}\b/g;
+
+type Said = { id: string; text: string; words: string[]; numbers: Set<string> };
+
+/** Most of an answer's content words come back together in a later text of
+ * the same turn, and every link, path, code and number it had. */
+function restates(later: Said, earlier: Said): boolean {
+  const own = new Set(earlier.words);
+  if (own.size < 8) return false;
+  // close together: a long answer holds most words of any short line somewhere
+  const span = Math.ceil(1.5 * earlier.words.length);
+  let kept = 0;
+  for (let i = 0; i === 0 || i + span <= later.words.length; i++) kept = Math.max(kept, new Set(later.words.slice(i, i + span).filter((word) => own.has(word))).size);
+  if (kept / own.size < 0.7) return false;
+  for (const number of earlier.numbers) if (!later.numbers.has(number)) return false;
+  return (earlier.text.match(KEPT) ?? []).every((part) => later.text.includes(part));
+}
+
+const said = (text: string, id = ""): Said => ({ id, text, words: words(text), numbers: numbers(text) });
+
+/** The texts no later one restates. */
+export function unrestated(texts: string[]): string[] {
+  const rows = texts.map((text) => said(text));
+  return texts.filter((_, i) => !rows.slice(i + 1).some((later) => restates(later, rows[i]!)));
+}
+
 /** Per thread, the turn's engine summaries. A turn that wrote no other text
  * shows them at its end, or it would look empty; one with a final answer
- * hides its commentary. */
-export function turnSummaries(hide?: (threadId: string, ids: string[]) => void) {
-  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean }>();
+ * hides its commentary, and a text a later one restates. */
+export function turnSummaries(hide?: (threadId: string, ids: string[], restated?: true) => void) {
+  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean; said: Said[] }>();
   return {
-    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase) {
+    /** `text` only for a row a later restatement may hide. */
+    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase, text?: string) {
       let turn = turns.get(threadId);
-      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false }));
+      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false, said: [] }));
       turn.turnId ??= turnId;
       if (summarized) turn.ids.push(messageId);
       else turn.replied = true;
       if (phase === "commentary") turn.commentary.push(messageId);
       else if (phase === "final_answer") turn.final = true;
+      if (!summarized && text) turn.said.push(said(text, messageId));
     },
     settle(threadId: string, turnId: string | undefined, quiet = false): string[] {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
       turns.delete(threadId);
-      if (turn.final && turn.commentary.length) hide?.(threadId, turn.commentary);
+      // commentary a final hides cannot stand in for an earlier row
+      const hidden = new Set(turn.final ? turn.commentary : []);
+      const restated = new Set(turn.said.filter((row, i) => turn.said.slice(i + 1).some((later) => !hidden.has(later.id) && restates(later, row))).map((row) => row.id));
+      const commentary = [...hidden].filter((id) => !restated.has(id));
+      if (commentary.length) hide?.(threadId, commentary);
+      if (restated.size) hide?.(threadId, [...restated], true);
       return turn.replied || quiet ? [] : turn.ids;
     },
   };

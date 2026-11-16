@@ -1,5 +1,6 @@
 import { color, shadows, type Source } from "./MemoryMapGlowPaint";
 import { softwareRender } from "./MemoryMapMotion";
+import { STACK_BELOW } from "./MemoryMapStage";
 
 interface Painted { key: string; glow: HTMLElement[]; rings: HTMLCanvasElement[]; live: HTMLCanvasElement | null }
 interface Reply { renderer?: string; layers: ImageBitmap[] | null }
@@ -23,7 +24,7 @@ function painter() {
 
 /** Starts the painter and builds its shader, so the first open only paints. */
 export function warmGlow() {
-  if (!paintsGlow() || worker) return;
+  if (window.innerWidth < STACK_BELOW || !paintsGlow() || worker) return;
   try {
     painter().postMessage(null);
   } catch {
@@ -160,5 +161,10 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
   const off = new AbortController();
   const rescale = () => matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener("change", () => { sized.disconnect(); watch(); rescale(); }, { once: true, signal: off.signal });
   rescale();
-  return () => { gone = true; clearTimeout(timer); sized.disconnect(); skin.disconnect(); off.abort(); painted = mine ?? painted; };
+  return () => {
+    gone = true; clearTimeout(timer); sized.disconnect(); skin.disconnect(); off.abort();
+    // React keeps the rings when a wide map becomes a phone map.
+    for (const each of [...orbits, card]) each.replaceChildren();
+    painted = mine ?? painted;
+  };
 }

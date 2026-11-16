@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { anyChatNeedsYou, askUserStatus, chatNeedsYou, needsYou, openQuestion, pinnedQuestion } from "./open-question";
+import { anyChatNeedsYou, askUserStatus, chatMovedOn, chatNeedsYou, needsYou, openQuestion, pinnedQuestion } from "./open-question";
 import type { Message } from "@/state/store";
 
 let at = 0;
@@ -158,6 +158,17 @@ describe("an ask_user card that stays open", () => {
     const again = live("q2", { subtitle: "question q1" });
     expect(askUserStatus([older, again], older)).toEqual({ state: "askedAgain" });
     expect(openQuestion([older, again])).toBe(again);
+  });
+});
+
+describe("the chat moving on from a question", () => {
+  it("counts only what lands after it, and nothing for a question that is not in the chat", () => {
+    const question = ask("q1", { staysOpen: true });
+    expect(chatMovedOn([typed("u0"), question], question)).toBe(false);
+    expect(chatMovedOn([question, paneNote("n1"), peer("p1")], question)).toBe(false);
+    expect(chatMovedOn([question, typed("u1")], question)).toBe(true);
+    expect(chatMovedOn([question, botText("b1")], question)).toBe(true);
+    expect(chatMovedOn([typed("u2"), botText("b2")], question)).toBe(false);
   });
 });
 

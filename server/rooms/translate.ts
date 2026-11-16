@@ -91,12 +91,11 @@ function generateOnce(key: string, generate: Generator, prompt: string, save: (t
 
 export async function translateRoute(
   req: IncomingMessage, res: ServerResponse, method: string, path: string,
-  deps: { store: Pick<Store, "groups"> & Partial<Pick<Store, "messagesFor">>; instances: readonly TextEngine[] | (() => readonly TextEngine[]); key?: string; hostName?: string; botCaller: boolean },
+  deps: { store: Pick<Store, "groups"> & Partial<Pick<Store, "messagesFor">>; instances: readonly TextEngine[] | (() => readonly TextEngine[]); key?: string; hostName?: string },
 ): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
   const [, joined, roomId, entryId] = route as unknown as [string, string | undefined, string, string | undefined];
-  if (deps.botCaller) { json(res, 403, { error: "forbidden" }); return true; }
   const held = () => joined ? joinedRoom(roomId) !== null
     : deps.store.groups.some((group) => group.hosted?.roomId === roomId);
   if (!held() || method !== (entryId ? "POST" : "GET")) { json(res, 404, { error: "not found" }); return true; }

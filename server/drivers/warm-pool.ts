@@ -1,5 +1,6 @@
 // Process-wide pool of speculative engine children (Grok, Muse, Gemini, and
-// Claude sessions prepared before Send). Codex never uses it. Holds no
+// Claude sessions prepared before Send), and Codex app-servers kept between a
+// thread's turns. Holds no
 // protocol code: drivers spawn and hand shake, the pool owns capacity,
 // identity generations and lifetimes.
 import os from "node:os";
@@ -30,7 +31,8 @@ export interface Lease {
 }
 export type WarmMatch = { engine?: string; instanceId?: string; incarnation?: string };
 
-type Kind = "speculative" | "handshake";
+/** `kept`: a host that just served a turn. The caps hold it; the free-RAM floor for new warms does not. */
+type Kind = "speculative" | "handshake" | "kept";
 type Entry = {
   lease: Lease;
   kind: Kind;
@@ -61,9 +63,10 @@ export interface WarmPoolOptions {
 }
 
 const GiB = 1024 ** 3;
+const MIN_FREE = 1.5 * GiB;
 const TOTAL_CAP = 3;
 const ENGINE_CAP = 2;
-const IDLE_TTL_MS = 10 * 60_000;
+export const IDLE_TTL_MS = 10 * 60_000;
 const SWEEP_MS = 60_000;
 const SLEEP_GAP_MS = 150_000;
 const PENDING_TTL_MS = 120_000;
@@ -115,6 +118,12 @@ export class WarmPool {
 
   setLiveTurns(probe: () => boolean) { this.liveTurns = probe; }
 
+  /** Boot and sign-in warms have no user intent: never on a small PC, and only with a free slot and RAM over the floor. */
+  idleWarmAllowed(engine: string): boolean { return !this.smaller() && this.freemem() >= this.floor() && this.admits(engine); }
+
+  /** A small PC holds its one slot for a click-warmed host only briefly. */
+  handshakeIdleMs(): number { return this.smaller() ? 60_000 : IDLE_TTL_MS; }
+
   /** The pool's own generation for an instance; Captured uses it when the account has none. */
   generation(key: Pick<WarmKey, "engine" | "instanceId">): number {
     return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0);
@@ -132,7 +141,7 @@ export class WarmPool {
     }
     if (existing) this.drop(existing, "replaced");
     const among = [...this.entries].filter((entry) => entry !== existing);
-    if (kind === "speculative" && !this.admits(key.engine, among)) return "denied";
+    if (kind !== "handshake" && !this.admits(key.engine, among)) return "denied";
     if (kind === "speculative" && this.freemem() < this.floor()) return "denied";
     return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS);
   }
@@ -329,7 +338,7 @@ export class WarmPool {
   }
 
   private smaller() { return this.totalmem() < 8 * GiB || this.cpus() <= 4; }
-  private floor() { return Math.max(1.5 * GiB, 0.15 * this.totalmem()); }
+  private floor() { return Math.max(MIN_FREE, 0.15 * this.totalmem()); }
 
   private admits(engine: string, among = [...this.entries]) {
     if (this.paused || this.final) return false;
@@ -367,12 +376,13 @@ export class WarmPool {
       else if ((entry.state === "pending" || (entry.state === "taken" && !entry.ready)) && now - entry.since >= entry.pendingMs) this.drop(entry, "pending timeout");
     }
     if (this.smaller() && (this.liveTurns() || [...this.entries].some((entry) => entry.state === "taken"))) {
-      for (const entry of [...this.entries]) if (entry.kind === "speculative" && (entry.state === "idle" || entry.state === "pending")) this.drop(entry, "busy");
+      for (const entry of [...this.entries]) if (entry.kind !== "handshake" && (entry.state === "idle" || entry.state === "pending")) this.drop(entry, "busy");
     }
-    let short = this.floor() - this.freemem();
+    const free = this.freemem();
+    let short = this.floor() - free;
     if (short <= 0) return;
     const idle = [...this.entries]
-      .filter((entry) => entry.state === "idle" && entry.child)
+      .filter((entry) => entry.state === "idle" && entry.child && (entry.kind !== "kept" || free < MIN_FREE))
       .map((entry) => ({ entry, rss: this.treeRss(entry.child!) ?? 0 }))
       .sort((a, b) => b.rss - a.rss);
     for (const { entry, rss } of idle) {

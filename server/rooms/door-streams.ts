@@ -31,9 +31,9 @@ export interface DoorState {
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
-  bots: Array<{ id: string; name: string; color: string }>;
+  bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
   /** Teammates' own bots; only a host that takes them sends this. */
-  teamBots: Array<{ id: string; name: string; color: string; owner: string }>;
+  teamBots: Array<{ id: string; name: string; color: string; owner: string; mascotStyle?: string }>;
   myAsks: never[];
 }
 
@@ -50,6 +50,7 @@ export type DoorFrame =
   | { kind: "reactions"; reset?: true; lines: LineReactions[] }
   | { kind: "deleted"; ids: string[]; count?: number }
   | { kind: "reset" }
+  | { kind: "stop" }
   | { kind: "ended" };
 
 export interface DoorStream {
@@ -181,6 +182,10 @@ export function broadcastDoorEntry(roomId: string, entry: RoomEntry): void {
   if (!streams.size) return;
   const frame: DoorFrame = { kind: "entry", entry: doorEntry(entry) };
   for (const stream of roomStreams(roomId)) deliver(stream, frame);
+}
+
+export function broadcastDoorStop(roomId: string): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "stop" });
 }
 
 export function broadcastDoorReactions(roomId: string, lines: LineReactions[]): void {

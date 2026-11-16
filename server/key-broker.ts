@@ -55,7 +55,6 @@ export type KeyUses = Record<string, { botId: string; at: string }>;
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 function multipartBody(form: NonNullable<CallApiRequest["form"]>, roots: readonly string[]): FormData {
-  if ((form.files?.length ?? 0) > 8) throw fail(413, "upload exceeds 8 files");
   let total = 0;
   const files = (form.files ?? []).map((file) => {
     const resolved = resolveLocalFile(file.path, roots);

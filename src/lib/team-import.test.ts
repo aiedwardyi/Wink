@@ -31,6 +31,12 @@ describe("team import preview", () => {
     ).toThrow("no members");
   });
 
+  it("previews a team or playbook with more than 200 bots", () => {
+    const bots = Array.from({ length: 201 }, (_, i) => ({ key: `bot-${i}`, name: `Bot ${i}` }));
+    expect(teamImportPreview({ format: "openmaus.team", version: 2, team: { name: "Big", members: bots } }).members).toHaveLength(201);
+    expect(teamImportPreview({ format: "openmaus.package", version: 1, package: { name: "Big", agents: bots } }).members).toHaveLength(201);
+  });
+
   it("previews the complete package setup before installation", () => {
     const preview = teamImportPreview({
       format: "openmaus.package",

@@ -121,7 +121,7 @@ describe("people-only room create", () => {
 
   it("takes bots afterwards and goes back to people-only with none", async () => {
     const group = await peopleRoom();
-    const mina = addPerson(group.hosted.roomId, "Mina", "trusted", []);
+    const mina = addPerson(group.hosted.roomId, "Mina", []);
     expect(await call(routes().patch, { memberIds: [wink] }, [group.id])).toMatchObject({ status: 200, body: { group: { memberIds: [wink] } } });
     expect(peopleOnlyRoom(group.hosted.roomId)).toBe(false);
     expect(hostedSend(store.group(group.id) as HostedGroup, { kind: "person", id: mina.id }, "@Wink are you there?").ask).toMatchObject({ botId: wink });
@@ -129,10 +129,10 @@ describe("people-only room create", () => {
     expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
   });
 
-  it("keeps a bot in a room nobody shares", async () => {
+  it("lets a room nobody shares drop its last bot", async () => {
     const created = await call(routes().create, { name: "Bots", memberIds: [wink] });
-    expect((await call(routes().patch, { memberIds: [] }, [created.body.group.id])).status).toBe(400);
-    expect(store.group(created.body.group.id)!.memberIds).toEqual([wink]);
+    expect((await call(routes().patch, { memberIds: [] }, [created.body.group.id])).status).toBe(200);
+    expect(store.group(created.body.group.id)!.memberIds).toEqual([]);
   });
 
   it("never turns an existing bot room into a people-only room", async () => {
@@ -212,8 +212,8 @@ describe("a send in a people-only room", () => {
 
   beforeEach(async () => {
     group = await peopleRoom();
-    mina = addPerson(group.hosted.roomId, "Mina", "trusted", []);
-    addPerson(group.hosted.roomId, "민준", "ask", []);
+    mina = addPerson(group.hosted.roomId, "Mina", []);
+    addPerson(group.hosted.roomId, "민준", []);
   });
 
   it("only commits and broadcasts, with 0 model, worker or helper calls", () => {

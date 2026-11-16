@@ -18,6 +18,7 @@ import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./term
 import { createPaneCleanupWorker } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
+import { createRemoteHosts } from "./terminal-remote.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
@@ -49,6 +50,7 @@ import {
   withToastCapability,
 } from "./desktop-notify.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
+import { createServerRevival } from "./server-revival.mjs";
 import { brandForRenderer, brandWindowOptions, holdBrandTitle, readBrandOverride } from "./brand-override.mjs";
 import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
 import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
@@ -113,7 +115,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { setMainPermissions } = require("./main-permissions.cjs");
@@ -124,7 +126,7 @@ const verifyProbe = process.env.OMB_VERIFY_PROBE_ROOT ? (await import("./verify-
 const verifyProbePort = verifyProbe ? await verifyProbe.allocatePort() : null;
 // release.yml bakes google-client.json into the package; self-built copies have none.
 const GOOGLE_CLIENT = googleClient(process.env, () => verifyProbe ? null : JSON.parse(fs.readFileSync(path.join(__dirname, "google-client.json"), "utf8")));
-// 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
+// 127.0.0.1 explicitly: vite binds IPv4, and a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 if (!app.isPackaged && process.env.OMB_USER_DATA) app.setPath("userData", process.env.OMB_USER_DATA);
@@ -342,6 +344,7 @@ const terminalHost = createTerminalHost({
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
+  remote: createRemoteHosts({ hosts: async () => JSON.parse(await fs.promises.readFile(path.join(app.getPath("home"), ".orbit", "remote-hosts.json"), "utf8").catch(() => "{}")) }),
   scratchRoot,
   processes: paneProcesses,
   paneCleanup: createPaneCleanupWorker({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), warn: slog }),
@@ -935,6 +938,8 @@ async function gatherDiagnostics() {
 // Set by startServerPackaged: true only when every failing candidate port was
 // taken by another process — decides which error-page message renders.
 let serverStartConflictOnly = false;
+let serverKeptStopping = false;
+let quitting = false;
 
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "packaged-boot.js");
@@ -992,6 +997,8 @@ async function startServerOn(port) {
       serverToken = null;
       appAuthorization.bind(`http://127.0.0.1:${port}`, null);
       updateCompanionHarness(port, null);
+      serverProc = null;
+      reviveServer();
     }
     slog(`exited code=${code}`);
   });
@@ -1000,8 +1007,8 @@ async function startServerOn(port) {
   // so only the child we actually forked (matching pid + static serving)
   // counts as ours.
   // The budget is wall-clock, not a fixed poll count: a healthy boot can take
-  // well past 20s on cold machines or when pre-listen network calls stall
-  // (issue #506), and reaping an about-to-listen child reads to the user as
+  // well past 20s on cold machines or when pre-listen network calls stall,
+  // and reaping an about-to-listen child reads to the user as
   // "something else is using its ports" even though nothing was on them.
   // The probe itself is deadline-bounded (a hung health endpoint cannot wedge
   // us here forever) and reports WHY it gave up, so the error page can tell
@@ -1063,6 +1070,26 @@ async function startServerPackaged() {
   return false;
 }
 
+const reviveServer = createServerRevival({
+  quitting: () => quitting,
+  start: () => {
+    // Keys saved since boot live in the dead child's memory; rebuild its env from the current document.
+    childEnvCredentials = absorbPackagedPlaintextSecrets(secureCredentials);
+    return startServerPackaged();
+  },
+  show: (state) => {
+    slog(`server revival: ${state}`);
+    serverReady = state === "ready";
+    serverKeptStopping = state === "stopped";
+    packagedBootPhase = state === "restarting" ? BOOT_CONNECTING : serverReady ? BOOT_READY : BOOT_FAILED;
+    // A fresh child holds no Google session until this push.
+    if (serverReady) void pushGoogleSession(secureCredentials.googleAccount ?? null);
+    livePackagedWindow()
+      ?.loadURL(state === "restarting" ? connectingPageHref(undefined, "packaged.restarting") : packagedWindowHref())
+      .catch(() => {});
+  },
+});
+
 async function syncDevTerminalBridge() {
   if (app.isPackaged || !terminalBridgeAccess || !serverToken) return;
   const port = Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
@@ -1115,11 +1142,13 @@ function nativeText(key, vars) {
   return translateNative(uiLocale(), key, vars);
 }
 
-function buildErrorPage({ allPortsOccupied }) {
+function buildErrorPage({ allPortsOccupied, keptStopping }) {
   const serverLogPath = path.join(LOG_DIR, "server.log");
-  const reason = allPortsOccupied
-    ? nativeText("packaged.bootPorts")
-    : nativeText("packaged.bootTimeout");
+  const reason = keptStopping
+    ? nativeText("packaged.bootStopped")
+    : allPortsOccupied
+      ? nativeText("packaged.bootPorts")
+      : nativeText("packaged.bootTimeout");
   const chrome = skinChrome(readPersistedSkin(app.getPath("userData")));
   const caption = process.platform === "win32" ? WINDOWS_CAPTION_HEIGHT : 0;
   const drag = caption
@@ -1162,6 +1191,7 @@ function respondToDisplayMediaRequest(callback, response) {
 }
 
 let cachedTailnet = "";
+let cachedSelfHost = "";
 
 function tailscaleStatus(command) {
   return new Promise((resolve) => {
@@ -1172,11 +1202,16 @@ function tailscaleStatus(command) {
 // Only a found tailnet is cached: Tailscale may start after Orbit.
 async function localTailnet() {
   const fromHost = deviceTailnet(process.env.ORBIT_REMOTE_HOST);
-  if (fromHost) return fromHost;
+  if (fromHost) {
+    cachedSelfHost = normalizedHost(process.env.ORBIT_REMOTE_HOST);
+    return fromHost;
+  }
   if (cachedTailnet) return cachedTailnet;
   const commands = process.platform === "win32" ? ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe"] : ["tailscale"];
   for (const command of commands) {
-    cachedTailnet = tailnetFromStatus(await tailscaleStatus(command));
+    const status = await tailscaleStatus(command);
+    cachedTailnet = tailnetFromStatus(status);
+    cachedSelfHost = selfHostFromStatus(status);
     if (cachedTailnet) break;
   }
   return cachedTailnet;
@@ -1279,6 +1314,10 @@ async function openDeviceWindow(rawHost, rawName) {
       }
       if (sameDesktopViewerOrigin(target, url.origin)) return;
       event.preventDefault();
+      // The PC menu jumps in place; from here this PC is the main window and another PC gets its own.
+      const pc = devicePickTarget(target, tailnet, cachedSelfHost);
+      if (pc === "self") return activateMainWindow();
+      if (pc) return void openDeviceWindow(pc, pc.split(".")[0]);
       const open = safeExternalUrl(target);
       if (open) void shell.openExternal(open);
     });
@@ -1538,7 +1577,7 @@ function connectingPageHref(backgroundColor, key = "packaged.connecting") {
 
 function packagedWindowHref(backgroundColor) {
   if (packagedBootPhase === BOOT_READY) return `http://127.0.0.1:${SERVER_PORT}`;
-  if (packagedBootPhase === BOOT_FAILED) return buildErrorPage({ allPortsOccupied: serverStartConflictOnly });
+  if (packagedBootPhase === BOOT_FAILED) return buildErrorPage({ allPortsOccupied: serverStartConflictOnly, keptStopping: serverKeptStopping });
   const persistedSkin = readPersistedSkin(app.getPath("userData"));
   return connectingPageHref(backgroundColor ?? skinChrome(persistedSkin).color);
 }
@@ -1874,7 +1913,7 @@ ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(ho
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
-  if (process.platform === "win32" && pane === "mic") return shell.openExternal("ms-settings:privacy-microphone");
+  if (process.platform === "win32" && (pane === "mic" || pane === "sound")) return shell.openExternal(pane === "mic" ? "ms-settings:privacy-microphone" : "ms-settings:sound");
   if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
@@ -1885,7 +1924,7 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
   // own-property lookup only — a renderer-supplied "__proto__"/"constructor"
   // would otherwise resolve up the prototype chain to a truthy object
   const anchor = Object.hasOwn(panes, pane) ? panes[pane] : "Privacy";
-  return shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${anchor}`);
+  return shell.openExternal(pane === "sound" ? "x-apple.systempreferences:com.apple.preference.sound?input" : `x-apple.systempreferences:com.apple.preference.security?${anchor}`);
 });
 
 ipcMain.handle("speech:start", (event, options) => {
@@ -2224,6 +2263,7 @@ process.once("SIGTERM", requestSignalQuit);
 app.on("before-quit", () => closeGuard.leave());
 
 app.on("before-quit", (e) => {
+  quitting = true;
   if (cuaCleanedUp) return;
   errorReports.stop();
   e.preventDefault();

@@ -118,7 +118,6 @@ export function shareGroup(deps: ShareDeps, groupId: string): Shared {
   const { store } = deps;
   const group = store.group(groupId);
   if (!group) throw statusError(404, "no such group");
-  if (group.dm) throw statusError(400, "bot-to-bot channels can't be shared");
   const relayHost = deps.relayHost();
   if (!relayHost) throw statusError(409, "phone access is off");
   const db = tables(roomsDatabase());
@@ -147,15 +146,14 @@ export function roomJoins(roomId: string): RoomJoin[] {
   return rows.map((row) => ({ personId: row.person_id, name: row.name, at: row.at }));
 }
 
-/** POST /api/groups/:id/share. Local only, owner only. False when the path isn't ours. */
+/** POST /api/groups/:id/share. Local only: the host and their own bots. False when the path isn't ours. */
 export async function shareRoute(
   _req: IncomingMessage, res: ServerResponse, method: string, path: string,
-  deps: ShareDeps & { botCaller: boolean; publicGroupState(group: GroupRecord): unknown; mintRoomCode?(): Promise<{ code: string; exp: number } | null> },
+  deps: ShareDeps & { publicGroupState(group: GroupRecord): unknown; mintRoomCode?(): Promise<{ code: string; exp: number } | null> },
 ): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
   if (method !== "POST") json(res, 404, { error: "not found" });
-  else if (deps.botCaller) json(res, 403, { error: "forbidden" });
   else {
     try {
       const shared = shareGroup(deps, route[1]!);

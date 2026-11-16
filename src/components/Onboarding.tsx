@@ -31,6 +31,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     let active = true;
     let pending: Promise<void> | undefined;
+    let recheck: ReturnType<typeof setTimeout> | undefined;
     const refresh = (probe: boolean) => {
       if (pending) return pending;
       setInstancesError(null);
@@ -56,6 +57,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           if (!active) return;
           setSignedOut(!data);
           if (data) setInstances(data.instances ?? []);
+          // Setup reads no instances frames; ask again until every first check lands.
+          if ((data?.instances as InstanceInfo[] | undefined)?.some((row) => row.snapshot.state === "checking")) recheck = setTimeout(() => void refresh(false), 500);
         })
         .catch(() => {
           if (active) {
@@ -71,6 +74,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     window.addEventListener("focus", onFocus);
     return () => {
       active = false;
+      clearTimeout(recheck);
       window.removeEventListener("focus", onFocus);
     };
   }, []);
@@ -139,7 +143,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         tabIndex={-1}
         aria-modal="true"
         aria-labelledby="onboarding-title"
-        className={`flex max-h-full w-full flex-col overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl shadow-black/60 ${
+        className={`flex max-h-full w-full flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/60 ${
           step === 1 ? "max-w-[680px]" : "max-w-[560px]"
         }`}
       >
@@ -153,7 +157,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <button
               type="button"
               onClick={retryInstances}
-              className="mt-6 w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
+              className="mt-6 w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110"
             >
               {t("onboarding.phoneTryAgain")}
             </button>
@@ -186,7 +190,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 trackOnboard("engine");
                 setStep(1);
               }}
-              className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40`}
+              className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40`}
             >
               {instancesError ? t("onboarding.tryAgain") : !instances ? t("onboarding.checking") : emptyConnect ? t("noEngines.title") : t("onboarding.continue")}
             </button>
@@ -215,7 +219,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               ) : (
                 <>
                   <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
-                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine }} />
+                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine, skip: hasReadyEngine ? undefined : onDone }} />
                   <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>
                 </>
               )}

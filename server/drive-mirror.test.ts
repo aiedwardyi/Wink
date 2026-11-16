@@ -317,6 +317,9 @@ describe("Drive mirror", () => {
       const google = await boot(clock, () => "z-open", () => {});
       google.resume();
       await google.kick();
+      // The kick landed mid-pass, so its one queued pass runs on time before the clock jumps.
+      await vi.advanceTimersByTimeAsync(0);
+      await google.idle();
       const { head } = backlog("boundary");
       clock.now += 30_000 + 60_000;
       await vi.advanceTimersByTimeAsync(30_000);
@@ -491,7 +494,7 @@ describe("Drive mirror", () => {
     pcs[0].ids.writerId = writer;
     const own = `threads-v2/bot/thread/${writer}/head.json`;
     write(pcs[0], own, "local own head");
-    const listing = execFileSync("cmd.exe", ["/d", "/c", "dir", "/x"], { cwd: dirname(dirname(join(pcs[0].folder, own))), encoding: "utf8" });
+    const listing = execFileSync("cmd.exe", ["/d", "/c", "dir", "/x"], { cwd: dirname(dirname(join(pcs[0].folder, own))), encoding: "utf8", windowsHide: true });
     const row = listing.split(/\r?\n/).find((line) => line.trim().endsWith(writer));
     const short = row?.match(/\S*~\d+\S*/)?.[0] ?? "7D3E5B~1";
     seed(`threads-v2/bot/thread/${short}/head.json`, "remote peer head");
