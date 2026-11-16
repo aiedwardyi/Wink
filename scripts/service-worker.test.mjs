@@ -226,6 +226,29 @@ describe("service worker", () => {
     expect(location.reload).toHaveBeenCalledOnce();
   });
 
+  it("opens a chat tapped while the offline page shows", async () => {
+    const page = readFileSync(join(ROOT, "public/offline.html"), "utf8");
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+    const location = { hostname: RELAY, href: `https://${RELAY}/`, assign: vi.fn(), reload() {} };
+    const serviceWorker = {};
+    for (const script of scripts) {
+      runInNewContext(script, {
+        URL,
+        location,
+        history: {},
+        navigator: { onLine: false, language: "en", serviceWorker },
+        localStorage: { getItem: () => null },
+        document: { documentElement: {}, getElementById: () => ({ textContent: "", addEventListener() {} }) },
+        window: { addEventListener() {} },
+        setInterval() {},
+      });
+    }
+    const shown = { url: location.href, focus: async () => {}, postMessage: (data) => serviceWorker.onmessage({ data }) };
+    const { listeners, now } = worker(RELAY, undefined, [shown]);
+    await click(listeners, "/?bot=b1&thread=t-new");
+    expect(location.assign).toHaveBeenCalledExactlyOnceWith(`https://${RELAY}/?bot=b1&thread=t-new&t0=${now}`);
+  });
+
   it("lets a reachable PC answer the page load itself", async () => {
     const { listeners } = worker(RELAY, async () => new Response("live page"));
     await install(listeners);

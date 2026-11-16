@@ -49,7 +49,7 @@ describe("short room codes", () => {
   });
 
   it("drops a code minted while a Remove retired the room code", async () => {
-    const person = addPerson(roomId, "Mina", "chat", []);
+    const person = addPerson(roomId, "Mina", []);
     expect(await shortRoomCode(roomId, async () => {
       barRoomPerson(roomId, person.id);
       return { code: "ABCDEF", exp: Date.now() + DAY };
@@ -79,7 +79,7 @@ describe("short room codes", () => {
 
   it("dies with the room code a Remove retires", async () => {
     await shortRoomCode(roomId, minter("ABCDEF", "GHJKLM"));
-    const person = addPerson(roomId, "Mina", "chat", []);
+    const person = addPerson(roomId, "Mina", []);
     barRoomPerson(roomId, person.id);
     expect(shortCodeTarget("ABCDEF")).toBeNull();
     expect(await shortRoomCode(roomId, minter("GHJKLM"))).toBe("GHJKLM");

@@ -1135,6 +1135,15 @@ describe("withSystemChanges", () => {
     );
   });
 
+  it("preserves project context when budgets move and the status changes", () => {
+    const delivered = "## Project A\nBudget: 500 dollars.\n## Project B\nBudget: 740 dollars.\nStatus: draft.";
+    const system = "## Project A\nBudget: 740 dollars.\n## Project B\nBudget: 500 dollars.\nStatus: final.";
+    const update = [...reminder("[Removed:]", ...delivered.split("\n"), "[Added:]", ...system.split("\n")), "", "hi"].join("\n");
+    expect(withSystemChanges("hi", delivered, system)).toBe(update);
+    expect(withSystemChanges("hi", delivered, system, 0)).toBeNull();
+    expect(withSystemChanges("hi", delivered, system, Infinity)).toBe(update);
+  });
+
   it("sends nothing when the system text did not change", () => {
     const system = withMemory("- City: Seoul");
     expect(withSystemChanges("hi", system, system)).toBe("hi");

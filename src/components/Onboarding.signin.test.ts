@@ -126,6 +126,24 @@ describe("Onboarding engine check", () => {
     expect(host.textContent).not.toContain("You're all set");
   });
 
+  it("leaves a way in when the only engine reads as signed out", async () => {
+    localStorage.setItem("omb-locale", "en");
+    const onDone = vi.fn();
+    const claude = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] } };
+    const host = await renderWith(200, onDone, { instances: [claude] });
+    const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label);
+    await act(async () => button("Continue")!.click());
+    expect(button("Continue")!.disabled).toBe(true);
+    expect(button("Open Wink")?.disabled).toBe(false);
+    await act(async () => button("Open Wink")!.click());
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(host.textContent).not.toContain("You're all set");
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ instances: [{ ...claude, snapshot: { state: "available", authenticated: true } }] }));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(button("Continue")!.disabled).toBe(false);
+    expect(button("Open Wink")).toBeUndefined();
+  });
+
   it("keeps the all-set step when an engine is ready", async () => {
     localStorage.setItem("omb-locale", "en");
     const onDone = vi.fn();

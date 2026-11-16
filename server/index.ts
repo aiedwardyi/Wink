@@ -15,7 +15,6 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
-import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
@@ -212,6 +211,7 @@ import {
   queueMark,
   queueRoomParticipation,
   queuedRoomBotIds,
+  waitingSends,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
 import "./send-deliver.ts";
@@ -808,6 +808,7 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
   driverKind: entry.driverKind,
   defaultModel: entry.models.default,
   available: entry.snapshot.state === "available",
+  authenticated: entry.snapshot.authenticated,
   capabilities: entry.capabilities,
   effortLevels: entry.capabilities.effortLevels,
   rateLimits: rateLimitsByInstance.get(entry.instanceId)?.windows,
@@ -843,6 +844,7 @@ function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate 
     driverKind: instance.driverKind,
     defaultModel: instance.models.default,
     available: automaticAvailability.get(instance.instanceId) !== false,
+    authenticated: providerSnapshots.get(instance.instanceId)?.authenticated,
     capabilities: {
       agentsMcp: instance.adapter.capabilities.agentsMcp === true,
       approvalReview: instance.reviewPermission !== undefined,
@@ -937,7 +939,7 @@ async function defaultSelection() {
 }
 
 const modelSelectionModeSchema = z.enum(["automatic", "pinned"]).optional();
-const botJobSchema = z.string().trim().min(1).max(BOT_PROFILE_LIMITS.description);
+const botJobSchema = z.string().trim().min(1);
 
 function checkedModelSelection(
   raw: unknown,
@@ -1002,6 +1004,20 @@ function checkedModelSelection(
     if (effort) selection.effort = effort;
   }
   return { ok: true, selection };
+}
+
+function createdBotSelection(chief: ModelSelection, model: unknown, effort: unknown): ReturnType<typeof checkedModelSelection> {
+  if (model === undefined) return effort === undefined ? { ok: true, selection: { ...chief } } : checkedModelSelection({ ...chief, effort });
+  const engines = [chief.instanceId, ...registry.instances().map((instance) => instance.instanceId)];
+  const instanceId = engines.find((id) => instanceOffersModel(id, String(model)));
+  if (!instanceId) {
+    const valid = new Set(engines.filter((id) => !accounts.get(id)).flatMap((id) => {
+      const models = registry.get(id)?.models;
+      return models ? [models.default, ...models.options.map((option) => option.id)].filter(Boolean) : [];
+    }));
+    return { ok: false, status: 400, error: `model "${String(model)}" is not offered; valid ids: ${[...valid].join(", ")}` };
+  }
+  return checkedModelSelection({ instanceId, model, mode: "pinned", effort }, false, true);
 }
 
 function checkedGroupResponder(value: unknown, memberIds: string[]): GroupDefaultResponder | null {
@@ -3154,17 +3170,9 @@ const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 
 // activity-based, so an hour-long turn that keeps streaming is never
 // touched, and turns parked on a human approval are exempt.
 const TURN_STALL_MS = Math.max(60_000, Number(process.env.OMB_TURN_STALL_MS) || 20 * 60_000);
-// A tool that is still running keeps the turn alive past TURN_STALL_MS - a long
-// build emits nothing between item.started and item.completed. This is the
-// ceiling on that exemption, for a tool that never returns at all.
-const TURN_TOOL_CAP_MS = Math.max(
-  TURN_STALL_MS,
-  Number(process.env.OMB_TURN_TOOL_CAP_MS) || 60 * 60_000,
-);
 const roomStallCompletions = new RoomTurnStallRegistry();
 const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
-  toolCapMs: TURN_TOOL_CAP_MS,
   checkMs: 60_000,
   onStall: (turn) => {
     repeats.settle(turn.threadId);
@@ -3230,6 +3238,12 @@ const watchdog = new TurnWatchdog({
       }
     }, 6_000);
     release.unref?.();
+  },
+  onQuiet: (turn) => {
+    const bot = store.bot(turn.botId);
+    // a lane turn or an open approval owns what the bot's activity says
+    if (!bot?.busy || bot.activeThreadId !== turn.threadId || bot.activity === "waiting-on-you") return;
+    store.setActivity(bot.id, turn.quiet ? "no-signal" : "working", turn.threadId);
   },
 });
 watchdog.start();
@@ -4081,7 +4095,7 @@ bus.subscribe((event: RuntimeEvent) => {
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
       if (event.signedOut && event.providerInstanceId) void accountRuntime.signedOut(event.providerInstanceId).catch(() => console.error("Signed-out account could not be saved"));
-      if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit.resetsAt, row.id,
+      if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit, row.id,
         [...new Set(["five_hour", "seven_day", ...(rateLimitsByInstance.get(event.providerInstanceId ?? "")?.windows.map((window) => window.id) ?? [])])]);
       // a setup error means the engine could not even start: the bot is
       // dead until something changes, not merely idle. The next successful
@@ -4343,8 +4357,8 @@ bus.subscribe((event: RuntimeEvent) => {
 const askHold = watchAskHold(store, bus);
 watchSkippedQuestions(store, (threadId, change) => {
   const current = taskPacketForWrite(threadId);
-  const asks = current && change(current.asks);
-  if (current && asks) persistTaskPacket({ ...current, asks, updatedAt: Date.now(), updatedBy: "harness" });
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
 });
 
 // Drain queued delegations for a source thread after its turn settles.
@@ -4488,7 +4502,6 @@ const paneWake = new PaneWakeScheduler({
     });
   },
   admit: (botId, threadId) => admitPaneWake(store, botId, threadId, commsBus.replyUnwoken),
-  warn: (line) => console.warn(line),
 });
 
 /** The user wrote to this bot: lift a Stop pause and wake for notes held under it. */
@@ -4717,6 +4730,7 @@ type StartTurnOptions = {
    * dispatch the same user action twice. */
   sendId?: string;
   call?: CallTag;
+  answersCard?: string;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4734,9 +4748,9 @@ const SHOW_IMAGE_GUIDANCE =
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
   " When reporting after time away, in a summary or wrap-up, or after workers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
   " If the user answers an open card in their own words, close the card." +
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself or your next step there (like 'Now the tests.', 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so give your full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, write at most one short line on what you are doing, never the answer itself, so the final message never repeats it. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a worker, CI, the user), never a vague 'we', and call a cause likely until you reproduce it. Quote a number only from a source you opened, and say which run, file or date it came from. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. Judge the user's ideas on merit and say plainly when one is wrong or low value; when you change your mind, name what convinced you. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a worker, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, check and follow existing work and decisions (feature list, status board, decision notes, memory). Say first if your plan would redo or contradict them. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
 const REPLY_STYLE_INSTRUCTIONS =
-  " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
+  " Default voice (role description and user requests override it, including length and teaching style): answer first, 2-5 short lines, the few key points unless asked for every option, plain words, a few bullets over paragraphs, warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. Work out questions before answering. Skip preamble, recaps and generic closing offers; needed questions and asking before acting are not padding. Give code, plans, drafts, commands and anything to paste or follow step by step in full. Otherwise go longer only when asked or needed, still verdict first.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
 const DETAILED_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS;
 
@@ -4744,7 +4758,7 @@ const DETAILED_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS;
 // session is told each change to the system text, so anything interpolated
 // here costs a reminder every send.
 const CORPUS_SEARCH_INSTRUCTIONS =
-  " When you search a corpus, a document set, or any body of files, match case-insensitively. Scanned and OCR'd records are routinely written in capitals, so a case-sensitive query misses text that is plainly there. Before concluding that something is absent, try at least one different search strategy or tool class: an empty result is evidence about your query first and about the corpus second. Never state an unqualified absence. If you still report not finding something, say what you searched and how you searched it, so the user can tell a true negative from an unlucky query.";
+  " When searching any corpus, document set or files, match case-insensitively: scanned/OCR records often use capitals. An empty result tests your query first; try another search strategy or tool class before concluding absence. Never state an unqualified absence. When reporting no match, say what and how you searched so the user can judge a true negative.";
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -4981,6 +4995,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           replyToId: opts?.replyTo?.id,
           sendId: opts?.sendId,
           call: opts?.call,
+          answersCard: opts?.answersCard,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -5788,7 +5803,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         foldLate();
         const notesPath = opensHostFiles(privateWorkspace) ? bot.projectNotes : undefined;
         const notesNotice = notesPath ? projectNotesCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
-        const memoryNotice = privateWorkspace ? memoryHealthCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
+        const memoryNotice = privateWorkspace && memoryNotesEnabled(cfg, bot) ? memoryHealthCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
         const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";
         const withLate = (base: string) =>
           [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
@@ -5831,7 +5846,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           CORPUS_SEARCH_INSTRUCTIONS +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
-          tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id) : "") +
+          tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
           tracePart("playbook", packagePlaybooks) +
           tracePart("playbook", harnessPlaybookPrompt(Boolean(integrations.terminal))) +
@@ -6357,9 +6372,10 @@ function resolveAndSendRoutine(
 // explicitly @mentions members. Responders run SEQUENTIALLY (one speaker at
 // a time — the transcript and streaming bubble stay coherent), each on a
 // fresh session with bounded room context. A member's reply may @mention
-// teammates; those get one chained turn (hop 1), never deeper.
+// teammates, who answer in turn; each tagger-to-tagged pair runs once per user message.
 const groupQueues = new Map<string, Promise<void>>();
-const MAX_GROUP_HOPS = 1;
+// shares the spoken set; a bot id never holds this separator
+const chainEdge = (from: string, to: string) => `${from}>${to}`;
 
 // Same memory-only wait as 1:1 steer-queue while the room remains active.
 // Group Stop drops this queued participation before it can drain later.
@@ -6379,6 +6395,7 @@ function queueBusyRoomMember(
   queueRoomParticipation(bot.id, threadId, {
     groupId,
     hop,
+    spoken,
     rootId: rootId ?? undefined,
     cardContinuation,
     onDispatchError,
@@ -6526,7 +6543,7 @@ const guestClient: GuestClient = new GuestClient({
   ownRoom: (code) => ownRoomGroup(code, store.groups),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   onSent: (roomId, entry) => setImmediate(() => myRoomBotTurns.sent(roomId, entry)),
-  onBotLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
+  onLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
   onStop: (roomId) => myRoomBotTurns.stop(roomId),
   botTurn: (roomId, id) => myRoomBotTurns.turn(roomId, id),
   botChain: (roomId) => myRoomBotTurns.chain(roomId),
@@ -6890,7 +6907,7 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     CORPUS_SEARCH_INSTRUCTIONS +
-    (workspace ? `\n${memorySystemPrompt(bot.id, lane).trim()}` : "") +
+    (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
     harnessPlaybookPrompt(Boolean(integrations.terminal));
@@ -7024,14 +7041,15 @@ async function runClaimedGroupMemberTurn(
     drainSecretResumes();
   }
 
-  // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain
+  if (!isCancelled?.() && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
-      if (spoken.has(next.id)) continue;
+      if (spoken.has(chainEdge(bot.id, next.id))) continue;
+      spoken.add(chainEdge(bot.id, next.id));
       if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId))) {
         return false;
       }
@@ -7077,11 +7095,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
-  const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
+  const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
+  const shared = hosted && answersCard ? store.patchMessage(group.threadId, hosted.id, { answersCard }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7096,6 +7115,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     replyToId: replyTo?.id,
     sendId,
     ...(askerId ? { askedBy: askerId } : {}),
+    answersCard,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -7255,17 +7275,7 @@ function routineProposalPersistence(botId: string, threadId: string) {
   if (!connectorThread(botId, threadId)) {
     return { ok: false as const, status: 403, error: "source conversation does not belong to sender" };
   }
-  // Only cards on the visible branch can be acted on from the composer.
-  // Abandoned branches must not permanently consume the proposal quota.
-  const openRequests = store.activePath(threadId).filter(
-    (message) =>
-      message.card?.routineRequest?.botId === botId &&
-      !message.card.answered &&
-      !message.card.dismissed,
-  ).length;
-  return openRequests >= 8
-    ? { ok: false as const, status: 429, error: "confirm or cancel an existing routine proposal first" }
-    : { ok: true as const };
+  return { ok: true as const };
 }
 
 function connectorMessage(botId: string, threadId: string, messageId: string) {
@@ -7597,6 +7607,7 @@ const internalRoutes = createInternalRoutes({
   computerControl,
   askBotAndWait,
   checkedMemberIds,
+  createdBotSelection,
   store,
   keepGoing,
   wireBot,
@@ -8282,6 +8293,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return [bot.id, { held: snapshot.held, helpReason: snapshot.helpReason }];
           }),
         ),
+        queued: waitingSends(),
         cursor: `${STREAM_ID}:${lastSeq}`,
         ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });
@@ -8546,7 +8558,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo|flow)$/);
     if (m) {
-      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       return await workerMap.handle(req, res, m[1], m[2], url);
     }
@@ -8858,10 +8869,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
-    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim() })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode() })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId), (roomId) => myRoomBotTurns.stopMine(roomId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);

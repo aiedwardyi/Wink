@@ -327,7 +327,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     await act(async () => rowButton("Staging").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id }]);
   });
 
   it("glows once when it arrives, then never again", async () => {
@@ -412,8 +412,8 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     const dismiss = pinButton("Dismiss question").className;
     expect(dismiss).toContain("p-1 ");
-    expect(dismiss).toContain("pointer-coarse:-my-3");
-    expect(dismiss).toContain("pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4");
+    expect(dismiss).toContain("pointer-coarse:after:-inset-y-[11px]");
+    expect(dismiss).not.toMatch(/pointer-coarse:-?(p|m)[xytb]?-/);
   });
 
   it("asks to type the answer while an open question is pinned", async () => {
@@ -430,7 +430,7 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id }]);
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
@@ -495,11 +495,11 @@ describe("pinned ask_user question", () => {
     expect(dot()).toBeNull();
   });
 
-  it("waits behind a pending approval, which keeps its composer takeover", async () => {
+  it("waits behind a pending approval and leaves the box typeable", async () => {
     await mount({ bot: bot([question, approval]) });
     expect(pin()).toBeNull();
     expect(host!.querySelector('[role="region"][aria-label="Pending approval"]')).not.toBeNull();
-    expect(textarea()?.disabled).toBe(true);
+    expect(textarea()?.disabled).toBe(false);
   });
 
   it("names the room member who asked and answers in the room", async () => {

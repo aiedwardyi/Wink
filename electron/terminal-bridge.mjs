@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
-import { BOT_PANE_TOTAL } from "./terminal-host.mjs";
 import { handleServerErrorReport } from "./error-report-capture.mjs";
 import { streamMapPanes } from "./map-events.mjs";
 
@@ -79,7 +78,7 @@ export function paneCountBody(labels) {
   const panes = {};
   if (!plainRecord(labels)) return { counts, panes };
   for (const [botId, names] of Object.entries(labels)) {
-    if (!BOT_ID_RE.test(botId) || !Array.isArray(names) || names.length < 1 || names.length > BOT_PANE_TOTAL) continue;
+    if (!BOT_ID_RE.test(botId) || !Array.isArray(names) || names.length < 1) continue;
     const list = [];
     for (const name of names) {
       if (Object.prototype.toString.call(name) !== "[object String]") continue;
@@ -316,7 +315,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (error?.status === 413) return json(res, 413, { error: message });
-        const status = /stale|No active|exited|Unknown terminal/i.test(message) ? 409 : /Too many/i.test(message) ? 429 : /Invalid|unavailable/i.test(message) ? 400 : 500;
+        const status = /stale|No active|exited|Unknown terminal/i.test(message) ? 409 : /Invalid|unavailable/i.test(message) ? 400 : 500;
         return json(res, status, { error: message });
       }
     });

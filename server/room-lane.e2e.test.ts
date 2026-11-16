@@ -88,6 +88,9 @@ beforeAll(async () => {
       claude: instance({ FAKE_CLAUDE_DUMP: dump }),
       toBee: instance({ FAKE_CLAUDE_REPLY_FIXTURE: fixture("to-bee", "@Bee over to you") }),
       toAce: instance({ FAKE_CLAUDE_REPLY_FIXTURE: fixture("to-ace", "@Ace back to you") }),
+      toAstra: instance({ FAKE_CLAUDE_REPLY_FIXTURE: fixture("to-astra", "@Astra your turn") }),
+      toCarbon: instance({ FAKE_CLAUDE_REPLY_FIXTURE: fixture("to-carbon", "@Carbon your turn") }),
+      toLead: instance({ FAKE_CLAUDE_REPLY_FIXTURE: fixture("to-lead", "@Lead back to you") }),
     },
   }));
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
@@ -290,7 +293,7 @@ describe("room lane", () => {
     expect(replies((await groupOf(rooms.y6.id)).messages)).toBe(1);
   }, 90_000);
 
-  it("still stops a bot-to-bot chain after one hop when both 1:1s are busy", async () => {
+  it("ends a two-bot ping-pong at the first repeated pair when both 1:1s are busy", async () => {
     const ace = await newBot("toBee", "Ace");
     const bee = await newBot("toAce", "Bee");
     const room = await newRoom("Chain room", [ace.id, bee.id]);
@@ -298,13 +301,26 @@ describe("room lane", () => {
     await holdOneOnOne(bee, "b7");
 
     await post(room.id, "@Ace start the chain");
-    await poll(async () => replies((await groupOf(room.id)).messages)).toBe(2);
+    await poll(async () => replies((await groupOf(room.id)).messages)).toBe(3);
     await poll(async () => (await groupOf(room.id)).working).toBe(false);
     open("a7");
     open("b7");
     await settled(ace.id);
     await settled(bee.id, room.id);
     const lines = (await groupOf(room.id)).messages.filter((message: any) => message.role === "bot" && message.kind === "text");
-    expect(lines.map((message: any) => message.text)).toEqual(["@Bee over to you", "@Ace back to you"]);
+    expect(lines.map((message: any) => message.text)).toEqual(["@Bee over to you", "@Ace back to you", "@Bee over to you"]);
+  }, 90_000);
+
+  it("runs a four-turn chain from one message, the lead answering twice", async () => {
+    const lead = await newBot("toAstra", "Lead");
+    const astra = await newBot("toCarbon", "Astra");
+    const carbon = await newBot("toLead", "Carbon");
+    const room = await newRoom("Forum room", [lead.id, astra.id, carbon.id]);
+
+    await post(room.id, "@Lead go");
+    await poll(async () => replies((await groupOf(room.id)).messages), 30_000).toBe(4);
+    await poll(async () => (await groupOf(room.id)).working).toBe(false);
+    const lines = (await groupOf(room.id)).messages.filter((message: any) => message.role === "bot" && message.kind === "text");
+    expect(lines.map((message: any) => message.text)).toEqual(["@Astra your turn", "@Carbon your turn", "@Lead back to you", "@Astra your turn"]);
   }, 90_000);
 });

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, mapClashes, treeIndex, treeLayout } from "./map-tree";
+import { fmt, mapClashes, rowY, treeIndex, treeLayout } from "./map-tree";
 
 it("sizes a folder box for the padding, border and gap its name and count are drawn with", () => {
   const box = readFileSync("src/components/MapTree.css", "utf8").match(/\.map-tree-box \{([^}]*)\}/)![1];
@@ -105,4 +105,13 @@ it("lists a file many workers share as one clash", () => {
   workers[9].files[0].ranges = [[1, 2]];
   expect(mapClashes(workers)).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.map(worker => worker.id), same: true }]);
   expect(mapClashes(workers.slice(1, 9))).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.slice(1, 9).map(worker => worker.id), same: false }]);
+});
+
+it("spaces a stack's file rows by the given pitch, so a phone can give each a finger's height", () => {
+  const paths = ["src/a.ts", "src/b.ts", "src/c.ts"];
+  const stack = (line?: number) => treeLayout(treeIndex("repo", paths), { width: 600, phone: false, line, changed: new Set(paths), measure: text => text.length * 7, folders: n => `+${n} folders`, files: n => `+${n} files` }).items.find(it => it.files)!;
+  const [mouse, finger] = [stack(), stack(44)];
+  expect(rowY(mouse, mouse, 1) - rowY(mouse, mouse, 0)).toBe(17);
+  expect(rowY(finger, finger, 1) - rowY(finger, finger, 0)).toBe(44);
+  expect(finger.h - mouse.h).toBe(3 * (44 - 17));
 });

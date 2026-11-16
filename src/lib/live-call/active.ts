@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
+import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 import { callAudio } from "./warm-audio";
 
@@ -12,6 +13,7 @@ let calls = 0;
 let call: ActiveCall | null = null;
 let note: { botId: string; text: string } | null = null;
 let inView = 0;
+let releaseReload: (() => void) | null = null;
 const watchers = new Set<() => void>();
 
 function notify() {
@@ -30,6 +32,7 @@ export function callsSupported(): boolean {
 
 export function placeCall(bot: Bot, ctx: AudioContext, opener?: string): ActiveCall {
   call = { id: ++calls, botId: bot.id, bot, ctx, opener };
+  releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;
   notify();
@@ -65,6 +68,8 @@ export function answerOnThread(bots: readonly Bot[], next?: Rung): ActiveCall | 
 export function dropCall(ended: ActiveCall, text?: string) {
   if (call !== ended) return;
   call = null;
+  releaseReload?.();
+  releaseReload = null;
   if (text) note = { botId: ended.botId, text };
   notify();
 }

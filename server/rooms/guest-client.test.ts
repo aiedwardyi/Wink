@@ -424,14 +424,14 @@ describe("races and floods", () => {
     expect(urls("/snapshot")).toHaveLength(2);
   });
 
-  it("refuses sends past a small queue instead of waiting on a silent host", async () => {
+  it("queues every send behind a silent host, each waiting its turn", async () => {
     const held: ServerResponse[] = [];
     route = (req, res) => (req.url?.endsWith("/send") ? void held.push(res) : quietDoor(req, res));
     const c = guest();
     await c.join(CODE);
-    const queued = Array.from({ length: 20 }, (_, i) => c.send("r1", `m${i}`));
-    const extra = await Promise.race([c.send("r1", "one too many"), new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
-    expect(extra).toEqual({ ok: false, status: 429, error: "too many messages waiting to send" });
+    const queued = Array.from({ length: 21 }, (_, i) => c.send("r1", `m${i}`));
+    const last = await Promise.race([queued[20], new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
+    expect(last).toBe("waiting");
     route = (req, res) => (req.url?.endsWith("/send") ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res));
     for (const res of held) reply(res, 503, { error: "phone access is off" });
     await until(() => held.every((res) => res.writableEnded));
@@ -723,7 +723,7 @@ describe("bot lines", () => {
     expect(c.room("r1")!.unread).toBe(2);
   });
 
-  it("hands on each new bot line once, never a backfill or a person's line, and a Stop", async () => {
+  it("hands on each new line once, never a backfill, and a Stop", async () => {
     const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
     const frame = (body: unknown) => `data: ${JSON.stringify(body)}
 
@@ -740,14 +740,14 @@ describe("bot lines", () => {
       }
       reply(res, 404, { error: "not found" });
     };
-    const onBotLine = vi.fn();
+    const onLine = vi.fn();
     const onStop = vi.fn();
-    const c = guest({ onBotLine, onStop });
+    const c = guest({ onLine, onStop });
     expect((await c.join(CODE)).ok).toBe(true);
     await until(() => onStop.mock.calls.length === 1);
     expect(c.room("r1")!.entries).toHaveLength(3);
     await c.botSend("r1", "tb-pete", "@Wink yours");
-    expect(onBotLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e4"]]);
+    expect(onLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e3"], ["r1", "e4"]]);
     expect(onStop).toHaveBeenCalledWith("r1");
   });
 

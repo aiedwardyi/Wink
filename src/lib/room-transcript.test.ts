@@ -52,6 +52,11 @@ const rows = (messages: Message[], showToolCalls = false) =>
   roomTranscriptRows(groupActivityRuns(messages), { showToolCalls });
 
 describe("roomTranscriptRows", () => {
+  it("hides a tapped choice's line", () => {
+    const line = (text: string): Message => ({ id: `u${text}`, at: at(1), role: "user", kind: "text", text });
+    expect(rows([say("a", "Dinner?"), { ...line("Sure"), answersCard: "ask" }, line("typed")]).map((row) => row.visible)).toEqual([true, false, true]);
+  });
+
   it("shows Terminal activity without revealing hidden screen frames", () => {
     const messages: Message[] = [
       step("a", "Read"),

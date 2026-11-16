@@ -638,15 +638,13 @@ describe("agents-proxy MCP surface", () => {
     const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
     expect(update.inputSchema.properties.goal).toMatchObject({ minLength: 1, pattern: "\\S" });
     expect(update.inputSchema.properties.plan.items.properties.step).toMatchObject({ minLength: 1, pattern: "\\S" });
-    const limits: Array<[Record<string, unknown>, "maxLength" | "maxItems", number]> = [
+    for (const list of ["plan", "blockers", "artifacts", "asks"]) expect(update.inputSchema.properties[list]).not.toHaveProperty("maxItems");
+    const limits: Array<[Record<string, unknown>, "maxLength", number]> = [
       [update.inputSchema.properties.goal, "maxLength", 500],
-      [update.inputSchema.properties.plan, "maxItems", 20],
       [update.inputSchema.properties.plan.items.properties.step, "maxLength", 200],
       [update.inputSchema.properties.completed_note, "maxLength", 300],
       [update.inputSchema.properties.next_action, "maxLength", 300],
-      [update.inputSchema.properties.blockers, "maxItems", 10],
       [update.inputSchema.properties.blockers.items.properties.note, "maxLength", 300],
-      [update.inputSchema.properties.artifacts, "maxItems", 20],
       [update.inputSchema.properties.artifacts.items.properties.ref, "maxLength", 500],
       [update.inputSchema.properties.artifacts.items.properties.label, "maxLength", 200],
     ];
@@ -709,12 +707,13 @@ describe("agents-proxy MCP surface", () => {
     const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
     const asks = update.inputSchema.properties.asks;
     expect(JSON.stringify(asks)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
-    expect(asks).toMatchObject({ type: "array", maxItems: 20 });
+    expect(asks).toMatchObject({ type: "array" });
+    expect(asks).not.toHaveProperty("maxItems");
     expect(asks.items.required).toEqual(["status"]);
     expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
     expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
     expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
-    for (const [field, limit] of [[asks, 20], [asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
+    for (const [field, limit] of [[asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
       expect(field.description).toContain(String(limit));
     }
 
@@ -876,6 +875,11 @@ describe("agents-proxy MCP surface", () => {
       role: "Product designer",
       instructions: "Design and review the user experience.",
     });
+  });
+
+  it("forwards create_bot model and effort to the harness", async () => {
+    await callTool("create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things.", model: " grok-4.6 ", effort: "xhigh" });
+    expect(lastCreateBody).toMatchObject({ model: "grok-4.6", effort: "xhigh" });
   });
 
   it("create_channel tells the model to call the tool instead of scanning localhost", async () => {

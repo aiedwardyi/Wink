@@ -204,6 +204,8 @@ export interface Message {
   from?: { botId: string; name: string; color: string; chiefOfStaff?: boolean };
   /** group threads: the member whose question card this user line answers; recovery reads who it was for. */
   askedBy?: string;
+  /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
+  answersCard?: string;
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;

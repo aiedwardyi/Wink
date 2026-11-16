@@ -36,7 +36,7 @@ function harness() {
       return current && store.taskByThread(bot.id, current.threadId) ? { threadId: current.threadId, controlKey: JSON.stringify(current.modelSelection), busy: Boolean(current.busy) } : null;
     }, usage, dispatch });
   waits.track(bot.id, bot.threadId, selection); waits.bind(bot.threadId, "turn");
-  waits.failed(bot.threadId, "turn", state.now + 60_000, "error", ["five_hour", "seven_day"]);
+  waits.failed(bot.threadId, "turn", { resetsAt: state.now + 60_000 }, "error", ["five_hour", "seven_day"]);
   waits.settled(bot.threadId, "turn", false);
   const row = waits.store.all()[0]!;
   state.now = row.nextCheckAt;

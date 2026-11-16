@@ -2,9 +2,9 @@ import { z } from "zod";
 
 export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "declined"] as const;
 export const ASK_STALE_MS = 6 * 60 * 60 * 1000;
-export const ASK_LIMITS = { ask: 80, ref: 80, kept: 40, update: 20 } as const;
+export const ASK_LIMITS = { ask: 80, ref: 80, kept: 40 } as const;
 const BRIEF_ASKS = 5;
-const QUESTIONS_KEPT = 10;
+export const MAX_STATUS_ASKS_BYTES = 48 * 1024;
 
 export const TASK_ASKS_PROMPT =
   "Add each ask the user makes to update_task_state asks in the same turn, and close it as done or declined as soon as it settles; never drop one. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them.";
@@ -23,6 +23,13 @@ export const taskAskSchema = z.object({
 
 export type TaskAsk = z.output<typeof taskAskSchema>;
 
+/** A thread's asks and the highest id it ever gave, so an id that fell off is never handed out again. */
+export interface AskBook { readonly asks?: readonly TaskAsk[]; readonly lastAskId?: number }
+export interface SavedAsks { asks: TaskAsk[]; lastAskId: number }
+
+export const lastAskIdOf = (book: AskBook | undefined): number =>
+  Math.max(book?.lastAskId ?? 0, ...(book?.asks ?? []).map((ask) => Number(ask.id.slice(1))));
+
 export interface TaskAskUpdate {
   id?: string;
   ask?: string;
@@ -39,15 +46,22 @@ const isQuestion = (ask: TaskAsk) => ask.kind === "question";
 const isStale = (ask: TaskAsk, now: number) => isOpenAsk(ask) && !isQuestion(ask) && now - ask.changedAt >= ASK_STALE_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
+// only closed asks fall off, oldest first; an open ask is never dropped or refused
+function trimClosed(asks: TaskAsk[]): void {
+  for (let closed = asks.findIndex((ask) => !isOpenAsk(ask)); asks.length > ASK_LIMITS.kept && closed >= 0; closed = asks.findIndex((ask) => !isOpenAsk(ask))) {
+    asks.splice(closed, 1);
+  }
+}
+
 /** No id adds an ask, an id updates it; closing keeps it, and only the oldest closed asks fall off past the cap. */
 export function mergeTaskAsks(
-  existing: readonly TaskAsk[] | undefined,
+  book: AskBook | undefined,
   updates: readonly TaskAskUpdate[],
   now: number,
-): { asks: TaskAsk[]; note: string } | { error: string } {
-  const asks = (existing ?? []).map((ask) => ({ ...ask }));
+): (SavedAsks & { note: string }) | { error: string } {
+  const asks = (book?.asks ?? []).map((ask) => ({ ...ask }));
   const added: string[] = [];
-  let last = Math.max(0, ...asks.map((ask) => Number(ask.id.slice(1))));
+  let last = lastAskIdOf(book);
   for (const update of updates) {
     const id = update.id?.trim().toUpperCase();
     const text = update.ask?.trim() ?? "";
@@ -70,16 +84,8 @@ export function mergeTaskAsks(
     asks.push({ id: `A${last}`, ask: text, status: update.status, ...(update.ref ? { ref: update.ref } : {}), at: now, changedAt: now });
     added.push(`A${last}`);
   }
-  while (asks.length > ASK_LIMITS.kept) {
-    const closed = asks.findIndex((ask) => !isOpenAsk(ask));
-    // a skipped question gives way before the bot's own ask is refused
-    const drop = closed < 0 ? asks.findIndex(isQuestion) : closed;
-    if (drop < 0) {
-      return { error: `That would leave ${asks.length} asks open; Wink keeps ${ASK_LIMITS.kept}. Close finished ones as done or declined first.` };
-    }
-    asks.splice(drop, 1);
-  }
-  return { asks, note: `Asks saved${added.length ? `: added ${added.join(", ")}` : ""}; ${asks.filter(isOpenAsk).length} open.` };
+  trimClosed(asks);
+  return { asks, lastAskId: last, note: `Asks saved${added.length ? `: added ${added.join(", ")}` : ""}; ${asks.filter(isOpenAsk).length} open.` };
 }
 
 const clip = (text: string, max: number) => {
@@ -87,19 +93,16 @@ const clip = (text: string, max: number) => {
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
 };
 
-/** Files a question card left unanswered as an open question; null when an open ask has its words or none can close to make room. */
-export function addQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, choices: readonly string[], now: number): TaskAsk[] | null {
+/** Files a question card left unanswered as an open question; null when an open ask has its words. */
+export function addQuestionAsk(book: AskBook | undefined, question: string, choices: readonly string[], now: number): SavedAsks | null {
   const ask = clip(question, ASK_LIMITS.ask);
-  const asks = (existing ?? []).map((item) => ({ ...item }));
+  const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   if (!ask || asks.some((item) => isOpenAsk(item) && words(item.ask) === words(ask))) return null;
-  const questions = asks.filter((item) => isQuestion(item) && isOpenAsk(item));
-  if (questions.length >= QUESTIONS_KEPT) asks.splice(asks.indexOf(questions[0]!), 1);
-  if (asks.filter(isOpenAsk).length >= ASK_LIMITS.kept) return null;
   const listed = clip(choices.join(" / "), ASK_LIMITS.ref);
-  const id = `A${Math.max(0, ...asks.map((item) => Number(item.id.slice(1)))) + 1}`;
-  asks.push({ id, ask, status: "open", kind: "question", ...(listed ? { choices: listed } : {}), at: now, changedAt: now });
-  while (asks.length > ASK_LIMITS.kept) asks.splice(asks.findIndex((item) => !isOpenAsk(item)), 1);
-  return asks;
+  const lastAskId = lastAskIdOf(book) + 1;
+  asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "question", ...(listed ? { choices: listed } : {}), at: now, changedAt: now });
+  trimClosed(asks);
+  return { asks, lastAskId };
 }
 
 /** A card answered after its question was filed: one filed for this card goes, an older one closes done. Null when none matches. */
@@ -126,13 +129,16 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, all
   const stale = open.filter((ask) => isStale(ask, now)).sort(byAge);
   const fresh = open.filter((ask) => !isStale(ask, now)).sort(byAge);
   const ordered = [...stale, ...fresh.filter((ask) => !isQuestion(ask)), ...fresh.filter(isQuestion)];
-  const shown = all ? ordered : ordered.slice(0, BRIEF_ASKS);
+  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${isStale(ask, now) ? " stale" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  let used = 0;
+  const over = all ? ordered.findIndex((ask) => (used += Buffer.byteLength(line(ask), "utf8") + 1) > MAX_STATUS_ASKS_BYTES) : -1;
+  const shown = !all ? ordered.slice(0, BRIEF_ASKS) : over < 0 ? ordered : ordered.slice(0, over);
   const them = stale.length === 1 ? "it" : "them";
   const flagged = stale.length ? `, ${stale.length} stale: no change in 6+ hours, so raise ${them} with the user now, then update ${them}` : "";
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
     `[Wink asks list - ${open.length} open${flagged}.${all ? " Build any summary or status from this list." : ""}${questions}]`,
-    ...shown.map((ask) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${isStale(ask, now) ? " stale" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`),
+    ...shown.map(line),
     ...(ordered.length > shown.length ? [`+${ordered.length - shown.length} more open`] : []),
   ].join("\n");
 }

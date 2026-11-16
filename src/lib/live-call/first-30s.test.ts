@@ -514,6 +514,7 @@ describe("5 the name it is shown by", () => {
     engine().events.turnDone();
     turn(engine(), "Be quiet, please.", "Okay.");
     engine().events.heard("Jenn, are you there?");
+    engine().events.answering();
     expect(call.state().hushed).toBeUndefined();
   });
 
@@ -522,9 +523,10 @@ describe("5 the name it is shown by", () => {
     engine().events.turnDone();
     turn(engine(), "Eddie, be quiet.", "Okay.");
     expect(call.state().hushed).toBe(true);
-    engine().events.heard("Jenn, are you there?");
+    turn(engine(), "Jenn, are you there?", "Okay.");
     expect(call.state().hushed).toBe(true);
-    engine().events.heard(" Eddie?");
+    engine().events.heard("Eddie?");
+    engine().events.answering();
     expect(call.state().hushed).toBeUndefined();
     expect(callsVoice("Hi Jennifer", "Chief of Staff")).toBe(false);
     expect(callsVoice("Hi Jennifer", "Chief of Staff", ["Jenn"])).toBe(true);
@@ -536,6 +538,7 @@ describe("5 the name it is shown by", () => {
     turn(engine(), "아델, 조용해.", "네.");
     expect(call.state().hushed).toBe(true);
     engine().events.heard("아델, 이제 말해도 돼.");
+    engine().events.answering();
     expect(call.state().hushed).toBeUndefined();
   });
 });
@@ -585,7 +588,7 @@ describe("6 hush and wake", () => {
       call.observe({ busy: false, messages: [...rows] });
       await flush();
     }
-    engine().events.heard("Hey, what's up?");
+    engine().events.heard("Hey, Chief of Staff, you there?");
     engine().events.answering();
     engine().events.said("Hey.");
     engine().events.turnDone();

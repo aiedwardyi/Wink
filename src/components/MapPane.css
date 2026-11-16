@@ -64,4 +64,13 @@
   .map-follow { display: block; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
   .map-follow i { display: inline-block; margin-right: 5px; vertical-align: 1px; }
 }
+/* a phone's controls are a finger tall; the worker picker keeps its size under a taller hit area */
+@media (max-width: 767px) {
+  .map-crumbs { height: auto; }
+  .map-crumbs [role="radio"] { min-height: 44px; }
+  .map-follow { height: 44px; padding-block: 0; line-height: 42px; }
+  .map-crumbs > .verify-watch-icon { width: 44px; height: 44px; }
+  .map-worker { position: relative; }
+  .map-worker::after { content: ""; position: absolute; inset: 50% 0 auto; height: 44px; translate: 0 -50%; }
+}
 @media (prefers-reduced-motion: reduce) { .map-step > *, .map-pane > * { animation: none; } .map-code { transition: none; } }

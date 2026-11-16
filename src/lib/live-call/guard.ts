@@ -1,5 +1,5 @@
 // What the voice's turn claims, one sentence at a time: a promise of work, a refusal, a dodge, or an honest "not sent".
-import { bareYes } from "./consent";
+import { afterYes, bareYes, YES_KO } from "./consent";
 
 export type Claim = "promise" | "cant" | "unsure" | "failed";
 
@@ -65,6 +65,24 @@ export function ordersChange(heard: string, names: readonly string[] = []): bool
   return asksForChange(said) || NEED_EN.test(heard) || COMMAND_KO.test(heard);
 }
 
+// What a yes may add and still mean the offered order: "Yes, go ahead and send it."
+const SAME_ORDER = new RegExp(`^(?:${CHANGES}|do|go|ahead|and|then|please|just|it|that|this|them|those|one|now|right|away|a|an|to|of|on|in|at|by|as|so|up|me|my|us|is|be|ok)$`, "i");
+const CHANGE_WORD = new RegExp(`\\b(?:${CHANGES})\\b`, "i");
+
+/** A yes word that goes on to give another order: "Okay, delete the logs instead" does not confirm "Merge PR 12". */
+export function ordersOther(said: string, order: string): boolean {
+  if (bareYes(said)) return false;
+  const rest = afterYes(said);
+  if (/\binstead\b|대신/i.test(rest)) return true;
+  // "Okay, send it to Bob": the yes words took the verb, the line still had one.
+  if (!ordersChange(rest) && !(rest && CHANGE_WORD.test(said))) return false;
+  const known = order.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  // A Korean verb alone ("배포해줘") says yes in its own words.
+  const words = (rest.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !SAME_ORDER.test(word) && !YES_KO.includes(word) && !FILLER_WORDS.has(word) && !/[가-힣](?:해|줘|봐|라|요|세요)$/.test(word));
+  // "server2" is not "server1".
+  return words.some((word) => !known.some((was) => /\p{N}/u.test(word + was) ? word === was : sameWord(word, was)));
+}
+
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;
 // Korean puts the verb last, so the lookup has to end the order: "검색해서 나온 파일은 지워줘" deletes.
 const LOOKUP_KO = /(?:(?:검색|조사)(?:\s?좀)?\s?해|(?:찾아|알아)\s?(?:봐|보세요|볼래|줘|주세요|줄래))(?:\s?(?:봐|보세요|볼래|줘|주세요|줄래))*요?[\s.!?~]*$/;
@@ -111,11 +129,14 @@ export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
 }
 
-// The whole line is the command, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.
-const QUIET_EN = /(?:be quiet|keep quiet|stay quiet|quiet down|quiet|silence|stop talking|shut up|hush|shh+|zip it|(?:that'?s )?enough|no more (?:updates|talking))/.source;
-const QUIET_KO = /(?:조용(?:해|히(?:\s?좀)?(?:\s?(?:해|하세요|있어))?)?|(?:말\s?)?그만(?:\s?(?:해|하세요|말해(?:도\s?(?:돼|되))?))?|말하지\s?마|닥쳐|쉿|시끄러(?:워)?|입\s?다물어)\s?(?:요|줘|봐|라|세요|주세요|줄래)?/.source;
-const SOFT = /please|just|ok(?:ay)?|now|wait|hold on|hey|(?:can|could|would|will) you|좀|이제|그만|잠깐(?:만)?|헤이/.source;
-const FOR_A_BIT = /for (?:a|one) (?:second|sec|minute|min|moment|bit|while)/.source;
+// Every clause of the line asks for quiet or says he is talking to someone else, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.
+const QUIET_EN = /(?:(?:be|stay|keep|remain) (?:quiet|quite|silent)|quiet down|keep it down|quiet|silence|stop (?:talking|responding|answering|speaking)|(?:don'?t|do not) (?:say anything|talk|respond|answer|reply|speak)|mute yourself|shut up|hush|shh+|zip it|(?:that'?s )?enough|no more (?:updates|talking)|pause|just listen|give me (?:a|one) (?:second|sec|minute|min|moment|bit))/.source;
+const QUIET_KO = /(?:가만히\s?(?:좀\s?)?있어|아무\s?말도\s?하지\s?마|대답\s?하지\s?마|말하지\s?말고\s?(?:가만히\s?)?있어|조용(?:해|히(?:\s?좀)?(?:\s?(?:해|하세요|있어))?)?|(?:말\s?)?그만(?:\s?(?:해|하세요|말해(?:도\s?(?:돼|되))?))?|말하지\s?마|닥쳐|쉿|시끄러(?:워)?|입\s?다물어)\s?(?:요|줘|봐|라|세요|주세요|줄래)?/.source;
+const PEOPLE = /(?:someone|somebody|a friend|my [a-z]+|him|her|them)(?: else)?/.source;
+const AWAY_EN = `(?:(?:while|because|cause|since|as) )?(?:(?:i'?m|i am|we'?re|we are) (?:talking|speaking) (?:to|with) ${PEOPLE}|(?:i'?m |i am )?not (?:talking|speaking) to you|(?:i|we)(?:'ll| need to| have to| gotta| want to| wanna)? (?:talk|speak) (?:to|with) ${PEOPLE}|(?:i'?m|i am|we'?re|we are) on (?:the|a|another) (?:phone|call))`;
+const AWAY_KO = /(?:나\s?)?(?:지금\s?)?(?:[가-힣]+(?:랑|하고)\s?)?(?:얘기|이야기|대화|통화)\s?(?:좀\s?)?(?:중|하는\s?중|하고\s?있어|할게|해야\s?(?:돼|해))(?:이야)?(?:요)?/.source;
+const SOFT = /please|just|ok(?:ay)?|now|wait|hold on|hang on|hey|(?:can|could|would|will) you|좀|이제|그만|잠깐(?:만)?|기다려(?:\s?봐)?|헤이/.source;
+const FOR_A_BIT = /for (?:a|one|a few|a couple(?: of)?|two|three|five|ten|\d+) (?:more )?(?:seconds?|secs?|minutes?|mins?|moments?|bit|while)/.source;
 
 const escaped = (name: string) => name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // How speech-to-text spells a shown voice name. A whole word only: "Jenkins" and "에디터" are not names.
@@ -127,15 +148,19 @@ export function asksForQuiet(heard: string, name = "", aliases: readonly string[
   // The shown name may run on: "Jenn" is called "Jennifer" too.
   const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`), ...spelled(aliases)].filter(Boolean).join("|");
   const lead = `(?:(?:${SOFT}${own && `|(?:${own})(?:야|아)?`})[\\s,]*)*`;
-  const tail = `(?:[\\s,]+(?:please|now|for now|${FOR_A_BIT}${own && `|${own}`}))*`;
-  return new RegExp(`^${lead}(?:${QUIET_EN}${tail}|${QUIET_KO})[\\s~….,!?]*$`, "i").test(heard.trim());
+  const tail = `(?:[\\s,]+(?:please|now|for now|ok(?:ay)?|alright|${FOR_A_BIT}${own && `|${own}`}))*`;
+  const clause = `${lead}(?:${QUIET_EN}${tail}|${QUIET_KO}|${AWAY_EN}|${AWAY_KO})`;
+  return new RegExp(`^${clause}(?:[\\s,.;!?~…]+${clause})*[\\s~….,!?]*$`, "i").test(heard.trim());
 }
 
-/** Talking to the voice again: its name, the name the picker shows for its voice, or a "hey". */
+const HELLO = /hey|hi|hello|ok(?:ay)?|alright|so|yo|헤이|저기/.source;
+const BACK = /are you (?:still )?there|you (?:still )?there|can you hear me|you can (?:talk|speak|go on|go ahead|continue)(?: again| now)*|go ahead|i'?m back|i'?m done|we'?re (?:back|done)|come back|wake up|talk to me|들려|거기 있어|있어|(?:이제\s?)?말해(?:도\s?(?:돼|되))?|다시\s?말해|나\s?왔어|돌아와|일어나/.source;
+
+/** Talking to the voice again: the whole line is its name, or the name the picker shows for its voice, with at most a hello or a "you there?". A name inside other talk is talk. */
 export function callsVoice(heard: string, name: string, aliases: readonly string[] = []): boolean {
-  // Whole name only, though a Korean particle may follow it ("Nova야"); the shown name may run on ("Jennifer").
-  const own = [escaped(name) && `${escaped(name)}(?![a-z0-9])`, ...aliases.map((alias) => `${escaped(alias)}[a-z]*(?![0-9])`), ...spelled(aliases)].filter(Boolean).join("|");
-  return /\bhey\b|헤이/i.test(heard) || (own !== "" && new RegExp(`(?<![\\p{L}\\p{N}])(?:${own})`, "iu").test(heard));
+  // A Korean particle may follow the name ("Nova야"); the shown name may run on ("Jennifer").
+  const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`), ...aliases.flatMap((alias) => SPELLED[alias] ?? [])].filter(Boolean).join("|");
+  return own !== "" && new RegExp(`^(?:(?:${HELLO})[\\s,]*)*(?:(?:${BACK})[\\s,]+)?(?:${own})(?:야|아)?(?:[\\s,]+(?:${BACK}))?[\\s~….,!?]*$`, "i").test(heard.trim());
 }
 
 // Letters English and Korean never use, and the words a mis-hear lands on ("¿Qué?", "Hola, aquí estoy.").

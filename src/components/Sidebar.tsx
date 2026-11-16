@@ -114,6 +114,7 @@ import { DeviceSwitcher } from "./DeviceSwitcher";
 import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
 import { useJoinedRooms } from "@/lib/joined-rooms";
@@ -635,7 +636,9 @@ export function Sidebar({
   const toast = usePresence(teamFeedback);
   const [query, setQuery] = useState("");
   const [savedCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
-  const sidebarCollapsed = savedCollapsed || folded;
+  // the phone drawer has no unfold button, so a fold saved in landscape waits for the wide layout
+  const phone = useIsPhone();
+  const sidebarCollapsed = (savedCollapsed && (!phone || showPhoneDrawerCollapse())) || folded;
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
@@ -686,6 +689,20 @@ export function Sidebar({
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
   }, [backOverlay]);
+  useEffect(() => {
+    if (!state.revealed) return;
+    setDeleteTarget(null);
+    setSectionPicker(null);
+    setRoomSectionPicker(null);
+    setMenu(null);
+    setRoomMenu(null);
+    setWizard(false);
+    setArchivedBotsOpen(false);
+    setTrashOpen(false);
+    setTeamLibraryOpen(false);
+    setTeamInstallUrl(null);
+    setPlusOpen(false);
+  }, [state.revealed]);
   // Desktop never opens the drawer, so only a phone drawer closing reaches this.
   useEffect(() => {
     if (!open) setPlusOpen(false);

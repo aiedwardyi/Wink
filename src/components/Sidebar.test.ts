@@ -2181,7 +2181,7 @@ function SelectedProbe() {
 }
 
 function SwipeStage({ onSelect }: { onSelect: (id: string) => void }) {
-  const stage = usePhoneSwipe("a", true, onSelect);
+  const stage = usePhoneSwipe("a", true, onSelect, undefined, () => ["a", "b", "c"]);
   return createElement("div", { ref: stage }, createElement(Sidebar, { open: false, onClose: () => {} }));
 }
 

@@ -1147,6 +1147,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
+  const reaching = useRef(false);
+  const touchTop = useRef(0);
 
   const setBottomFollow = useCallback((next: boolean) => {
     followRef.current = next;
@@ -1232,7 +1235,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const modelSwitch = useNoReplySwitch(bot, lastUserMessage?.id, turnSignal !== undefined);
   const activityLabel = turnStageLabel(
     phase,
-    liveActivityLabel(lastMessage, showActivities),
+    liveActivityLabel(lastMessage, showActivities, bot.activity === "no-signal"),
     busyRetryLabel(lastMessage),
     noReply?.label,
   );
@@ -1704,19 +1707,27 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
         onWheel={(e) => followWheel(e.deltaY)}
-        onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
+        onTouchStart={(e) => {
+          touchY.current = e.touches[0]?.clientY ?? 0;
+          reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
+        }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) breakFollow();
+          if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
+        onTouchEnd={() => (reaching.current = false)}
+        onTouchCancel={() => (reaching.current = false)}
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,

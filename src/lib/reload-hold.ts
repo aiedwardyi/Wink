@@ -20,3 +20,10 @@ export function onHoldReleased(listener: () => void): () => void {
   releaseListeners.add(listener);
   return () => releaseListeners.delete(listener);
 }
+
+/** Holds the update reload until the returned release runs. */
+export function holdReloadOpen(): () => void {
+  let release!: () => void;
+  void holdReload(new Promise<void>((resolve) => (release = resolve)));
+  return release;
+}

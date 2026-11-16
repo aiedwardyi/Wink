@@ -55,7 +55,6 @@ const REQUEST_MS = 15_000;
 const REPLY_BYTES = 32 * 1024 * 1024;
 const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
-const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
 const MAX_VIEW_ENTRIES = 10_000;
 const UPLOAD_MS = 10 * 60_000;
@@ -145,8 +144,8 @@ export interface GuestClientDeps {
   onChange?(roomId: string): void;
   /** A line this PC sent, as the host stored it. */
   onSent?(roomId: string, entry: JoinedEntry): void;
-  /** A bot's line, stored here for the first time live or from this PC's own bot. */
-  onBotLine?(roomId: string, entry: JoinedEntry): void;
+  /** A line stored here for the first time live, or this PC's own bot's line. */
+  onLine?(roomId: string, entry: JoinedEntry): void;
   /** The host pressed the room's Stop. */
   onStop?(roomId: string): void;
   /** What this PC's bots in the room are doing now. */
@@ -373,7 +372,6 @@ export class GuestClient {
   /** One at a time per room. A caller retrying a failed send passes the same sendId back. */
   send(roomId: string, text: unknown, replyToId?: unknown, sendId?: unknown, fileIds?: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
     const waiting = this.pending.get(roomId) ?? 0;
-    if (waiting >= MAX_PENDING_SENDS) return Promise.resolve(failed(429, "too many messages waiting to send"));
     this.pending.set(roomId, waiting + 1);
     const next = (this.sending.get(roomId) ?? Promise.resolve()).then(() => this.sendNow(roomId, text, replyToId, sendId, fileIds));
     const tail = next.catch(() => {}).then(() => {
@@ -479,7 +477,7 @@ export class GuestClient {
     if (!entry.success) return unavailable();
     if (addJoinedEntries(roomId, [entry.data.entry])) {
       this.changed(roomId);
-      this.deps.onBotLine?.(roomId, entry.data.entry);
+      this.deps.onLine?.(roomId, entry.data.entry);
     }
     return { ok: true, value: entry.data.entry };
   }
@@ -786,7 +784,7 @@ export class GuestClient {
       if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) {
         this.changed(roomId);
         this.alertLine(roomId, parsed.entry);
-        if (parsed.entry.author.kind === "bot") this.deps.onBotLine?.(roomId, parsed.entry);
+        this.deps.onLine?.(roomId, parsed.entry);
       }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);

@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksForChange, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, reasks, repeatsAsk, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, ordersOther, reasks, repeatsAsk, restates } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -28,7 +28,7 @@ export type CallState = {
   caption?: { id: number; who: CallLine["who"]; text: string };
   /** The last order or ask that never reached the bot, or got no reply. */
   notice?: { kind: "notSent" | "noReply"; text: string; why?: string };
-  /** Told to be quiet: nothing plays until they call it by name, say hey or tap. */
+  /** Told to be quiet: nothing plays until they call it by name or tap. */
   hushed?: true;
   /** The mic has sent total silence since the call connected or its last sound. */
   micSilent?: true;
@@ -38,8 +38,6 @@ export type CallAudioPort = {
   capture(onFrame: (pcm: ArrayBuffer) => void): Promise<void>;
   /** Mic off with the audio kept, so capture can run again. */
   stopMic(): void;
-  /** The voice turned down while a barge-in shows whether it was him; flush() turns it back up. */
-  duck?(on: boolean): void;
   heal(): Promise<boolean>;
   play(pcm: Int16Array): void;
   flush(): void;
@@ -78,7 +76,8 @@ const TOOLS: Record<string, ToolRun> = {
 type Request = { text: string; accounted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>>; asked: string[]; misheard: boolean; overclaimed: boolean };
 /** A [Wink] line waiting for the voice to be quiet. */
 // `fix` corrects the voice's own last turn, so it skips the quiet gap.
-type Held = { text: string; valid?: () => boolean; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string };
+// `kept` is context it leaves behind when dropped as no longer valid.
+type Held = { text: string; valid?: () => boolean; kept?: string; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string };
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
@@ -114,8 +113,6 @@ const openerLine = (note: string, app: "en" | "ko") =>
   `[Wink] You are the caller: you rang them because you are stuck until they act: "${note}". In ${TONGUE[app]}, in first person, say what you need them to do in one or two short, plain sentences, like "I need you to sign in on Home so tonight's run can go." Then wait for their answer. Nothing else.`;
 const wrongTongue = (app: "en" | "ko") => `[Wink] Wrong language: speak only ${TONGUE[app]}. In ${TONGUE[app]}, ask them in a few words to say that again.`;
 const misheardMsg = (app: "en" | "ko") => `not sent: that line was in another language, so it is likely a mis-hear. In ${TONGUE[app]}, ask them in one short line to say that again`;
-// A barge-in with no words yet may be his voice or the speaker's echo: the voice turns down this long, then back up.
-const DUCK_MS = 1_500;
 // What the bot wrote after these answers them, not the person.
 const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
 // An order from a call this recent is still his when he calls back to hear how it went.
@@ -219,7 +216,8 @@ export class LiveCall {
   // The voice's last whole line while he has said nothing since; a turn he did not prompt is held in `echo` until its words differ.
   private lastLine = "";
   private echo?: Int16Array[];
-  private softCut = false;
+  // The voice was cut while it played: words until his line ends may be its echo.
+  private talkedOver = false;
   private settleTimer?: ReturnType<typeof setTimeout>;
   private lines = 0;
   private lineIds: Record<CallLine["who"], number> = { user: 0, voice: 0 };
@@ -302,7 +300,6 @@ export class LiveCall {
   private answer_ = "";
   private echoed = "";
   private checkAsk = false;
-  private duckTimer?: ReturnType<typeof setTimeout>;
   private closing = false;
   private closeTimer?: ReturnType<typeof setTimeout>;
 
@@ -464,22 +461,18 @@ export class LiveCall {
         this.stir();
         this.heardBuf += text;
         // The voice's own words back through a phone speaker are not his, however many chunks they come in.
-        const echo = this.deps.audio.playing || this.echoed ? echoOf(spokenText(this.echoed + this.heardBuf), `${this.lastSaid} ${this.saidBuf}`) : "no";
+        const echo = this.deps.audio.playing || this.echoed || this.talkedOver ? echoOf(spokenText(this.echoed + this.heardBuf), `${this.lastSaid} ${this.saidBuf}`) : "no";
         if (echo === "echo") {
           this.echoed += this.heardBuf;
           this.heardBuf = "";
-          this.unduck();
           return;
         }
         this.echoed = "";
         // His words can arrive after the voice starts answering them.
         if (spokenText(this.heardBuf)) this.unhold(true);
         this.caption("user", this.heardBuf);
-        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName, this.aliases)) this.wake(0);
         // Google only cuts a turn it is still sending, so audio it already sent stops here on his first words.
-        if (echo === "no" && this.deps.audio.playing && (this.softCut || !this.generating) && !backchannel(spokenText(this.heardBuf))) {
-          this.softCut = false;
-          this.unduck();
+        if (echo === "no" && this.deps.audio.playing && !this.generating && !backchannel(spokenText(this.heardBuf))) {
           this.cutPlaying();
           this.deps.audio.flush();
         }
@@ -507,7 +500,6 @@ export class LiveCall {
         if (!mine()) return;
         this.stir();
         this.generating = true;
-        this.softCut = false;
         this.flushHeard();
         this.dropping = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
@@ -528,6 +520,9 @@ export class LiveCall {
         this.dropping = this.offTongue = this.checkAsk = false;
         const said = spokenText(this.saidBuf);
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
+        // "I'm here. I'm here." is a repeat inside one turn.
+        const parts = said.split(/(?<=[.!?])\s+/).map(lineKey).filter(Boolean);
+        if (new Set(parts).size < parts.length && lineKey(said) !== this.lastLine) this.stats.repeats += 1;
         const spoke = this.turnHadAudio || Boolean(said);
         // His late words clear the last line, so they go first: this answer is the line a later turn must not repeat.
         this.flushHeard();
@@ -566,20 +561,8 @@ export class LiveCall {
         this.unhold(false);
         this.dropping = false;
         this.cutHold = "cut";
-        // Echo or noise can trip barge-in; with no speech heard the received reply plays out.
-        if (!spokenText(this.heardBuf)) {
-          this.softCut = this.deps.audio.playing;
-          if (this.softCut) this.duck();
-          this.flushSaid(1);
-          this.ackOut();
-          this.turnHadAudio = false;
-          this.generating = false;
-          this.guarded = false;
-          this.doneTold = false;
-          // A held line whose turn never finished was not heard in full.
-          if (!this.playing?.ended) this.cutPlaying();
-          return;
-        }
+        this.talkedOver ||= this.deps.audio.playing;
+        // Google threw the rest of the turn away; what it already sent would play over him.
         const share = this.deps.audio.heardShare();
         this.deps.audio.flush();
         this.flushSaid(share);
@@ -588,7 +571,8 @@ export class LiveCall {
         this.generating = false;
         this.guarded = false;
         this.doneTold = false;
-        this.cutPlaying();
+        // A held line whose turn never finished was not heard in full.
+        if (!this.playing?.ended) this.cutPlaying();
       },
       toolCall: (calls) => {
         if (!mine()) return;
@@ -652,7 +636,7 @@ export class LiveCall {
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
-  private toolResult(ids: string[], name: string, subject: string, result: string, note?: string) {
+  private toolResult(ids: string[], name: string, subject: string, result: string, note?: string, said?: number) {
     // An ask redirected to propose_work shows until its offer replaces it.
     if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
     const engine = this.engine;
@@ -664,7 +648,10 @@ export class LiveCall {
     this.missed = false;
       return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     }
-    this.held.push({ text: `[Wink] ${told(heard, subject)}` });
+    const line = `[Wink] ${told(heard, subject)}`;
+    // Its call is gone: once the voice has spoken since his answer, a line of its own would be a second ack.
+    const answered = note === HEARD && said !== undefined;
+    this.held.push(answered ? { text: line, valid: () => this.stats.voiceLines === said, kept: `[Wink] Already answered aloud. Context only, do not read it out.\n${told(heard, subject)}` } : { text: line });
     this.release();
   }
 
@@ -737,8 +724,9 @@ export class LiveCall {
     clearTimeout(this.settleTimer);
     this.settleTimer = setTimeout(() => {
       if (this.ended) return;
-      const quiet = !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName, this.aliases);
-      if (quiet || (this.pending && consentOf(spokenText(this.heardBuf)))) this.flushHeard();
+      const line = spokenText(this.heardBuf.slice(this.wokeAt));
+      const flips = this.snapshot.hushed ? callsVoice(line, this.deps.botName, this.aliases) : asksForQuiet(line, this.deps.botName, this.aliases);
+      if (flips || (this.pending && consentOf(spokenText(this.heardBuf)))) this.flushHeard();
     }, LIVE_VAD.silenceDurationMs);
   }
 
@@ -748,22 +736,23 @@ export class LiveCall {
     this.set({ pending: undefined });
   }
 
-  private answerTool(result: string, note?: string) {
+  private answerTool(result: string, note?: string, said?: number) {
     const pending = this.pending;
     if (!pending) return;
     this.clearPending();
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note, said);
   }
 
   /** Yes or No on the pending order, tapped or spoken. A spoken one gets the voice's own turn, so its result must not make another. */
   async answer(yes: boolean, spoken = false) {
     const pending = this.pending;
     if (!pending) return;
+    const said = this.stats.voiceLines;
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
       this.open.settle(this.stats.userLines);
-      return this.answerTool("declined", spoken ? HEARD : undefined);
+      return this.answerTool("declined", spoken ? HEARD : undefined, said);
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
@@ -772,7 +761,6 @@ export class LiveCall {
     const req = this.req;
     // A tapped yes keeps the request, so "restarting it now" is backed by the order as well as its asks.
     req.asked.push(pending.order);
-    const said = this.stats.voiceLines;
     const result = await this.send(pending.order, { order: true });
     if (!reached(result)) {
       this.sent.delete(key);
@@ -781,7 +769,7 @@ export class LiveCall {
       req.asked = req.asked.filter((asked) => asked !== pending.order);
       this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
     }
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined, said);
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
@@ -789,7 +777,7 @@ export class LiveCall {
     if (!question) return this.toolResult(ids, tool, question, "not sent: no question");
     if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.app));
     if (this.cardTakes) return this.toolResult(ids, tool, question, this.notNeeded);
-    if (asksForChange(question)) return this.toolResult(ids, tool, question, CHANGE_ASK);
+    if (ordersChange(question, [this.deps.botName, ...this.aliases])) return this.toolResult(ids, tool, question, CHANGE_ASK);
     const req = this.req;
     req.accounted = true;
     req.asked.push(question);
@@ -908,13 +896,17 @@ export class LiveCall {
   // Speech cut off mid-line (a reconnect) is kept as a line but never answers a card or an offer.
   private flushHeard(ended = true) {
     const text = spokenText(this.heardBuf);
-    // Only a whole line said since the last wake hushes, so a fragment that passes through "...말하지 마" never does.
-    const quiet = ended && !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName, this.aliases);
+    // Only a whole line said since the last wake hushes or wakes, so a fragment that passes through "...말하지 마" or "에디야" never does.
+    const line = spokenText(this.heardBuf.slice(this.wokeAt));
+    const quiet = ended && !this.snapshot.hushed && asksForQuiet(line, this.deps.botName, this.aliases);
+    const woke = ended && this.snapshot.hushed && callsVoice(line, this.deps.botName, this.aliases);
     this.heardBuf = "";
     this.echoed = "";
+    this.talkedOver = false;
     this.wokeAt = 0;
     this.lineIds.user = 0;
     if (quiet) this.hush();
+    if (woke) this.wake(0);
     if (!text) return;
     this.lastLine = "";
     if (this.cutHold) this.cutHold = "heard";
@@ -972,7 +964,8 @@ export class LiveCall {
       else clearTimeout(this.closeTimer);
     }
     if (!this.pending || !ended || this.snapshot.hushed || offTongue) return;
-    const consent = consentOf(text);
+    const reply = consentOf(text);
+    const consent = reply === "yes" && ordersOther(text, this.pending.order) ? null : reply;
     if (consent === "yes") req.accounted = true;
     if (consent) void this.answer(consent === "yes", true);
   }
@@ -1205,7 +1198,10 @@ export class LiveCall {
     if (!this.connected || this.stalled || this.snapshot.hushed || this.playing || (this.gap && !this.held[0]?.fix) || this.cutHold || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
     this.carry();
     let item = this.held.shift();
-    while (item?.valid && !item.valid()) item = this.held.shift();
+    while (item?.valid && !item.valid()) {
+      if (item.kept) this.context.push(item.kept);
+      item = this.held.shift();
+    }
     if (!item) return;
     // The next turn relays a real result, so the guards sit it out.
     this.guarded = !item.nudge;
@@ -1236,6 +1232,8 @@ export class LiveCall {
   wake(from = this.heardBuf.length) {
     if (!this.snapshot.hushed) return;
     this.wokeAt = from;
+    // The turn in flight answers talk nearby; only the next one is for him.
+    if (this.generating) this.dropping = true;
     this.set({ hushed: undefined });
     const updates = this.held.filter((item) => item.update !== undefined);
     if (updates.length > 1) {
@@ -1292,18 +1290,6 @@ export class LiveCall {
 
   private askedLine() {
     return `[Wink] You already asked that, and they answered "${clip(this.answer_.split(/(?<=[.!?])\s+/)[0] ?? "", 80)}". Don't ask it again: reply to their answer in one short line.`;
-  }
-
-  private duck() {
-    this.deps.audio.duck?.(true);
-    clearTimeout(this.duckTimer);
-    this.duckTimer = setTimeout(() => this.unduck(), DUCK_MS);
-  }
-
-  private unduck() {
-    clearTimeout(this.duckTimer);
-    this.duckTimer = undefined;
-    this.deps.audio.duck?.(false);
   }
 
   /** Ends the hold on a turn he did not prompt: played late when it says something new, dropped unheard when it does not. */
@@ -1409,7 +1395,6 @@ export class LiveCall {
     clearTimeout(this.gap);
     clearInterval(this.micTimer);
     clearTimeout(this.readyTimer);
-    clearTimeout(this.duckTimer);
     clearTimeout(this.closeTimer);
     this.deps.audio.close();
     const finish = (heard: LiveEngine | null) => {

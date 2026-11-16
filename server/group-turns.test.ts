@@ -69,7 +69,7 @@ describe("a tapped question card in a group", () => {
     await routes.postMessage(Readable.from([JSON.stringify({ text: "Yes", cardId: card.id })]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
     expect(steer).not.toHaveBeenCalled();
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, card.id);
   });
 
   it("runs the asking bot under a lead rule", async () => {

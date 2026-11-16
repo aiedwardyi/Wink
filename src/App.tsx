@@ -50,6 +50,7 @@ import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-compose
 import { answerOnThread } from "@/lib/live-call/active";
 import { webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
+import { isPhone, swipeBotIds } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -123,11 +124,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // cancelling them with md:, which would still emit a translate value and
   // turn the aside into a containing block for its fixed descendants (see
   // Sidebar.tsx's className comment).
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerWanted, setDrawerOpen] = useState(false);
   // The button is md:hidden: at desktop width its animation never runs, so an
   // ungated glow would sit flagged until a later resize replays it. Gating on
   // visibility consumes the arrival instead.
   const phoneMenuVisible = useIsPhone();
+  // rotating to the wide layout hides the drawer, so it must not keep a Back entry or a scrim there
+  const drawerOpen = phoneMenuVisible && drawerWanted;
   const menuArrival = useArrivalGlow(
     [...state.bots.filter((bot) => !bot.hidden), ...listedGroups(state.groups)]
       .filter((chat) => chat.id !== state.selectedId)
@@ -549,7 +552,18 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // asked for, and leaving the list up would hide it.
   useEffect(() => {
     setDrawerOpen(false);
-  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
+  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen, state.revealed]);
+
+  // A tapped notification shows its chat: the palette, model picker and message menu cover it everywhere,
+  // and on a phone the pane and Bot Details are sheets over it too.
+  useEffect(() => {
+    if (!state.revealed) return;
+    for (const cover of ["orbit:close-palette", "orbit:close-model-picker", "orbit:close-message-menu"]) window.dispatchEvent(new Event(cover));
+    if (!isPhone()) return;
+    closePane();
+    dispatch({ type: "toggleSettings", open: false });
+    dispatch({ type: "toggleInspector", open: false });
+  }, [state.revealed, dispatch]);
 
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
@@ -572,7 +586,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     Boolean(bot && state.inspectorOpen);
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
-  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
+  const swipeOrder = () => swipeBotIds(state.bots, state.groups, loadSidebarOrder(), bot?.id);
+  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef, swipeOrder);
   const closeDrawer = () => {
     setDrawerOpen(false);
     menuButtonRef.current?.focus();
@@ -661,6 +676,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
     add(Boolean(sidebarOverlay), `sidebar:${sidebarOverlay}`, () => window.dispatchEvent(new Event("orbit:close-sidebar-overlay")));
     add(state.settingsOpen, "settings", () => dispatch({ type: "toggleSettings", open: false }));
+    add(slotPanels.includes("show"), "pane", closePane);
     add(state.inspectorOpen, "inspector", () => dispatch({ type: "toggleInspector", open: false }));
     add(state.appSettingsOpen, "app-settings", () => dispatch({ type: "toggleAppSettings", open: false }));
     add(state.pluginsOpen, "plugins", () => dispatch({ type: "togglePlugins", open: false }));
@@ -765,20 +781,20 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
       ) : joinedId ? (
-        <JoinedRoomView key={joinedId} roomId={joinedId} />
+        <JoinedRoomView key={joinedId} roomId={joinedId} hidden={nativeViewOverlayOpen} />
       ) : group && isTeamRoom(group) ? (
         <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-          <TeamRoomView key={group.id} group={group} />
+          <TeamRoomView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
           {watchPanel(nativeViewOverlayOpen)}
         </div>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-            <GroupView key={group.id} group={group} />
+            <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
             {watchPanel(nativeViewOverlayOpen)}
           </div>
         ) : (
-          <GroupView key={group.id} group={group} />
+          <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
         )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">

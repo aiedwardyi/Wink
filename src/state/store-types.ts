@@ -141,6 +141,8 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
+  answersCard?: string;
 }
 
 export type GroupDefaultResponder =
@@ -504,6 +506,8 @@ export interface AppState {
   routines: Routine[];
   routineRuns: RoutineRun[];
   createBotOpen: boolean;
+  /** Bumps when a tapped notification asks for its chat, so whatever is open over the chat closes. */
+  revealed: number;
   composerFocusBotId: string | null;
   settingsOpen: boolean;
   /** Bumps when the chat avatar asks bot details to open the avatar picker. */
@@ -583,6 +587,7 @@ export type Action =
       groups: Group[];
       botsUnreadable?: boolean;
       computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
+      queued?: AppState["pendingQueued"];
       sidebarOrder: SidebarOrder;
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
@@ -626,7 +631,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string }
+  | { type: "select"; id: string; reveal?: boolean }
   | {
       type: "send";
       botId: string;
@@ -644,7 +649,7 @@ export type Action =
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }
   | { type: "sendSettled"; threadId: string; sendId: string; queued?: boolean }
-  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string }
+  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string; held?: true }
   | { type: "editMessage"; botId: string; messageId: string; text: string; expectedSelection?: ModelSelection; onSettled?: (error?: unknown) => void }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
