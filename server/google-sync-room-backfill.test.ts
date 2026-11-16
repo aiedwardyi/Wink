@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { gunzipSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDriveClient } from "./drive-client.ts";
 import { readDriveOwnIds } from "./drive-own-ids.ts";
@@ -244,7 +244,9 @@ describe("Room backfill between Google PCs", { timeout: 300_000 }, () => {
     await start(b);
     await rounds(3);
     await a.call("room", { room: "On A", members: ["Atlas", "Nova"], dm: true });
-    await new Promise((done) => setTimeout(done, 20));
+    // the pair's oldest channel wins, so B's must be stamped after A's
+    const made = Date.now();
+    await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(made));
     await b.call("room", { room: "On B", members: ["Atlas", "Nova"], dm: true });
     await rounds(3);
     for (const pc of [a, b]) expect(names(await pc.rooms())).toEqual(["On A", "On B"]);
