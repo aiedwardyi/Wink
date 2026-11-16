@@ -140,6 +140,12 @@ export class PhoneDevices {
     return this.phones.map(publicPhone);
   }
 
+  /** Still signed in: not revoked (even if that write failed) and not idle past the cutoff. */
+  paired(id: string): boolean {
+    const record = this.phones.find((phone) => phone.id === id);
+    return !!record && !record.revoked && this.clock.now() - record.lastSeenAt < PHONE_IDLE_MS;
+  }
+
   /** Opens a fresh window, replacing any open one. */
   openPairing(): PairingWindow {
     this.clearReplay();

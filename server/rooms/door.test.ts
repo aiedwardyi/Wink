@@ -30,6 +30,7 @@ import { hostedSend } from "./send.ts";
 const HOST = "abcdefghijklmnop.wink.test";
 const ORIGIN = `https://${HOST}`;
 const PEER = "203.0.113.7";
+let peer = PEER;
 const COMMS = "c".repeat(48);
 const REMOTE_KEY = "a".repeat(64);
 const MINUTE = 60_000;
@@ -212,7 +213,7 @@ beforeAll(async () => {
     config: () => ({ base: "wink.test", enabled: true }),
     saveEnabled: () => {},
     start: () => relay,
-    loadClient: async () => ({ start: () => relay, enroll: async () => {}, peer: () => PEER }),
+    loadClient: async () => ({ start: () => relay, enroll: async () => {}, peer: () => peer }),
     room: handleRoomDoor,
   });
   await access.start(app);
@@ -234,6 +235,7 @@ beforeEach(() => {
   vi.setSystemTime(clock);
   rmSync(DATA_DIR, { recursive: true, force: true });
   reached.length = 0;
+  peer = PEER;
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   deps = {
@@ -535,6 +537,9 @@ describe("the guest key", () => {
     for (let i = 0; i < 120; i += 1) expect((await call(path)).status).toBe(401);
     expect((await call(path)).status).toBe(429);
     expect((await post("/room/v1/join", { code: code(group, "Mina").code })).status).toBe(429);
+    peer = "198.51.100.9";
+    expect((await post("/room/v1/join", { code: code(group, "Jun").code })).status).toBe(200);
+    peer = PEER;
     vi.setSystemTime(Date.now() + MINUTE);
     expect((await call(path)).status).toBe(401);
   });
@@ -606,6 +611,9 @@ describe("join", () => {
     for (let i = 0; i < 20; i += 1) expect((await post("/room/v1/join", { code: `wkr1:${HOST}:nope${i}.wki_${"A".repeat(43)}` })).status).toBe(404);
     const invite = code(group, "Mina");
     expect(await post("/room/v1/join", { code: invite.code })).toMatchObject({ status: 429, body: { error: "busy" } });
+    peer = "2001:db8:1:2::9";
+    expect((await post("/room/v1/join", { code: code(group, "Jun").code })).status).toBe(200);
+    peer = PEER;
     vi.setSystemTime(Date.now() + MINUTE);
     expect((await post("/room/v1/join", { code: invite.code })).status).toBe(200);
   });

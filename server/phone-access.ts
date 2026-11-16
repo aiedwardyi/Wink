@@ -32,6 +32,7 @@ import type { PhoneRelay, PhoneRelayConfig, PhoneRelayEnrollOptions, PhoneRelayO
 import { relayMode } from "./phone-relay/mode.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
+import { removePhonePushSubscriptions } from "./web-push.ts";
 
 const MINUTE_MS = 60_000;
 const MAX_BODY_BYTES = 4096;
@@ -330,6 +331,11 @@ export class PhoneAccess {
     return this.handler !== null && relayMode(this.options.config() ?? {}, this.options.env).kind === "on" && this.presenceHost() !== null;
   }
 
+  /** A relay phone still signed in. */
+  paired(id: string): boolean {
+    return this.phones.paired(id);
+  }
+
   /** The base a relay phone's device picker is limited to. */
   base(): string | null {
     const mode = relayMode(this.options.config() ?? {}, this.options.env);
@@ -393,7 +399,7 @@ export class PhoneAccess {
     const phone = this.session(req, res);
     if (phone) return { handled: false, phone };
     const path = new URL(req.url ?? "/", "https://relay.invalid").pathname;
-    if (linkedFileGrant(req.method, path)) return { handled: false, phone: null };
+    if (linkedFileGrant(req.method, path, (holder) => this.phones.paired(holder))) return { handled: false, phone: null };
     if (path.startsWith("/api/")) {
       send(res, 401, { error: "unauthorized" });
       return HANDLED;
@@ -601,6 +607,7 @@ export class PhoneAccess {
         this.google?.dropPhone(id);
         for (const socket of this.sockets.get(id) ?? []) socket.destroy();
         this.sockets.delete(id);
+        removePhonePushSubscriptions(this.options.dataDir, id);
       }
       return reply(200, { ok: true });
     }

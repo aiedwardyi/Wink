@@ -42,7 +42,7 @@ never sees the setup code, only the invite inside it.
 A `test <label> <ms>` line appended to `<dataDir>/team-sessions` marks a PC by hand.
 Only PCs enrolled with a setup code are offered `active` and have their PC and Wink names kept for the team page; a PC enrolled through `/v1/enroll/google` (listed in `<dataDir>/google-enrolls`) gets neither.
 
-A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines, note times and the stuck pane's last 30 lines, scrubbed; never chats or attached files), and they follow each PC's error-report setting. They sit in `<dataDir>/team-snags` for at most 14 days.
+A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines and note times, scrubbed; never chats, files or terminal text), and they follow each PC's error-report setting. They sit in `<dataDir>/team-snags` for at most 14 days.
 
 With `stats` in config, the relay also takes anonymous usage stats at `POST /v1/stats`: no account, nothing logged per request, no IP or label stored. Batches land in `<dataDir>/stats/YYYY-MM-DD.ndjson` (gzipped after the day, deleted after `keepDays`, default 90). `GET /v1/stats/day/<date>` serves a day to the stats read key.
 

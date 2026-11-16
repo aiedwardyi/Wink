@@ -99,7 +99,7 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   snagsPerLabelPerDay: 20,
   roomCodeLookupsPerIpPerMin: 10,
   roomCodeLookupsPerIpPerHour: 30,
-  roomCodeLookupsPerHour: 1_000,
+  roomCodeLookupsPerHour: 20_000,
   statsPerIpPerHour: 120,
   statsReadsPerIpPerMin: 30,
 });
