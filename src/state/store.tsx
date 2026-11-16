@@ -38,7 +38,7 @@ import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstC
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
-import { joinedRoomIdOf } from "@/lib/team-rooms";
+import { joinedRoomIdOf, roomFileRefusal } from "@/lib/team-rooms";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
@@ -1859,7 +1859,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", threadId, sendId });
               }
-              showError(error);
+              showError(roomFileRefusal(error) ?? error);
               action.onError?.();
             });
           void holdReload(sending);

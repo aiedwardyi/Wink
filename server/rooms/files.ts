@@ -2,11 +2,11 @@
 // stream to disk, are fsynced, and only then get a row; a room reaches a blob
 // only through its row, so a crash leaves nothing the room can open.
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readdirSync, rmSync } from "node:fs";
-import { mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
+import { createReadStream, existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdir, open, rename, rm, stat, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { pipeline } from "node:stream";
+import { pipeline, type Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
 import { sniffImageMime } from "../attachments.ts";
@@ -210,7 +210,7 @@ export interface Upload {
 type Received = { ok: true; bytes: number; sha256: string; type: string } | { ok: false; status: number; error: string };
 
 /** Streams the body into `file`, cut at the first byte past a limit. Never buffered whole. */
-function receive(req: IncomingMessage, file: string, roomId: string, base: number, counted: { bytes: number }, media: boolean): Promise<Received> {
+function receive(req: Readable, file: string, roomId: string, base: number, counted: { bytes: number }, media: boolean): Promise<Received> {
   return new Promise((resolve) => {
     const hash = createHash("sha256");
     const text = new TextDecoder("utf-8", { fatal: true });
@@ -302,16 +302,29 @@ const tooLarge = (max: number) => (max === IMAGE_MAX_BYTES ? "pictures can be up
 export async function saveRoomFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
   const release = holdRoomFiles();
   try {
-    return await saveFile(req, roomId, upload);
+    return await saveFile(req, Number(req.headers["content-length"] ?? 0), roomId, upload);
   } finally {
     release();
   }
 }
 
-async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
+/** A file on this PC, taken in under the same checks and limits as an upload. */
+export async function copyRoomFile(path: string, roomId: string, upload: Upload): Promise<RoomFile> {
+  const size = await stat(path).then((info) => (info.isFile() ? info.size : null), () => null);
+  if (size === null) throw statusError(404, "file not found");
+  const release = holdRoomFiles();
+  const body = createReadStream(path);
+  try {
+    return await saveFile(body, size, roomId, upload);
+  } finally {
+    body.destroy();
+    release();
+  }
+}
+
+async function saveFile(req: Readable, length: number, roomId: string, upload: Upload): Promise<RoomFile> {
   if (upload.uploadId === null || !UPLOAD_ID.test(upload.uploadId)) throw statusError(400, "bad uploadId");
   if (!uploads.take(`${roomId}\n${upload.owner}`)) throw statusError(429, "too many files at once, try again in a few minutes");
-  const length = Number(req.headers["content-length"] ?? 0);
   if (length > DOCUMENT_MAX_BYTES) throw statusError(413, tooLarge(DOCUMENT_MAX_BYTES));
   const base = used(roomId);
   const free = ROOM_DISK_BYTES - base - (inflight.get(roomId) ?? 0);
