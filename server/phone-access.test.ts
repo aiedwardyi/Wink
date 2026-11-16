@@ -1049,6 +1049,21 @@ describe("phone removal that fails to save", () => {
     expect(retry.res.statusCode).toBe(200);
     expect(new PhoneDevices(dir, clock).authenticate(paired.token)).toBeNull();
   });
+
+  it("ends a linked page's grant even when the sign-out write fails", async () => {
+    const w = await world();
+    const session = await pairPhone(w);
+    const opened = await viaRelay(w.r, `/api/threads/t1/linked-file?path=${encodeURIComponent(join(w.linkedRoot, "page.html"))}`, { headers: { cookie: session } });
+    const scope = String(opened.headers.location);
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementationOnce(() => {
+      throw Object.assign(new Error("phone registry is busy"), { code: "EBUSY" });
+    });
+    const path = `/api/phone/devices/${phones[0]!.id}`;
+    const revoke = exchange(path, "DELETE");
+    await expect(w.access.handle(revoke.req, revoke.res, path, "DELETE", true)).rejects.toThrow("phone registry is busy");
+    expect((await viaRelay(w.r, `${scope}body.woff2`)).status).toBe(401);
+  });
 });
 
 describe("dev boot", () => {
