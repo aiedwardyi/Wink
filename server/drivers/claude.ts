@@ -1045,7 +1045,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         args.push("--settings", AUTO_SETTINGS);
       }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
-      const disallowed = [...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
+      // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
+      const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
@@ -1063,7 +1064,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
       // Orbit's own servers skip ToolSearch deferral; a fresh CLI session
-      // would otherwise re-fetch their schemas every time.
+      // would otherwise re-fetch their schemas every time. A tool can still
+      // opt out with _meta "anthropic/alwaysLoad": false (deferOptional).
       const orbitOwned = { alwaysLoad: true, timeout: 1_800_000 };
       if (turn.integrations?.composio) {
         mcpServers.composio = { ...turn.integrations.composio };
@@ -1094,7 +1096,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // agentsIntegration(); pre-allowing matters doubly here, or the CLI's
       // own ListAgents look-alike shadows it and "@Bot" asks go nowhere
       if (turn.integrations?.agents) {
-        mcpServers.agents = { ...experimentalAgents(turn.integrations.agents), ...orbitOwned };
+        const agents = experimentalAgents(turn.integrations.agents);
+        mcpServers.agents = { ...agents, env: { ...agents.env, OMB_WINK_TOOL_DEFER: "1" }, ...orbitOwned };
         allowed.push("mcp__agents");
       }
       if (turn.integrations?.phone) {

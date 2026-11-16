@@ -43,7 +43,7 @@ import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCusto
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
-import { createToolCatalog } from "./tool-catalog.ts";
+import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -1094,6 +1094,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
 
 const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
+const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
 export async function handle(msg: Json) {
   const id = msg.id;
@@ -1117,8 +1118,8 @@ export async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      recordToolSchemas(() => catalog?.tools ?? eligibleTools);
-      ok(id, { tools: catalog?.tools ?? eligibleTools });
+      recordToolSchemas(() => listedTools);
+      ok(id, { tools: listedTools });
       return;
     case "tools/call": {
       if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);
