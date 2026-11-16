@@ -40,6 +40,7 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 export const PANE_TAB_KEY = "omb-pane-tab";
 const paneTab = z.union([z.enum(["media", "map"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text"]), src: z.string().optional() })]);
 type PaneTab = z.infer<typeof paneTab>;
+const picked = new Map<string, PaneTab>();
 
 function picks(): Record<string, PaneTab> {
   try {
@@ -50,6 +51,7 @@ function picks(): Record<string, PaneTab> {
 }
 
 function pick(threadId: string, tab: PaneTab) {
+  picked.set(threadId, tab);
   try {
     globalThis.localStorage?.setItem(PANE_TAB_KEY, JSON.stringify({ ...picks(), [threadId]: tab }));
   } catch {
@@ -110,7 +112,7 @@ export const lastShown = (threadId: string) => last.get(threadId);
 /** The header button: shuts this chat's pane, or opens the tab last picked in it, else Map while a worker is live, else Media. */
 export function togglePane(threadId: string, live = false) {
   if (showing?.threadId === threadId || media === threadId || mapping === threadId) return closeShow();
-  const tab = picks()[threadId] ?? (live ? "map" : "media");
+  const tab = picked.get(threadId) ?? picks()[threadId] ?? (live ? "map" : "media");
   if (tab === "map") openMap(threadId);
   else if (tab === "media") openMedia(threadId);
   else openItem(last.get(threadId) ?? tab);

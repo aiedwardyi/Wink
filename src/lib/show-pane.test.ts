@@ -105,6 +105,7 @@ beforeEach(() => {
   root = createRoot(host);
   shown = null;
   media = null;
+  map = null;
 });
 afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); });
 
@@ -181,14 +182,14 @@ it("the header button opens the tab last picked in each chat", async () => {
 
 it("with no pick the header button opens Map while a worker is live, else Media, and neither counts as a pick", async () => {
   await render("t1", []);
-  await act(async () => togglePane("t7", true));
-  expect([media, map]).toEqual([null, "t7"]);
-  await act(async () => togglePane("t7", true));
-  await act(async () => togglePane("t7"));
-  expect([media, map]).toEqual(["t7", null]);
-  await act(async () => togglePane("t7"));
-  await act(async () => togglePane("t7", true));
-  expect([media, map]).toEqual([null, "t7"]);
+  await act(async () => togglePane("t10", true));
+  expect([media, map]).toEqual([null, "t10"]);
+  await act(async () => togglePane("t10", true));
+  await act(async () => togglePane("t10"));
+  expect([media, map]).toEqual(["t10", null]);
+  await act(async () => togglePane("t10"));
+  await act(async () => togglePane("t10", true));
+  expect([media, map]).toEqual([null, "t10"]);
 });
 
 it("a file that opens on its own is not a pick", async () => {
@@ -202,16 +203,26 @@ it("a file that opens on its own is not a pick", async () => {
 
 it("keeps each chat's pick across a restart", async () => {
   await render("t1", []);
-  await act(async () => showMap("t7"));
-  await act(async () => showItem({ ...pdf, threadId: "t8" }));
+  await act(async () => showMap("t11"));
+  await act(async () => showItem({ ...pdf, threadId: "t12" }));
   await act(async () => closeShow());
   vi.resetModules();
   const restarted = await import("./show-pane");
   let seen: unknown[] = [];
   const After = () => { seen = [restarted.useShowItem(), restarted.useMapThread()]; return null; };
   await act(async () => root.render(createElement(After)));
-  await act(async () => restarted.togglePane("t7"));
-  expect(seen).toEqual([null, "t7"]);
-  await act(async () => restarted.togglePane("t8", true));
-  expect(seen).toEqual([{ ...pdf, threadId: "t8" }, null]);
+  await act(async () => restarted.togglePane("t11"));
+  expect(seen).toEqual([null, "t11"]);
+  await act(async () => restarted.togglePane("t12", true));
+  expect(seen).toEqual([{ ...pdf, threadId: "t12" }, null]);
+});
+
+it("keeps the pick for the session when storage refuses it", async () => {
+  const refuse = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+  await render("t1", []);
+  await act(async () => showMap("t13"));
+  await act(async () => closeShow());
+  await act(async () => togglePane("t13"));
+  expect(map).toBe("t13");
+  refuse.mockRestore();
 });

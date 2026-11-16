@@ -122,7 +122,7 @@ import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
-import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
+import { listedRuns, shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
@@ -1596,7 +1596,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} live={workers.some((shown) => shown.state === "working" || shown.state === "waiting")} />
+          <ShowPaneButton threadId={bot.threadId} live={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting")} />
 
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
         </div>
