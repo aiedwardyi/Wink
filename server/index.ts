@@ -180,6 +180,7 @@ import {
   isEffortLevel,
   newId,
   type ModelSelection,
+  type PrepareFocus,
   type ProviderInstance,
   type RequestOutcome,
   type RuntimeEvent,
