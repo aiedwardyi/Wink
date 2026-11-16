@@ -55,4 +55,9 @@ describe("timingsFromReports", () => {
     };
     expect(timingsFromReports([report])).toEqual({ "server/a.test.ts": 3, "src/b.test.ts": 2 });
   });
+
+  it("takes a file's median over the runs it is given", () => {
+    const run = (ms) => ({ startTime: 0, testResults: [{ name: "D:\\a\\Wink\\Wink\\server\\a.test.ts", startTime: 0, endTime: ms }, { name: "D:\\a\\Wink\\Wink\\src\\b.test.ts", startTime: ms, endTime: ms + 1000 }] });
+    expect(timingsFromReports([run(2000), run(3000), run(9000)])).toEqual({ "server/a.test.ts": 3, "src/b.test.ts": 1 });
+  });
 });

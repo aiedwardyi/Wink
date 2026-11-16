@@ -210,6 +210,8 @@ it("includes waiting inside the tool deadline", async () => {
   const aborter = new AbortController(), first = tool({ entry: "site" }, { signal: aborter.signal }).catch(() => null);
   await until(() => bridge!.starts.length === 1);
   flags.limits.runMs = 100;
+  const now = Date.now, skew = now();
+  vi.spyOn(Date, "now").mockImplementation(() => skew + (now() - skew) / 2);
   const started = Date.now(), second = await tool({ entry: "site" });
   expect(second.body.errorCode).toBe("timeout");
   expect(Date.now() - started).toBeLessThan(1000);

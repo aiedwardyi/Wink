@@ -37,6 +37,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           },
         ],
         bots: [],
+        routines: [],
         config: {},
         mascotMotion: null,
         settingsAvatarRequest: avatarRequest,

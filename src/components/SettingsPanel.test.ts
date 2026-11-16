@@ -52,6 +52,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           },
         ],
         bots: [],
+        routines: [],
         config: { features: { terminalHost: configMock.terminalHost } },
         mascotMotion: null,
       },
