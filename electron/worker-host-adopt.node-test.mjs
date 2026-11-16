@@ -98,7 +98,7 @@ async function left(t, { count = 1, end = "quit", command = LOOP, typed = "one",
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-adopt-"));
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  const child = fork(fileURLToPath(import.meta.url), ["app", JSON.stringify({ root, runtimeRoot, count, command, typed, reported })], { env, execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const child = fork(fileURLToPath(import.meta.url), ["app", JSON.stringify({ root, runtimeRoot, count, command, typed, reported })], { env, execArgv: [], windowsHide: true, stdio: ["ignore", "ignore", "inherit", "ipc"] });
   const gone = new Promise((resolve) => child.once("exit", resolve));
   const first = {};
   const told = new Promise((resolve) => child.on("message", (message) => {
