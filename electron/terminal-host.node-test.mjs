@@ -1016,18 +1016,36 @@ test("only bot-spawned panes turn off Claude prompt suggestions", async () => {
   assert.equal(f.children[1].options.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, "false");
 });
 
-test("bot-spawned panes start Claude with Code Mode on unless the pane env sets it", async (t) => {
+test("bot-spawned panes turn Code Mode on only with its caveats saved in the pane's Claude config", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-code-mode-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = (name, text) => {
+    fs.mkdirSync(path.join(root, name));
+    if (text !== undefined) fs.writeFileSync(path.join(root, name, ".claude.json"), text);
+    return path.join(root, name, ".claude.json");
+  };
+  const asked = config("asked", JSON.stringify({ numStartups: 3, codeModeCaveatsAcceptedV1: false }));
+  const saved = config("saved", JSON.stringify({ codeModeCaveatsAcceptedV1: true, codeModeAutoModeCaveatAcceptedV1: true }));
+  const broken = config("broken", "{ not json");
+  const own = config("own", JSON.stringify({ numStartups: 1 }));
+  const missing = config("missing");
   let owner;
-  let environment = {};
+  let environment;
   const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 0 }, environment }) });
   owner = f.owner;
   t.after(() => f.host.dispose());
   await f.host.open(f.event, f.input);
-  await f.host.openForBot("bot-1", { label: "worker" });
-  await f.host.openForBot("bot-1", { label: "managed", command: "claude" });
-  environment = { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" };
-  await f.host.openForBot("bot-1", { label: "own", command: "claude" });
-  assert.deepEqual(f.children.map((child) => child.options.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE), [undefined, "1", "1", "0"]);
+  const seen = [];
+  for (const [file, extra] of [[asked], [saved], [broken], [missing], [own, { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" }]]) {
+    environment = { CLAUDE_CONFIG_DIR: path.dirname(file), ...extra };
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+    await f.host.openForBot("bot-1", { label: path.basename(path.dirname(file)), command: "claude" });
+    seen.push([f.children.at(-1).options.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE, file === asked ? null : (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null) === before]);
+  }
+  assert.equal(f.children[0].options.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE, undefined);
+  assert.deepEqual(seen, [["1", null], ["1", true], [undefined, true], [undefined, true], ["0", true]]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(asked, "utf8")), { numStartups: 3, codeModeCaveatsAcceptedV1: true, codeModeAutoModeCaveatAcceptedV1: true });
+  assert.deepEqual(fs.readdirSync(path.dirname(asked)), [".claude.json"]);
 });
 
 test("openForBot opens a bot's 129th pane and rejects bad input", async () => {

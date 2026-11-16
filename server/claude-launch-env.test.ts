@@ -5,15 +5,15 @@ import { expect, it } from "vitest";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LAUNCH = /\b(?:spawnCli|execCli|spawn|execFile|execFileSync|spawnSync|execSync|fork)\(/g;
-const FIX = "build the Claude env with withClaudeLaunchEnv() from shared/claude-launch-env.mjs";
+const FIX = "build the Claude pane env with withClaudePaneEnv() from shared/claude-launch-env.mjs";
 
-// Every process launch in shipped code. `claude` is text in the file that shows its Claude env goes through withClaudeLaunchEnv.
+// Every process launch in shipped code. `claude` is text in the file that shows its Claude pane env goes through withClaudePaneEnv.
 const SITES = {
-  "server/drivers/claude.ts": { launches: 3, claude: "withClaudeLaunchEnv(" },
-  "server/drivers/claude-fork.ts": { launches: 1, claude: "{ ...spawn.env," },
-  "server/worker-launch.ts": { launches: 0, claude: "withClaudeLaunchEnv(" },
-  "electron/terminal-host.mjs": { launches: 4, claude: "withClaudeLaunchEnv(" },
-  "electron/terminal-remote.mjs": { launches: 1, claude: "CLAUDE_LAUNCH_ENV" },
+  "electron/terminal-host.mjs": { launches: 4, claude: "withClaudePaneEnv(" },
+  "electron/terminal-remote.mjs": { launches: 1, claude: "CLAUDE_PANE_ENV" },
+  // Headless Claude: Code Mode only runs in the interactive terminal.
+  "server/drivers/claude.ts": { launches: 3 },
+  "server/drivers/claude-fork.ts": { launches: 1 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
   "companion/src/listener.ts": { launches: 1 },
@@ -60,7 +60,7 @@ function shipped(dir: string): string[] {
     .filter((file) => !file.includes("/testing/") && !file.includes("/node_modules/"));
 }
 
-it("every process launch is listed, and every Claude launch gets the shared Claude env", () => {
+it("every process launch is listed, and every Claude pane gets the shared pane env", () => {
   const problems: string[] = [];
   const seen = new Map<string, number>();
   for (const file of ["server", "electron", "shared", "companion/src"].flatMap(shipped)) {
@@ -69,12 +69,12 @@ it("every process launch is listed, and every Claude launch gets the shared Clau
   }
   for (const [file, count] of seen) {
     const site = sites.get(file);
-    if (!site) problems.push(`${file} starts a process but is not in SITES. If it can start Claude, ${FIX} and list it with claude:; otherwise list it with launches: ${count}.`);
-    else if (site.launches !== count) problems.push(`${file} has ${count} process launches, SITES says ${site.launches}. If a new one can start Claude, ${FIX}; then update the count.`);
+    if (!site) problems.push(`${file} starts a process but is not in SITES. If it can start Claude in a pane, ${FIX} and list it with claude:; otherwise list it with launches: ${count}.`);
+    else if (site.launches !== count) problems.push(`${file} has ${count} process launches, SITES says ${site.launches}. If a new one can start Claude in a pane, ${FIX}; then update the count.`);
   }
   for (const [file, site] of sites) {
     if (!seen.has(file) && site.launches) problems.push(`${file} no longer starts a process; remove it from SITES.`);
-    if (site.claude && !readFileSync(join(ROOT, file), "utf8").includes(site.claude)) problems.push(`${file} starts Claude but no longer shows "${site.claude}": ${FIX}.`);
+    if (site.claude && !readFileSync(join(ROOT, file), "utf8").includes(site.claude)) problems.push(`${file} starts Claude panes but no longer shows "${site.claude}": ${FIX}.`);
   }
   expect(problems).toEqual([]);
 });

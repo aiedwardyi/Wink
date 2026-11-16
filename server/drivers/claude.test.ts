@@ -7,7 +7,7 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { spawn as spawnChild } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -964,50 +964,19 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
 
-  it("turns Code Mode on for every turn", async () => {
+  it("keeps Code Mode off headless turns and helpers", async () => {
     await create();
     const dump = join(scratch, "code-mode.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
+    const seen = () => JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE;
 
     await instance.adapter.sendTurn({ threadId: "t-code-mode", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
-
-    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("1");
-  });
-
-  it("keeps the instance's Code Mode value", async () => {
-    await create(undefined, { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" });
-    const dump = join(scratch, "code-mode-instance.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-
-    await instance.adapter.sendTurn({ threadId: "t-code-mode-instance", text: "hi" });
-    await recorder.until((e) => e.type === "turn.completed");
-
-    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("0");
-  });
-
-  it("lets the user's settings.json Code Mode value win", async () => {
-    const configDir = join(scratch, "claude-config");
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" } }));
-    await create(undefined, { CLAUDE_CONFIG_DIR: configDir });
-    const dump = join(scratch, "code-mode-settings.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-
-    await instance.adapter.sendTurn({ threadId: "t-code-mode-settings", text: "hi" });
-    await recorder.until((e) => e.type === "turn.completed");
-
-    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("0");
-  });
-
-  it.each([{}, { lean: true, ephemeral: true }])("turns Code Mode on for generateText helpers %o", async (opts) => {
-    await create();
-    const dump = join(scratch, "code-mode-helper.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-
-    await instance.generateText?.("summarize", opts);
-
-    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("1");
+    expect(seen()).toBeUndefined();
+    for (const opts of [{}, { lean: true, ephemeral: true }]) {
+      await instance.generateText?.("summarize", opts);
+      expect(seen()).toBeUndefined();
+    }
   });
 
   it.each(["claude-sonnet-5-5", "unsloth::local-model"])("defaults MCP tool idle timeout for %s", async (model) => {

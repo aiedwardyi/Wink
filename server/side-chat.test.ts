@@ -526,7 +526,7 @@ describe("Claude fork (fake CLI)", () => {
     expect(prompts().find((line) => line.argv.includes("--fork-session"))!.text).toBe("[LIVE]\n\nq");
   });
 
-  it("runs the fork with Code Mode on", async () => {
+  it("runs the headless fork without Code Mode", async () => {
     process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Port 8080.");
     const dump = join(scratch, "fork-env.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
@@ -536,7 +536,7 @@ describe("Claude fork (fake CLI)", () => {
     await handle.close(5_000);
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv).toContain("--fork-session");
-    expect(seen.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("1");
+    expect(seen.env).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE");
   });
 
   const forkOf = (settings: object, policy: Parameters<typeof forkClaude>[0]["policy"] = {}) => {

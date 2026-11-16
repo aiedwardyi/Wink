@@ -568,21 +568,11 @@ describe("trusted worker accounts", () => {
     expect(f.available).toHaveBeenCalledWith("claude", 0);
   });
 
-  it("starts Claude workers with Code Mode on unless the user's settings.json sets it", async () => {
+  it("leaves Code Mode to the pane", async () => {
     const f = await fixture();
-    const command = "claude --model fixture 'task'";
-    const on = await f.prepare({ ...f.input, command });
-    if (on?.kind !== "managed") throw new Error("expected managed launch");
-    expect(on.environment.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("1");
-    const base = f.bases.claude.environment!.CLAUDE_CONFIG_DIR!;
-    mkdirSync(base, { recursive: true });
-    writeFileSync(join(base, "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: "0" } }));
-    const off = await f.prepare({ ...f.input, command });
-    if (off?.kind !== "managed") throw new Error("expected managed launch");
-    expect(off.environment.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe("0");
-    const codex = await f.prepare(f.input);
-    if (codex?.kind !== "managed") throw new Error("expected managed launch");
-    expect(codex.environment).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE");
+    const launch = await f.prepare({ ...f.input, command: "claude --model fixture 'task'" });
+    if (launch?.kind !== "managed") throw new Error("expected managed launch");
+    expect(launch.environment).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE");
   });
 
   it("routes an other-engine Codex worker to that engine's ready Main and reports its usage", async () => {
