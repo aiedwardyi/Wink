@@ -24,7 +24,10 @@ export function sameProof(actual, expected) {
 export function keepRing(pane, bytes, limit) {
   pane.ring.push({ seq: ++pane.seq, bytes });
   pane.bytes += bytes.length;
-  while (pane.bytes > limit && pane.ring.length - pane.head > 1) pane.bytes -= pane.ring[pane.head++].bytes.length;
+  while (pane.bytes > limit && pane.ring.length - pane.head > 1) {
+    pane.bytes -= pane.ring[pane.head].bytes.length;
+    pane.ring[pane.head++] = null;
+  }
   if (pane.head > 1024) {
     pane.ring.splice(0, pane.head);
     pane.head = 0;
