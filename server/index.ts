@@ -56,7 +56,7 @@ import { ghRun } from "./map-pr.ts";
 import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { createRoomLanes, laneKey } from "./room-lane.ts";
+import { createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -4779,9 +4779,9 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " When reporting after time away, in a summary or wrap-up, or after workers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
+  " When reporting after time away, in a summary or wrap-up, or after helpers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
   " If the user answers an open card in their own words, close the card." +
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a worker, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, check and follow existing work and decisions (feature list, status board, decision notes, memory). Say first if your plan would redo or contradict them. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, check and follow existing work and decisions (feature list, status board, decision notes, memory). Say first if your plan would redo or contradict them. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (role description and user requests override it, including length and teaching style): answer first, 2-5 short lines, the few key points unless asked for every option, plain words, a few bullets over paragraphs, warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. Work out questions before answering. Skip preamble, recaps and generic closing offers; needed questions and asking before acting are not padding. Give code, plans, drafts, commands and anything to paste or follow step by step in full. Otherwise go longer only when asked or needed, still verdict first.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -6427,6 +6427,7 @@ function queueBusyRoomMember(
   instructionId?: string,
   rootId?: string | null,
   askId?: string,
+  hands = false,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
@@ -6438,6 +6439,7 @@ function queueBusyRoomMember(
     onDispatchError,
     instructionId,
     askId,
+    hands,
   });
   const group = store.group(groupId);
   if (group?.hosted) broadcast({ kind: "group", group: publicGroupState(group) });
@@ -6455,7 +6457,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; spoken?: Set<string> },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; spoken?: Set<string>; hands?: true },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (hostedTurnRefused(store.group(room.groupId), threadId, botId, room.askId) || !roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6492,6 +6494,7 @@ function enqueueDrainedRoomTurn(
       undefined,
       room.rootId ?? null,
       room.askId,
+      room.hands,
     );
   });
   const tracked = next.finally(() => finishGroupTurnOperation(room.groupId, operation));
@@ -6611,6 +6614,8 @@ async function runGroupMemberTurn(
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
   authority?: string,
+  // a lane's hand-off: waits for the bot to be free instead of taking a lane
+  hands = false,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6620,10 +6625,10 @@ async function runGroupMemberTurn(
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   // the lane runs beside the 1:1 in its folder, so only an engine that can deny edits and shell gets one
-  const lane = botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
+  const lane = !hands && botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
     botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
   if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
@@ -6648,6 +6653,7 @@ async function runGroupMemberTurn(
       rootId,
       authority,
       lane,
+      hands,
     );
   } finally {
     releaseTurnStart();
@@ -6681,6 +6687,7 @@ async function runClaimedGroupMemberTurn(
   authority?: string,
   // the bot's second lane: no busy flag, no hands, and a Stop keyed apart from the 1:1
   lane = false,
+  hands = false,
 ): Promise<boolean> {
   const turnKey = lane ? laneKey(botId) : botId;
   const epoch = currentTurnEpoch(turnKey);
@@ -6694,7 +6701,7 @@ async function runClaimedGroupMemberTurn(
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy && !lane) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands);
   }
   // Capture before any await. startGroupTurn persists the next instruction
   // on arrival, so a re-read after setup binds this turn to a later message.
@@ -6862,7 +6869,7 @@ async function runClaimedGroupMemberTurn(
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   // automatic routing can resolve to an engine that cannot run read-only
   if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority, hands);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
   if (!lane) {
@@ -6939,11 +6946,13 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
+  const handoff = laneHandoff({ lane, hop, teammate: Boolean(authority), autoApprove: bot.autoApprove, rows: store.messagesFor(threadId).slice(0, messagesAtStart), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId });
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
+    (handoff ? LANE_HANDOFF_LINE : "") +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7059,6 +7068,9 @@ async function runClaimedGroupMemberTurn(
   if (outcome === "stalled" || outcome === "timed_out") return false;
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
   if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
+  if (outcome === "settled" && handoff && replyText.trim() && !isCancelled?.()) {
+    queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handoff.asker, handoff.ask), undefined, dispatchedInstructionId, rootId, undefined, true);
+  }
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.

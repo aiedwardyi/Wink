@@ -157,7 +157,7 @@ describe("every room runner caller on a hosted thread", () => {
     });
     await drain(botId, group.threadId, { groupId: group.id, hop: 0, askId: live.id });
     expect(runGroupMemberTurn).toHaveBeenCalledTimes(1);
-    expect((runGroupMemberTurn.mock.calls[0] as unknown[]).at(-1)).toBe(live.id);
+    expect((runGroupMemberTurn.mock.calls[0] as unknown[])[11]).toBe(live.id);
   });
 
   it("commits the host's own room line with hostSend, then wakes the group's responders", () => {
