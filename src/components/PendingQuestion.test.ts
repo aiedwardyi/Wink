@@ -11,19 +11,21 @@ let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
 const onPick = vi.fn();
 const onDismiss = vi.fn();
-const message = (id: string): Message => ({ id, at: 1, role: "bot", kind: "options",
-  card: { title: "Question", subtitle: "Which design should we review first?", options: ["Analytics", "Models"], askUser: true, staysOpen: true } });
+const message = (id: string, options = ["Analytics", "Models"]): Message => ({ id, at: 1, role: "bot", kind: "options",
+  card: { title: "Question", subtitle: "Which design should we review first?", options, askUser: true, staysOpen: true } });
 
-async function render(id: string) {
+async function render(id: string, options?: string[]) {
   if (!root) {
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
   }
-  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id), askerName: "Wink", count: 1, onPick, onDismiss })));
+  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss })));
 }
 
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const pill = () => host.querySelector<HTMLButtonElement>('[data-question-row] button[aria-expanded="false"]');
+// detail is the click count: 0 for Enter or Space, 1 for a mouse or a tap
+const press = (target: Element, detail: number) => act(async () => { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail })); });
 const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
 const open = async () => {
   await act(async () => pill()!.click());
@@ -47,6 +49,7 @@ async function swipe(dx: number, dy: number, scrollTop = 0) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (root) await act(async () => root!.unmount());
   host?.remove();
   root = undefined;
@@ -173,5 +176,53 @@ describe("question folding", () => {
     expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
     expect(pill()).toBeNull();
+  });
+
+  it("counts every choice the row has no room for in one +N pill that opens the card", async () => {
+    // happy-dom has no layout: each shown pill is 100px wide in a 250px space
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.matches("[data-row-choices]") ? this.querySelectorAll("button:not([hidden])").length * 100 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.matches("[data-row-choices]") ? 250 : 0;
+    });
+    const options = ["Yes, both", "Only the open speed", "Change it"];
+    await render("fold-more", options);
+    await fold();
+    const pills = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].filter((pill) => !pill.hidden);
+    const more = pills.find((pill) => /^\+\d+$/.test(pill.textContent ?? ""));
+    const shown = pills.filter((pill) => pill !== more).map((pill) => pill.textContent);
+    expect(shown).toEqual(["Yes, both"]);
+    expect(more?.textContent).toBe("+2");
+    expect(more?.getAttribute("aria-label")).toBe("2 more choices");
+    expect(more?.className).toBe(pills[0].className);
+    await press(more!, 1);
+    await settle();
+    expect(pill()).toBeNull();
+    expect([...host.querySelectorAll("[data-term-choices] button")].map((choice) => choice.textContent)).toEqual(options);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("shows no +N pill when every choice fits", async () => {
+    await render("fold-all-fit", ["Yes, both", "Only the open speed", "Change it"]);
+    await fold();
+    const pills = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].filter((pill) => !pill.hidden);
+    expect(pills.map((pill) => pill.textContent)).toEqual(["Yes, both", "Only the open speed", "Change it"]);
+  });
+
+  it("moves focus between the row and the card only for the keyboard, so a click never inherits a focus ring", async () => {
+    await render("fold-focus");
+    await press(button("Fold question"), 1);
+    await settle();
+    expect(document.activeElement).not.toBe(pill());
+    await press(pill()!, 1);
+    await settle();
+    expect(document.activeElement).not.toBe(button("Fold question"));
+    await press(button("Fold question"), 0);
+    await settle();
+    expect(document.activeElement).toBe(pill());
+    await press(pill()!, 0);
+    await settle();
+    expect(document.activeElement).toBe(button("Fold question"));
   });
 });
