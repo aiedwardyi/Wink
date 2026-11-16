@@ -164,7 +164,15 @@ export function removeAboutYouSource(source: string): void {
 export function aboutYouFacts(): string {
   let size = 0;
   const lines: string[] = [];
-  for (const line of savedLines(readSaved()).slice(0, MEMORY_MAX_LINES)) {
+  let raw: string;
+  try {
+    raw = readSaved();
+  } catch (error) {
+    // optional context: an unreadable file drops the section, never the chat or call it feeds
+    console.warn(`[about-you] read failed (${error instanceof Error ? error.name : "error"})`);
+    return "";
+  }
+  for (const line of savedLines(raw).slice(0, MEMORY_MAX_LINES)) {
     const fact = clean(line);
     if (!fact) continue;
     const date = TAG.exec(line)?.[2];
