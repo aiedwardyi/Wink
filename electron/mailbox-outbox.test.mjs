@@ -94,9 +94,9 @@ it.skipIf(process.platform !== "win32")("waits for a live sender's Windows shari
   });
   try {
     await ready;
-    const delivering = deliverMailboxOutbox(f.profile, f.url);
-    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(await deliverMailboxOutbox(f.profile, f.url, undefined, { budgetMs: 200 })).toMatchObject({ delivered: 0, unreadable: true });
     expect(f.posts).toEqual([]);
+    const delivering = deliverMailboxOutbox(f.profile, f.url);
     child.stdin.end("release\n");
     await exited;
     expect((await delivering).delivered).toBe(1);

@@ -197,8 +197,18 @@ it.skipIf(process.platform !== "win32")("concurrent senders keep both new report
 it.skipIf(process.platform !== "win32")("a remote-pane URL retries across a real 30 second gap without a local queue", async () => {
   const f = await fixture();
   await new Promise<void>(resolve => f.server.close(() => resolve()));
+  const started = Date.now();
+  let lateRetry!: () => void;
+  const gapCrossed = new Promise<void>(resolve => { lateRetry = resolve; });
+  const down = createServer((_req, res) => {
+    res.writeHead(503, { connection: "close" }).end();
+    if (Date.now() - started >= 30_000) lateRetry();
+  });
+  servers.push(down);
+  await new Promise<void>(resolve => down.listen(f.port, "127.0.0.1", resolve));
   const sending = run(f.bin, { ...f.env, ORBIT_URL: `http://localhost:${f.port}` });
-  await new Promise(resolve => setTimeout(resolve, 30_000));
+  await gapCrossed;
+  await new Promise<void>(resolve => { down.close(() => resolve()); down.closeAllConnections(); });
   await new Promise<void>(resolve => f.server.listen(f.port, "127.0.0.1", resolve));
   expect((await sending).code).toBe(0);
   expect(f.notes()).toHaveLength(1);
