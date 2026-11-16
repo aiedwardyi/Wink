@@ -22,7 +22,7 @@ class FakeEventSource {
 const call = "c-0123456789ab";
 const at = (h: number, m: number, s = 0) => new Date(2026, 10, 16, h, m, s).getTime();
 
-function bot(ms?: number): Bot {
+function bot(ms?: number, after: Message[] = []): Bot {
   const messages: Message[] = [
     { id: "u0", at: at(14, 50), role: "user", kind: "text", text: "Before the call" },
     { id: "l1", parentId: "u0", at: at(14, 59), role: "bot", kind: "text", text: "Hey, I'm here.", call: { id: call, voice: true, ...(ms ? { ms, summary: "You asked Atlas about the build." } : {}) } },
@@ -31,11 +31,12 @@ function bot(ms?: number): Bot {
     { id: "b1", parentId: "t1", at: at(15, 0, 30), role: "bot", kind: "text", text: "Reply during the call" },
     { id: "l3", parentId: "b1", at: at(15, 1, 44), role: "bot", kind: "text", text: "It passed.", call: { id: call, voice: true } },
     { id: "u3", parentId: "l3", at: at(15, 5), role: "user", kind: "text", text: "After the call" },
+    ...after,
   ];
   // SAFETY: a fixture with the Bot fields ChatView reads; the rest stay unset.
   return {
     id: "atlas", threadId: "thread-atlas", name: "Atlas", title: "", description: "", notifications: false,
-    color: "iris", unread: false, modelSelection: { instanceId: "inst", model: "m" }, messages, activeLeafId: "u3", hasMore: false,
+    color: "iris", unread: false, modelSelection: { instanceId: "inst", model: "m" }, messages, activeLeafId: messages.at(-1)!.id, hasMore: false,
   } as unknown as Bot;
 }
 
@@ -92,6 +93,18 @@ describe("ChatView call card", () => {
       const card = view.host.querySelector("[data-call-card]")!;
       expect(card.textContent).toContain("3:01");
       expect(before(view.host.querySelector('[data-mid="b1"]')!, card)).toBe(true);
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("keeps an order sent at hang-up in its own row, after the card", async () => {
+    const view = await mount(bot(165_000, [{ id: "o1", parentId: "u3", at: at(15, 6), role: "user", kind: "text", text: "Ship the build.", call: { id: call, order: true } }]));
+    try {
+      const card = view.host.querySelector("[data-call-card]")!;
+      expect(card.textContent).toContain("3:01");
+      expect(view.host.querySelector('[data-mid="o1"] [data-call-card]')).toBeNull();
+      expect(before(card, view.host.querySelector('[data-mid="o1"]')!)).toBe(true);
     } finally {
       await view.unmount();
     }

@@ -16,8 +16,8 @@ export function CallCard({ rows, live, botName, forceOpen = false }: { rows: Mes
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
   const first = rows[0]!;
-  const time = formatTime((live ? first : rows.at(-1)!).at, localeTag(locale));
   const said = useMemo(() => rows.filter((row) => isVoiceLine(row) && row.text?.trim()), [rows]);
+  const time = formatTime((live ? first : said.at(-1) ?? first).at, localeTag(locale));
   const stripe = useMemo(() => callStripe(rows), [rows]);
   const summary = callSummary(rows);
   const [shownFirst] = useState(summary);

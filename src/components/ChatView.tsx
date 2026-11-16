@@ -710,13 +710,13 @@ const MessagesList = memo(function MessagesList({
   }, [transcript]);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
-  // A live call holds its first row; an ended one moves to its last, after what was sent during it.
+  // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
   const callAt = useMemo(() => {
     const at = new Map<string, string>();
     for (const item of items) {
       if (item.kind !== "message" || !item.message.call) continue;
       const { id } = item.message.call;
-      if (id !== calls.live || !at.has(id)) at.set(id, item.message.id);
+      if (!at.has(id) || (id !== calls.live && isVoiceLine(item.message))) at.set(id, item.message.id);
     }
     return at;
   }, [items, calls.live]);
