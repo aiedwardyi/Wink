@@ -1065,7 +1065,6 @@ export const en = {
   "composer.attach": "Attach a file",
   "composer.tagBot": "Tag a bot",
   "composer.dismissFailed": "Dismiss failed message",
-  "composer.cancelQueued": "Cancel queued message",
 
   "composer.roomDm": "Message {name}",
   "composer.roomEveryone": "Message {name}",
@@ -1080,7 +1079,6 @@ export const en = {
   "composer.removeImage": "Remove image",
   "composer.removePasted": "Remove pasted text",
   "composer.retry": "Retry",
-  "composer.queuedUntil": "Sends next: “{text}”",
   "composer.catchingUp": "Catching up on messages…",
   "composer.imageLoading": "Engine details are still loading. Try sending the image again in a moment.",
   "composer.imageUnsupported": "Direct image attachments are not supported by this engine.",
@@ -2905,7 +2903,6 @@ export const ko = {
   "composer.attach": "파일 첨부",
   "composer.tagBot": "봇 언급",
   "composer.dismissFailed": "실패한 메시지 닫기",
-  "composer.cancelQueued": "대기 중인 메시지 취소",
 
   "composer.roomDm": "{name}에게 메시지 보내기",
   "composer.roomEveryone": "{name}에게 메시지 보내기",
@@ -2920,7 +2917,6 @@ export const ko = {
   "composer.removeImage": "이미지 빼기",
   "composer.removePasted": "붙여넣은 글 빼기",
   "composer.retry": "다시 시도",
-  "composer.queuedUntil": "다음에 보내집니다: “{text}”",
   "composer.catchingUp": "메시지를 불러오는 중…",
   "composer.imageLoading": "엔진 정보를 아직 불러오는 중입니다. 잠시 후 이미지를 다시 보내 보세요.",
   "composer.imageUnsupported": "이 엔진은 직접 이미지 첨부를 지원하지 않습니다.",

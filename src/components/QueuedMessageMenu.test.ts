@@ -96,9 +96,7 @@ async function mount(room = false, steering = true, coarse = false, locale = "en
       key: "Enter", code: "Enter", keyCode: 13, ctrlKey: after, bubbles: true, cancelable: true,
     })));
   };
-  const row = (text: string) => room
-    ? [...host.querySelectorAll("span")].find((el) => el.textContent?.endsWith(`“${text}”`))!.parentElement!
-    : [...host.querySelectorAll("[data-orbit-message='user']")].find((el) => el.textContent?.includes(text))!;
+  const row = (text: string) => [...host.querySelectorAll("[data-orbit-message='user']")].find((el) => el.textContent?.includes(text))!;
   const open = async (text: string) => {
     const el = row(text);
     expect(el).toBeTruthy();
@@ -229,11 +227,20 @@ describe("queued message menu", () => {
     expect(ui.host.textContent).not.toContain("second");
     expect(ui.host.textContent!.indexOf("first")).toBeLessThan(ui.host.textContent!.indexOf("third"));
     expect(ui.deletes).toEqual(room ? [] : ["/api/bots/helper/queue/queue-2"]);
-    if (room) {
-      await act(async () => ui.host.querySelector<HTMLButtonElement>("button[aria-label='Cancel queued message']")!.click());
-      expect(ui.host.textContent).not.toContain("first");
-      expect(ui.host.textContent).toContain("third");
-    }
+  });
+
+  it("shows a room hold as the 1:1 queued bubble", async () => {
+    const chat = await mount(false, false);
+    await chat.send("held");
+    const oneToOne = chat.host.querySelector("[data-orbit-message='user']")!.outerHTML;
+    await unmount?.();
+    unmount = null;
+    const ui = await mount(true, false);
+    await ui.send("held");
+    const held = ui.host.querySelector("[role='log'] [data-orbit-message='user']");
+    expect(held?.outerHTML).toBe(oneToOne);
+    expect(ui.host.textContent).not.toContain("Sends next: “held”");
+    expect(ui.host.querySelector("button[aria-label='Cancel queued message']")).toBeNull();
   });
 
   it("sends once when the queued line drains while its menu is open", async () => {
