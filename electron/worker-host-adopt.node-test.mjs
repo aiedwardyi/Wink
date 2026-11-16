@@ -220,8 +220,9 @@ for (const count of [1, 20]) {
 test("a pane that finished while the app was closed is told to its bot once, and closes if it had reported", { ...windows, timeout: 300_000 }, async (t) => {
   const before = await left(t, { count: 3, command: [SHORT, SHORT, GONE], typed: null, reported: ["KEEP-1"] });
   assert.deepEqual(record(before.root).map((run) => [run.label, run.state, run.kept]), [["KEEP-0", "running", true], ["KEEP-1", "reported", true], ["KEEP-2", "running", true]]);
-  await wait(22_000);
   const second = app(before.root, runtimeRoot);
+  // Adoption reads the host's list, so it starts once the host has seen every command end.
+  await until(async () => await second.client.prewarm() && (await second.client.panes()).every((pane) => pane.exit !== null || pane.mark?.kind === "D"));
   await second.adopt();
   const [quiet, told, gone] = before.panes;
   assert.deepEqual(sorted(second.notes.map((note) => `${note.bot}: ${note.text}`)), [
@@ -245,7 +246,7 @@ test("a kept pane with no record or an unknown owner never becomes a row and is 
   const second = app(before.root, runtimeRoot, { names: { "bot-0": "Zero", "bot-1": "One" } });
   let recheck;
   const rechecked = new Promise((resolve) => { recheck = resolve; });
-  await second.adopt({ unknownBotMs: 600_000, wait: (ms) => ms === 600_000 ? rechecked : new Promise((resolve) => { setTimeout(resolve, ms).unref(); }) });
+  await second.adopt({ unknownBotMs: 600_000, wait: (ms) => ms === 600_000 ? rechecked : new Promise(() => {}) });
   assert.deepEqual(second.of("terminal:opened").map((pane) => pane.id), [kept.sessionId]);
   await until(() => !alive(stray.pid), 30_000);
   assert.equal(alive(orphan.pid), true);
@@ -272,8 +273,9 @@ test("a host the app cannot reach blocks both adoption and restart until it is g
     const done = adoptWorkers({ client, runs, host: { adoptPane: () => null, closeForBot: async () => {} }, recover: async (notes) => { kept.push([[...notes].map(([botId, note]) => `${botId}: ${note.text}`), [...runs.restarted().keys()]]); }, wait: () => new Promise((resolve) => { tick = resolve; }) });
     await until(() => kept.length === 1 && tick);
     assert.deepEqual(kept[0], [["bot-1: WORKERS UNAVAILABLE: Wink cannot reach its background worker host, so it cannot tell whether these panes still run: LOST-1 [pane 11111111]. It does not restart them, and checks again every 30 s."], []]);
+    const asked = tick;
     tick();
-    await wait(50);
+    await until(() => tick !== asked);
     assert.equal(kept.length, 1);
     state = "none";
     tick();
