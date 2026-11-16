@@ -864,6 +864,49 @@ describe("15:00:09 a spoken language ask holds for the rest of the call", () => 
     expect(fixes(e).at(-1)).toBe("[Wink] Wrong language: speak only Thai. In Thai, ask them in a few words to say that again.");
   });
 
+  it("in the language he asked for, a whole line with no spaces is his, and a stub is still a mis-hear", () => {
+    expect(guard.misheard("デスクトップのフォルダを開いてください。", "Japanese")).toBe(false);
+    expect(guard.misheard("デスクトップのフォルダを開いて", "Japanese")).toBe(false);
+    expect(guard.misheard("帮我打开桌面文件夹。", "Chinese")).toBe(false);
+    expect(guard.misheard("帮我打开桌面文件夹", "Chinese")).toBe(false);
+    expect(guard.misheard("เปิดโฟลเดอร์แชทเลย", "Thai")).toBe(false);
+    expect(guard.misheard("Открой папку на рабочем столе", "Russian")).toBe(false);
+    expect(guard.misheard("デスク", "Japanese")).toBe(true);
+    expect(guard.misheard("桌面", "Chinese")).toBe(true);
+    expect(guard.misheard("เปิด", "Thai")).toBe(true);
+    expect(guard.misheard("different")).toBe(true);
+  });
+
+  it.each([
+    ["Japanese", "Can you talk to me in Japanese?", "デスクトップのフォルダを開いてください。", "はい。"],
+    ["Chinese", "Switch to Chinese.", "帮我打开桌面文件夹。", "好的。"],
+    ["Thai", ASK, "เปิดโฟลเดอร์แชทเลย", "ใช่ครับ"],
+  ])("in %s, his request goes to the bot on hang-up, and his spoken yes sends the offer", async (_tongue, ask, request, yes) => {
+    const first = await live();
+    first.engine().events.heard(ask);
+    speak(first.engine(), "OK.");
+    await tick(1_500);
+    first.engine().events.heard(request);
+    speak(first.engine(), "OK, opening", false);
+    first.call.end();
+    await tick(2_000);
+    expect(sentToBot(first.posts)).toEqual([expect.stringContaining(request)]);
+
+    const second = await live();
+    const e = second.engine();
+    e.events.heard(ask);
+    speak(e, "OK.");
+    await tick(1_500);
+    e.events.heard(request);
+    e.events.answering();
+    e.events.toolCall([{ id: "p1", name: "propose_work", args: { order: request } }]);
+    e.events.turnDone();
+    await tick(5_000);
+    e.events.heard(yes);
+    await tick(1_500);
+    expect(sentToBot(second.posts)).toEqual([request]);
+  });
+
   it("unasked, Thai is still a mis-hear", async () => {
     const { audio, engine } = await live();
     const e = engine();

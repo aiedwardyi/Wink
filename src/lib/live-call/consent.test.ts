@@ -25,6 +25,23 @@ describe("consentOf", () => {
   ])("%s keeps waiting", (said) => expect(consentOf(said)).toBeNull());
 });
 
+describe("consentOf in the call's other languages", () => {
+  it.each([
+    "Sí.", "Sí, por favor.", "Claro.", "De acuerdo.", "Oui.", "Oui, merci.", "D'accord.", "Ja.", "Ja, bitte.", "Klar.", "Sim.", "Pode.", "Sì.", "Va bene.", "Vâng.", "Dạ vâng.", "Được.",
+    "Да.", "Да, пожалуйста.", "Хорошо.", "हाँ।", "हाँ जी", "ठीक है", "نعم.", "تمام", "はい。", "はい、お願いします。", "うん", "好的。", "好", "是的", "可以", "ใช่ครับ", "ได้ค่ะ", "ตกลง",
+  ])("%s is yes", (said) => expect(consentOf(said)).toBe("yes"));
+
+  it.each([
+    "Non.", "Non, merci.", "Nein.", "Nein, danke.", "Não.", "Không.", "Нет.", "Нет, спасибо.", "नहीं।", "لا.", "いいえ。", "いや", "だめ", "不要。", "不用了", "不好", "算了", "ไม่ครับ", "ไม่เอา", "ไม่ต้องค่ะ",
+  ])("%s is no", (said) => expect(consentOf(said)).toBe("no"));
+
+  it.each([
+    "Sí, pero mañana.", "Oui, mais attends.", "Ja, aber später.", "はい、でも明日。", "好的，但是等一下。", "ใช่ แต่รอก่อน", "Да, но потом.", "はい？", "好吗？", "Claro que no.",
+  ])("%s keeps waiting", (said) => expect(consentOf(said)).toBeNull());
+
+  it.each(["はい", "好的", "ใช่ครับ", "Sí.", "Oui", "Да."])("%s is a bare yes", (said) => expect(bareYes(said)).toBe(true));
+});
+
 describe("claimsDone", () => {
   it.each(["It's done.", "All fixed!", "I've pushed it", "we're live", "완료했어요", "다 끝났어요", "버그 고쳤어요", "머지했습니다", "보냈어요"])("%s claims done", (said) => {
     expect(claimsDone(said)).toBe(true);

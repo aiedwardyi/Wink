@@ -18,6 +18,41 @@ export const NO_KO = ["아니", "아냐", "하지마", "취소"];
 // Short 응 often transcribes as 은 or 음, so these count as the second word too.
 const STRONG_YES_KO = ["보내", "보내줘", "해줘", "고고"];
 
+// The call's other languages: a line of only these words, polite ones aside, is a yes or a no.
+const YES_OTHER = [
+  "sí", "si", "claro", "vale", "dale", "de acuerdo", "por supuesto",
+  "oui", "ouais", "d'accord", "vas-y", "allez-y", "bien sûr",
+  "ja", "jawohl", "klar", "genau", "gerne", "einverstanden",
+  "sim", "pode", "beleza", "tá bom", "com certeza",
+  "sì", "certo", "va bene", "d'accordo", "vai",
+  "vâng", "dạ", "có", "được", "ừ",
+  "да", "конечно", "хорошо", "давай", "ладно",
+  "हाँ", "हां", "जी", "ठीक है", "बिल्कुल",
+  "نعم", "أيوه", "ايوه", "حسنا", "حسناً", "تمام", "موافق",
+  "はい", "ええ", "うん", "いいよ", "いいです", "お願いします", "お願い", "どうぞ",
+  "好", "好的", "是", "是的", "对", "行", "可以", "嗯", "没问题",
+  "ใช่", "ได้", "ตกลง", "โอเค", "เอา", "เอาเลย", "ครับ", "ค่ะ",
+];
+const NO_OTHER = ["non", "nein", "não", "không", "thôi", "нет", "не надо", "नहीं", "मत", "لا", "いいえ", "いや", "だめ", "やめて", "不", "不要", "不用", "不用了", "不行", "不好", "别", "算了", "ไม่", "ไม่เอา", "ไม่ใช่", "ไม่ต้อง", "ยกเลิก"];
+const SOFT_OTHER = ["por favor", "gracias", "merci", "s'il te plaît", "s'il vous plaît", "bitte", "danke", "obrigado", "obrigada", "per favore", "grazie", "ạ", "nhé", "пожалуйста", "спасибо", "जी", "شكرا", "من فضلك", "です", "ね", "よ", "吧", "啊", "呀", "了", "请", "ครับ", "ค่ะ", "คะ", "นะ", "จ้ะ"];
+const OTHER_WORDS = [...new Set([...YES_OTHER, ...NO_OTHER, ...SOFT_OTHER])].sort((a, b) => b.length - a.length);
+// Thai, Japanese and Chinese words run on with no space after them.
+const UNSPACED = /[฀-๿぀-ヿ一-鿿]$/u;
+
+function otherConsent(said: string): "yes" | "no" | null {
+  let rest = said.normalize("NFC").toLowerCase().replace(/’/g, "'").replace(/[\s,.!~…。、，！।]+/gu, " ").trim();
+  const words: string[] = [];
+  while (rest) {
+    const word = OTHER_WORDS.find((known) => rest.startsWith(known) && (UNSPACED.test(known) || rest.length === known.length || rest[known.length] === " "));
+    if (!word) return null;
+    words.push(word);
+    rest = rest.slice(word.length).trimStart();
+  }
+  const only = (kinds: string[][]) => words.every((word) => kinds.some((kind) => kind.includes(word)));
+  if (words.some((word) => NO_OTHER.includes(word))) return only([NO_OTHER, SOFT_OTHER]) ? "no" : null;
+  return words.some((word) => YES_OTHER.includes(word)) && only([YES_OTHER, SOFT_OTHER]) ? "yes" : null;
+}
+
 function koWords(text: string): string[] {
   return text.replace(/하지\s+마/g, "하지마").split(/[\s,.!?~…]+/).filter(Boolean).slice(0, 2)
     .map((word) => word.replace(/주세요$/, "줘").replace(/습니다$/, "아"))
@@ -31,13 +66,13 @@ export function consentOf(said: string): "yes" | "no" | null {
   if (/^아니(?:면|라)/.test(first)) return null;
   if (NO_EN.test(text) || [first, second].some((word) => NO_KO.some((no) => word.startsWith(no)))) return "no";
   // "Confirm?" asks, it does not answer.
-  if (/\?\s*$/.test(text)) return null;
+  if (/[?？؟]\s*$/.test(text)) return null;
   if (YES_ALONE_EN.test(text)) return "yes";
   if (YES_EN.test(text)) return BUT_EN.test(text.replace(YES_EN, "")) ? null : "yes";
   if (BUT_KO.test(text)) return null;
   if (first === "어") return second ? (consentOf(text.replace(/^어[\s,.!?~…]*/, "")) === "yes" ? "yes" : null) : (!/\.\.|…/.test(text) ? "yes" : null);
   if (YES_KO.includes(first) || STRONG_YES_KO.includes(second)) return "yes";
-  return null;
+  return otherConsent(text);
 }
 
 /** What follows the yes words: "Okay, delete the logs" leaves "delete the logs". */
@@ -50,6 +85,7 @@ export function afterYes(said: string): string {
 /** A yes and nothing more: "Okay, delete the logs" asks, it does not answer. */
 export function bareYes(said: string): boolean {
   if (consentOf(said) !== "yes") return false;
+  if (otherConsent(said) === "yes") return true;
   return afterYes(said).split(/[\s,.!~…]+/).filter(Boolean).every((word) => ["어", "은", "음", ...YES_KO].includes(koWords(word)[0]!));
 }
 
