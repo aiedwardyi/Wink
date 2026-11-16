@@ -114,8 +114,9 @@ describe("ChatView call card", () => {
     live.botId = "atlas";
     const view = await mount(bot());
     try {
-      const line = [...view.host.querySelectorAll("div")].find((div) => div.textContent === "Call · 2:59 PM")!;
-      expect(line).toBeDefined();
+      // the test locale is en, so the time is 12-hour on any runner
+      const line = [...view.host.querySelectorAll("div")].find((div) => /^Call · \d/.test(div.textContent ?? ""))!;
+      expect(line.textContent).toBe("Call · 2:59 PM");
       expect(before(line, view.host.querySelector('[data-mid="t1"]')!)).toBe(true);
       expect(before(view.host.querySelector('[data-mid="u0"]')!, line)).toBe(true);
     } finally {
