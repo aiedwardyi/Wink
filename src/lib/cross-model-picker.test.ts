@@ -141,7 +141,7 @@ describe("picker catalogs", () => {
     expect(JSON.stringify(instance.models)).toBe(before);
   });
 
-  it("serves exactly the two Meta Muse models with the required labels", () => {
+  it("serves exactly the three Meta Muse models with the required labels", () => {
     const instance: InstanceInfo = {
       instanceId: "muse", driverKind: "museAgent", displayName: "Meta Muse", snapshot: { state: "available" },
       models: {
@@ -149,6 +149,7 @@ describe("picker catalogs", () => {
         options: [
           { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
           { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+          { id: "muse-ember-1.0", label: "Meta Muse Ember" },
           { id: "other-model", label: "Other" },
         ],
       },
@@ -159,10 +160,12 @@ describe("picker catalogs", () => {
     expect(rows[0]!.cells.map((cell) => cell.options[0]!.id)).toEqual([
       "muse-spark-1.3",
       "muse-spark-1.3-contributor",
+      "muse-ember-1.0",
     ]);
     expect(rows[0]!.cells.map((cell) => cell.options[0]!.label)).toEqual([
       "Meta Muse 1.3",
       "Meta Muse 1.3 Contributor",
+      "Meta Muse Ember",
     ]);
   });
 
@@ -385,48 +388,53 @@ describe("picker catalogs", () => {
     });
   });
 
-  it("shows a Gemini 4 Argon cell first, then 3.8 Flash", () => {
+  it("shows Gemini 4 Carbon, Argon and Hydrogen cells first, then 3.8 Flash", () => {
     const instance: InstanceInfo = {
       instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" },
       models: {
         default: "gemini-3.1-pro-high",
         options: [
+          "gemini-4-carbon-high", "gemini-4-carbon-medium", "gemini-4-carbon-low",
           "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
+          "gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
           "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-          "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
           "gemini-3.1-pro-high",
         ].map((id) => ({ id, label: id })),
       },
     };
     const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-argon-low" })[0]!;
     expect(row.cells.filter((cell) => !cell.offList).map((cell) => cell.label)).toEqual([
-      "Gemini 4 Argon", "Gemini 3.8 Flash",
+      "Gemini 4 Carbon", "Gemini 4 Argon", "Gemini 4 Hydrogen", "Gemini 3.8 Flash",
     ]);
+    expect(row.cells[0]!.options.map((option) => option.id)).toEqual(["gemini-4-carbon-high", "gemini-4-carbon-medium", "gemini-4-carbon-low"]);
+    expect(row.cells[2]!.options.map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
     expect(row.cells.some((cell) => cell.offList)).toBe(false);
     expect(PICKER_MODEL_IDS).toContain("gemini-4-argon");
-    expect(PICKER_MODEL_IDS).not.toContain("gemini-3.7-flash");
+    expect(PICKER_MODEL_IDS).toContain("gemini-4-hydrogen");
+    expect(PICKER_MODEL_IDS).toContain("gemini-4-carbon");
   });
 
-  it("keeps a 3.7 pin working as one off-list cell with its tiers", () => {
+  it("keeps a 3.1 Pro pin working as one off-list cell with its tiers", () => {
     const instance: InstanceInfo = {
       instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" },
       models: {
-        default: "gemini-3.7-flash-medium",
+        default: "gemini-3.1-pro-low",
         options: [
           "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
+          "gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
           "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-          "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
+          "gemini-3.1-pro-high", "gemini-3.1-pro-low",
         ].map((id) => ({ id, label: id })),
       },
     };
-    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-3.7-flash-medium" })[0]!;
+    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-3.1-pro-low" })[0]!;
     const offList = row.cells.filter((cell) => cell.offList);
     expect(offList).toHaveLength(1);
     expect(offList[0]!.options.map((option) => option.id).sort()).toEqual([
-      "gemini-3.7-flash-high", "gemini-3.7-flash-low", "gemini-3.7-flash-medium",
+      "gemini-3.1-pro-high", "gemini-3.1-pro-low",
     ]);
     expect(pickerEfforts(row, offList[0]!).map((option) => option.model)).toEqual([
-      "gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high",
+      "gemini-3.1-pro-low", "gemini-3.1-pro-high",
     ]);
   });
 
@@ -447,7 +455,7 @@ describe("picker catalogs", () => {
     ]);
   });
 
-  it("offers Max above Extra High for Meta Muse and Contributor", () => {
+  it("offers the six CLI efforts for Meta Muse, Contributor and Ember", () => {
     const instance: InstanceInfo = {
       instanceId: "muse", driverKind: "museAgent", displayName: "Meta Muse", snapshot: { state: "available" },
       models: {
@@ -455,16 +463,17 @@ describe("picker catalogs", () => {
         options: [
           { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
           { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+          { id: "muse-ember-1.0", label: "Meta Muse Ember" },
         ],
       },
-      capabilities: { effortLevels: ["low", "medium", "high", "xhigh", "max"] },
+      capabilities: { effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"] },
     };
     const rows = pickerRows([instance], { instanceId: "muse", model: "muse-spark-1.3" });
     const row = rows[0]!;
     for (const cell of row.cells) {
-      expect(pickerEfforts(row, cell).map((option) => option.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(pickerEfforts(row, cell).map((option) => option.id)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     }
-    for (const model of ["muse-spark-1.3", "muse-spark-1.3-contributor"] as const) {
+    for (const model of ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-ember-1.0"] as const) {
       const current = { instanceId: "muse", model, mode: "pinned" as const, effort: "xhigh" as const };
       expect(movePicker(rows, current, "ArrowRight")).toEqual({ ...current, effort: "max" });
     }

@@ -87,41 +87,41 @@
   --radius-xl: 16px;
 }
 
-/* ── Moss ──────────────────────────────────────────────────────────────────
-   Deep forest floor, cream ink and a sage accent, in rounded Nunito.
+/* ── Merlot ────────────────────────────────────────────────────────────────
+   Black cherry grounds, bright gray ink and one wine line, cut sharp.
    ───────────────────────────────────────────────────────────────────────── */
-:root[data-skin="moss"],
-[data-skin="moss"] {
-  --color-app: #171c18;
-  --color-panel: #131714;
-  --color-raised: #262e27;
-  --color-raised-hover: #2d362e;
-  --color-card: #1f2620;
-  --color-inset: #111512;
-  --color-control: #283029;
-  --color-hairline: #343e35;
+:root[data-skin="merlot"],
+[data-skin="merlot"] {
+  --color-app: #150c0f;
+  --color-panel: #0e0607;
+  --color-raised: #2b1a20;
+  --color-raised-hover: #342128;
+  --color-card: #25171c;
+  --color-inset: #0c0607;
+  --color-control: #2e1c23;
+  --color-hairline: #4a2e38;
 
-  --color-ink: #e9e8de;
-  --color-ink-secondary: #adb3a4;
+  --color-ink: #ede7e9;
+  --color-ink-secondary: #c4b6ba;
 
-  --color-accent: #a8c48c;
-  --color-accent-border: #b6cf9d;
-  --color-accent-text: #c0d6aa;
-  --color-focus: #b6cf9d;
-  --color-accent-ink: #151a14;
-  --color-bubble-user: #303d2b;
+  --color-accent: #b8375a;
+  --color-accent-border: #d0506f;
+  --color-accent-text: #eeb0bc;
+  --color-focus: #d0506f;
+  --color-accent-ink: #fff5f7;
+  --color-bubble-user: #481d2b;
 
-  --color-success: #a8c48c;
-  --color-danger: #eb9f94;
-  --color-danger-ink: #171c18;
-  --color-warning: #e3c78a;
-  --color-scrollbar: #364038;
-  --color-maus-line: #adb3a4;
+  --color-success: #8fd1a6;
+  --color-danger: #ff9b8f;
+  --color-danger-ink: #150c0f;
+  --color-warning: #ecc879;
+  --color-scrollbar: #4a2f39;
+  --color-maus-line: #c4b6ba;
 
-  --font-sans: "Nunito", "Segoe UI", -apple-system, BlinkMacSystemFont,
+  --font-sans: "Manrope", "Segoe UI", -apple-system, BlinkMacSystemFont,
     "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
-  --radius-lg: 24px;
-  --radius-xl: 26px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
 }
 
 /* ── Precision Dimmed ──────────────────────────────────────────────────────
@@ -252,7 +252,7 @@
 }
 
 /* Shared: both sides bubbled, wide enough for pasted code and long replies. */
-@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
+@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="merlot"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
   [data-orbit-message-body] {
     max-width: min(54rem, 94%);
   }
@@ -314,20 +314,19 @@
   }
 }
 
-@scope ([data-skin="moss"]) to ([data-skin]) {
+@scope ([data-skin="merlot"]) to ([data-skin]) {
   [data-orbit-message] {
     padding-block: 0.25rem;
   }
 
-  [data-orbit-message="bot"] .orbit-message-speaker {
-    margin-left: 22px;
+  [data-orbit-message-content] {
+    border: 1px solid var(--color-hairline);
+    line-height: 1.7;
+    box-shadow: 0 3px 14px rgb(0 0 0 / 0.35);
   }
 
-  [data-orbit-message-content] {
-    padding: 16px 22px;
-    font-size: 16px;
-    line-height: 1.7;
-    box-shadow: 0 3px 14px rgb(0 0 0 / 0.28);
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
   }
 
   .chat-md > div[class*="font-semibold"] {
@@ -335,8 +334,9 @@
   }
 
   [data-orbit-composer-frame] {
+    border: 1px solid var(--color-hairline);
     border-radius: var(--radius-xl);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.25);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 }
 
@@ -377,7 +377,7 @@
 
 /* Last, so it beats each skin's roomier desktop padding. */
 @media (max-width: 767px) {
-  @scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
+  @scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="merlot"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
     [data-orbit-message-body] {
       max-width: 96%;
     }

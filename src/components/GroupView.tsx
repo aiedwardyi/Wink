@@ -2,24 +2,29 @@
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
-import { ErrorRow, commPeer } from "./ChatView";
+import { ActivityChip, ErrorRow, NoteMessage, PinnedBanner, commPeer } from "./ChatView";
+import { CopyButton, FoldToggle, TimestampLabel, USER_FOLD_CLASS, userTextFolds } from "./ChatBubble";
+import { AppErrorBanner } from "./AppErrorBanner";
+import { ChatScene, sceneOf } from "./ChatScene";
+import { DaySeparator } from "./DaySeparator";
+import { JumpToLatest } from "./JumpToLatest";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, FolderOpen, Loader2, MessageSquareReply } from "lucide-react";
 import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
   useStore,
   useStreaming,
-  formatTime,
   openNotificationTarget,
   type Bot,
   type Group,
   type GroupDefaultResponder,
   type Message,
 } from "@/state/store";
-import type { RoomJoin } from "@/state/store-types";
-import { BotAvatar } from "./Avatar";
+import type { RoomJoin, TeamBot } from "@/state/store-types";
+import { BotAvatar, RoomBotAvatar } from "./Avatar";
+import { CallWidgetSlot } from "./CallSlots";
 import { DockedPresence, MessageBoundary, TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
@@ -31,6 +36,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
 import { groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { ChatOptionChips } from "./ChatOptionChips";
 import { AskUserRecord } from "./AskUserRecord";
 import { MemorySaveChip, MemorySaveRun } from "./MemorySaveChip";
@@ -38,7 +44,6 @@ import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { detectChatOptions, laterUserAnswer } from "@/lib/chat-options";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { Composer } from "./Composer";
-import { EngineSetup, setupErrorAction } from "./EngineSetup";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { roomRecoveryBusy, roomRecoveryPacket } from "@/lib/task-recovery";
 import { ChatFindBar } from "./ChatFindBar";
@@ -53,43 +58,45 @@ import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
 import { FileAttachmentRows } from "./FileAttachmentRow";
+import { RoomFileRows, RoomLineTranslation, RoomTranslateButton, RoomTranslationText, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
-import { ManageMembersPanel } from "./ManageMembersPanel";
-import { GroupMemberRoster } from "./GroupMemberRoster";
+import { RoomTitle } from "./RoomTitle";
+import { RoomAlertsBell } from "./RoomAlertsBell";
+import { RoomNotice } from "./RoomNotice";
+import { RoomPicture } from "./RoomPicture";
+import { ShowPaneButton } from "./ShowPaneButton";
 import { GroupArchiveBar } from "./GroupArchiveBar";
-import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
+import { PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
-import { roomJoins } from "@/lib/team-rooms";
-import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
+import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice } from "@/lib/team-rooms";
+import { groupActivityRuns, itemMatchesFind, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
-import { nextBulletin } from "@/lib/room-bulletin";
-import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
+import { useTranslationAvailable } from "@/lib/room-translate";
+import { ActivityRun } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
-import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { useSearchFindSeed } from "@/lib/chat-find";
 import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
-import { shortPath } from "@/lib/short-path";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import { turnPresenceWaiting } from "@/lib/send-accept";
-import { activeLocale, localeTag, t, useI18n } from "@/lib/i18n";
-import { liveActivityLabel } from "@/lib/live-activity";
+import { picturedReplies } from "@/lib/show-pane";
+import { useI18n } from "@/lib/i18n";
+import { useRoomTurnStage } from "@/lib/room-turn";
 import { buffersForTurn } from "@/lib/turn-stage";
-import { usageLimitReset } from "@/lib/usage";
-import { useNow } from "./PlanUsageBar";
 import { splitAttachedImages } from "@/lib/composer-attachments";
-import { pinPreview } from "@/lib/pin-preview";
+import { usePresence } from "@/lib/use-presence";
 import {
   TRANSCRIPT_WINDOW_SIZE,
   focusWindow,
@@ -99,37 +106,24 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { useReplyDraft } from "@/lib/drafts";
-import { Presence } from "@/lib/use-presence";
 
-function dayLabel(at: number): string {
-  const d = new Date(at);
-  const now = new Date();
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
-  if (diffDays === 0) return t("chat.today");
-  if (diffDays === 1) return t("chat.yesterday");
-  return d.toLocaleDateString(localeTag(activeLocale()), { weekday: "short", month: "short", day: "numeric" });
-}
-
-/** One activity row in a room: a comm chip that opens its channel, otherwise
- * the 1:1 pill minus its status glyph — a room reads as a conversation. */
+/** One activity row in a room: the 1:1 rows, plus the room's folder fix and a still comm avatar. */
 export function RoomToolChip({
   message,
   notices,
   onRetry,
   group,
+  onMessageMenu,
 }: {
   message: Message;
   notices?: LinkedApproval[];
   onRetry?: (callbacks?: { onError?: () => void }) => void;
   group?: Group;
+  onMessageMenu?: (menu: MessageMenuRequest) => void;
 }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
-  const terminal = isTerminalToolSkin(useSkin());
-  const now = useNow();
   const [retried, setRetried] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const tool = message.tool;
   if (!tool) return null;
   if (tool.name === "memory.save") return <MemorySaveChip summary={tool.spoken ?? ""} at={message.at} room />;
@@ -140,53 +134,7 @@ export function RoomToolChip({
         onRetry({ onError: () => setRetried(false) });
       }
     : undefined;
-  const retryButton = onRetry && (
-    <button
-      disabled={retried}
-      onClick={handleRetry}
-      className={cn(
-        "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-        tool.usageLimit ? "border-warning/30 hover:bg-warning/15" : "border-danger/30 hover:bg-danger/15",
-        "disabled:pointer-events-none disabled:opacity-50",
-      )}
-    >
-      <RefreshCw size={12} /> {t("composer.retry")}
-    </button>
-  );
   if (tool.folder) return <FolderFix folder={tool.folder} botId={message.from?.botId} group={group} onRetry={handleRetry} />;
-  // A spent plan is the one failure a room can explain, so it gets the same
-  // warning treatment as 1:1 — with the engine's own words kept on the title.
-  if (tool.usageLimit) {
-    const reset = usageLimitReset(tool.usageLimit.resetsAt, now);
-    return (
-      <div className="flex justify-start">
-        <div className="flex min-w-0 max-w-full flex-col items-start">
-          <div
-            title={tool.name}
-            className="flex min-w-0 max-w-full items-center gap-2 rounded-full border border-warning/30 bg-warning/10 px-3 py-1.5 text-[13px] text-warning"
-          >
-            <Gauge size={13} className="shrink-0" />
-            <span className="min-w-0 max-w-[480px] truncate">
-              {reset ? `${t("chat.usageLimit")} · ${t(reset.key, reset.vars)}` : t("chat.usageLimit")}
-            </span>
-          </div>
-          {onRetry && (
-            <button
-              disabled={retried}
-              onClick={handleRetry}
-              className={cn(
-                "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-                "border-warning/30 hover:bg-warning/15",
-                "disabled:pointer-events-none disabled:opacity-50",
-              )}
-            >
-              <RefreshCw size={12} /> {t("composer.retry")}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
   const comm = message.comm;
   if (comm) {
     const peer = commPeer(state.bots, comm);
@@ -198,87 +146,51 @@ export function RoomToolChip({
           title={t("chat.openConversation", { name: comm.withName })}
           className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
         >
-          <BotAvatar bot={peer ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} animated={false} />
+          <RoomBotAvatar bot={peer ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} animated={false} />
           <span className="min-w-0 max-w-[480px] truncate">{commLabel(message, t)}</span>
           <ChevronRight size={13} className="shrink-0" />
         </button>
       </div>
     );
     if (!message.text) return chip;
+    const menuProps = group && onMessageMenu
+      ? messageMenuProps({ threadId: group.threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
+      : {};
     return (
-      <div>
+      <div {...menuProps} tabIndex={-1}>
         {chip}
         <PeerMessageBody text={message.text} />
+        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" readOnly={!onMessageMenu} />}
       </div>
     );
   }
-  if (terminal && !tool.name.startsWith("error:")) return <ActivityStep message={message} notices={notices} />;
+  if (!tool.name.startsWith("error:")) return <ActivityChip message={message} notices={notices} />;
   const member = message.from?.botId ? state.bots.find((bot) => bot.id === message.from?.botId) : undefined;
-  const instance = member?.modelSelection?.instanceId
-    ? state.instances.find((i) => i.instanceId === member.modelSelection.instanceId)
-    : undefined;
-  if (tool.name.startsWith("error:")) return (
-    <ErrorRow message={tool.name.slice(6).trim()} botId={member?.id ?? ""} botName={member?.name ?? message.from?.name}
-      setupInstance={(tool.setup || tool.signIn) && onRetry ? instance : undefined} signIn={tool.signIn} onRetry={handleRetry} retryDisabled={retried} />
-  );
-  const status = isServerLine(tool.name);
-  const setupAction =
-    (tool.setup || tool.signIn) && onRetry
-      ? setupErrorAction(instance, tool.signIn)
-      : undefined;
-
+  const accountId = tool.accountId;
+  const setupId = accountId ?? (tool.setup || tool.signIn ? member?.modelSelection?.instanceId : undefined);
   return (
-    <div className="flex justify-start">
-      <div className="flex min-w-0 max-w-full flex-col items-start">
-        <div
-          title={approvalHover(notices, t)}
-          className={cn(
-            "flex min-w-0 max-w-full items-center gap-2 border border-transparent px-3 py-1.5 text-[13px]",
-            // Only turn-level `error:` rows go red; a plain failed step the
-            // bot retried past renders like any other.
-            tool.name.startsWith("error:") ? "text-danger" : "text-ink-secondary",
-          )}
-        >
-          <span
-            style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}
-            className={tool.ok === false && expanded
-              ? cn("min-w-0 max-w-full break-words whitespace-pre-wrap", !status && "font-mono")
-              : status
-                ? "min-w-0 max-w-[480px] break-words"
-                : "min-w-0 max-w-[480px] truncate font-mono"}
-          >
-            {isCommsNotice(tool.name) ? <CommsNotice text={localizeServerLine(tool.name, t)} /> : localizeServerLine(tool.name, t)}
-          </span>
-        </div>
-        {setupAction === "cli" && instance ? (
-          <>
-            <EngineSetup instance={instance} signIn={tool.signIn} className="mt-2 text-ink-secondary" />
-            {tool.signIn && retryButton}
-          </>
-        ) : (
-          retryButton
-        )}
-        {/* Failed turns truncate mid-word in the pill above; the full text
-          is the debuggable part. Same affordance as ChatView bot bubbles. */}
-        {tool.ok === false && onRetry && (
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink"
-          >
-            {t(expanded ? "chat.showLess" : "chat.showFullMessage")}
-          </button>
-        )}
-      </div>
-    </div>
+    <ErrorRow
+      botId={member?.id ?? ""}
+      botName={member?.name ?? message.from?.name}
+      message={tool.name.slice(6).trim()}
+      onRetry={handleRetry}
+      retryDisabled={retried}
+      setupInstance={setupId ? state.instances.find((instance) => instance.instanceId === setupId) : undefined}
+      bound={Boolean(accountId)}
+      usageLimit={tool.usageLimit}
+      usageWait={tool.usageWait}
+      signIn={tool.signIn}
+      identities={state.instances.map((instance) => instance.snapshot.account)}
+    />
   );
 }
 
 /** 16px maus + name, shown once per sender cluster. */
-function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: Bot["color"] }) {
+function ClusterLabel({ bot, teamBot, name, color }: { bot?: Bot; teamBot?: TeamBot; name: string; color: Bot["color"] }) {
   return (
     <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-      <BotAvatar
-        bot={bot ?? { name, color }}
+      <RoomBotAvatar
+        bot={bot ?? teamBot ?? { name, color }}
         state={normalizeState(bot?.mascotExpression) ?? "happy"}
         size={16}
         motion="none"
@@ -290,7 +202,7 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: Bo
   );
 }
 
-function RoomReplyQuote({ group, replyToId, transcript }: { group: Group; replyToId: string; transcript: Message[] }) {
+function RoomReplyQuote({ group, replyToId, transcript, fallbackName }: { group: Group; replyToId: string; transcript: Message[]; fallbackName?: string }) {
   const { dispatch } = useStore();
   const target = useThreadMessage(
     group.threadId,
@@ -301,7 +213,7 @@ function RoomReplyQuote({ group, replyToId, transcript }: { group: Group; replyT
     <div className="mb-2">
       <ReplyQuote
         message={target}
-        fallbackName="Bot"
+        fallbackName={fallbackName}
         compact
         onJump={() => dispatch({ type: "focusMessage", threadId: group.threadId, messageId: target.id })}
       />
@@ -339,13 +251,22 @@ export const Transcript = memo(function Transcript({
   /** An older task: shown, never changed. */
   readOnly?: boolean;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { state, dispatch } = useStore();
   const skin = useSkin();
+  const roomBase = group.hosted ? hostRoomBase(group.hosted.roomId) : null;
+  const canTranslate = useTranslationAvailable(roomBase ?? "");
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
+  const teamBotOf = (id?: string) => roomTeamBots(group).find((b) => b.id === id);
+  const people = useMemo(() => {
+    if (!group.hosted) return undefined;
+    const names = reactionNames(roomPeople(group));
+    for (const m of transcript) if (m.author?.kind === "person") names.set(`person:${m.author.id}`, m.author.name);
+    return names;
+  }, [group, transcript]);
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
@@ -353,14 +274,21 @@ export const Transcript = memo(function Transcript({
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
       terminal,
-      (m) => messageVisible(m, showToolCalls, showActivities) || Boolean(workerAt.get(m.id)),
+      (m) => workerAt.has(m.id) ? Boolean(workerAt.get(m.id)) : messageVisible(m, showToolCalls, showActivities),
     ),
     [messages, streamingMessage, terminal, showToolCalls, showActivities, workerAt],
   );
   const rows = useMemo(
-    () => roomTranscriptRows(items, { showToolCalls, showActivities, workerRows: new Set([...workerAt].filter(([, shown]) => shown).map(([id]) => id)) }),
+    () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt }),
     [items, showToolCalls, showActivities, workerAt],
   );
+  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
+  const toggleFold = (id: string) => setUnfolded((current) => {
+    const next = new Set(current);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
   const joinsAt = useMemo(
     () => placeJoins(joins, items.map((item, i) => (rows[i].visible ? (item.kind === "message" ? item.message : item.messages[0]).at : null)), messages[0]?.id === transcript[0]?.id),
     [joins, items, rows, messages, transcript],
@@ -406,14 +334,10 @@ export const Transcript = memo(function Transcript({
           const forceOpen = found || item.messages.some((step) => step.id === focusedId);
           return (
             <div key={item.id} className="contents" data-run={item.id} {...logLine(skin === "logfile", first.at, item.messages)}>
-              {newDay && (
-                <div className="py-3 text-center text-[13px] text-ink-secondary">
-                  {dayLabel(first.at)} {formatTime(first.at, localeTag(locale))}
-                </div>
-              )}
+              {newDay && <DaySeparator at={first.at} />}
               {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
               {first.from && cluster && (
-                <ClusterLabel bot={memberOf(first.from.botId)} name={first.from.name} color={first.from.color} />
+                <ClusterLabel bot={memberOf(first.from.botId)} teamBot={teamBotOf(first.from.botId)} name={first.from.name} color={first.from.color} />
               )}
               {item.kind === "memory" ? (
                 <MemorySaveRun messages={item.messages} forceOpen={forceOpen}>
@@ -434,6 +358,7 @@ export const Transcript = memo(function Transcript({
                         message={step}
                         notices={item.notices?.get(step.id)}
                         onRetry={onRetryFor(step.id)}
+                        onMessageMenu={readOnly ? undefined : onMessageMenu}
                       />
                     </div>
                   ))}
@@ -453,15 +378,17 @@ export const Transcript = memo(function Transcript({
         slots.add(key);
         const docked = dock && dock.slot === slot && m.id === dockTargetId ? dock : null;
         const attachedImages = user && m.text ? splitAttachedImages(m.text) : null;
+        const folded = mine && !unfolded.has(m.id) && userTextFolds(attachedImages?.display ?? m.text ?? "");
         const menuTarget =
-          m.kind === "text" && m.text && !m.placeholder && !readOnly
+          m.kind === "text" && (m.text || m.roomFiles?.length) && !m.placeholder && !readOnly
             ? {
               threadId: group.threadId,
               message: m,
               copyText: attachedImages?.display ?? m.text ?? "",
-              user,
-              pinned: group.pinnedMessageId === m.id,
-              canPin: user || (!streaming && !docked?.live),
+              user: mine,
+              pinned: roomBase ? group.notice?.entryId === m.roomEntryId : group.pinnedMessageId === m.id,
+              canPin: (!roomBase || Boolean(m.roomEntryId)) && (user || (!streaming && !docked?.live)),
+              notice: Boolean(roomBase),
             }
             : null;
         const detectedOptions =
@@ -474,6 +401,9 @@ export const Transcript = memo(function Transcript({
         const markdownText =
           optionChoices?.messagePrefix != null ? optionChoices.messagePrefix : (m.text ?? "");
         const choicesOnly = Boolean(optionChoices) && !markdownText.trim() && !m.replyToId;
+        const copyText = attachedImages?.display ?? m.text ?? "";
+        const translateText = user ? copyText : markdownText;
+        const translateId = !roomBase ? undefined : user ? (person ? m.roomEntryId : undefined) : `m-${m.id}`;
         // the room's pinned folder, else its shared desk, else the writer's own
         const botFolder = (group.pinnedCwd === undefined ? group.cwd : group.pinnedCwd) ?? memberOf(m.from?.botId)?.cwd;
         const routineOwner = m.kind === "routine.run" ? memberOf(m.from?.botId) : undefined;
@@ -491,8 +421,8 @@ export const Transcript = memo(function Transcript({
           // `tool` distinguishes a permission from a QUESTION — a question
           // only accepts an "answer", so routing it here would offer an
           // Allow the broker rejects
-          m.kind === "note" && m.verify ? (
-            <VerifyCard card={m.verify} threadId={group.threadId} messageId={m.id} />
+          m.kind === "note" ? (
+            m.verify ? <VerifyCard card={m.verify} threadId={group.threadId} messageId={m.id} /> : <NoteMessage message={m} />
           ) : m.kind === "secret" && m.secret && m.from?.botId ? (
             <SecretRequestCard botId={m.from.botId} threadId={group.threadId} message={m} />
           ) : m.kind === "connector" && m.connector && m.from?.botId ? (
@@ -508,6 +438,7 @@ export const Transcript = memo(function Transcript({
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
                 pinned={pinnedQuestion(group.messages)?.id === m.id}
+                onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
           ) : m.kind === "compaction" ? (
@@ -528,6 +459,7 @@ export const Transcript = memo(function Transcript({
               message={m}
               notices={item.notices}
               onRetry={onRetryFor(m.id)}
+              onMessageMenu={readOnly ? undefined : onMessageMenu}
             />
           ) : m.kind === "screen" && m.image ? (
             <ShownImage name={m.image} caption={m.text} />
@@ -536,50 +468,30 @@ export const Transcript = memo(function Transcript({
               <img
                 src={m.png ? `data:${m.mime ?? "image/png"};base64,${m.png}` : screenImageUrl(group.threadId, m.id)}
                 alt={m.text || t("chrome.screenFrame")}
-                className="w-fit max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40"
+                style={CHAT_IMAGE}
+                className="rounded-2xl border border-hairline/40"
               />
               {m.text && <p className="max-w-[min(42rem,78%)] px-1 text-[13px] text-ink-secondary">{m.text}</p>}
             </div>
-          ) : m.kind === "text" && m.text ? (
+          ) : m.kind === "text" && (m.text || m.roomFiles?.length) ? (
             <div
               data-orbit-message={user ? "user" : "bot"}
-              className={cn("group flex w-full flex-col outline-none", mine ? "items-end" : "items-start")}
+              className={cn("group flex w-full flex-col outline-none", mine ? "animate-msg-in items-end" : "items-start")}
               tabIndex={-1}
-              {...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget })))}
-              onContextMenu={menuTarget ? (e) => {
-                if (isTouchPrimary() || !(e.target instanceof Element)) return;
-                const kind = contextClickKind(e.target, e.clientX, e.clientY);
-                if (kind === "native") return;
-                e.preventDefault();
-                e.stopPropagation();
-                onMessageMenu(kind === "selection"
-                  ? { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" }
-                  : { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, target: menuTarget });
-              } : undefined}
-              onKeyDown={menuTarget ? (e) => {
-                if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
-                if (e.target instanceof Element && keepsNativeMenu(e.target)) return;
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                onMessageMenu({
-                  kind: "message",
-                  x: rect.left + rect.width / 2,
-                  y: rect.top + rect.height / 2,
-                  opener: e.currentTarget,
-                  target: menuTarget,
-                });
-              } : undefined}
+              {...messageMenuProps(menuTarget, onMessageMenu)}
             >
+              <RoomLineTranslation base={roomBase ?? ""} entryId={translateId} text={translateText} canTranslate={canTranslate && !streaming}>{(translation) => (
               <div
                 data-orbit-message-body
                 data-strip={m.reactions?.length ? "" : undefined}
-                className={cn("relative w-fit max-w-[min(42rem,78%)]", Boolean(m.reactions?.length) && "pb-3.5")}
+                className={cn("relative w-fit max-w-[min(42rem,78%)]", !readOnly && "pb-8")}
               >
                 {mine && !readOnly && (
                   <div
                     data-message-hover-actions
-                    className="pointer-events-none absolute top-1/2 right-full z-20 mr-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                    className="pointer-events-none absolute right-0 bottom-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
                   >
+                    <CopyButton text={copyText} className="opacity-100" />
                     <button
                       type="button"
                       onClick={() => onReply(m)}
@@ -599,20 +511,26 @@ export const Transcript = memo(function Transcript({
                     "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words",
                     user ? cn("whitespace-pre-wrap text-ink", mine ? "bg-bubble-user" : "bg-card") : "bg-card text-ink",
                   )}
-                  title={new Date(m.at).toLocaleString(localeTag(locale))}
                 >
-                  {m.replyToId && <RoomReplyQuote group={group} replyToId={m.replyToId} transcript={transcript} />}
+                  {m.replyToId && <RoomReplyQuote group={group} replyToId={m.replyToId} transcript={transcript} fallbackName={members.length === 1 ? members[0].name : undefined} />}
                   {user ? (
                     <>
                       {attachedImages && attachedImages.images.length > 0 && (
                         <AttachedImageGallery paths={attachedImages.images} />
                       )}
-                      {attachedImages?.display ?? m.text}
-                      {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
+                      {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
+                      <div className={cn(folded && USER_FOLD_CLASS)}>
+                        <LinkedText text={translateText} />
+                        {translation && <RoomTranslationText translation={translation} markdown={false} />}
+                      </div>
+                      {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={group.threadId} className={cn(attachedImages.display && "mt-2")} />}
+                      {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
+                      {(folded || unfolded.has(m.id)) && <FoldToggle expanded={!folded} onToggle={() => toggleFold(m.id)} />}
                     </>
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />
+                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={pictured.has(m.id)} />
+                      {translation && <RoomTranslationText translation={translation} markdown />}
                     </MessageBoundary>
                   ) : null}
                 </div>
@@ -620,9 +538,11 @@ export const Transcript = memo(function Transcript({
                 {!mine && !streaming && !docked?.live && !readOnly && (
                   <div
                     data-message-hover-actions
-                    className="pointer-events-none absolute top-1/2 left-full z-20 ml-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
+                    // left, not right: the row is wider than a short bubble, and the wrapper is w-fit
+                    className="pointer-events-none absolute bottom-0 left-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
                   >
                     <ReactionBar threadId={group.threadId} message={m} />
+                    <CopyButton text={copyText} className="opacity-100" />
                     <button
                       type="button"
                       onClick={() => onReply(m)}
@@ -632,17 +552,20 @@ export const Transcript = memo(function Transcript({
                     >
                       <MessageSquareReply size={14} />
                     </button>
-
+                    {translation && <RoomTranslateButton translation={translation} />}
                   </div>
                 )}
                 <ReactionChips
                   threadId={group.threadId}
                   message={m}
                   members={members}
+                  names={people}
                   corner={mine ? "left" : "right"}
-                  className={cn("bottom-3.5", readOnly && "pointer-events-none")}
+                  className="bottom-3.5"
+                  readOnly={readOnly}
                 />
               </div>
+              )}</RoomLineTranslation>
               {optionChoices && (
                 <ChatOptionChips
                   options={optionChoices.options}
@@ -652,25 +575,19 @@ export const Transcript = memo(function Transcript({
                   onPick={(option) => dispatch({ type: "sendGroup", groupId: group.id, text: option })}
                 />
               )}
-              <div className="relative mt-0.5 flex">
-                <span className={cn("text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100", streaming && "invisible")}>
-                  {formatTime(m.at, localeTag(locale))}
-                </span>
-                {docked && <DockedPresence avatar={docked.avatar} label={docked.label} live={docked.live} since={docked.since} className="absolute inset-y-0 left-0" />}
+              <div className="relative flex">
+                <TimestampLabel at={m.at} hidden={streaming} />
+                {docked && <DockedPresence {...docked} className="absolute inset-y-0 left-0" />}
               </div>
             </div>
           ) : null;
         if (!row) return null;
         return (
           <div key={key} className="contents" data-mid={m.id} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
-            {newDay && (
-              <div className="py-3 text-center text-[13px] text-ink-secondary">
-                {dayLabel(m.at)} {formatTime(m.at, localeTag(locale))}
-              </div>
-            )}
+            {newDay && <DaySeparator at={m.at} />}
             {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
             {!user && m.from && cluster && (
-              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} />
+              <ClusterLabel bot={memberOf(m.from.botId)} teamBot={teamBotOf(m.from.botId)} name={m.from.name} color={m.from.color} />
             )}
             {person && cluster && <PersonLabel name={person.name} />}
             {row}
@@ -681,112 +598,6 @@ export const Transcript = memo(function Transcript({
     </>
   );
 });
-
-/** The room's shared project folder: where every member's shell and file
- * tools run, overriding each bot's own folder for room turns. The room
- * pins its own copy on its first turn (the server does the pinning —
- * engines key their sessions to the folder a thread starts in, so a
- * folder must not move under a room that already worked somewhere). The
- * PATCH is made directly rather than through patchGroup: the server
- * validates the path and a rejected folder must not stick in local state. */
-function RoomWorkingFolder({ group }: { group: Group }) {
-  const { t } = useI18n();
-  const { capabilities } = useDesktopCapabilities();
-  const home = capabilities.host.homeDir;
-  const [draft, setDraft] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const canPick = Boolean(window.ogb?.pickFolder);
-  const pinned = group.pinnedCwd; // undefined = not yet, null = each bot's own, string = folder
-  const locked = pinned !== undefined;
-  const shownCwd = locked ? (pinned ?? undefined) : group.cwd;
-  const emptyLabel = locked ? t("room.eachBotFolder") : t("room.chooseSharedFolder");
-
-  const save = async (cwd: string | null) => {
-    setSaving(true);
-    setError(null);
-    try {
-      await api(`/api/groups/${group.id}`, { method: "PATCH", body: JSON.stringify({ cwd }) });
-      setDraft(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const pick = async () => {
-    const chosen = await window.ogb?.pickFolder?.(group.cwd);
-    if (chosen) void save(chosen);
-  };
-
-  return (
-    <div className="rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">{t("room.workingFolder")}</div>
-      <div className="mt-0.5 text-[13px] text-ink-secondary">{t("room.workingFolderHelp")}</div>
-      {locked ? (
-        <div className="mt-3">
-          <div className="truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={shownCwd}>
-            {shownCwd ? shortPath(shownCwd, home) : <span className="font-sans text-ink-secondary">{emptyLabel}</span>}
-          </div>
-          <div className="mt-2 text-[12px] text-ink-secondary">
-            {t("room.fixedFolder")}
-          </div>
-        </div>
-      ) : canPick ? (
-        <div className="mt-3 flex items-center gap-2">
-          <div className="min-w-0 flex-1 truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={group.cwd}>
-            {group.cwd ? shortPath(group.cwd, home) : <span className="font-sans text-ink-secondary">{emptyLabel}</span>}
-          </div>
-          <button onClick={() => void pick()} disabled={saving} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            <FolderOpen size={14} /> {t("room.chooseEllipsis")}
-          </button>
-          {group.cwd && (
-            <button onClick={() => void save(null)} disabled={saving} className="shrink-0 rounded-lg px-2 py-2 text-[13px] text-ink-secondary hover:text-ink disabled:opacity-50">
-              {t("room.clear")}
-            </button>
-          )}
-        </div>
-      ) : (
-        <form
-          className="mt-3 flex items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            // an emptied field clears the folder — the server wants null
-            void save((draft ?? group.cwd ?? "").trim() || null);
-          }}
-        >
-          <input
-            className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 font-mono text-[12.5px] text-ink placeholder:font-sans placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
-            placeholder={t("room.eachBotFolderPath")}
-            value={draft ?? group.cwd ?? ""}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <button type="submit" disabled={saving || draft === null} className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            {t("room.save")}
-          </button>
-        </form>
-      )}
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-    </div>
-  );
-}
-
-function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: () => void }) {
-  const { t } = useI18n();
-  const folder = group.pinnedCwd === undefined ? group.cwd : (group.pinnedCwd ?? undefined);
-  const name = folder ? folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder : t("room.projectFolderChip");
-  return (
-    <button
-      onClick={onToggle}
-      className="flex min-w-0 max-w-[220px] shrink-[8] items-center max-md:shrink-0 gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
-      title={folder ? t("room.workingFolderNamed", { folder }) : t("room.workingFolderChip")}
-      aria-label={folder ? t("room.workingFolderNamed", { folder }) : t("room.projectFolderChip")}
-    >
-      <Folder size={12} className="shrink-0" />
-      {folder && <span className="truncate font-mono max-md:hidden">{name}</span>}
-    </button>
-  );
-}
 
 type RoomSetupFields = {
   setupPending?: boolean;
@@ -1137,7 +948,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group: live }: { group: Group }) {
+export function GroupView({ group: live, hidden = false }: { group: Group; hidden?: boolean }) {
   const archive = useGroupArchive(live.id);
   const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
@@ -1157,10 +968,9 @@ export function GroupView({ group: live }: { group: Group }) {
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
-  const [bulletinOpen, setBulletinOpen] = useState(false);
-  const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
-  const [folderOpen, setFolderOpen] = useState(false);
-  const [membersOpen, setMembersOpen] = useState(false);
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
+  const reaching = useRef(false);
+  const touchTop = useRef(0);
   const find = useSearchFindSeed(group.threadId);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
@@ -1170,6 +980,7 @@ export function GroupView({ group: live }: { group: Group }) {
   );
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
+    if (group.hosted) return void setHostNotice(group.id, group.notice?.entryId === message.roomEntryId ? null : message.roomEntryId!).catch(() => {});
     dispatch({
       type: "patchGroup",
       groupId: group.id,
@@ -1177,6 +988,8 @@ export function GroupView({ group: live }: { group: Group }) {
     });
   };
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const [heldSlot, setHeldSlot] = useState<HTMLDivElement | null>(null);
+  const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   // Same instance can show another thread without a click outside the menu.
   const [menuThread, setMenuThread] = useState(group.threadId);
   if (menuThread !== group.threadId) {
@@ -1184,8 +997,6 @@ export function GroupView({ group: live }: { group: Group }) {
     setMenu(null);
   }
   useEffect(() => endSelectMode, [group.threadId]);
-  const membersTriggerRef = useRef<HTMLButtonElement>(null);
-  const closeMembers = useCallback(() => setMembersOpen(false), []);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
@@ -1202,11 +1013,6 @@ export function GroupView({ group: live }: { group: Group }) {
     [group.memberIds, state.bots],
   );
   const speaker = members.find((b) => b.id === group.busyBotId);
-  const pinnedMessage = useThreadMessage(
-    group.threadId,
-    group.hasMore ? group.pinnedMessageId : undefined,
-    group.messages.find((m) => m.id === group.pinnedMessageId),
-  );
   const recoveryPacket = roomRecoveryPacket(group);
   const recoveryBot = recoveryPacket
     ? members.find((b) => b.id === recoveryPacket.botId) ?? members[0]
@@ -1218,10 +1024,13 @@ export function GroupView({ group: live }: { group: Group }) {
   const lastGroupMessage = group.messages.at(-1);
   const toolInFlight = lastGroupMessage?.kind === "activity" && lastGroupMessage.tool?.ok === undefined;
   const skin = useSkin();
+  const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   const terminal = isTerminalSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
-  const activityLabel = liveActivityLabel(lastGroupMessage, showActivities);
+  const speakerEngine = state.instances.find((instance) => instance.instanceId === speaker?.modelSelection?.instanceId);
+  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind, speaker?.activity === "no-signal");
   const reveal = stream.reveal?.[group.threadId];
   const waiting = !reveal?.ended && turnPresenceWaiting({
     busy: Boolean(speaker),
@@ -1334,9 +1143,11 @@ export function GroupView({ group: live }: { group: Group }) {
     slot: dockSlot,
     live: dockLive,
     label: activityLabel,
-    since: lastUserAt,
+    since: noReply ? undefined : lastUserAt,
+    quiet: noReply?.quiet,
+    wrap: Boolean(noReply),
     avatar: (
-      <BotAvatar
+      <RoomBotAvatar
         bot={presenceSpeaker ?? { name: group.name, color: DEFAULT_MAUS_COLOR }}
         state={toolInFlight ? "working" : "thinking"}
         size={16}
@@ -1345,7 +1156,7 @@ export function GroupView({ group: live }: { group: Group }) {
         trackPointer={false}
       />
     ),
-  } : null, [dockSlot, dockLive, activityLabel, lastUserAt, presenceSpeaker, group.name, toolInFlight]);
+  } : null, [dockSlot, dockLive, activityLabel, lastUserAt, noReply, presenceSpeaker, group.name, toolInFlight]);
 
   // the window holding a focus target commits before useFocusMessage scrolls
   const appliedFocus = useRef<number | null>(null);
@@ -1393,14 +1204,6 @@ export function GroupView({ group: live }: { group: Group }) {
   // A plain tail holds at least the newest window of visible rows - see ChatView.
   const tailStart = useMemo(() => tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders), [group.messages.length, renders]);
 
-  // an open draft outranks an incoming bulletin patch — resyncing under the cursor loses the edit
-  useEffect(() => {
-    if (!bulletinOpen) setBulletinDraft(group.bulletin);
-  }, [bulletinOpen, group.id, group.bulletin]);
-  // an open folder editor belongs to the room it was opened in
-  useEffect(() => setFolderOpen(false), [group.id]);
-  useEffect(() => setMembersOpen(false), [group.id]);
-  useEffect(() => setBulletinOpen(false), [group.id]);
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
   // `follow` is intentionally omitted - see ChatView.
@@ -1519,99 +1322,27 @@ export function GroupView({ group: live }: { group: Group }) {
     });
   };
 
-  const saveBulletin = () => {
-    setBulletinOpen(false);
-    const next = nextBulletin(group.bulletin, bulletinDraft);
-    if (next !== null) {
-      dispatch({ type: "patchGroup", groupId: group.id, patch: { bulletin: next } });
-    }
-  };
-
-  const discardBulletin = () => {
-    setBulletinDraft(group.bulletin);
-    setBulletinOpen(false);
-  };
-
-  // Static mauses: one per member, a ring + dot on whoever is working.
-  const memberMauses = members.map((b) => (
-    <span
-      key={b.id}
-      title={group.busyBotId === b.id ? t("chrome.botWorking", { name: b.name }) : b.name}
-      className={cn(
-        "relative inline-flex rounded-full",
-        group.busyBotId === b.id && "z-10 ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
-      )}
-    >
-      <BotAvatar bot={b} state={normalizeState(b.mascotExpression) ?? "happy"} size={24} animated={false} />
-      {group.busyBotId === b.id && (
-        <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent" />
-      )}
-    </span>
-  ));
-
   return (
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
       <GroupCallOverlay group={group} members={members} />
-      <Presence open={membersOpen && !group.dm}>
-        {(closing) => <ManageMembersPanel group={group} closing={closing} onClose={closeMembers} triggerRef={membersTriggerRef} />}
-      </Presence>
-      {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
-          "@container/chathead flex items-center justify-between px-5 py-3",
+          // md:min-h-18 matches the 1:1 header's 48px avatar row, so switching never jumps
+          "@container/chathead flex items-center justify-between px-5 py-3 md:min-h-18",
           // Room for the drawer button, which overlays this corner below md.
           sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT,
         )}
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
-          <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
+          <RoomTitle name={group.name} picture={<RoomPicture key={group.id} src={group.hosted && roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
-          <button
-            type="button"
-            onClick={() => find.toggleFind()}
-            aria-label={t("chat.findInConversation")}
-            aria-pressed={findOpen}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
-              findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title={t("chat.findInConversation")}
-          >
-            <Search size={18} />
-          </button>
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
-          {!setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
-          {group.dm ? (
-            memberMauses
-          ) : (
-            // The roster lives where you already look to see who is in the
-            // room; a dashed + says the row is editable without shouting.
-            <GroupMemberRoster
-              group={group}
-              members={members}
-              mauses={memberMauses}
-              onOpen={(pressed) => {
-                if (pressed) membersTriggerRef.current = pressed;
-                setMembersOpen(true);
-              }}
-            >
-              <GroupPeopleFaces group={group} />
-              <button
-                ref={membersTriggerRef}
-                type="button"
-                title={t("room.manageMembers")}
-                aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-                className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full text-ink-secondary pointer-coarse:-my-[13px] pointer-coarse:-mr-[26px] pointer-coarse:size-11 pointer-coarse:justify-start pointer-coarse:rounded-none"
-              >
-                <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70">
-                  <Plus size={11} />
-                </span>
-              </button>
-            </GroupMemberRoster>
-          )}
+          <RoomAlertsBell chat={group.id} />
+          <ShowPaneButton threadId={group.threadId} />
         </div>
       </div>
 
@@ -1625,96 +1356,25 @@ export function GroupView({ group: live }: { group: Group }) {
         />
       )}
 
-      {/* Bulletin: one pinned line; click to edit */}
-      {!setupPending && <div className="w-full px-5">
-        {bulletinOpen ? (
-          <div className="mb-1 rounded-lg border border-hairline/40 bg-panel p-2">
-            <textarea
-              autoFocus
-              value={bulletinDraft}
-              onChange={(e) => setBulletinDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveBulletin();
-                if (e.key === "Escape") discardBulletin();
-              }}
-              placeholder={t("room.bulletinPlaceholder")}
-              rows={4}
-              className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-ink placeholder:text-ink-secondary focus:outline-none"
-            />
-            <div className="flex items-center justify-end gap-1">
-              <button
-                type="button"
-                onClick={discardBulletin}
-                aria-label={t("room.discardInstructions")}
-                title={t("room.discardInstructions")}
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
-              >
-                <X size={15} />
-              </button>
-              <button
-                type="button"
-                onClick={saveBulletin}
-                aria-label={t("room.saveInstructions")}
-                title={t("room.save")}
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
-              >
-                <Check size={15} />
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setBulletinOpen(true)}
-            className="mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-raised/40"
-            title={t("room.bulletinTitle")}
-          >
-            <Pin size={12} className="shrink-0 text-ink-secondary" />
-            <span className={cn("truncate text-[12.5px]", group.bulletin ? "text-ink-secondary" : "text-ink-secondary/60")}>
-              {group.bulletin.split("\n")[0] || t("room.addInstructions")}
-            </span>
-          </button>
-        )}
-      </div>}
-
-      {/* Optional shared folder — the chip in the header toggles it */}
-      {!setupPending && folderOpen && !group.dm && (
-        <div className="w-full px-5">
-          <div className="mb-1">
-            <RoomWorkingFolder group={group} />
-          </div>
-        </div>
-      )}
+      <AppErrorBanner />
 
       {/* Pinned message banner — resolves against the room's full transcript */}
-      {(() => {
-        const pinned = pinnedMessage?.kind === "text" ? pinnedMessage : undefined;
-        const text = pinned ? pinPreview(pinned.role === "user" ? "user" : "bot", pinned.text ?? "") : "";
-        if (!pinned || !text) return null;
-        const sender = pinned.role === "user" ? (pinned.author?.kind === "person" ? pinned.author.name : t("room.you")) : (pinned.from?.name ?? t("chrome.aBot"));
-        return (
-          <div className="w-full px-5">
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
-              <Pin size={12} className="shrink-0 text-accent" />
-              <button
-                onClick={() => dispatch({ type: "focusMessage", threadId: group.threadId, messageId: pinned.id })}
-                className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
-                title={t("room.jumpToPinned")}
-              >
-                <span className="shrink-0 text-[11.5px] font-medium text-accent">{sender}</span>
-                <span className="truncate text-[12.5px] text-ink-secondary">{text}</span>
-              </button>
-              <button
-                onClick={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
-                aria-label={t("chat.unpinMessage")}
-                title={t("room.unpin")}
-                className="shrink-0 rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink"
-              >
-                <X size={13} />
-              </button>
-            </div>
-          </div>
-        );
-      })()}
+      {group.hosted ? group.notice?.entryId && (
+        <RoomNotice
+          base={hostRoomBase(group.hosted.roomId)}
+          line={hostLines(group.messages.filter((m) => m.roomEntryId === group.notice!.entryId))[0]}
+          text={roomNoticeText(group)}
+          onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
+        />
+      ) : (
+        <PinnedBanner
+          bot={{ name: t("chrome.aBot"), threadId: group.threadId, hasMore: group.hasMore }}
+          pinnedId={group.pinnedMessageId}
+          messages={group.messages}
+          onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
+          onUnpin={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
+        />
+      )}
 
       <ReconnectingCue />
 
@@ -1723,7 +1383,7 @@ export function GroupView({ group: live }: { group: Group }) {
         ref={scrollRef}
         data-orbit-transcript
         data-room-transcript
-        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
+        className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
         onWheel={(e) => {
           if (e.deltaY < 0) breakFollow();
@@ -1732,19 +1392,27 @@ export function GroupView({ group: live }: { group: Group }) {
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
-        onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
+        onTouchStart={(e) => {
+          touchY.current = e.touches[0]?.clientY ?? 0;
+          reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
+        }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) breakFollow();
+          if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
+        onTouchEnd={() => (reaching.current = false)}
+        onTouchCancel={() => (reaching.current = false)}
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,
@@ -1843,7 +1511,7 @@ export function GroupView({ group: live }: { group: Group }) {
           {(speaker || waiting) && !jump.messages && (
             <TurnPresence
               avatar={
-                <BotAvatar
+                <RoomBotAvatar
                   bot={presenceSpeaker ?? { name: group.name, color: DEFAULT_MAUS_COLOR }}
                   state={toolInFlight ? "working" : "thinking"}
                   size={36}
@@ -1855,28 +1523,25 @@ export function GroupView({ group: live }: { group: Group }) {
               visible={waiting && !dockLive}
               docked={dockLive}
               label={activityLabel}
-              since={lastUserAt}
+              instant={responding}
+              quiet={noReply?.quiet}
+              wrap={Boolean(noReply)}
+              since={noReply ? undefined : lastUserAt}
             />
           )}
+          <div ref={setHeldSlot} className="contents" />
         </div>
         )}
       </div>
 
-      {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
-      ) : menu ? (
-        <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
+      {shownMenu?.kind === "message" ? (
+        <MessageMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} target={shownMenu.target} closing={menuClosing} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: shownMenu.target.threadId, messageId: shownMenu.target.message.id, emoji, message: shownMenu.target.message })} onClose={() => setMenu(null)} />
+      ) : shownMenu ? (
+        <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
       {(jump.messages || laterCount > 0 || (!follow && newestBelow)) && (
-        <button
-          onClick={jumpToLatest}
-          aria-label={t("chat.jumpToLatest")}
-          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
-          style={{ bottom: composerDock.height }}
-        >
-          <ArrowDown size={13} /> {t("chat.jumpToLatest")}
-        </button>
+        <JumpToLatest bottom={composerDock.height} onJump={jumpToLatest} />
       )}
 
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
@@ -1893,17 +1558,22 @@ export function GroupView({ group: live }: { group: Group }) {
               busy={roomRecoveryBusy(group, recoveryBot.busy)}
             />
           )}
+          <CallWidgetSlot className="px-3 pb-2 md:hidden" />
           <Composer
             key={group.threadId}
             group={group}
             members={members}
             composerRef={composerInputRef}
-            onSend={jumpToLatest}
+            onSend={() => {
+              jumpToLatest();
+              sceneSend.current?.();
+            }}
             locked={setupPending}
             replyTo={replyTo}
             onClearReply={clearReply}
             onConsumeReply={consumeReply}
             onRestoreReply={restoreReply}
+            heldSlot={heldSlot}
           />
         </>
       )}

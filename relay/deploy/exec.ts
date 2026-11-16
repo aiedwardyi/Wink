@@ -376,7 +376,8 @@ export function realLocal(relayDir: string, buildDir: string): Local {
         acme,
       };
       const withGoogle = opts.google ? { ...config, google: opts.google } : config;
-      const file = opts.teamOwnerEmail ? { ...withGoogle, teamOwnerEmail: opts.teamOwnerEmail } : withGoogle;
+      const withTeam = opts.teamOwnerEmail ? { ...withGoogle, teamOwnerEmail: opts.teamOwnerEmail } : withGoogle;
+      const file = opts.statsReadKeySha256 ? { ...withTeam, stats: { readKeySha256: opts.statsReadKeySha256 } } : withTeam;
       await writeFile(join(buildDir, "wink-relay.config.json"), `${JSON.stringify(file, null, 2)}\n`);
     },
     async waitDns(fqdn, ip) {

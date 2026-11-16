@@ -253,7 +253,7 @@ describe("usage refresh route result", () => {
         FAKE_ACP_RPC_DUMP: rpcDump,
       });
       expect(result).toMatchObject({ config: { creditUsagePercent: 42, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } } });
-      expect(JSON.parse(readFileSync(argsDump, "utf8")).argv).toEqual(["--permission-mode", "default", "agent", "stdio"]);
+      expect(JSON.parse(readFileSync(argsDump, "utf8")).argv).toEqual(["agent", "stdio"]);
       expect(JSON.parse(readFileSync(rpcDump, "utf8"))).toEqual(["initialize", "authenticate", "_x.ai/billing"]);
     } finally {
       removeTempDir(scratch);

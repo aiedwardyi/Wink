@@ -41,6 +41,7 @@ let lastGenerateImageBody: any = null;
 let lastCallApiBody: any = null;
 let lastReactBody: any = null;
 let lastRoutineQuery = "";
+let lastUsageUrl = "";
 let routinesResponse: unknown = {
   now: "2026-08-28T10:30:00.000Z",
   timeZone: "Asia/Kolkata",
@@ -196,6 +197,10 @@ beforeAll(async () => {
           res.writeHead(403, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "source thread does not belong to sender" }));
         }
+        if (lastAskUserBody.close) {
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ closed: true }));
+        }
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ messageId: "msg-ask" }));
       });
@@ -252,6 +257,11 @@ beforeAll(async () => {
         res.end(JSON.stringify({ status: 401, text: "HTTP 401\nbad key [key]" }));
       });
       return;
+    }
+    if (req.method === "GET" && req.url?.startsWith("/api/internal/usage?")) {
+      lastUsageUrl = req.url;
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ text: "Claude:\n- Claude 1 (Main): 5h 34% left" }));
     }
     if (req.method === "GET" && req.url?.startsWith("/api/internal/routines?")) {
       lastRoutineQuery = req.url;
@@ -360,6 +370,8 @@ describe("agents-proxy MCP surface", () => {
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
+      "board_search",
+      "board_post",
       "list_bots",
       "update_task_state",
       "ask_bot",
@@ -374,11 +386,13 @@ describe("agents-proxy MCP surface", () => {
       "generate_image",
       "call_api",
       "request_credential",
+      "usage_status",
       "list_routines",
       "propose_routine",
       "propose_routine_action",
       "set_keep_going",
       "no_reply_needed",
+      "link_room_fix",
     ]);
   });
 
@@ -458,6 +472,16 @@ describe("agents-proxy MCP surface", () => {
       question: "Ship to prod or staging?",
       choices: ["Prod", 3, "Staging"],
     });
+  });
+
+  it("forwards a question close through the same tool without asking again", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "ask_user");
+    expect(tool.inputSchema.properties.close).toMatchObject({ type: "boolean" });
+    const res = await callTool("ask_user", { question: " Ship it? ", close: true });
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("Closed as answered in chat.");
+    expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
   });
 
   it("surfaces ask_user rejections and an empty question as tool errors", async () => {
@@ -624,15 +648,13 @@ describe("agents-proxy MCP surface", () => {
     const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
     expect(update.inputSchema.properties.goal).toMatchObject({ minLength: 1, pattern: "\\S" });
     expect(update.inputSchema.properties.plan.items.properties.step).toMatchObject({ minLength: 1, pattern: "\\S" });
-    const limits: Array<[Record<string, unknown>, "maxLength" | "maxItems", number]> = [
+    for (const list of ["plan", "blockers", "artifacts", "asks"]) expect(update.inputSchema.properties[list]).not.toHaveProperty("maxItems");
+    const limits: Array<[Record<string, unknown>, "maxLength", number]> = [
       [update.inputSchema.properties.goal, "maxLength", 500],
-      [update.inputSchema.properties.plan, "maxItems", 20],
       [update.inputSchema.properties.plan.items.properties.step, "maxLength", 200],
       [update.inputSchema.properties.completed_note, "maxLength", 300],
       [update.inputSchema.properties.next_action, "maxLength", 300],
-      [update.inputSchema.properties.blockers, "maxItems", 10],
       [update.inputSchema.properties.blockers.items.properties.note, "maxLength", 300],
-      [update.inputSchema.properties.artifacts, "maxItems", 20],
       [update.inputSchema.properties.artifacts.items.properties.ref, "maxLength", 500],
       [update.inputSchema.properties.artifacts.items.properties.label, "maxLength", 200],
     ];
@@ -695,12 +717,13 @@ describe("agents-proxy MCP surface", () => {
     const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
     const asks = update.inputSchema.properties.asks;
     expect(JSON.stringify(asks)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
-    expect(asks).toMatchObject({ type: "array", maxItems: 20 });
+    expect(asks).toMatchObject({ type: "array" });
+    expect(asks).not.toHaveProperty("maxItems");
     expect(asks.items.required).toEqual(["status"]);
     expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
     expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
     expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
-    for (const [field, limit] of [[asks, 20], [asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
+    for (const [field, limit] of [[asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
       expect(field.description).toContain(String(limit));
     }
 
@@ -862,6 +885,11 @@ describe("agents-proxy MCP surface", () => {
       role: "Product designer",
       instructions: "Design and review the user experience.",
     });
+  });
+
+  it("forwards create_bot model and effort to the harness", async () => {
+    await callTool("create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things.", model: " grok-4.6 ", effort: "xhigh" });
+    expect(lastCreateBody).toMatchObject({ model: "grok-4.6", effort: "xhigh" });
   });
 
   it("create_channel tells the model to call the tool instead of scanning localhost", async () => {
@@ -1026,6 +1054,16 @@ describe("agents-proxy MCP surface", () => {
     const wait = list.result.tools.find((t: { name: string }) => t.name === "wait_delegation");
     expect(wait.description).toContain("only sent when this turn ends");
     delegationStatusResponse = { status: "done", toBotName: "Helper", result: "All done." };
+  });
+
+  it("reads the Usage page through usage_status without arguments", async () => {
+    const tool = (await rpc("tools/list")).result.tools.find((t: { name: string }) => t.name === "usage_status");
+    expect(tool.inputSchema).toEqual({ type: "object", properties: {} });
+    const res = await callTool("usage_status", {});
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("Claude:\n- Claude 1 (Main): 5h 34% left");
+    expect(new URL(lastUsageUrl, "http://localhost").searchParams.get("self")).toBe("bot-asker");
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
   it("lists only the current bot's routines with authoritative time context", async () => {
@@ -1268,7 +1306,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(19);
+    expect(list.result.tools).toHaveLength(23);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1298,51 +1336,52 @@ describe("agents-proxy catalog", () => {
   const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
   const names = (list: any): string[] => list.result.tools.map((tool: { name: string }) => tool.name);
 
-  it("replaces only the ten optional definitions with the bounded pair", async () => {
+  it("replaces only the five ask-driven definitions with the bounded pair", async () => {
     const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
-    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "ask_user", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "react", "ask_user", "show_image", "list_routines", "propose_routine", "propose_routine_action", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
     expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
-    expect(17 + names(list).length).toBe(28);
   });
 
   it.each([
     ["create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things." }],
     ["create_channel", { name: "Design", member_ids: ["bot-helper"] }],
-    ["react", { emoji: "👍" }],
-    ["show_image", { path: "/proj/image.png", caption: "Preview" }],
     ["generate_image", { prompt: "A test image", show: true }],
     ["call_api", { credential_id: "ttsKey", method: "POST", url: "https://api.example.com/audio" }],
     ["request_credential", { credential_id: "geminiApiKey", reason: "Task needs it" }],
-    ["list_routines", {}],
-    ["propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } }],
-    ["propose_routine_action", { routine_id: "routine-1", action: "delete" }],
   ])("runs %s through its original handler and returns the same artifact or card", async (name, args) => {
     const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name as string, args);
     const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
     expect(gateway.call.result).toMatchObject({ ...direct.call.result, _meta: { winkTool: name } });
     expect(gateway.call.result.isError).toBeFalsy();
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([
+    ["react", { emoji: "👍" }],
+    ["show_image", { path: "/proj/image.png", caption: "Preview" }],
+    ["list_routines", {}],
+    ["propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } }],
+    ["propose_routine_action", { routine_id: "routine-1", action: "delete" }],
+  ])("keeps %s loaded: one direct call, never through the gateway", async (name, args) => {
+    const direct = await probeWithIdentity(identity(), name as string, args);
+    expect(direct.call.result.isError).toBeFalsy();
     if (name === "react") expect(lastReactBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", emoji: "👍" });
+    expect(direct.list.result.tools.map((tool: { name: string }) => tool.name)).toContain(name);
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
+    expect(gateway.call.result.isError).toBe(true);
   });
 
-  it("retains the original routine argument normalization", async () => {
-    const args = { name: "Brief", instructions: "Check things.", schedule: JSON.stringify({ type: "daily", time: "09:00" }) };
-    const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name: "propose_routine", arguments: args });
-    expect(call.result.isError).toBeFalsy();
-    expect(lastRoutineRequestBody.routine.schedule.type).toBe("weekly");
-  });
-
-  it.each(["create_bot", "create_channel", "react", "show_image", "generate_image", "request_credential", "propose_routine", "propose_routine_action"])("preserves %s argument refusals", async (name) => {
+  it.each(["create_bot", "create_channel", "generate_image", "request_credential"])("preserves %s argument refusals", async (name) => {
     const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name, {});
     const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
     expect(gateway.call.result.content).toEqual(direct.call.result.content);
     expect(gateway.call.result.isError).toBe(true);
   });
 
-  it.each([1, 2])("reveals only list_routines among optional tools at depth %s", async (depth) => {
+  it.each([1, 2])("offers no catalog at depth %s, where no folded tool is allowed", async (depth) => {
     const { list, call } = await probeWithIdentity(identity(depth), "find_wink_tool", { query: "routine bot image api credential" });
-    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "update_task_state", "wait_delegation", "find_wink_tool", "call_wink_tool"].sort());
-    expect(JSON.parse(call.result.content[0].text).tools.map((tool: { name: string }) => tool.name)).toEqual(["list_routines"]);
+    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "update_task_state", "wait_delegation", "list_routines"].sort());
+    expect(JSON.parse(call.result.content[0].text).tools).toEqual([]);
     const refused = await probeWithIdentity(identity(depth), "call_wink_tool", { name: "create_bot", arguments: { name: "X", role: "Y", instructions: "Z" } });
     expect(refused.call.result.isError).toBe(true);
   });
@@ -1355,7 +1394,7 @@ describe("agents-proxy catalog", () => {
       const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
       expect(call.result.isError).toBe(true);
     }
-    const unauthorized = await probeWithIdentity({ ...identity(), OMB_COMMS_TOKEN: "wrong-token" }, "call_wink_tool", { name: "list_routines", arguments: {} });
+    const unauthorized = await probeWithIdentity({ ...identity(), OMB_COMMS_TOKEN: "wrong-token" }, "call_wink_tool", { name: "create_bot", arguments: { name: "Pixel", role: "Designer", instructions: "Draw things." } });
     expect(unauthorized.call.result.isError).toBe(true);
     expect(unauthorized.call.result.content[0].text).toContain("unauthorized");
   });
@@ -1404,14 +1443,14 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 19, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 20, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 20, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 21, true],
-    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 11, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, true],
-    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 13, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 23, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 24, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 24, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 25, true],
+    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
+    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
     const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);

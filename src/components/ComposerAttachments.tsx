@@ -11,15 +11,16 @@ import {
   attachmentImageUrl,
   intakeFiles,
   formatSize,
-  pasteImageAttachment,
   pasteSummary,
   type Attachment,
   type PasteAttachment,
   type UploadAttachment,
 } from "@/lib/composer-attachments";
+import { shrunkPicture } from "@/lib/shrink-image";
 import { usePresence } from "@/lib/use-presence";
 import { AttachmentPreviewDialog, previewImage, type PreviewImage } from "./AttachmentPreview";
 import { FileDropOverlay } from "./FileDropOverlay";
+import { trackScreen } from "@/lib/usage-stats";
 
 /** Electron 32 removed File.path; only the preload can name a file. */
 export function pathForFile(file: File): string {
@@ -41,6 +42,7 @@ export function ComposerAttachments({
   localFile,
   onDropFiles,
   dropLabel,
+  roomCopy,
 }: {
   disabled?: boolean;
   items: Attachment[];
@@ -57,6 +59,8 @@ export function ComposerAttachments({
   localFile?: (id: string) => { file: File; picture: boolean } | undefined;
   onDropFiles?: (files: File[]) => void;
   dropLabel?: string;
+  /** A hosted room's copy of a desktop file, for teammates. */
+  roomCopy?: (file: File) => Promise<string | undefined>;
 }) {
   const { t } = useI18n();
   const [preview, setPreview] = useState<PreviewImage | null>(null);
@@ -68,13 +72,14 @@ export function ComposerAttachments({
       t,
       allowImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
+      shrunkPath: shrunkPicture,
+      roomCopy,
     });
     if (!isActive()) return;
     if (attachments.length) onAdd(attachments, uploads, startedAt);
     // A concurrent intake's notice must survive this drop.
     if (message) onNotice(message);
-  }, [onAdd, allowImages, onNotice, onDropFiles, t]), disabled);
+  }, [onAdd, allowImages, onNotice, onDropFiles, roomCopy, t]), disabled);
 
   return (
     <>
@@ -120,7 +125,7 @@ export function ComposerAttachments({
                 <button
                   type="button"
                   onClick={() => onDisplayInChatBox(a)}
-                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text transition-colors hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
                   aria-label="Display pasted text in chat box"
                   title="Display in chat box"
                 >
@@ -132,7 +137,7 @@ export function ComposerAttachments({
               <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)}>
                 <button
                   type="button"
-                  onClick={() => setPreview(previewImage(a.path))}
+                  onClick={() => { trackScreen("attachment-preview"); setPreview(previewImage(a.path)); }}
                   className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                   aria-label={`Preview ${a.name}`}
                 >
@@ -260,7 +265,7 @@ function Chip({
       title={title}
       className={cn(
         "group relative w-[172px] shrink-0 rounded-xl border border-hairline/40 bg-raised px-2.5 py-2",
-        "transition-colors hover:border-hairline",
+        "hover:border-hairline",
       )}
     >
       {children}

@@ -137,13 +137,13 @@ describe("room log writer", () => {
 describe("room people", () => {
   it("holds names unique per room across host, bots and people", () => {
     const roomId = group.hosted.roomId;
-    expect(addPerson(roomId, "Mina", "chat", ["Edward", "Wink"])).toMatchObject({ name: "Mina", level: "chat" });
+    expect(addPerson(roomId, "Mina", ["Edward", "Wink"])).toMatchObject({ name: "Mina" });
     for (const name of ["mina", "WINK", "edward", "everyone", "a@b", "two\nlines", "", "x".repeat(41)]) {
-      expect(() => addPerson(roomId, name, "ask", ["Edward", "Wink"])).toThrow(expect.objectContaining({ status: 400 }));
+      expect(() => addPerson(roomId, name, ["Edward", "Wink"])).toThrow(expect.objectContaining({ status: 400 }));
     }
     const composed = "한글";
-    expect(addPerson(roomId, composed, "trusted", []).name).toBe(composed);
-    expect(() => addPerson(roomId, composed.normalize("NFD"), "trusted", [])).toThrow(RoomError);
-    expect(() => addPerson("gone", "Jo", "chat", [])).toThrow(expect.objectContaining({ status: 404 }));
+    expect(addPerson(roomId, composed, []).name).toBe(composed);
+    expect(() => addPerson(roomId, composed.normalize("NFD"), [])).toThrow(RoomError);
+    expect(() => addPerson("gone", "Jo", [])).toThrow(expect.objectContaining({ status: 404 }));
   });
 });

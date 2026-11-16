@@ -1,6 +1,9 @@
-.folder-fix-error,
+.folder-fix-error {
+  transition: opacity var(--motion-fast) var(--ease-exit);
+}
+
 .folder-fix-success {
-  transition: opacity 200ms;
+  transition: opacity var(--motion-moderate) var(--ease-standard);
 }
 
 .folder-fix[data-folder-fix="fading"] .folder-fix-error {

@@ -10,7 +10,7 @@ import type { createUsageHistory } from "./usage-history.ts";
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
   blocked?: boolean; identity?: string; credit?: true;
-  status?: { state: "available" | "unavailable"; authenticated?: boolean; account?: string; accountIdentity?: string };
+  status?: { state: "available" | "unavailable" | "checking"; cliMissing?: boolean; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
 type WorkerRun = {
@@ -19,7 +19,7 @@ type WorkerRun = {
 };
 type Runs = { known: true; runs: WorkerRun[] } | { known: false; reason: "no-host" | "old-host" | "error" | "timeout" };
 type MainChange = {
-  base: string; engine: "claude" | "codex"; from: { id: string; generation: number }; to: { id: string; generation: number }; seq: number;
+  base: string; engine: "claude" | "codex" | "grok"; from: { id: string; generation: number }; to: { id: string; generation: number }; seq: number;
 };
 type Turn = { turnId: string; botId: string; accountId: string; generation: number };
 type History = Pick<ReturnType<typeof createUsageHistory>, "record" | "event" | "purge" | "since" | "snapshot">;
@@ -35,7 +35,7 @@ type Deps = {
   now?: () => number;
 };
 type Cursor = { boot: string; revision: number; counter: number; accounts: string; epoch: number };
-const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grok", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
+const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grokAgent", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
 const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" } satisfies Record<UsageBoardEngineId, string>;
 
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
@@ -194,6 +194,7 @@ export function createUsageBoard(deps: Deps) {
     const full = !old || old.boot !== boot || old.accounts !== accountSet || old.epoch !== epoch || old.revision > revision;
     const history = deps.history.since(full ? undefined : old.counter);
     const board: UsageBoard = { version: 1, revision, cursor: "", full, at: now(), runs: "unknown", engines: [] };
+    const byId = new Map(rows.map((row) => [row.id, row]));
     for (const row of rows) {
       const engine = engines.get(row.driverKind)!;
       let group = board.engines.find((group) => group.base === row.of);
@@ -213,7 +214,7 @@ export function createUsageBoard(deps: Deps) {
       }
       const named = deps.names.get(row.id);
       const number = row.credit ? Math.max(0, ...group.accounts.map((account) => account.number)) + 1 : named?.number ?? 1;
-      const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" ? `${titles[engine]} ${number}` : titles[engine];
+      const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" || engine === "grok" ? `${titles[engine]} ${number}` : titles[engine];
       // Validated user labels may match the provider's sign-in name.
       const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
       const report = deps.rateLimits.get(row.id);
@@ -230,6 +231,9 @@ export function createUsageBoard(deps: Deps) {
       }
       let signIn: UsageBoardAccount["signIn"] = "unknown";
       if (Object.hasOwn(deps.accounts.drains, row.id)) signIn = "draining";
+      else if (row.status?.cliMissing || byId.get(row.of)?.status?.cliMissing) signIn = "cli-missing";
+      // A ready account is blocked while its sign-in is unconfirmed, not only after a sign-out.
+      else if (row.blocked && !row.existing && row.state === "ready") signIn = "unknown";
       else if (row.blocked || row.state === "stopped") signIn = "signed-out";
       else if (row.state === "pending") signIn = "signing-in";
       else if (!row.existing) signIn = "ready";

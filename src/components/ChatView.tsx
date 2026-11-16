@@ -1,5 +1,6 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
+import { AppErrorBanner } from "./AppErrorBanner";
 import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { DaySeparator } from "./DaySeparator";
@@ -14,7 +15,6 @@ import {
   Crown,
   ListTree,
   Loader2,
-  Phone,
   Pin,
   RefreshCw,
   Search,
@@ -47,10 +47,11 @@ import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
-import { buffersForTurn, currentTurnId, turnPhase, turnStageLabel } from "@/lib/turn-stage";
+import { buffersForTurn, currentTurnId, hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
@@ -74,11 +75,15 @@ import { MediaViewerProvider } from "./MediaViewerProvider";
 import { ModelPicker } from "./ModelPicker";
 import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
+import { ReactionChips } from "./Reactions";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
 import { CallCard } from "./CallCard";
+import { ChatScene, sceneOf } from "./ChatScene";
 import { lazyView } from "@/lib/stale-build";
+import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
+import { usePresence } from "@/lib/use-presence";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
@@ -113,15 +118,18 @@ import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
-import { endCall } from "@/lib/call";
+import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { callAudio } from "@/lib/live-call/warm-audio";
+import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
-import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
+import { listedRuns, shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
 const LiveCallBar = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallBar })));
 const LiveCallBox = lazyView(() => import("./LiveCallBox").then((m) => ({ default: m.LiveCallBox })));
+export const warmCallViews = () => Promise.all([LiveCallBar.preload(), LiveCallBox.preload()]);
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -237,7 +245,7 @@ export function ErrorRow({
       disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-        "border-danger/30 hover:bg-danger/15",
+        "border-danger/30 hover:bg-danger/10",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
@@ -271,13 +279,13 @@ export function ErrorRow({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot: Bot }) {
+export const ActivityChip = memo(function ActivityChip({ message, notices, bot, onMessageMenu }: { message: Message; notices?: LinkedApproval[]; bot?: Bot; onMessageMenu?: (menu: MessageMenuRequest) => void }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
-  if (tool.name === "memory.save") return <MemoryCleanSave message={message} bot={bot} />;
-  if (message.comm) return <CommChip message={message} comm={message.comm} />;
+  if (tool.name === "memory.save" && bot) return <MemoryCleanSave message={message} bot={bot} />;
+  if (message.comm) return <CommChip message={message} comm={message.comm} threadId={bot?.threadId} onMessageMenu={onMessageMenu} />;
   if (terminal) return <ActivityStep message={message} notices={notices} />;
   const failed = tool.ok === false;
   const status = isServerLine(tool.name);
@@ -301,7 +309,7 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
       </div>
     </div>
   );
-}, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
+}, (a, b) => a.message === b.message && a.bot === b.bot && a.onMessageMenu === b.onMessageMenu && sameNotices(a.notices, b.notices));
 
 /** A row synced from another PC names the peer by that PC's bot id; the name still finds it here. */
 export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]>): Bot | undefined {
@@ -310,7 +318,7 @@ export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]
 }
 
 /** bot⇄bot comm chip: opens the channel where the exchange lives. */
-function CommChip({ message, comm }: { message: Message; comm: NonNullable<Message["comm"]> }) {
+function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message; comm: NonNullable<Message["comm"]>; threadId?: string; onMessageMenu?: (menu: MessageMenuRequest) => void }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
   const peer = commPeer(state.bots, comm);
@@ -328,10 +336,14 @@ function CommChip({ message, comm }: { message: Message; comm: NonNullable<Messa
     </div>
   );
   if (!message.text) return chip;
+  const menuProps = threadId && onMessageMenu
+    ? messageMenuProps({ threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
+    : {};
   return (
-    <div>
+    <div {...menuProps} tabIndex={-1}>
       {chip}
       <PeerMessageBody text={message.text} />
+      {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
     </div>
   );
 }
@@ -342,7 +354,8 @@ function ScreenFrame({ src, caption }: { src: string; caption?: string }) {
       <img
         src={src}
         alt={caption || "Bot's screen"}
-        className="w-fit max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40"
+        style={CHAT_IMAGE}
+        className="rounded-2xl border border-hairline/40"
       />
       {caption && <p className="max-w-[min(42rem,78%)] px-1 text-[13px] text-ink-secondary">{caption}</p>}
     </div>
@@ -359,7 +372,7 @@ function NoteReport({ note }: { note: PaneNote }) {
   );
 }
 
-const NoteMessage = memo(function NoteMessage({ message }: { message: Message }) {
+export const NoteMessage = memo(function NoteMessage({ message }: { message: Message }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const note = parsePaneNote(message.text ?? "");
@@ -682,6 +695,7 @@ const MessagesList = memo(function MessagesList({
     }
     return replies;
   }, [transcript, streamingMessage]);
+  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
   // the first user text after each bot reply, for its option chips
   const laterAnswers = useMemo(() => {
     const answers = new Map<string, string>();
@@ -696,6 +710,16 @@ const MessagesList = memo(function MessagesList({
   }, [transcript]);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
+  // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
+  const callAt = useMemo(() => {
+    const at = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind !== "message" || !item.message.call) continue;
+      const { id } = item.message.call;
+      if (!at.has(id) || (id !== calls.live && isVoiceLine(item.message))) at.set(id, item.message.id);
+    }
+    return at;
+  }, [items, calls.live]);
   // A search hit inside a folded run has to open it: the fold keeps the
   // row out of the DOM, and there is nothing for the scroll to land on.
   const focus = state.focusMessage;
@@ -752,7 +776,7 @@ const MessagesList = memo(function MessagesList({
         }
         const m = item.message;
         const callId = m.call?.id;
-        const callStart = callId && !items.some((x, j) => j < i && x.kind === "message" && x.message.call?.id === callId);
+        const callHere = callId && callAt.get(callId) === m.id;
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -769,7 +793,15 @@ const MessagesList = memo(function MessagesList({
               }
               if (m.card && isAskUserCard(m)) {
                 const pinned = pinnedQuestion(bot.messages, visibleMessages(bot))?.id === m.id;
-                return <AskUserRecord message={m} transcript={transcript} askerName={bot.name} pinned={pinned} />;
+                return (
+                  <AskUserRecord
+                    message={m}
+                    transcript={transcript}
+                    askerName={bot.name}
+                    pinned={pinned}
+                    onPick={(answer) => dispatch({ type: "answerCard", botId: bot.id, messageId: m.id, answer })}
+                  />
+                );
               }
               if (shouldHideOnboardingCard(m, transcript)) return null;
               return <OptionCard botId={bot.id} message={m} />;
@@ -814,7 +846,7 @@ const MessagesList = memo(function MessagesList({
                 );
               }
               if (!activityVisibleInChat(m, showActivities) && !found) return null;
-              return <ActivityChip bot={bot} message={m} notices={item.notices} />;
+              return <ActivityChip bot={bot} message={m} notices={item.notices} onMessageMenu={onMessageMenu} />;
             }
             case "screen":
               if (m.image) return <ShownImage name={m.image} caption={m.text} />;
@@ -839,6 +871,7 @@ const MessagesList = memo(function MessagesList({
                   editing={editingId === m.id}
                   isLastBotText={m.id === lastBotTextId}
                   streaming={m === streamingMessage}
+                  pictured={pictured.has(m.id)}
                   dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
@@ -851,13 +884,14 @@ const MessagesList = memo(function MessagesList({
               );
           }
         })();
-        if (!row && !callStart) return null;
+        // a call line that opens a day keeps the divider, now that the card may sit further down
+        if (!row && !callHere && !(callId && newDay)) return null;
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
-            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
+            {callHere && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
@@ -946,14 +980,16 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const callAvailable =
     capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
-  const [liveCall, setLiveCall] = useState<{ botId: string; ctx: AudioContext } | null>(null);
-  const [callNote, setCallNote] = useState<{ botId: string; text: string } | null>(null);
-  const endLiveCall = useCallback((note?: string) => {
-    setLiveCall(null);
-    if (note) setCallNote({ botId: bot.id, text: note });
-  }, [bot.id]);
+  const liveCall = useActiveCall();
+  const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
-  const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
+  useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
+  // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
+  const startCall = useCallback(() => {
+    const ctx = callAudio();
+    void ctx.resume();
+    placeCall(bot, ctx);
+  }, [bot]);
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
     activeRunForBot(state.routineRuns, bot.id),
@@ -981,6 +1017,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     });
   };
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   // Stays mounted across threads, so drop a menu that still names the previous one.
   const [menuThread, setMenuThread] = useState(bot.threadId);
   if (menuThread !== bot.threadId) {
@@ -1021,6 +1058,8 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const workers = useMemo(() => runs.map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })), [runs, livePanes, bot.id]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
+  const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   const terminal = isTerminalSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
@@ -1124,6 +1163,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
+  const reaching = useRef(false);
+  const touchTop = useRef(0);
 
   const setBottomFollow = useCallback((next: boolean) => {
     followRef.current = next;
@@ -1209,12 +1251,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const modelSwitch = useNoReplySwitch(bot, lastUserMessage?.id, turnSignal !== undefined);
   const activityLabel = turnStageLabel(
     phase,
-    liveActivityLabel(lastMessage, showActivities),
+    liveActivityLabel(lastMessage, showActivities, bot.activity === "no-signal"),
     busyRetryLabel(lastMessage),
     noReply?.label,
   );
   const waiting = modelSwitch.active || !reveal?.ended && turnPresenceWaiting({
-    busy: bot.busy,
+    busy: hydrationTurnThread(bot, state.groups) === bot.threadId,
     turnActive: turnSignal !== undefined,
     activity: bot.activity,
     lastMessage,
@@ -1478,7 +1520,8 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} hidden={hidden} sendRef={sceneSend} />}
       {/* Call mode covers the thread while the bot is on the line */}
       {!onLiveCall && <CallOverlay bot={bot} />}
       {/* Header */}
@@ -1497,7 +1540,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           <button
             data-orbit-chat-focus-fallback=""
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50 cursor-pointer"
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised cursor-pointer"
             title={t("chat.avatarTip")}
             aria-label={t("chat.avatarTip")}
           >
@@ -1569,32 +1612,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} />
+          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} />
 
-          {/* Before the chip: the phone header fits the chip as its last control. */}
-          <button
-            type="button"
-            aria-pressed={onLiveCall}
-            aria-label={liveCallLabel}
-            title={liveCallLabel}
-            // The audio context is born in the tap: phones only let it play from one.
-            onClick={() => {
-              if (onLiveCall) {
-                // Release the call first, or the desktop's old call overlay mounts for a render.
-                endCall(bot.id);
-                return setLiveCall(null);
-              }
-              const ctx = new AudioContext();
-              void ctx.resume();
-              setCallNote(null);
-              setLiveCall({ botId: bot.id, ctx });
-            }}
-            className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
-          >
-            <Phone size={18} />
-          </button>
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
-          {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
       </div>
 
@@ -1608,15 +1628,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         />
       )}
 
-      {/* Error banner */}
-      {state.error && (
-        <div className="w-full px-5">
-          <div className="mb-2 flex items-start gap-2 rounded-lg border border-hairline/50 bg-inset px-3 py-2 text-[13px] text-ink">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
-            <span className="min-w-0 break-words">{state.error}</span>
-          </div>
-        </div>
-      )}
+      <AppErrorBanner />
 
       <ReconnectingCue />
 
@@ -1711,19 +1723,27 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
         onWheel={(e) => followWheel(e.deltaY)}
-        onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
+        onTouchStart={(e) => {
+          touchY.current = e.touches[0]?.clientY ?? 0;
+          reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
+        }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) breakFollow();
+          if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
             if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
           }
         }}
+        onTouchEnd={() => (reaching.current = false)}
+        onTouchCancel={() => (reaching.current = false)}
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,
@@ -1790,7 +1810,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onCall={onLiveCall}
             hidden={hidden}
           />
-          {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} />}
+          {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} thread={bot.threadId} />}
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button
@@ -1825,6 +1845,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             visible={waiting && !jump.messages && !dockLive}
             docked={dockLive}
             label={activityLabel}
+            instant={phase === "responding"}
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
@@ -1842,8 +1863,8 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
                 sendsNext={sendsNext && index === 0}
                 sendsAfterSync={pending?.some((entry) => entry.queueId === m.id && entry.reason === "sync")}
                 queuedActions={{
-                  // Send now steers the running turn; a preparing turn has nothing to steer into yet.
-                  sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === m.id && entry.sendId && (entry.reason === "sync" || engine?.capabilities?.queueing === true))
+                  // Send now steers this chat's running turn; a preparing turn, or one in a room, has nothing to steer into.
+                  sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === m.id && entry.sendId && (entry.reason === "sync" || (canSteer && turnSignal !== undefined)))
                     ? () => dispatch({ type: "sendQueuedNow", botId: bot.id, threadId: bot.threadId, queueId: m.id })
                     : undefined,
                   cancel: () => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId: m.id }),
@@ -1871,10 +1892,10 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         onWheel={followWheel}
       />
 
-      {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
-      ) : menu ? (
-        <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
+      {shownMenu?.kind === "message" ? (
+        <MessageMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} target={shownMenu.target} closing={menuClosing} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: shownMenu.target.threadId, messageId: shownMenu.target.message.id, emoji, message: shownMenu.target.message })} onClose={() => setMenu(null)} />
+      ) : shownMenu ? (
+        <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
       {/* Reading scrollback — one tap back to the end, streaming or not */}
@@ -1888,8 +1909,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {onLiveCall
-          ? <Suspense fallback={null}><LiveCallBar bot={bot} ctx={liveCall.ctx} onEnd={endLiveCall} /></Suspense>
+          ? <Suspense fallback={null}><LiveCallBar bot={bot} /></Suspense>
           : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
+        <CallWidgetSlot className="px-3 pb-2 md:hidden" />
         {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
           <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}
@@ -1915,7 +1937,10 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           key={bot.threadId}
           bot={bot}
           composerRef={composerInputRef}
-          onSend={jumpToLatest}
+          onSend={() => {
+            jumpToLatest();
+            sceneSend.current?.();
+          }}
           focusBlocked={focusComposerBlocked}
           replyTo={replyTo}
           onClearReply={clearReply}
@@ -1923,6 +1948,8 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
           call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
+          onCall={!onLiveCall && callsSupported() ? startCall : undefined}
+          callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} helpAbove /> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>

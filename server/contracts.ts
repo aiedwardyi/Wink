@@ -212,6 +212,8 @@ export interface SendTurnInput {
   systemUpdate?: string;
   /** The bot's Ask for approval / Auto chip. Omitted keeps the driver's own mode. */
   approval?: "ask" | "auto";
+  /** No file edits or shell, whatever the approval mode. Only for drivers with capabilities.readOnlyTurns. */
+  readOnly?: true;
   /** A person is present for this turn. Only then does background work it
    * starts keep Auto approvals for desktop control after it settles. */
   attended?: boolean;
@@ -330,6 +332,8 @@ export interface ProviderAdapter {
     /** True when `steer` calls its `consumed` callback, so the caller can
      * tell a message the model took in from one a Stop or failure dropped. */
     steerConsumed?: boolean;
+    /** True when the driver honours SendTurnInput.readOnly. */
+    readOnlyTurns?: boolean;
     /** True only when local MCP calls can reach the human approval channel.
      * Full-auto/bypass provider instances must leave this false. */
     localComputerMcp?: boolean;
@@ -339,6 +343,8 @@ export interface ProviderAdapter {
     askApproval?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
+  /** What this turn may do, from the same values the driver sets its flags with; the prompt states it. Only the box agent omits it (its box never asks); turn-access.test scans the rest. */
+  access?(turn: import("./drivers/turn-access.ts").AccessTurn): import("./drivers/turn-access.ts").TurnAccess;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
   /** End this running turn as a clean finish, through the driver's own
    * interrupt. Absent = the turn runs on to its natural end. */
@@ -385,8 +391,11 @@ export interface ProviderAdapter {
 
 // ── provider snapshot (upstream ServerProviderShape, reduced) ────────────
 export interface ProviderSnapshot {
-  state: "available" | "unavailable";
+  /** "checking": the first probe has not answered yet; never saved. */
+  state: "available" | "unavailable" | "checking";
   reason?: string;
+  /** `--version` did not answer: the CLI is missing, broken or too slow, so sign-in state is unknown. */
+  cliMissing?: boolean;
   authenticated?: boolean;
   authChecked?: boolean;
   /** Email or account name of the sign-in, read from the CLI's own status or auth file. */

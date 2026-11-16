@@ -10,15 +10,16 @@ import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
+import type { BoardCalls } from "./board-calls.ts";
+import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
-import { claimOpenAsk, MAX_OPEN_ASKS, releaseOpenAsk } from "./comms-budget.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
 import { callerSnapshot, release, reserve, type Reservation } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
-import { newId } from "./contracts.ts";
+import { newId, type ModelSelection } from "./contracts.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import { appendDecision } from "./decision-log.ts";
 import { acceptPeerTask, drainWaitingOn, finishDelegatedTurn, pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult, type drainDelegations } from "./delegations.ts";
@@ -51,6 +52,7 @@ type InternalRouteDeps = {
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  createdBotSelection: (chief: ModelSelection, model: unknown, effort: unknown) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
   wireBot: (bot: BotRecord) => Record<string, unknown>;
@@ -58,6 +60,8 @@ type InternalRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
+  botCalls?: Pick<BotCalls, "blockers">;
+  boardCalls?: Pick<BoardCalls, "hold">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -90,6 +94,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     computerControl,
     askBotAndWait,
     checkedMemberIds,
+    createdBotSelection,
     store,
     keepGoing,
     wireBot,
@@ -175,29 +180,33 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       if (body.next_action !== undefined) assignTaskNextAction(next, body.next_action);
       foldCompletedNextAction(next);
+      const board = body.blockers !== undefined && deps.boardCalls
+        ? deps.boardCalls.hold(bot.id, body.fromThreadId, current.blockers, body.blockers)
+        : null;
       if (body.blockers !== undefined) {
         next.blockers = [
           ...next.blockers.filter((blocker) => blocker.kind === "approval"),
-          ...body.blockers,
+          ...(board?.blockers ?? body.blockers),
         ];
       }
       for (const artifact of artifacts) {
         if (!next.artifacts.some((existing) => existing.ref === artifact.ref)) next.artifacts.push(artifact);
       }
-      const asks = body.asks ? mergeTaskAsks(next.asks, body.asks, Date.now()) : null;
+      const asks = body.asks ? mergeTaskAsks(next, body.asks, Date.now()) : null;
       if (asks && "error" in asks) return json(res, 400, { error: asks.error });
-      if (asks) next.asks = asks.asks;
+      if (asks) Object.assign(next, { asks: asks.asks, lastAskId: asks.lastAskId });
       next.updatedAt = Date.now();
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
+      if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {
@@ -310,22 +319,17 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
       if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
-      // Depth stops recursion, not breadth. Both claims happen before the
+      // Depth stops recursion, the root budget breadth. The claim happens before the
       // approval card so a turn cannot open unbounded cards either.
       const taskId = newId();
-      if (!claimOpenAsk(fromThreadId, taskId)) {
-        return json(res, 200, { limit: `You already have ${MAX_OPEN_ASKS} teammate messages waiting. Collect those replies first.` });
-      }
       const credit = reserve(snapshot.rootId, "ask");
       if (!credit.ok) {
-        releaseOpenAsk(fromThreadId, taskId);
         postRefusalNotice(store, credit.reason, snapshot.rootId, taskId, fromThreadId, store.dmGroup(from.id, target.id)?.threadId);
         return json(res, 200, { limit: refusalText(credit.reason) });
       }
       const reservation = credit.reservation;
       const refuse = (code: number, error: string) => {
         release(reservation);
-        releaseOpenAsk(fromThreadId, taskId);
         return json(res, code, { error });
       };
       let currentFrom = from;
@@ -430,13 +434,16 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           bot: (id) => store.bot(id),
           conversation: connectorThread,
           appendMessage: (threadId, message) => store.appendMessage(threadId, message),
+          activePath: (threadId) => store.activePath(threadId),
+          patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
+          cancelHeld: (botId, threadId, question) => askHold.cancel(botId, threadId, question),
           alertThread: (bot, threadId) => {
             // A routine run's alert opens the conversation that owns the routine.
             const run = routines?.activeRunForBot(bot.id);
             return (run?.threadId === threadId && routineSourceThread(run)) || threadId;
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
-          whenSettled: (botId, threadId, post) => askHold.whenSettled(botId, threadId, post),
+          whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
         },
         askUserRequestSchema.parse(body),
       );
@@ -490,7 +497,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
-        return json(res, 400, { error: "needs a prompt (max 4000 chars) and a supported size and quality" });
+        return json(res, 400, { error: "needs a prompt and a supported size and quality" });
       }
       const roots = botOutputRoots(from, fromThreadId, owner.group?.id);
       let generated: Awaited<ReturnType<typeof generateImageFile>>;
@@ -616,7 +623,6 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           self: "a bot cannot delegate to itself",
           too_deep: "message chains are limited to one hop",
           no_target: "no such bot",
-          too_many: "too many delegations queued on this turn - finish some first",
         };
         return json(res, 200, { error: said[queued.result === "ok" ? "no_target" : queued.result] });
       }
@@ -667,20 +673,22 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (duplicate) {
         return json(res, 409, { error: `@${duplicate.name} already exists in this section; use list_bots` });
       }
+      const selection = createdBotSelection(chief.modelSelection, body.model, body.effort);
+      if (!selection.ok) return json(res, selection.status, { error: selection.error });
       const created = store.createBot(
         {
           name,
           title: role,
           description: instructions,
-          modelSelection: { ...chief.modelSelection },
+          modelSelection: selection.selection,
           section: chief.section,
         },
         { seedMessages: false },
       );
       const safeBot = store.patchBot(created.id, {
-        composio: false,
-        autoApprove: false,
-        approvePeerComms: false,
+        composio: chief.composio !== false,
+        autoApprove: chief.autoApprove === true,
+        approvePeerComms: chief.approvePeerComms === true,
       })!;
       return json(res, 201, {
         id: safeBot.id,

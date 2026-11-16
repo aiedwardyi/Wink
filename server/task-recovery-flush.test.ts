@@ -8,6 +8,7 @@ import {
   idleReopenStampReason,
   isRecoveringPacket,
   lastUserInstruction,
+  owedRoomResponders,
   packetAfterInterruption,
   shouldStampRecoveryDismiss,
   shutdownStampsForClose,
@@ -70,6 +71,33 @@ describe("task recovery interruption flush", () => {
       flushReason: "stop",
     });
     expect(packetAfterInterruption(null, "crash", { now: 1, turnsAtWrite: 0 })).toBeNull();
+  });
+});
+
+describe("room answers owed after a restart", () => {
+  const members = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const text = (id: string, botId?: string) => ({ id, role: botId ? "bot" : "user", kind: "text", text: id, ...(botId ? { from: { botId } } : {}) });
+  const all = () => members;
+
+  it("owes the responders that never answered, bar the one being resumed", () => {
+    const rows = [text("old", "c"), text("line"), text("a1", "a"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
+    expect(owedRoomResponders([...rows, text("c1", "c")], "line", all, "b")).toEqual([]);
+  });
+
+  it("counts a question card as an answer, but not a tool row", () => {
+    const row = (id: string, kind: string, botId: string) => ({ id, role: "bot", kind, from: { botId } });
+    const rows = [text("line"), row("a-card", "options", "a"), text("b-half", "b"), row("c-tool", "activity", "c")];
+    expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
+  });
+
+  it("owes nobody when the line is gone", () => {
+    expect(owedRoomResponders([text("line"), text("b-half", "b")], "missing", all, "b")).toEqual([]);
+  });
+
+  it("owes the rest when a member brought in by a mention was the one cut off", () => {
+    const rows = [text("line"), text("a1", "a"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "line", () => [{ id: "a" }, { id: "c" }], "b")).toEqual([{ id: "c" }]);
   });
 });
 
@@ -349,6 +377,25 @@ describe("turn completion disposition after stop", () => {
     expect(spent).toBeGreaterThan(dispatch);
     expect(spent).toBeGreaterThan(send);
     expect(indexSource.slice(send, spent)).not.toContain("clearResumeCursors");
+  });
+
+  it("stages the send's record before dispatch and settles it when the dispatch ends", () => {
+    const claimed = indexSource.indexOf("async function startClaimedTurn(");
+    const staged = indexSource.indexOf("persistTaskPacket(packet, { staged: true });", claimed);
+    const dispatch = indexSource.indexOf("const started = await dispatchAdapterTurn(", claimed);
+    const settle = indexSource.lastIndexOf("store.settleTaskPacket(threadId);");
+    expect(staged).toBeGreaterThan(claimed);
+    expect(staged).toBeLessThan(dispatch);
+    expect(settle).toBeGreaterThan(indexSource.indexOf("return live.adapter.sendTurn({", dispatch));
+    expect(indexSource.split("{ staged: true }")).toHaveLength(2);
+  });
+
+  it("settles the staged record on every early return before the dispatch", () => {
+    const staged = indexSource.indexOf("persistTaskPacket(packet, { staged: true });");
+    const early = indexSource.slice(staged, indexSource.indexOf("const releaseStarting = takeStartingHold(bot.id);", staged));
+    const exits = early.split("logSummaryWait();").slice(1);
+    expect(exits).toHaveLength(6);
+    for (const exit of exits) expect(exit.trimStart()).toMatch(/^store\.settleTaskPacket\(threadId\);/);
   });
 
   it("keeps a routine turn fired in a chat out of that chat's recovery and completion", () => {

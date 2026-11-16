@@ -20,7 +20,11 @@ export function watchDescriptionSaveStatus(botId: string, changed: () => void): 
 
 export function setDescriptionSaveStatus(botId: string, patch: BotUpdatePatch, status: "saving" | "saved" | "idle", pending: BotUpdatePatch = {}): void {
   if (!Object.hasOwn(patch, "description") || Object.hasOwn(pending, "description")) return;
-  if (status === "idle") saves.delete(botId);
-  else saves.set(botId, status === "saved" ? Date.now() : status);
-  for (const view of listeners.get(botId) ?? []) view();
+  setSaveStatus(botId, status);
+}
+
+export function setSaveStatus(id: string, status: "saving" | "saved" | "idle"): void {
+  if (status === "idle") saves.delete(id);
+  else saves.set(id, status === "saved" ? Date.now() : status);
+  for (const view of listeners.get(id) ?? []) view();
 }

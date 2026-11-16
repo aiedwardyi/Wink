@@ -8,6 +8,7 @@ import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
 import { adoptHumanRoot } from "./comms-root.ts";
 import { KEEP_GOING_RULES, keepGoingTurnOptions } from "./keep-going.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
+import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } from "./steer-queue.ts";
 import type { Message } from "./store.ts";
@@ -58,7 +59,7 @@ describe("summary grace dispatch", () => {
     new Function("scope", `with (scope) { ${claim} }`)({
       store: { messagesFor: () => [], setActivity: () => {} },
       bot: { id: "bot" }, threadId: "room", dispatchedThreads: new Map(), releaseTurnStart: undefined,
-      keepGoing: { turnStarted }, hop, cardContinuation,
+      keepGoing: { turnStarted }, hop, cardContinuation, lane: false, turnKey: "bot",
       takeStartingHold: () => () => {},
     });
     expect(turnStarted).toHaveBeenCalledWith("bot", "room", byUser);
@@ -161,7 +162,7 @@ describe("summary grace dispatch", () => {
       const enqueue = () => queueSteeredMessage("bot", "thread", payload);
       if (fold === "preparation") enqueue();
       const sendTurn = vi.fn(async (_turn: { text: string; transcript: Array<{ text: string }>; resumeCursor?: unknown }) => ({ turnId: "turn" }));
-      const live = { adapter: { capabilities: { pinnedSystem }, sendTurn, hasBackgroundWork: () => event === "background" } };
+      const live = { adapter: { capabilities: { pinnedSystem }, sendTurn, access: () => ({}), hasBackgroundWork: () => event === "background" } };
       if (event === "background") {
         const recycleStart = source.indexOf("recycle: shouldRecycleProviderSession(") + "recycle: ".length;
         const recycle = source.slice(recycleStart, source.indexOf("\n    local:", recycleStart)).trim().replace(/,$/, "");
@@ -183,7 +184,7 @@ describe("summary grace dispatch", () => {
           return live;
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-        turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
+        turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge,
         clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
@@ -192,7 +193,7 @@ describe("summary grace dispatch", () => {
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
         commsDepth: 0, MAX_COMMS_DEPTH: 1,
         taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false, cfg: {},
-        ALWAYS_REPLY_INSTRUCTIONS: "", CORPUS_SEARCH_INSTRUCTIONS: "", keepGoing: { rules: () => "" },
+        ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
         skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
         text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: false, replaysNatively: false,
         reactions: {}, rewound: false, fresh: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,

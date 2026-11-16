@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
+import { ArrowLeftRight, Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
 
 import { leaveFor } from "@/lib/back-navigation";
 import { onThisPc } from "@/lib/devices-setup";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { api, useStoreDispatch } from "@/state/store";
@@ -25,9 +26,29 @@ const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: num
   device.laptop ? <Laptop size={size} className={cn("shrink-0", className)} /> : <Monitor size={size} className={cn("shrink-0", className)} />;
 
 const DEVICES_CHANGE = "orbit-devices-change";
+const SAVED = "omb-devices";
 
-export function useDevices(enabled: boolean, watching = false) {
-  const [devices, setDevices] = useState<DeviceItem[]>([]);
+function savedDevices(): DeviceItem[] | null {
+  try {
+    const body = JSON.parse(localStorage.getItem(SAVED) ?? "null");
+    return Array.isArray(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepDevices(devices: DeviceItem[]) {
+  try {
+    const text = JSON.stringify(devices);
+    if (localStorage.getItem(SAVED) !== text) localStorage.setItem(SAVED, text);
+  } catch {
+    /* The next open fetches again. */
+  }
+}
+
+/** `saved` starts from the last answer (null until one exists), so a list paints before the PC replies. Every caller's answer is saved, whatever `saved` says: the sidebar's boot fetch keeps it fresh. */
+export function useDevices(enabled: boolean, watching = false, saved = false) {
+  const [devices, setDevices] = useState<DeviceItem[] | null>(() => (saved ? savedDevices() : null));
   const live = useRef(true);
   const requested = useRef(0);
   const applied = useRef(0);
@@ -38,7 +59,8 @@ export function useDevices(enabled: boolean, watching = false) {
         .then((body: { devices: DeviceItem[] }) => {
           if (!live.current || request <= applied.current) return;
           applied.current = request;
-          setDevices(body.devices);
+          keepDevices(body.devices ?? []);
+          setDevices(body.devices ?? []);
         })
         .catch(() => {});
     },
@@ -69,12 +91,19 @@ export function useDevices(enabled: boolean, watching = false) {
     return () => window.clearInterval(timer);
   }, [enabled, watching, load]);
 
-  return [devices, load] as const;
+  return [devices ?? [], load, devices !== null] as const;
 }
 
 type Navigate = (url: string) => void;
 
-/** Phones jump in place from the bot list, leaving no Back step to this PC; the desktop app opens the PC in its own window. */
+/** The sign-in page's PC list, for a relay browser; it also reaches PCs missing from this PC's roster. */
+function choosePcUrl(): string | null {
+  const host = window.location.hostname;
+  const pc = /^[a-z2-7]{16}\.(.+)$/.exec(host);
+  return window.ogb || host.endsWith(".ts.net") || !pc ? null : `https://${pc[1]}/?pick=1`;
+}
+
+/** Browsers jump in place, leaving no Back step to this PC; the desktop app opens the PC in its own window. */
 export function DeviceSwitcher({
   navigate = leaveFor,
   labeled = false,
@@ -92,12 +121,15 @@ export function DeviceSwitcher({
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
   const deviceWindow = window.ogb?.deviceWindow;
-  const visible = labeled || Boolean(deviceWindow);
+  // Another PC's desktop app window has no preload, and its server can't know which PC you sit at.
+  const remoteWindow = !window.ogb && /\bElectron\//.test(navigator.userAgent);
+  const visible = labeled || Boolean(deviceWindow) || (!window.ogb && !isPhone());
   const [open, setOpen] = useState(false);
   const [devices, reload] = useDevices(visible, open);
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
   const [pinned, setPinned] = useState<CSSProperties>();
   const [renaming, setRenaming] = useState(false);
+  const [offlineNote, setOfflineNote] = useState<string | null>(null);
   const renameInput = useRef<HTMLInputElement>(null);
   const presence = usePresence(open);
   // The menu lives on the body, so the drawer sliding shut would strand it over the chat.
@@ -109,13 +141,16 @@ export function DeviceSwitcher({
   }, [labeled, drawerOpen]);
 
   const here = devices.find((device) => device.current);
+  const picker = choosePcUrl();
+  const shown = visible && (Boolean(picker) || (devices.length >= 2 && (!labeled || Boolean(here))));
   const tip = iconOnly && here ? `${t("chrome.devices")}: ${here.name}` : undefined;
   const close = () => {
     setOpen(false);
     setRenaming(false);
+    setOfflineNote(null);
   };
-  useBackLayer(open && visible && devices.length >= 2 && (!labeled || Boolean(here)), close);
-  if (devices.length < 2 || !visible || (labeled && !here)) return null;
+  useBackLayer(open && shown, close);
+  if (!shown) return null;
 
   const rename = (value: string) => {
     const name = value.trim();
@@ -175,6 +210,8 @@ export function DeviceSwitcher({
                     data-device-id={device.deviceId}
                     onClick={() => {
                       if (device.current) return close();
+                      // A browser sent to an offline PC lands on a raw error, so say so in place.
+                      if (!deviceWindow && device.offline) return setOfflineNote(t("chrome.deviceOfflineNote", { name: device.name }));
                       if (!deviceWindow) return navigate(`https://${device.host}/`);
                       void deviceWindow.open(device.host, device.name).then((opened) => {
                         if (!opened) dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
@@ -182,7 +219,8 @@ export function DeviceSwitcher({
                       close();
                     }}
                     className={cn(
-                      "flex min-w-0 flex-1 items-center gap-3 py-2 pl-3.5 text-left text-[14px] text-ink hover:bg-raised/70 disabled:hover:bg-transparent",
+                      "flex min-w-0 flex-1 items-center gap-3 py-2 pl-3.5 text-left text-[14px] text-ink disabled:hover:bg-transparent",
+                      MENU_ITEM_HOVER,
                       device.current ? "pr-2" : "pr-3.5",
                       (device.offline || device.checking) && !device.current && "opacity-50",
                     )}
@@ -192,7 +230,7 @@ export function DeviceSwitcher({
                     </span>
                     <span className="min-w-0 flex-1 truncate">{device.name}</span>
                     {device.current ? (
-                      <span className="flex items-center gap-1 text-[12px] text-accent">
+                      !remoteWindow && <span className="flex items-center gap-1 text-[12px] text-accent">
                         <Check size={14} />
                         {t("chrome.deviceCurrent")}
                       </span>
@@ -216,14 +254,23 @@ export function DeviceSwitcher({
                 </li>
               ),
             )}
-            {onThisPc() && <li className="mt-1 border-t border-hairline/40 pt-1">
+            {offlineNote && <li data-device-note role="status" className="px-3.5 py-1.5 text-[13px] text-ink-secondary">{offlineNote}</li>}
+            {onThisPc() && <li>
+              <div className="mx-2 my-1 border-t border-hairline/40" />
               <button type="button" data-connect-device onClick={() => {
                 close();
                 dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
-              }} className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:bg-raised/70 hover:text-ink">
+              }} className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:text-ink", MENU_ITEM_HOVER)}>
                 <Plus size={16} className="shrink-0" />
                 <span>{t("settings.devices.connect")}</span>
               </button>
+            </li>}
+            {picker && <li>
+              {devices.length > 0 && <div className="mx-2 my-1 border-t border-hairline/40" />}
+              <a href={picker} data-pc-picker className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:text-ink", MENU_ITEM_HOVER)}>
+                <ArrowLeftRight size={16} className="shrink-0" />
+                <span>{t("chrome.choosePc")}</span>
+              </a>
             </li>}
           </ul>
     </>

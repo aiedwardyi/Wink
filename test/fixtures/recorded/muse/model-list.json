@@ -1,0 +1,91 @@
+{
+  "stamp": {
+    "engine": "muse",
+    "cliVersion": "Muse Code 1.4.20 (1.4.20-R8619.1)",
+    "recordedAt": "2026-11-14T14:04:10.9639818Z",
+    "sourcePc": "home",
+    "method": "model/list",
+    "provider": "meta",
+    "setup": "Isolated home with a copy of this PC provider catalog cache; no credentials or inference."
+  },
+  "reply": {
+    "providerId": "meta",
+    "profileId": "tbh",
+    "source": "providerCatalog",
+    "models": [
+      {
+        "modelId": "muse-ember-1.0",
+        "displayLabel": "muse-ember-1.0",
+        "providerId": "meta",
+        "profileId": "tbh",
+        "releaseDate": "2026-10-01",
+        "description": null,
+        "contextLimit": 1007997,
+        "outputLimit": 128000,
+        "cost": null,
+        "isActive": false,
+        "isDefault": false,
+        "variants": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "reasoningEffortVariants": [],
+        "defaultReasoningEffort": "max"
+      },
+      {
+        "modelId": "muse-spark-1.3",
+        "displayLabel": "muse-spark-1.3",
+        "providerId": "meta",
+        "profileId": "tbh",
+        "releaseDate": "2026-09-02",
+        "description": null,
+        "contextLimit": 1007997,
+        "outputLimit": 128000,
+        "cost": null,
+        "isActive": false,
+        "isDefault": true,
+        "variants": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "reasoningEffortVariants": [],
+        "defaultReasoningEffort": "max"
+      },
+      {
+        "modelId": "muse-spark-1.2",
+        "displayLabel": "muse-spark-1.2",
+        "providerId": "meta",
+        "profileId": "tbh",
+        "releaseDate": "2026-08-05",
+        "description": null,
+        "contextLimit": 1007997,
+        "outputLimit": 128000,
+        "cost": null,
+        "isActive": false,
+        "isDefault": false,
+        "variants": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "reasoningEffortVariants": [
+          {
+            "tier": "xhigh",
+            "description": "Use this for deepest analysis and complex fixes."
+          }
+        ],
+        "defaultReasoningEffort": "xhigh"
+      }
+    ]
+  }
+}

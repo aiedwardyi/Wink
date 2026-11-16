@@ -150,8 +150,10 @@
     flex: 0 1 auto;
   }
 
-  .term-status button:hover {
-    text-decoration: underline;
+  @media (hover: hover) {
+    .term-status button:hover {
+      text-decoration: underline;
+    }
   }
 }
 

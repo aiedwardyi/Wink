@@ -2,10 +2,11 @@
 // choice capping, and exactly one alert per question.
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
-import type { MausColor, Message } from "./store.ts";
+import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, skippedQuestion, watchSkippedQuestions, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
+import type { MausColor, Message, StoreChange } from "./store.ts";
+import type { TaskAsk } from "./task-asks.ts";
 
 type Bot = { id: string; name: string; color: MausColor };
 
@@ -20,6 +21,9 @@ function harness(conversations = new Map<string, { group?: object }>([["bot-a:th
       appended.push({ threadId, message });
       return { ...message, id: `m-${appended.length}`, at: 1 };
     },
+    activePath: () => [],
+    patchMessage: () => null,
+    cancelHeld: () => false,
     alertThread: (_bot, threadId) => threadId,
     notifyQuestion: (bot, threadId, question) => alerts.push({ bot, threadId, question }),
     whenSettled: (_botId, _threadId, post) => post(),
@@ -40,7 +44,7 @@ describe("ask-user endpoint", () => {
         message: {
           role: "bot",
           kind: "options",
-          card: { title: "Your bot has a question", subtitle: "Prod or staging?", options: ["Prod", "Staging"], askUser: true },
+          card: { title: "Your bot has a question", subtitle: "Prod or staging?", options: ["Prod", "Staging"], askUser: true, staysOpen: true },
         },
       },
     ]);
@@ -68,12 +72,12 @@ describe("ask-user endpoint", () => {
     expect(h.alerts).toEqual([]);
   });
 
-  it("caps the question and trims, dedupes and caps the choices", () => {
+  it("caps the question and trims and dedupes the choices", () => {
     const h = harness();
     ask(h.deps, { fromBotId: "bot-a", fromThreadId: "thread-a", question: "q".repeat(ASK_USER_QUESTION_MAX + 50) });
     expect(h.appended[0].message.card?.subtitle).toHaveLength(ASK_USER_QUESTION_MAX);
     expect(askUserRequestSchema.parse({ choices: [" a ", "a", "", 4, "b", "c", "d", "e", "f"] }).choices).toHaveLength(9);
-    expect(askUserChoices(askUserRequestSchema.parse({ choices: [" a ", "a", "", 4, "b", "c", "d", "e", "f"] }).choices)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(askUserChoices(askUserRequestSchema.parse({ choices: [" a ", "a", "", 4, "b", "c", "d", "e", "f"] }).choices)).toEqual(["a", "b", "c", "d", "e", "f"]);
     expect(askUserRequestSchema.parse({ choices: "a,b" }).choices).toEqual([]);
     expect(askUserRequestSchema.parse("not an object")).toEqual({ fromBotId: "", fromThreadId: "", question: "", choices: [] });
   });
@@ -86,7 +90,7 @@ describe("ask-user endpoint", () => {
     expect(handler).toContain("conversation: connectorThread");
     expect(handler).toContain('buildNotification("question", bot, target, question)');
     expect(handler).toContain("routineSourceThread(run)");
-    expect(handler).toContain("askHold.whenSettled(botId, threadId, post)");
+    expect(handler).toContain("askHold.whenSettled(botId, threadId, post, question)");
     expect(source).toContain("askHold.flush();");
     expect(handler).not.toContain("waiting-on-you");
     const dispatch = source.slice(source.indexOf('if (method === "POST" && path === "/api/internal/ask-user")'));
@@ -114,6 +118,7 @@ const askCard = (id: string, question: string, extra: Partial<Message> = {}, car
   card: { title: "Your bot has a question", subtitle: question, options: ["Yes", "No"], askUser: true, ...card },
 });
 const said = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, at: 2, role: "user", kind: "text", text, ...extra });
+const OPEN = '[2 of your question cards are still open: "Ship it?"; "Which region?". If their latest message answers one in their own words, close that card with ask_user close:true and its exact question text.]';
 const CLOSED = '[Your question card ("Ship it?") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]';
 
 describe("closed ask_user card note", () => {
@@ -128,7 +133,7 @@ describe("closed ask_user card note", () => {
     activeMessages, userMessage, text: userMessage.text, closedAskNotes, currentPrompt: userMessage.text,
     turnStartedByUser: () => true, opts: undefined, supportsWorkspaceFiles: () => false, instance: {}, threadSyncV2: null,
     mailForTurn: () => [], store: {}, threadId: "t1", paneNoteIds: [], modelContextWindow: 200_000, paneTokens: 0,
-    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], callLines: [], bot: { id: "bot-a" },
+    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], bot: { id: "bot-a" },
   });
 
   it("tells the bot its open card closed when the user typed past it", () => {
@@ -142,6 +147,12 @@ describe("closed ask_user card note", () => {
     expect(turnPrompt([askCard("c1", "Ship it?", {}, { dismissed: true }), typed], typed)).toBe("ok");
     expect(turnPrompt([askCard("c1", "Ship it?"), said("u1", "later"), typed], typed)).toBe("ok");
     expect(turnPrompt([said("u0", "hi"), typed], typed)).toBe("ok");
+  });
+
+  it("tells the bot nothing when its card stays open past the typed message", () => {
+    const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
+    expect(closedAskNotes([askCard("c1", "Ship it?", {}, { staysOpen: true }), said("u1", "hm")], "hm", "u1")).toEqual([]);
+    expect(memberClosedAskNotes([askCard("c1", "Ship it?", { from: ada }, { staysOpen: true }), said("u1", "hm")], "bot-a")).toEqual([]);
   });
 
   it("treats a tapped choice as the answer even before its patch lands", () => {
@@ -161,6 +172,30 @@ describe("closed ask_user card note", () => {
     expect(line).toContain(`("${"q".repeat(199)}…")`);
   });
 
+  it("puts every open card in the turn prompt when two or more wait", () => {
+    const typed = said("u1", "staging first");
+    const open = [askCard("c1", "Ship it?", {}, { staysOpen: true }), askCard("c2", "Which region?", {}, { staysOpen: true })];
+    expect(turnPrompt([...open, typed], typed)).toBe(`${OPEN}\n\nCurrent message:\n\nstaging first`);
+  });
+
+  it("lists every open card when they type while two or more wait", () => {
+    const open = [askCard("c1", "Ship it?", {}, { staysOpen: true }), askCard("c2", "Which region?", {}, { staysOpen: true })];
+    expect(closedAskNotes([...open, said("u1", "staging first")], "staging first", "u1")).toEqual([OPEN]);
+    expect(closedAskNotes(open, "staging first")).toEqual([OPEN]);
+    expect(closedAskNotes([...open, said("u1", "Yes")], "Yes", "u1")).toEqual([]);
+    expect(closedAskNotes([open[0]!, said("u1", "hm")], "hm", "u1")).toEqual([]);
+    const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
+    const grace = { botId: "bot-g", name: "Grace", color: "teal" as const };
+    const room = [
+      askCard("c1", "Ship it?", { from: ada }, { staysOpen: true }),
+      askCard("c2", "Which region?", { from: ada }, { staysOpen: true }),
+      askCard("c3", "Lunch?", { from: grace }, { staysOpen: true }),
+      said("u1", "hm"),
+    ];
+    expect(memberClosedAskNotes(room, "bot-a")).toEqual([OPEN]);
+    expect(memberClosedAskNotes(room, "bot-g")).toEqual([]);
+  });
+
   it("tells only the asking room member, until it next speaks", () => {
     const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
     const card = askCard("c1", "Ship it?", { from: ada });
@@ -168,5 +203,130 @@ describe("closed ask_user card note", () => {
     expect(memberClosedAskNotes([card, said("u1", "hm")], "bot-b")).toEqual([]);
     expect(memberClosedAskNotes([card, said("u1", "hm"), { id: "r1", at: 3, role: "bot", kind: "text", text: "ok", from: ada }], "bot-a")).toEqual([]);
     expect(memberClosedAskNotes([card], "bot-a")).toEqual([]);
+  });
+});
+
+describe("skipped ask_user questions", () => {
+  function watched(initial: TaskAsk[] = []) {
+    const listeners: Array<(change: StoreChange) => void> = [];
+    const path: Message[] = [];
+    const lists = new Map<string, TaskAsk[]>([["t1", initial]]);
+    const store = {
+      importingSync: false,
+      onChange: (listener: (change: StoreChange) => void) => (listeners.push(listener), () => {}),
+      activePath: () => [...path],
+    };
+    watchSkippedQuestions(store, (threadId, change) => {
+      const saved = change({ asks: lists.get(threadId) });
+      if (saved) lists.set(threadId, saved.asks);
+    }, () => 50);
+    const append = (message: Message, imported?: true) => {
+      path.push(message);
+      for (const listener of listeners) listener({ type: "message", threadId: "t1", message, ...(imported ? { imported } : {}) });
+    };
+    const patch = (message: Message) => {
+      path.splice(path.findIndex((entry) => entry.id === message.id), 1, message);
+      for (const listener of listeners) listener({ type: "message.patch", threadId: "t1", message });
+    };
+    return { store, append, patch, asks: () => lists.get("t1") };
+  }
+  const filed = (id: string, ask: string, at = 50): TaskAsk => ({ id, ask, status: "open", kind: "question", choices: "Yes / No", at, changedAt: at });
+
+  it("files a card a newer card replaced", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    expect(h.asks()).toEqual([]);
+    h.append(askCard("c2", "Which branch?", { at: 3 }));
+    expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
+  });
+
+  it("never files a card answered by typing or speaking", () => {
+    for (const [options, text] of [[["Yes", "No"], "yes"], [["Yes", "No"], "after lunch"], [[], "Ship it Friday."], [["Yes", "No"], "Yes."]] as Array<[string[], string]>) {
+      const h = watched();
+      h.append(askCard("c1", "Ship it?", {}, { options }));
+      h.append(said("u1", text));
+      h.append(askCard("c2", "Next?", { at: 3 }));
+      expect(h.asks()).toEqual([]);
+    }
+  });
+
+  it("walks the thread only for a new question card", () => {
+    const h = watched();
+    const walk = vi.spyOn(h.store, "activePath");
+    h.append(said("u1", "hi"));
+    h.append({ id: "r1", at: 3, role: "bot", kind: "text", text: "working" });
+    expect(walk).not.toHaveBeenCalled();
+    h.append(askCard("c1", "Ship it?"));
+    expect(walk).toHaveBeenCalledTimes(1);
+  });
+
+  it("never files an answered, tapped or dismissed card", () => {
+    for (const card of [{ answered: "Yes" }, { dismissed: true }]) {
+      const h = watched();
+      h.append(askCard("c1", "Ship it?", {}, card));
+      h.append(said("u1", "hm"));
+      h.append(askCard("c2", "Next?"));
+      expect(h.asks()).toEqual([]);
+    }
+    const tapped = watched();
+    tapped.append(askCard("c1", "Ship it?"));
+    tapped.append(said("u1", "Yes"));
+    tapped.append(askCard("c2", "Next?"));
+    expect(tapped.asks()).toEqual([]);
+  });
+
+  it("takes back a replaced card whose answer landed just after", () => {
+    const h = watched();
+    const card = askCard("c1", "Ship it?");
+    h.append(card);
+    h.append(askCard("c2", "Which branch?", { at: 3 }));
+    expect(h.asks()).toHaveLength(1);
+    h.patch({ ...card, card: { ...card.card!, answered: "after lunch" } });
+    expect(h.asks()).toEqual([]);
+  });
+
+  it("closes an older filed question once a re-asked card is answered", () => {
+    const h = watched([filed("A1", "Ship it?", 0)]);
+    const card = askCard("c1", "Ship it?", { at: 10 });
+    h.append(card);
+    h.patch({ ...card, card: { ...card.card!, answered: "Yes" } });
+    expect(h.asks()).toEqual([{ ...filed("A1", "Ship it?", 0), status: "done", changedAt: 50 }]);
+  });
+
+  it("closes a filed question once the person types its answer", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it when?", {}, { staysOpen: true, options: [] }));
+    h.append(askCard("c2", "Which branch?", { at: 3 }, { staysOpen: true }));
+    expect(h.asks()).toEqual([{ id: "A1", ask: "Ship it when?", status: "open", kind: "question", at: 50, changedAt: 50 }]);
+    h.append(said("u1", "Yes"));
+    expect(h.asks()).toHaveLength(1);
+    h.append(said("u2", "Re: “Ship it when?”\nFriday"));
+    expect(h.asks()).toEqual([]);
+  });
+
+  it("files a question once while it stays open", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    h.append(askCard("c2", "ship  it?"));
+    h.append(askCard("c3", "Which branch?"));
+    expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
+  });
+
+  it("ignores synced history and messages that close nothing", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    h.append(said("u1", "hm"), true);
+    h.append({ id: "n1", at: 3, role: "user", kind: "text", text: "pane note", from: { botId: "b", name: "B", color: "teal" } });
+    h.append({ id: "r1", at: 4, role: "bot", kind: "text", text: "working" });
+    expect(h.asks()).toEqual([]);
+    h.store.importingSync = true;
+    h.append(said("u2", "hm"));
+    expect(h.asks()).toEqual([]);
+  });
+
+  it("reads the transcript before the message, not with it", () => {
+    expect(skippedQuestion([askCard("c1", "Ship it?")], askCard("c2", "Next?"))?.id).toBe("c1");
+    expect(skippedQuestion([], askCard("c2", "Next?"))).toBeNull();
+    expect(skippedQuestion([askCard("c1", "Ship it?"), said("u0", "hm")], said("u1", "hm"))).toBeNull();
   });
 });

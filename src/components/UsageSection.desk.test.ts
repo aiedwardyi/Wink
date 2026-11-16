@@ -30,6 +30,7 @@ const CODEX_2 = "acct_00000000-0000-4000-8000-000000000012";
 const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
 const GLYPHS = /[\u2580-\u25FF]/u;
 const FOLDS = "openmausbot.usageFolds.v1";
+const BOARD = "omb-usage-board-v1";
 const BOX = ["h-[22px]", "min-w-12", "shrink-0", "border", "px-2", "text-[11px]", "rounded-md"];
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
@@ -190,6 +191,7 @@ async function unmount() {
 // A new page load: no cached board, a fresh client.
 async function reload() {
   if (host?.isConnected) await unmount();
+  localStorage.removeItem(BOARD);
   vi.resetModules();
   i18n = await import("@/lib/i18n");
   await warm();
@@ -207,6 +209,7 @@ async function rerender() {
 
 beforeEach(async () => {
   vi.useFakeTimers({ now: usageBoardNow, toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  localStorage.removeItem(BOARD);
   vi.resetModules();
   i18n = await import("@/lib/i18n");
   await warm();
@@ -337,7 +340,8 @@ describe("Usage desk", () => {
     expect(text(column("main")?.querySelector("[data-main-check]"))).toBe("Main");
     await click(picker());
     expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 2"]);
-    expect(menuItems().map(text)).toEqual(["3Studio", "2Claude 2"]);
+    expect(menuItems().map(text)).toEqual(["Studio", "Claude 2"]);
+    expect(host.querySelector("[data-tile]")).toBeNull();
     const all = text(host);
     expect(all).not.toContain("Account 1");
     expect(all).not.toContain(CLAUDE_3);
@@ -847,6 +851,10 @@ describe("Usage desk", () => {
     vi.resetModules();
     i18n = await import("@/lib/i18n");
     await mount();
+    expect(left("claude")).toBe("34% left");
+    expect(text(q("[data-board-status]"))).toBe(i18n.translate("en", "usage.desk.stale" as never));
+    await reload();
+    await mount();
     expect(text(q("[data-empty-state]"))).toBe(i18n.translate("en", "usage.desk.unavailable" as never));
     expect(q("[data-account-row]")).toBeNull();
   });
@@ -1107,7 +1115,7 @@ describe("Usage desk", () => {
     expect(await walk(0, pages.length)).toEqual([...pages.slice(0, -1).reverse(), pages[0]]);
     expect(ends()).toEqual([true, false]);
     await click(picker());
-    expect(menuItems().map(text)).toEqual([...phone ? [`1Claude 1${say("accounts.main")}`] : [], "2Claude 2", "3Studio", "4Claude 4"]);
+    expect(menuItems().map(text)).toEqual([...phone ? [`Claude 1${say("accounts.main")}`] : [], "Claude 2", "Studio", "Claude 4"]);
     await click(menuItems().at(-1));
     expect(viewed()).toBe(CLAUDE_4);
     expect(heroName()).toBe("Claude 4");

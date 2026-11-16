@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,20 @@ describe("wink guide", () => {
 
   it("points to the packaged guide", () => {
     expect(CREDENTIAL_PROMPT).toContain(`How Wink itself works (engines, keys, accounts, workers, routines, sync, phone): ${PACKAGED_FILES.winkGuide}. Read it for Wink questions or before asking for setup.`);
+  });
+
+  it("keeps engine picks in the guide", () => {
+    const guide = readFileSync(PACKAGED_FILES.winkGuide, "utf8");
+    expect(guide).toContain("- Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.");
+    expect(guide).toContain("- Coding fallback as engines run low:");
+  });
+
+  it("covers rooms, calls, side pane, to-do list and skills in a short read", () => {
+    const lines = readFileSync(PACKAGED_FILES.winkGuide, "utf8").trimEnd().split(/\r?\n/);
+    for (const heading of ["## Groups and team rooms", "## Calls", "## Side pane", "## Bot details and to-do list", "## Skills"]) {
+      expect(lines).toContain(heading);
+    }
+    expect(lines.length).toBeLessThanOrEqual(150);
   });
 
   it("warns on and skips the pointer when the guide is missing", () => {

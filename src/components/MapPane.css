@@ -1,0 +1,82 @@
+/* one git green on every theme: passed checks, the done Git line, added lines */
+.map-pane { container: map-pane / inline-size; --map-green: light-dark(#047857, #34d399); }
+.map-pane > :is(.map-head, .map-top, .map-flow-rows, .map-crumbs, .map-code, .map-example) { animation: fade-in var(--motion-moderate) var(--ease-standard); }
+.map-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-shrink: 0; padding: 10px 12px; border-bottom: 1px solid var(--color-hairline); }
+.map-worker-menu { position: relative; min-width: 0; flex-shrink: 0; max-width: 50%; }
+.map-worker { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 3px 7px; border: 1px solid var(--color-hairline); border-radius: var(--radius-lg, 6px); font: 600 11px var(--font-sans, sans-serif); letter-spacing: .04em; }
+.map-worker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-worker i, .map-follow i, .map-step > i { width: 6px; height: 6px; flex-shrink: 0; background: var(--color-accent); }
+.map-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; min-width: 180px; max-width: 270px; padding: 4px; border: 1px solid var(--color-hairline); border-radius: 8px; background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / .2); }
+.map-menu button { display: block; width: 100%; padding: 8px 10px; border-radius: 6px; text-align: left; overflow-wrap: anywhere; }
+.map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }
+.map-top { display: flex; flex-direction: column; gap: 8px; flex: 0 1 auto; min-height: 96px; max-height: var(--map-split); overflow: auto; scroll-padding: 32px 0 14px; padding: 10px 12px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); scrollbar-width: thin; }
+/* not inherited: a drag restyles this one box, never the tree in it */
+@property --map-split { syntax: "<length-percentage>"; inherits: false; initial-value: 30%; }
+.map-pane[data-expanded] > :is(.map-top, .map-flow-rows) { max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0; overflow: hidden; visibility: hidden; }
+.map-pane[data-expanded] > .map-split { display: none; }
+.map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }
+/* the drag line above the Git rows sets --map-rows as a share of the pane; 170px is the list's 158px with the box's padding */
+.map-pane > .map-flow-rows { display: flex; flex-direction: column; max-height: var(--map-rows, 170px); }
+.map-pane > .map-flow-rows > .map-flow-list { min-height: 0; max-height: none; }
+@media (pointer: coarse) { .map-split::before { content: ""; position: absolute; inset: -6px 0 -4px; } }
+/* pinned: a short tree box scrolls to the current file and would carry this line off; sticky measures inside the box's 10px top padding */
+.map-where { position: sticky; top: -10px; z-index: 4; margin: -10px 0 -6px; padding: 10px 0 6px; background: var(--color-panel); display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; color: var(--color-ink-secondary); }
+.map-where b { color: var(--color-ink); font-weight: 600; }
+.map-where span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) {
+  .map-menu button:hover { background: var(--color-raised); color: var(--color-accent-text); }
+  button.map-gap:hover { color: var(--color-ink); }
+}
+.map-crumbs { display: flex; align-items: center; gap: 7px; flex-shrink: 0; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
+.map-path { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 10px var(--font-mono, monospace); color: var(--color-ink-secondary); }
+.map-path b { color: var(--color-ink); font-weight: 600; }
+.map-follow { display: flex; align-items: center; gap: 5px; flex-shrink: 0; height: 24px; padding: 3px 7px; border: 1px solid var(--color-hairline); border-radius: var(--radius-lg, 6px); font-size: 10px; white-space: nowrap; }
+.map-crumbs > .verify-watch-icon { width: 28px; height: 28px; }
+.map-crumbs [role="radio"] { padding: 1px 7px; font-size: 10px; line-height: 16px; }
+.map-follow[aria-pressed="false"] { border-color: var(--color-accent); color: var(--color-accent-text); }
+.map-follow[aria-pressed="false"] i { background: var(--color-hairline); }
+.map-step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 9px; align-items: start; flex-shrink: 0; padding: 10px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
+.map-step > i { width: 8px; height: 8px; margin-top: 5px; }
+.map-step h3 { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font: 600 13px/1.3 var(--font-sans, sans-serif); }
+.map-step time { padding-top: 2px; font: 500 10px var(--font-mono, monospace); color: var(--color-ink-secondary); }
+.map-step p { grid-column: 2 / 4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--font-mono, monospace); color: var(--color-ink-secondary); }
+.map-step > * { animation: map-rise 320ms cubic-bezier(.2,.7,.2,1) both; }
+@keyframes map-rise { from { opacity: 0; transform: translateY(5px); } }
+.map-code { min-height: 0; flex: 1; overflow: auto; padding: 10px 0 24px; background: var(--code-bg, var(--color-inset)); font: 12px/1.65 var(--font-mono, monospace); scrollbar-width: thin; transition: opacity var(--motion-moderate) var(--ease-standard); }
+.map-code[aria-busy="true"]:not(:has(> .map-empty)) { opacity: .5; }
+/* a 5,000-line file re-lays out only the rows in view as its colors land */
+.map-code-row { display: grid; grid-template-columns: 38px 18px minmax(0, 1fr); padding-right: 14px; content-visibility: auto; contain-intrinsic-size: auto 1.65em; }
+.map-code-row u { text-align: right; text-decoration: none; color: var(--color-ink-secondary); opacity: .6; user-select: none; font-variant-numeric: tabular-nums; }
+.map-code-row b { text-align: center; font-weight: 500; user-select: none; }
+.map-code-row code { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-syntax-fg, var(--color-ink)); }
+.map-code-row[data-kind="context"] code { opacity: .6; }
+.map-code-row[data-kind="add"] { background: color-mix(in oklab, var(--map-green) 9%, transparent); box-shadow: inset 2px 0 var(--map-green); }
+.map-code-row[data-kind="add"] b { color: var(--map-green); }
+.map-code-row[data-kind="remove"] { background: color-mix(in oklab, var(--color-danger) 9%, transparent); box-shadow: inset 2px 0 var(--color-danger); }
+.map-code-row[data-kind="remove"] b { color: var(--color-danger); }
+.map-code-row[data-kind="remove"] code { opacity: .7; }
+.map-gap { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0; padding: 0 16px 0 56px; color: var(--color-ink-secondary); font-size: 11px; }
+.map-gap::after { content: ""; flex: 1; border-top: 1px dashed var(--color-hairline); }
+.map-empty { padding: 20px 16px; color: var(--color-ink-secondary); font: 13px/1.5 var(--font-sans, sans-serif); }
+.map-empty button { text-decoration: underline; }
+.map-example { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; padding: 0 16px 16px; color: var(--color-ink-secondary); font: 13px/1.5 var(--font-sans, sans-serif); }
+.map-example > div { position: relative; flex-shrink: 0; max-width: 420px; overflow: hidden; padding: 28px 10px 0; border: 1px dashed var(--color-hairline); border-radius: 8px; }
+/* the chip's look is the menu unread badge's utilities on the tag; a font or color here would beat them */
+.map-example small { position: absolute; top: 6px; right: 10px; }
+.map-example .map-code { margin: 8px -10px 0; padding: 6px 0 8px; font-size: 11px; }
+@container map-pane (max-width: 380px) { .map-head, .map-top, .map-crumbs, .map-step { padding-left: 10px; padding-right: 10px; } }
+/* a long worker name gives way before the two-sided switch does */
+@container map-pane (max-width: 440px) {
+  .map-follow { display: block; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
+  .map-follow i { display: inline-block; margin-right: 5px; vertical-align: 1px; }
+}
+/* a phone's controls are a finger tall; the worker picker keeps its size under a taller hit area */
+@media (max-width: 767px) {
+  .map-crumbs { height: auto; }
+  .map-crumbs [role="radio"] { min-height: 44px; }
+  .map-follow { height: 44px; padding-block: 0; line-height: 42px; }
+  .map-crumbs > .verify-watch-icon { width: 44px; height: 44px; }
+  .map-worker { position: relative; }
+  .map-worker::after { content: ""; position: absolute; inset: 50% 0 auto; height: 44px; translate: 0 -50%; }
+}
+@media (prefers-reduced-motion: reduce) { .map-step > *, .map-pane > * { animation: none; } .map-code { transition: none; } }

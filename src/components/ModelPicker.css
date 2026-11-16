@@ -94,7 +94,7 @@ html[data-orbit-caption="win32"] .model-cross-header { top: calc(var(--orbit-cap
 /* a two-line engine and name plus the note overflow the fixed card height */
 .model-cross-cell:has(.model-cross-note) { gap: 2px; }
 .model-cross-cell:has(.model-cross-note) > svg { width: 22px; height: 22px; margin-bottom: 0; }
-.model-cross-cell:hover { opacity: 0.85; }
+@media (hover: hover) { .model-cross-cell:hover { opacity: 0.85; } }
 .model-cross-cell[aria-pressed="true"] { opacity: 1; background: linear-gradient(145deg, #20212b, #0b0e16); }
 .model-cross-column .model-cross-cell[aria-pressed="true"] { border-color: transparent; transform: scale(1.12, 1.14); }
 .model-cross-cell:focus-visible,
@@ -216,7 +216,7 @@ html[data-orbit-caption="win32"] .model-cross-header { top: calc(var(--orbit-cap
   box-shadow: 0 1px 2px #0009;
 }
 
-button.model-cross-binding:hover { color: #fff; }
+@media (hover: hover) { button.model-cross-binding:hover { color: #fff; } }
 button.model-cross-binding:disabled { opacity: 0.4; }
 
 @media (pointer: coarse) {
@@ -266,7 +266,7 @@ button.model-cross-binding:disabled { opacity: 0.4; }
   }
 
   .model-cross-cell:has(.model-cross-note) { opacity: .86; }
-  .model-cross-cell:hover { opacity: .92; }
+  @media (hover: hover) { .model-cross-cell:hover { opacity: .92; } }
 
   .model-cross-cell[aria-pressed="true"] {
     opacity: 1;
@@ -309,5 +309,5 @@ button.model-cross-binding:disabled { opacity: 0.4; }
     box-shadow: 0 1px 2px color-mix(in srgb, var(--color-ink) 8%, transparent);
   }
 
-  button.model-cross-binding:hover { color: var(--color-ink); }
+  @media (hover: hover) { button.model-cross-binding:hover { color: var(--color-ink); } }
 }

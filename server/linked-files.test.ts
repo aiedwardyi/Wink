@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
@@ -22,7 +22,7 @@ import {
 
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
-  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+  return { ...actual, realpathSync: Object.assign(vi.fn(actual.realpathSync), { native: vi.fn(actual.realpathSync.native) }) };
 });
 
 const roots: string[] = [];
@@ -107,16 +107,16 @@ describe("linked files", () => {
     try {
       const page = await site.open("index.html");
       expect(page.status).toBe(200);
-      const canonical = realpathSync(site.root);
+      const canonical = realpathSync.native(site.root);
       for (const [target, status, body] of [[".secrets.json", 404, null], [".hidden/data.json", 404, null], ["normal.json", 200, "public"], ["node_modules/.pnpm/pkg/index.js", 200, "package"]] as const) {
         const alias = target.endsWith(".js") ? "public.js" : "public.json";
-        vi.mocked(realpathSync).mockImplementation(((path, ...args) => path === join(canonical, alias) ? join(canonical, target) : Reflect.apply(actual.realpathSync, actual, [path, ...args])) as typeof realpathSync);
+        vi.mocked(realpathSync.native).mockImplementation(((path, ...args) => path === join(canonical, alias) ? join(canonical, target) : Reflect.apply(actual.realpathSync.native, actual, [path, ...args])) as typeof realpathSync.native);
         const response = await fetch(new URL(alias, page.url));
         expect(response.status, target).toBe(status);
         if (body) expect(await response.text()).toBe(body);
       }
     } finally {
-      vi.mocked(realpathSync).mockRestore();
+      vi.mocked(realpathSync.native).mockRestore();
       await site.server.close();
     }
   });
@@ -131,10 +131,10 @@ describe("linked files", () => {
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
-      for (const ext of ["txt", "exe", "png"]) {
+      for (const ext of ["json", "exe", "png"]) {
         const target = join(root, `target.${ext}`);
         writeFileSync(target, "private");
-        vi.mocked(realpathSync).mockReturnValueOnce(target);
+        vi.mocked(realpathSync.native).mockReturnValueOnce(target);
         const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(alias)}`, { headers: { Range: "bytes=0-0" } });
         expect(response.status).toBe(ext === "png" ? 206 : 404);
         if (ext === "png") {
@@ -148,7 +148,7 @@ describe("linked files", () => {
   });
 
   it.each(["other-PC", "phone"])("streams bot-linked Desktop media outside roots to %s", async (client) => {
-    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "mredw");
+    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "alice");
     const desktop = join(user, "Desktop");
     const folder = join(user, "Projects", "car-advisor");
     mkdirSync(desktop, { recursive: true });
@@ -186,14 +186,34 @@ describe("linked files", () => {
     }
   });
 
-  it("keeps unlinked, non-media, hidden, AppData, system, and disguised files outside roots refused", async () => {
+  it("hands over a bot-linked Desktop document outside roots as a download", async () => {
+    const desktop = join(temp("linked-doc-", process.cwd()), "Users", "alice", "Desktop");
+    mkdirSync(desktop, { recursive: true });
+    const file = join(desktop, "UN-Certificate_Vertia.docx");
+    writeFileSync(file, "docx-bytes");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "bot", text: `([UN-Certificate_Vertia.docx](<${file}>))` }],
+      writerDeviceId: () => null, rootsFor: () => [join(desktop, "..", "bot")],
+    }));
+    try {
+      const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-disposition")).toMatch(/^attachment;/);
+      expect(await response.text()).toBe("docx-bytes");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps unlinked, code, hidden, AppData, system, and disguised files outside roots refused", async () => {
     const root = temp("linked-media-policy-", process.cwd());
     const folder = join(root, "bot");
-    const desktop = join(root, "Users", "mredw", "Desktop");
+    const desktop = join(root, "Users", "alice", "Desktop");
     mkdirSync(folder);
     mkdirSync(desktop, { recursive: true });
     const refused = [
-      ...["txt", "json", "html", "exe"].map((ext) => join(desktop, `linked.${ext}`)),
+      ...["json", "html", "exe", "ts"].map((ext) => join(desktop, `linked.${ext}`)),
       join(desktop, ".hidden", "linked.png"),
       join(desktop, ".linked.png"),
       join(root, "Users", "someone-else", "aPpDaTa", "Local", "linked.mp4"),
@@ -207,7 +227,7 @@ describe("linked files", () => {
     }
     const alias = join(desktop, "junction.mp4");
     symlinkSync(dirname(refused[0]!), alias, "junction");
-    const disguised = join(alias, "linked.txt");
+    const disguised = join(alias, "linked.json");
     const mediaAlias = join(desktop, "appdata.mp4");
     symlinkSync(dirname(refused[6]!), mediaAlias, "junction");
     const secretMedia = join(mediaAlias, "linked.mp4");
@@ -231,8 +251,35 @@ describe("linked files", () => {
     }
   });
 
+  it("refuses dot folders, dot files and other types named by their Windows short names", async (context) => {
+    const home = temp("linked-short-");
+    const folder = join(home, "bot");
+    mkdirSync(join(home, ".dotdir"), { recursive: true });
+    mkdirSync(join(folder, "shared"), { recursive: true });
+    mkdirSync(join(folder, ".private"));
+    for (const [path, text] of [[".dotdir/keys.txt", "keys"], [".hidden.txt", "hidden"], ["wallet.txtbackup", "wallet"], ["bot/shared/.notes.txt", "notes"], ["bot/.private/plan.txt", "plan"]]) writeFileSync(join(home, path), text);
+    const short = [join(home, "DOTDIR~1", "keys.txt"), join(home, "HIDDEN~1.TXT"), join(home, "WALLET~1.TXT")];
+    const folderShort = join(folder, "shared", "NOTES~1.TXT");
+    const privateShort = join(folder, "PRIVAT~1");
+    if (![...short, folderShort, privateShort].every((path) => existsSync(path))) return context.skip();
+    const server = await listen((req, res) => (req.url?.includes("/linked-folder") ? serveLinkedFolder : serveLinkedFile)(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [...short, join(folder, "shared"), privateShort].map((path) => ({ id: path, role: "bot", text: `[file](<${path}>)` })),
+      writerDeviceId: () => null, rootsFor: () => [folder],
+    }));
+    try {
+      for (const path of [...short, folderShort, join(privateShort, "plan.txt")]) {
+        const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+        expect(response.status, path).toBe(404);
+      }
+      expect((await fetch(`${server.url}/api/threads/t1/linked-folder?path=${encodeURIComponent(privateShort)}`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
   it.each(["other-PC", "phone"])("explains a bot-linked Desktop video outside roots to %s without exposing unlinked paths", async (client) => {
-    const user = join(temp("linked-desktop-"), "Users", "mredw");
+    const user = join(temp("linked-desktop-"), "Users", "alice");
     const desktop = join(user, "Desktop");
     const folder = join(user, "Projects", "car-advisor");
     mkdirSync(desktop, { recursive: true });
@@ -299,6 +346,31 @@ describe("linked files", () => {
     }));
     try {
       expect((await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves a picture the user attached by path, but not another file type or an unattached picture", async () => {
+    const root = temp("linked-attached-", process.cwd());
+    const picture = join(root, "image (3).png");
+    const notes = join(root, "notes.txt");
+    const other = join(root, "other.png");
+    for (const file of [picture, notes, other]) writeFileSync(file, "pixels");
+    const tag = (path: string) => `<attached-file path="${path.replaceAll("&", "&amp;")}" name="${basename(path)}" size="6" />`;
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "user", text: `look\n\n${tag(picture)}\n${tag(notes)}\n[other](${other})` }],
+      writerDeviceId: () => null, rootsFor: () => [],
+    }));
+    try {
+      const open = (path: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+      const shown = await open(picture);
+      expect(shown.status).toBe(200);
+      expect(shown.headers.get("content-type")).toBe("image/png");
+      expect(await shown.text()).toBe("pixels");
+      expect((await open(notes)).status).toBe(404);
+      expect((await open(other)).status).toBe(404);
     } finally {
       await server.close();
     }

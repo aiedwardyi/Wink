@@ -44,3 +44,25 @@ describe("memory settings target", () => {
     expect(reducer(closed, action).settingsMemoryTarget!.nonce).toBeGreaterThan(second.settingsMemoryTarget!.nonce);
   });
 });
+
+describe("themes to reveal", () => {
+  it("keeps them for the Themes tab it opened, until the next move in Settings", () => {
+    const skins = ["samurai-ink", "night-rain"] as const;
+    const opened = reducer(initialState, { type: "toggleAppSettings", open: true, section: "themes", skins: [...skins] });
+    expect(opened.appSettingsSection).toBe("themes");
+    expect(opened.appSettingsSkins).toEqual(skins);
+    expect(reducer(opened, { type: "toggleAppSettings", open: true, section: "themes" }).appSettingsSkins).toBeNull();
+    expect(reducer(opened, { type: "toggleAppSettings", open: false }).appSettingsSkins).toBeNull();
+  });
+});
+
+describe("deleting the open room", () => {
+  it("closes Room details instead of opening the next bot's details", () => {
+    const group = { id: "g1", threadId: "t1", name: "Room", memberIds: [], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 0, messages: [] } as const;
+    const bot = { id: "b1", threadId: "bt1", name: "Wink", title: "", description: "", notifications: true, color: "green", unread: false, messages: [] } as const;
+    const open = { ...initialState, bots: [bot], groups: [group], selectedId: "g1", settingsOpen: true } as unknown as typeof initialState;
+    const after = reducer(open, { type: "groupDeleted", groupId: "g1" });
+    expect(after.selectedId).toBe("b1");
+    expect(after.settingsOpen).toBe(false);
+  });
+});

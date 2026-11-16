@@ -1,7 +1,7 @@
 // Unsent composer input, kept per task. Switching tasks unmounts the Composer
 // and its local state. Drafts live in localStorage, so coming back to a task — in this
 // session or after a restart — finds what you were typing still there.
-import { useCallback, useEffect, useState, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { isAttachment, restoredAttachment, type Attachment } from "./composer-attachments.js";
 
 const KEY = "omb-drafts";
@@ -17,6 +17,8 @@ const draftRevisions = new Map<string, number>();
 // so task navigation and a rejected send can resolve the original message
 // without duplicating message contents in storage.
 const replyDrafts = new Map<string, string>();
+// A failed send's restore can come from a view that unmounted; the open one hears it here.
+const replyRestoreListeners = new Map<string, Set<() => void>>();
 type DraftRestore = { text: string; attachments: Attachment[] };
 type DraftRestoreListener = (draft: DraftRestore) => void;
 const restoreListeners = new Map<string, Set<DraftRestoreListener>>();
@@ -105,6 +107,7 @@ export interface PersistedRoomHold {
   revision: number;
   replyToId?: string;
   attachments: Attachment[];
+  at?: number;
 }
 
 function isPersistedRoomHold(value: unknown): value is PersistedRoomHold {
@@ -117,6 +120,7 @@ function isPersistedRoomHold(value: unknown): value is PersistedRoomHold {
     typeof hold.threadId === "string" &&
     typeof hold.revision === "number" &&
     (hold.replyToId === undefined || typeof hold.replyToId === "string") &&
+    (hold.at === undefined || typeof hold.at === "number") &&
     Array.isArray(hold.attachments)
   );
 }
@@ -135,9 +139,32 @@ export function getRoomHolds(store: Store, id: string): PersistedRoomHold[] {
       revision: item.revision,
       ...(item.replyToId !== undefined ? { replyToId: item.replyToId } : {}),
       attachments: item.attachments.filter(isAttachment),
+      ...(item.at !== undefined ? { at: item.at } : {}),
     });
   }
   return holds;
+}
+
+const openRoomComposers = new Map<string, number>();
+
+/** A mounted room Composer flushes its own holds; the store flushes a room nobody has open. */
+export function claimRoomHolds(id: string): () => void {
+  openRoomComposers.set(id, (openRoomComposers.get(id) ?? 0) + 1);
+  return () => {
+    const left = (openRoomComposers.get(id) ?? 1) - 1;
+    if (left > 0) openRoomComposers.set(id, left);
+    else openRoomComposers.delete(id);
+  };
+}
+
+/** Takes the oldest hold of a room with no Composer mounted. An image hold waits for the Composer's engine check. */
+export function takeClosedRoomHold(id: string): PersistedRoomHold | undefined {
+  if (openRoomComposers.has(id)) return undefined;
+  const store = getStore();
+  const [next, ...rest] = getRoomHolds(store, id);
+  if (!next || next.requestText.includes("<attached-image ")) return undefined;
+  setRoomHolds(store, id, rest);
+  return next;
 }
 
 export function setRoomHolds(store: Store, id: string, holds: readonly PersistedRoomHold[]): void {
@@ -202,6 +229,20 @@ export function useReplyDraft<T extends { id: string }>(
     });
   }, [messages, threadId]);
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  useEffect(() => {
+    const listeners = replyRestoreListeners.get(threadId) ?? new Set<() => void>();
+    const listener = () => setReplyState((current) =>
+      current.threadId === threadId && current.message ? current : { threadId, message: resolveReplyMessage(threadId, messagesRef.current) });
+    listeners.add(listener);
+    replyRestoreListeners.set(threadId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) replyRestoreListeners.delete(threadId);
+    };
+  }, [threadId]);
+
   const selectReply = useCallback((message: T) => {
     selectReplyDraft(draftId, threadId, message.id);
     setReplyState({ threadId, message });
@@ -223,6 +264,7 @@ export function useReplyDraft<T extends { id: string }>(
     // Persist before touching React state: this callback can belong to a task
     // view that unmounted while its request was still in flight.
     rememberReplyDraft(targetThreadId, message.id);
+    for (const listener of replyRestoreListeners.get(targetThreadId) ?? []) listener();
     if (threadId === targetThreadId) {
       setReplyState((current) =>
         current.threadId === targetThreadId && current.message
@@ -312,6 +354,16 @@ export function returnSendsToComposer(id: string, sends: readonly DraftRestore[]
     text: all.filter((draft) => draft.text.trim()).map((draft) => draft.text).join("\n\n"),
     attachments: all.flatMap((draft) => draft.attachments),
   });
+}
+
+/** A room send's text left the box at send. Success drops its chips; failure puts the text back ahead of anything typed since. */
+export function settleRoomSend(id: string, text: string, chipIds: ReadonlySet<string>, failed: boolean): void {
+  const store = getStore();
+  const typed = getDraft(store, id);
+  const attachments = getDraftAttachments(store, id);
+  restoreComposerDraft(id, failed
+    ? { text: [text, typed].filter((part) => part.trim()).join("\n\n"), attachments }
+    : { text: typed, attachments: attachments.filter((attachment) => !chipIds.has(attachment.id)) });
 }
 
 function subscribeToDraftRestores(id: string, listener: DraftRestoreListener): () => void {

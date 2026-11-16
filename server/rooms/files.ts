@@ -6,10 +6,11 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { pipeline } from "node:stream";
+import { pipeline, type Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
 import { sniffImageMime } from "../attachments.ts";
+import { IMMUTABLE_CACHE } from "../compression.ts";
 import { DATA_DIR } from "../config.ts";
 import { RateLimiter } from "../phone-auth.ts";
 import { roomById, RoomError, type RoomFile } from "./db.ts";
@@ -96,6 +97,25 @@ export function ownRoomFiles(roomId: string, owner: string, ids: readonly string
   });
 }
 
+export const ROOM_FILE_TYPES = [
+  "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage",
+  "video/mp4", "video/quicktime", "video/x-m4v", "video/webm", "audio/mp4", "audio/mpeg", "audio/wav", "text/plain",
+] as const;
+
+/** Still pictures share the ftyp box with video; they stay refused. */
+const STILL_BRAND = /^(hei[cxms]|hev[cms]|mif1|msf1|avi[fs])$/;
+const FTYP = { "qt  ": "video/quicktime", "M4V ": "video/x-m4v", "M4VH": "video/x-m4v", "M4A ": "audio/mp4" } as const;
+
+function sniffMedia(head: Buffer): string | null {
+  const latin = head.toString("latin1");
+  if (latin.startsWith("ftyp", 4)) return STILL_BRAND.test(latin.slice(8, 12)) ? null : FTYP[latin.slice(8, 12) as keyof typeof FTYP] ?? "video/mp4";
+  if (head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
+  // Layer II or III only: a UTF-16 text file opens FF FE, which reads as a layer I frame.
+  if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0 && [0x02, 0x04].includes((head[1] ?? 0) & 0x06))) return "audio/mpeg";
+  if (latin.startsWith("RIFF") && latin.startsWith("WAVE", 8)) return "audio/wav";
+  return null;
+}
+
 /** Text files are UTF-8 with no control characters beyond tab, line ends and form feed. */
 function sniff(head: Buffer): { type: string; max: number } {
   const image = sniffImageMime(head);
@@ -104,10 +124,13 @@ function sniff(head: Buffer): { type: string; max: number } {
   if (latin.startsWith("%PDF-")) return { type: "application/pdf", max: DOCUMENT_MAX_BYTES };
   if (latin.startsWith("PK\x03\x04")) return { type: "application/zip", max: DOCUMENT_MAX_BYTES };
   if (head.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) return { type: "application/x-ole-storage", max: DOCUMENT_MAX_BYTES };
+  const media = sniffMedia(head);
+  if (media) return { type: media, max: DOCUMENT_MAX_BYTES };
   return { type: "text/plain", max: DOCUMENT_MAX_BYTES };
 }
 
 const BINARY_TEXT = /[\u0000-\u0008\u000b\u000e-\u001f\u007f]/;
+const REFUSED = "only pictures, video, audio, PDF, zip, Office and text files can be shared";
 
 /** Display name only: no folders, no control or reserved characters. */
 function cleanName(raw: string | null): string {
@@ -135,9 +158,21 @@ export function roomFilesState(roomId: string) {
   return { deleted: deleted.map((file) => file.id), error: roomFilesFolder().error };
 }
 
-/** Newest first, capped so the frame stays under a teammate's frame limit. */
-export const deletedRoomFiles = (roomId: string): string[] =>
-  (withDb((db) => db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ? ORDER BY rowid DESC LIMIT 5000").all(roomId)) as Array<{ id: string }>).map((file) => file.id);
+/** Newest first, past the `seen` count a teammate holds (a higher one gets all), capped so the frame stays under a teammate's frame limit. */
+export function deletedRoomFiles(roomId: string, seen = 0): { ids: string[]; count: number } {
+  return withDb((db) => {
+    // One snapshot, so a delete between the two reads can't push an unseen id out of the limit.
+    db.exec("BEGIN");
+    try {
+      const { count } = db.prepare("SELECT COUNT(*) AS count FROM room_file_deletions WHERE room_id = ?").get(roomId) as { count: number };
+      const fresh = Math.min(5000, seen > count ? count : count - seen);
+      const ids = fresh ? db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ? ORDER BY rowid DESC LIMIT ?").all(roomId, fresh) as Array<{ id: string }> : [];
+      return { ids: ids.map((file) => file.id), count };
+    } finally {
+      db.exec("COMMIT");
+    }
+  });
+}
 
 export async function deleteRoomFile(roomId: string, id: string): Promise<void> {
   const release = holdRoomFiles();
@@ -168,12 +203,14 @@ export interface Upload {
   uploadId: string | null;
   /** Rechecked once the bytes are on disk, before the row: the uploader may have been removed meanwhile. */
   still?: () => boolean;
+  /** False for a teammate build that fails a whole room on video or audio entries. */
+  media?: boolean;
 }
 
 type Received = { ok: true; bytes: number; sha256: string; type: string } | { ok: false; status: number; error: string };
 
 /** Streams the body into `file`, cut at the first byte past a limit. Never buffered whole. */
-function receive(req: IncomingMessage, file: string, roomId: string, base: number, counted: { bytes: number }): Promise<Received> {
+function receive(req: Readable, file: string, roomId: string, base: number, counted: { bytes: number }, media: boolean): Promise<Received> {
   return new Promise((resolve) => {
     const hash = createHash("sha256");
     const text = new TextDecoder("utf-8", { fatal: true });
@@ -204,9 +241,9 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       hash.update(chunk);
       if (kind!.type === "text/plain") {
         try {
-          if (BINARY_TEXT.test(text.decode(chunk, { stream: true }))) return fail(415, "this kind of file can't be shared");
+          if (BINARY_TEXT.test(text.decode(chunk, { stream: true }))) return fail(415, REFUSED);
         } catch {
-          return fail(415, "this kind of file can't be shared");
+          return fail(415, REFUSED);
         }
       }
       req.pause();
@@ -219,6 +256,7 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       kind = sniff(Buffer.concat(head!));
       const chunks = head!;
       head = null;
+      if (!media && /^(video|audio)\//.test(kind.type)) return fail(415, REFUSED);
       for (const chunk of chunks) write(chunk);
     };
     req.on("data", (chunk: Buffer) => {
@@ -244,9 +282,9 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       if (done) return;
       if (kind!.type === "text/plain") {
         try {
-          if (BINARY_TEXT.test(text.decode())) return fail(415, "this kind of file can't be shared");
+          if (BINARY_TEXT.test(text.decode())) return fail(415, REFUSED);
         } catch {
-          return fail(415, "this kind of file can't be shared");
+          return fail(415, REFUSED);
         }
       }
       void writes.then(() => finish({ ok: true, bytes: size, sha256: hash.digest("hex"), type: kind!.type }), () => fail(500, "couldn't save the file"));
@@ -264,16 +302,39 @@ const tooLarge = (max: number) => (max === IMAGE_MAX_BYTES ? "pictures can be up
 export async function saveRoomFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
   const release = holdRoomFiles();
   try {
-    return await saveFile(req, roomId, upload);
+    return await saveFile(req, Number(req.headers["content-length"] ?? 0), roomId, upload);
   } finally {
     release();
   }
 }
 
-async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
+/** A file on this PC, taken in under the same checks and limits as an upload. */
+export async function copyRoomFile(path: string, roomId: string, upload: Upload): Promise<RoomFile> {
+  // opened before any await, so an unreadable file is a refusal, not an unhandled stream error
+  const handle = await open(path, "r").catch(() => null);
+  const size = handle && await handle.stat().then((info) => (info.isFile() ? info.size : null), () => null);
+  if (!handle || size === null) {
+    await handle?.close();
+    throw statusError(404, "file not found");
+  }
+  const release = holdRoomFiles();
+  try {
+    const kept = withDb((db) => db.prepare(`SELECT ${FILE_COLUMNS} FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?`).get(roomId, upload.owner, upload.uploadId) as FileRow | undefined);
+    if (!kept) return await saveFile(handle.createReadStream({ autoClose: false }), size, roomId, upload);
+    // a retry reuses its earlier copy before asking the room for space again
+    const hash = createHash("sha256");
+    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk as Buffer);
+    if (hash.digest("hex") !== kept.sha256) throw statusError(409, "uploadId was used for another file");
+    return publicFile(kept);
+  } finally {
+    await handle.close();
+    release();
+  }
+}
+
+async function saveFile(req: Readable, length: number, roomId: string, upload: Upload): Promise<RoomFile> {
   if (upload.uploadId === null || !UPLOAD_ID.test(upload.uploadId)) throw statusError(400, "bad uploadId");
   if (!uploads.take(`${roomId}\n${upload.owner}`)) throw statusError(429, "too many files at once, try again in a few minutes");
-  const length = Number(req.headers["content-length"] ?? 0);
   if (length > DOCUMENT_MAX_BYTES) throw statusError(413, tooLarge(DOCUMENT_MAX_BYTES));
   const base = used(roomId);
   const free = ROOM_DISK_BYTES - base - (inflight.get(roomId) ?? 0);
@@ -285,7 +346,7 @@ async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): P
   let received: Received;
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    received = await receive(req, temp, roomId, base, counted);
+    received = await receive(req, temp, roomId, base, counted, upload.media !== false);
   } catch {
     received = { ok: false, status: 500, error: "couldn't save the file" };
   } finally {
@@ -302,7 +363,10 @@ async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): P
     if (upload.still && !upload.still()) throw statusError(401, "unauthorized");
     await rename(temp, blob);
     await syncDir(dir);
-    const file: FileRow = { id, owner: upload.owner, name: cleanName(upload.name), type: received.type, bytes: received.bytes, sha256: received.sha256 };
+    const name = cleanName(upload.name);
+    // Audio-only mp4s often carry the isom brand; the name only picks audio over video, never whether a file is taken.
+    const type = received.type === "video/mp4" && /\.m4a$/i.test(name) ? "audio/mp4" : received.type;
+    const file: FileRow = { id, owner: upload.owner, name, type, bytes: received.bytes, sha256: received.sha256 };
     const kept = withDb((db) => {
       const room = db.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM room_files WHERE room_id = ?").get(roomId) as { bytes: number };
       if (room.bytes + file.bytes > ROOM_DISK_BYTES && !db.prepare("SELECT 1 FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?").get(roomId, file.owner, upload.uploadId)) {
@@ -355,7 +419,8 @@ export function fileHeaders(file: RoomFile, preview: boolean): Record<string, st
     "x-content-type-options": "nosniff",
     "x-content-sha256": file.sha256,
     "content-security-policy": "default-src 'none'; sandbox",
-    "cache-control": "no-store",
+    // A file id is never reused, so any image preview can paint from cache while the server is still busy booting.
+    "cache-control": preview ? IMMUTABLE_CACHE : "no-store",
   };
 }
 

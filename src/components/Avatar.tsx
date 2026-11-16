@@ -13,7 +13,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { DEFAULT_MAUS_COLOR, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
 import { mascotLayerMarkup, mascotSvgMarkup, scopeMascotSvgIds } from "@/lib/mascot-art";
 import {
   botAvatarAssetPath,
@@ -249,6 +249,14 @@ export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotP
   );
 }
 
+/** A bot as a room knows it: a teammate's or the host's carries only these, from its owner. */
+export type RoomBotLook = { name: string; color?: string | null; mascotStyle?: string | null };
+
+/** Every room view draws a bot here, so a room bot looks the same in every spot and on every PC. */
+export function RoomBotAvatar({ bot, ...props }: Omit<BotAvatarProps, "bot"> & { bot: RoomBotLook | BotAvatarProps["bot"] }) {
+  return <BotAvatar {...props} bot={{ ...bot, color: (bot.color || DEFAULT_MAUS_COLOR) as MausColor }} />;
+}
+
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 export function profileInitials(profile?: { name?: string; email?: string }): string {
   const name = profile?.name?.trim();
@@ -268,11 +276,13 @@ export function InitialsAvatar({
   imageUrl,
   size = 32,
   pending = false,
+  tone = "bg-raised",
 }: {
   initials: string;
   imageUrl?: string;
   size?: number;
   pending?: boolean;
+  tone?: string;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [imageUrl]);
@@ -295,7 +305,7 @@ export function InitialsAvatar({
   }
   return (
     <div
-      className="flex shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary font-medium"
+      className={`flex shrink-0 items-center justify-center rounded-full ${tone} text-ink-secondary font-medium`}
       style={{ width: size, height: size, fontSize: size * 0.38 }}
     >
       {initials}

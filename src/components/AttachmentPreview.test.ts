@@ -95,6 +95,86 @@ describe("ShownImage", () => {
       vi.useRealTimers();
     }
   });
+
+  it("loads a picture the moment its file lands, after the timed retries gave up", async () => {
+    vi.useFakeTimers();
+    const { host, root } = await renderShownImage("/a/b/abc-123.png");
+    try {
+      for (const wait of [5_000, 15_000, 45_000]) {
+        await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+        await act(async () => { await vi.advanceTimersByTimeAsync(wait); });
+      }
+      await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+      await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+      expect(host.querySelector("img")).toBeNull();
+      await act(async () => window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: "other.png" })));
+      expect(host.querySelector("img")).toBeNull();
+      await act(async () => window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: "abc-123.png" })));
+      expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/abc-123.png?retry=4");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("loads a picture that lands while the last timed retry is still loading", async () => {
+    vi.useFakeTimers();
+    const { host, root } = await renderShownImage("/a/b/abc-123.png");
+    try {
+      for (const wait of [5_000, 15_000, 45_000]) {
+        await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+        await act(async () => { await vi.advanceTimersByTimeAsync(wait); });
+      }
+      expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/abc-123.png?retry=3");
+      await act(async () => window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: "abc-123.png" })));
+      await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+      expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/abc-123.png?retry=4");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps the picture like a markdown image without stretching it", async () => {
+    const { host, root } = await renderShownImage("/a/b/cap.png");
+    try {
+      const img = host.querySelector("img")!;
+      expect(img.style.maxHeight).toBe("384px");
+      expect(img.style.maxWidth).toBe("min(512px, 100%)");
+      expect(img.parentElement!.style.maxWidth).toBe("min(512px, 100%)");
+      expect(img.className).not.toContain("w-full");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it.each([
+    ["tall.png", 1080, 2400, "172.8px"],
+    ["logo.png", 1000, 800, "480px"],
+    ["wide.png", 2000, 500, "512px"],
+    ["small.png", 64, 48, "64px"],
+  ])("reserves the capped box for %s once its size is known", async (file, w, h, width) => {
+    const first = await renderShownImage(`/a/b/${file}`);
+    const img = first.host.querySelector("img")!;
+    expect(img.style.width).toBe("");
+    Object.defineProperties(img, { naturalWidth: { value: w }, naturalHeight: { value: h } });
+    await act(async () => img.dispatchEvent(new Event("load")));
+    await act(async () => first.root.unmount());
+    first.host.remove();
+
+    const again = await renderShownImage(`/a/b/${file}`);
+    try {
+      const style = again.host.querySelector("img")!.style;
+      expect(style.width).toBe(width);
+      expect(style.aspectRatio).toBe(`auto ${w} / ${h}`);
+    } finally {
+      await act(async () => again.root.unmount());
+      again.host.remove();
+    }
+  });
 });
 
 describe("AttachmentPreviewDialog viewer image", () => {

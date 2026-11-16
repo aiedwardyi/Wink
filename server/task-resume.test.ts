@@ -200,9 +200,10 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     },
   });
   drainQueuedSends = load("drainQueuedSends", {
+    myRoomBotTurns: { drain: noop },
     taskResumes, store, drainPeerUserReplies, drainSteeredMessages, continueQueuedDrainIfIdle, startTurn, botHasActiveTurn,
     startQueuedTurn, writeChatError, terminalBridgeAccess: null, isSendCancelled: () => false,
-    markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
+    markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop, roomLanes: { free: () => false },
   });
   const startGroupCardContinuation = load("startGroupCardContinuation", {
     store, groupTaskResumes, groupQueues,
@@ -258,7 +259,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const deps = {
     bus: { subscribe: (fn: typeof settle) => { settle = fn; } }, providerReload: { settled: noop },
     workerTurns: { capture() {}, settled() {} }, drainQueuedSends, paneWake, routines: { tick: noop },
-    followPendingSyncImports: noop, store, syncMemory: noop,
+    followPendingSyncImports: noop, store, syncMemory: noop, publishSettledTurn: noop,
   };
   new Function(...Object.keys(deps), fold)(...Object.values(deps));
   const deleteDeps = {
@@ -275,6 +276,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const groupStopDeps = {
     store, taskResumes,
     readBody: async () => ({}),
+    roomStops: new Map(),
     cancelGroupTurnOperations: () => operations.forEach((operation) => { operation.cancelled = true; }),
     cancelQueuedRoomParticipations: noop,
     registry: { get: () => undefined },
@@ -403,6 +405,21 @@ describe("task resume during cancelled preparation", () => {
     expect(failure.frames).toContainEqual({ kind: "task.resume", botId: failure.bot.id, threadId: failure.bot.threadId, error: "model unavailable" });
   });
 
+  it("tells every client which queued send a cancel dropped", async () => {
+    const f = rig({ live: true });
+    const queued = queueSteeredMessage(f.bot.id, f.bot.threadId, "from phone", { sendId: "send_1234567890123456" });
+    const frames: unknown[] = [];
+    const cancel = botChatRoute("deleteQueued", {
+      store: { bot: () => f.bot }, cancelSteeredMessage, broadcast: (frame: unknown) => frames.push(frame),
+      json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
+    });
+    expect(await cancel({}, ["", f.bot.id, queued.id])).toMatchObject({ status: 200, body: { cancelled: true } });
+    expect(frames).toEqual([{
+      kind: "queue.cancelled", botId: f.bot.id,
+      sends: [{ threadId: f.bot.threadId, queueId: queued.id, sendId: "send_1234567890123456", text: "from phone" }],
+    }]);
+  });
+
   it("tells every client which queued sends Stop handed back", async () => {
     const f = rig({ live: true });
     const queued = queueSteeredMessage(f.bot.id, f.bot.threadId, "from phone");
@@ -498,8 +515,8 @@ describe("interrupt ownership", () => {
     }
     visit(room);
     const javascript = ts.transpileModule(`const bind = ${binding.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", `${javascript}\nreturn bind;`)(
-      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {},
+    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", "turnKey", `${javascript}\nreturn bind;`)(
+      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {}, "bot-1",
     )({ turnId: "stopped-turn" });
     expect(f.liveTurnIdByThread.get(threadId)).toBe("new-turn");
     expect(f.stale(threadId, "new-turn")).toBe(false);

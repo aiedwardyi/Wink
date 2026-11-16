@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { teamIdToken, teamOwnerHash, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
+import { teamIdToken, teamOwnerHash, teamRelayOrigin, type TeamTokenSource } from "./team-stats.ts";
 import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
 
 const DAY_MS = 24 * 60 * 60_000;

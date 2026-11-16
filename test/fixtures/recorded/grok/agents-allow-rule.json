@@ -1,0 +1,117 @@
+{
+  "stamp": {
+    "engine": "grok",
+    "cliVersion": "grok 1.0.77 (50ca579fa996) [stable]",
+    "recordedAt": "2026-11-14T10:54:03.000Z",
+    "sourcePc": "home",
+    "source": "real grok --permission-mode default agent -m grok-4.6 --reasoning-effort low stdio, signed in, fake agents MCP server with one tool ping; withRule configAtStart written by ensureGrokAgentsAllowed; configAfterGrok is the file after Grok rewrote it during the run",
+    "model": "grok-4.6",
+    "effort": "low"
+  },
+  "reply": {
+    "withoutRule": {
+      "configAtStart": "[cli]\nauto_update = false\n",
+      "configAfterGrok": "[cli]\nauto_update = false\n\n[marketplace]\ndefault_skills_installs_purged = true\nofficial_marketplace_auto_installed = true\n\n[[marketplace.sources]]\nname = \"xAI Official\"\ngit = \"https://github.com/xai-org/plugin-marketplace.git\"\n",
+      "clientPermissionRequests": [
+        "agents__ping"
+      ],
+      "events": [
+        {
+          "ts": "2026-11-14T10:53:40.776Z",
+          "type": "permission_requested",
+          "tool_name": "search_tool"
+        },
+        {
+          "ts": "2026-11-14T10:53:40.778Z",
+          "type": "permission_resolved",
+          "tool_name": "search_tool",
+          "decision": "allow",
+          "wait_ms": 2
+        },
+        {
+          "ts": "2026-11-14T10:53:42.720Z",
+          "type": "permission_requested",
+          "tool_name": "use_tool"
+        },
+        {
+          "ts": "2026-11-14T10:53:42.730Z",
+          "type": "permission_resolved",
+          "tool_name": "use_tool",
+          "decision": "allow",
+          "wait_ms": 10
+        },
+        {
+          "ts": "2026-11-14T10:53:42.731Z",
+          "type": "mcp_tool_call_started",
+          "server_name": "agents",
+          "tool_name": "ping",
+          "call_id": "agents__ping",
+          "timeout_sec": 6000
+        },
+        {
+          "ts": "2026-11-14T10:53:42.732Z",
+          "type": "mcp_tool_call_completed",
+          "server_name": "agents",
+          "tool_name": "ping",
+          "call_id": "agents__ping",
+          "duration_ms": 1,
+          "success": true,
+          "is_timeout": false,
+          "reconnect_attempted": false,
+          "auth_retry_attempted": false
+        }
+      ]
+    },
+    "withRule": {
+      "configAtStart": "[cli]\nauto_update = false\n\n[permission]\nallow = [\"MCPTool(agents__*)\"]\n",
+      "configAfterGrok": "[cli]\nauto_update = false\n\n[permission]\nallow = [\"MCPTool(agents__*)\"]\n\n[marketplace]\ndefault_skills_installs_purged = true\nofficial_marketplace_auto_installed = true\n\n[[marketplace.sources]]\nname = \"xAI Official\"\ngit = \"https://github.com/xai-org/plugin-marketplace.git\"\n",
+      "clientPermissionRequests": [],
+      "events": [
+        {
+          "ts": "2026-11-14T10:54:00.516Z",
+          "type": "permission_requested",
+          "tool_name": "search_tool"
+        },
+        {
+          "ts": "2026-11-14T10:54:00.516Z",
+          "type": "permission_resolved",
+          "tool_name": "search_tool",
+          "decision": "allow",
+          "wait_ms": 0
+        },
+        {
+          "ts": "2026-11-14T10:54:02.944Z",
+          "type": "permission_requested",
+          "tool_name": "use_tool"
+        },
+        {
+          "ts": "2026-11-14T10:54:02.944Z",
+          "type": "permission_resolved",
+          "tool_name": "use_tool",
+          "decision": "allow",
+          "wait_ms": 0
+        },
+        {
+          "ts": "2026-11-14T10:54:02.945Z",
+          "type": "mcp_tool_call_started",
+          "server_name": "agents",
+          "tool_name": "ping",
+          "call_id": "agents__ping",
+          "timeout_sec": 6000
+        },
+        {
+          "ts": "2026-11-14T10:54:02.945Z",
+          "type": "mcp_tool_call_completed",
+          "server_name": "agents",
+          "tool_name": "ping",
+          "call_id": "agents__ping",
+          "duration_ms": 0,
+          "success": true,
+          "is_timeout": false,
+          "reconnect_attempted": false,
+          "auth_retry_attempted": false
+        }
+      ]
+    }
+  }
+}

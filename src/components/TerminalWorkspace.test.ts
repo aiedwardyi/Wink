@@ -1502,7 +1502,7 @@ it("switches clicked rows and sends input only to the selected pane", async () =
   for (const [nick, id] of [["one", "pane-one"], ["two", "pane-two"], [null, "main-bot-1"]] as const) {
     await f.select(nick);
     expect(shownPane()).toBe(nick ?? "Desk");
-    expect(host.querySelector("[data-worker-list]")).toBeNull();
+    expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     expect(f.open).toHaveBeenLastCalledWith(expect.objectContaining({ restart: false, ...(nick ? { sessionId: id } : {}) }));
     await act(async () => { terminal.__emitData("hello\r"); });
     expect(f.write).toHaveBeenLastCalledWith(id, "hello\r");

@@ -4,7 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { trackOnboard } from "@/lib/usage-stats";
 import { Onboarding } from "./Onboarding";
+
+vi.mock("@/lib/usage-stats", async (original) => ({ ...(await original<typeof import("@/lib/usage-stats")>()), trackOnboard: vi.fn() }));
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 let roots: Root[] = [];
@@ -14,6 +17,7 @@ afterEach(async () => {
   roots = [];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.mocked(trackOnboard).mockClear();
   document.body.innerHTML = "";
 });
 
@@ -40,6 +44,7 @@ describe("Onboarding engine check", () => {
     expect(onDone).toHaveBeenCalledOnce();
     expect(host.textContent).toBe("");
     expect(fetch).toHaveBeenCalledWith("/api/bots?messages=0");
+    expect(trackOnboard).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("keeps setup on a fresh browser (phone %s)", async (phone) => {
@@ -48,6 +53,28 @@ describe("Onboarding engine check", () => {
     const host = await renderWith(200, onDone, { instances: [], bots: [] });
     expect(host.textContent).toContain("Welcome to Wink");
     expect(onDone).not.toHaveBeenCalled();
+    expect(trackOnboard).toHaveBeenCalledExactlyOnceWith("welcome");
+  });
+
+  it("asks for engines again until no first check is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("ogb", { platform: "win32" });
+      const row = (state: string) => ({ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state }, models: { default: "", options: [] } });
+      const answers = [row("checking"), row("checking"), row("available")];
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ instances: [answers.shift() ?? row("available")] })));
+      const host = document.createElement("div");
+      const root = createRoot(host);
+      roots.push(root);
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(Onboarding, { onDone: vi.fn() }))));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(fetch).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps desktop setup even when bots exist", async () => {
@@ -97,6 +124,24 @@ describe("Onboarding engine check", () => {
     await click("Open Wink");
     expect(onDone).toHaveBeenCalledOnce();
     expect(host.textContent).not.toContain("You're all set");
+  });
+
+  it("leaves a way in when the only engine reads as signed out", async () => {
+    localStorage.setItem("omb-locale", "en");
+    const onDone = vi.fn();
+    const claude = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] } };
+    const host = await renderWith(200, onDone, { instances: [claude] });
+    const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label);
+    await act(async () => button("Continue")!.click());
+    expect(button("Continue")!.disabled).toBe(true);
+    expect(button("Open Wink")?.disabled).toBe(false);
+    await act(async () => button("Open Wink")!.click());
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(host.textContent).not.toContain("You're all set");
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ instances: [{ ...claude, snapshot: { state: "available", authenticated: true } }] }));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(button("Continue")!.disabled).toBe(false);
+    expect(button("Open Wink")).toBeUndefined();
   });
 
   it("keeps the all-set step when an engine is ready", async () => {

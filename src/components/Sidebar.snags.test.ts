@@ -7,7 +7,7 @@ import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
-import { StoreProvider } from "@/state/store";
+import { StoreProvider, useStore } from "@/state/store";
 import { Sidebar } from "./Sidebar";
 
 const joined = vi.hoisted(() => ({ needsCode: false, rooms: [{
@@ -26,6 +26,12 @@ class FakeEventSource {
 }
 
 let root: Root | null = null;
+let seen: { selectedId?: string; settingsOpen?: boolean } = {};
+function Seen() {
+  const { state } = useStore();
+  seen = { selectedId: state.selectedId, settingsOpen: state.settingsOpen };
+  return null;
+}
 const calls: Array<{ path: string; method: string; body: unknown }> = [];
 const bot = (id: string) => ({ id, threadId: `${id}-thread`, name: id, messages: [], modelSelection: { instanceId: "", model: "" } });
 const group = { id: "host", threadId: "host-thread", name: "Design team", memberIds: [], messages: [], hosted: { roomId: "r1" }, room: { name: "Design team", people: [] }, defaultResponder: { kind: "everyone" }, bulletin: "", createdAt: 0 };
@@ -48,7 +54,7 @@ async function mount() {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(createElement(I18nProvider, null, createElement(StoreProvider, null, createElement(Sidebar, { open: true, onClose: vi.fn() })))));
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(StoreProvider, null, createElement(Sidebar, { open: true, onClose: vi.fn() }), createElement(Seen)))));
   await act(async () => FakeEventSource.current.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "" }));
   await vi.waitFor(() => expect(host.querySelector('[data-sidebar-row-id="first"]')).not.toBeNull());
   return host;
@@ -156,16 +162,25 @@ it("keeps joined pin and section local through remount, then unpins in its saved
   expect(calls.filter((call) => call.path.includes("joined:r9"))).toEqual([]);
 });
 
-it("copies the hosted invite and opens its existing People sheet", async () => {
+it("copies the hosted invite and opens Room details from People", async () => {
   const writeText = vi.fn(async () => {});
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   await mount();
   await choose(await context("host"), "Copy");
   expect(writeText).toHaveBeenCalledWith("fixture-code");
   await choose(await context("host"), "People");
-  expect(document.querySelector('[role="dialog"][aria-label="People"]')).not.toBeNull();
-  expect(document.querySelector('[role="dialog"][aria-label="People"]')!.closest("aside")).toBeNull();
-  expect(document.querySelector("[data-team-room-code]")?.textContent).toContain("fixture-code");
+  expect(document.querySelector('[role="dialog"][aria-label="People"]')).toBeNull();
+  expect(seen).toEqual({ selectedId: "host", settingsOpen: true });
+});
+
+it("asks before deleting a hosted room", async () => {
+  await mount();
+  await choose(await context("host"), "Delete group");
+  expect(calls.filter((call) => call.method === "DELETE")).toEqual([]);
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("Delete Design team?");
+  await choose(dialog, "Delete");
+  expect(calls).toContainEqual({ path: "/api/groups/host", method: "DELETE", body: undefined });
 });
 
 it("requires the existing leave confirmation before posting", async () => {
@@ -222,8 +237,8 @@ it("rejoins a left room without a code field and opens it", async () => {
 });
 
 it.each([
-  ["en", "Rejoin", "Paste this room's code once. This PC will remember it."],
-  ["ko", "다시 참여", "이 채팅방의 코드를 한 번만 붙여 넣어 주세요. 이 PC에 저장돼요."],
+  ["en", "Rejoin", "Paste this group's code once. This PC will remember it."],
+  ["ko", "다시 참여", "이 그룹의 코드를 한 번만 붙여 넣어 주세요. 이 PC에 저장돼요."],
 ] as const)("asks once for an old copy's code in %s", async (locale, label, hint) => {
   persistPreference(locale);
   joined.rooms[0].status = "left";

@@ -99,6 +99,11 @@ export function markTalked(ledger: MemorySyncLedger, botSyncId: string, now = Da
   (ledger.talked ??= {})[botSyncId] = now;
 }
 
+/** A peer's snapshot landed: idle bots take it now; a bot mid-turn is skipped, so its turn's settle must sync it. */
+export function peerMemoryLanded(botSyncId: string, botMap: Record<string, string>, busy: (botId: string) => boolean, sync: (botId: string) => void): void {
+  for (const [botId, syncId] of Object.entries(botMap)) if (syncId === botSyncId && !busy(botId)) sync(botId);
+}
+
 const hash = (text: string | null) => (text === null ? null : createHash("sha256").update(text).digest("hex"));
 
 // null = absent; undefined = unreadable (a Drive placeholder), left alone until a later pass

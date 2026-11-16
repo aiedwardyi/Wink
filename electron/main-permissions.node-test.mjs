@@ -79,3 +79,9 @@ test("device windows and verify sessions still refuse the main window's micropho
   const verify = readFileSync(new URL("./verify-network.mjs", import.meta.url), "utf8");
   assert.ok(verify.includes("ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));"));
 });
+
+test("the sound pane opens Windows sound settings and macOS Sound > Input", () => {
+  const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  assert.ok(source.includes('pane === "mic" ? "ms-settings:privacy-microphone" : "ms-settings:sound"'));
+  assert.ok(source.includes('pane === "sound" ? "x-apple.systempreferences:com.apple.preference.sound?input"'));
+});

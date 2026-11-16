@@ -6,6 +6,7 @@ import { createConnection, createServer as createTcpServer, type AddressInfo, ty
 import { join } from "node:path";
 import type { TLSSocket } from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { PHONE_RELAY_OFF } from "../../shared/relay-protocol.ts";
 import { DATA_DIR } from "../config.ts";
@@ -45,6 +46,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
+const BOT = "Bearer bot-token";
 
 interface Reply {
   status: number;
@@ -84,7 +86,7 @@ async function localApp(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
   if (client && (await joinedFileRoute(req, res, method, url, client))) return;
-  if (await hostFileRoute(req, res, method, url, { store, hostName: () => "Edward", botCaller: false })) return;
+  if (await hostFileRoute(req, res, method, url, { store, hostName: () => "Edward", botCaller: req.headers.authorization === BOT })) return;
   res.writeHead(404).end();
 }
 
@@ -202,7 +204,7 @@ async function joinedTeam(name = "Mina") {
   const c = teammate();
   // As the local routes do: start first, so a later start() can't follow the room twice.
   c.start();
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward"]);
   const result = await c.join(`wkr1:${HOST}:${invite.id}.${secret}`);
   if (!result.ok) throw new Error(result.error);
   await until(() => c.rooms()[0]?.link === "live");
@@ -365,6 +367,17 @@ describe("pictures and files in a team room, through the real door", () => {
     expect((await call("GET", `/api/rooms/${roomId}/files-state`)).json.deleted).toContain(file.id);
   });
 
+  it("keeps a teammate's 250 held lines when the host deletes a file", async () => {
+    const { group, roomId } = await joinedTeam();
+    const file = await hostUpload(roomId, pdf(100), "plan.pdf");
+    hostedSend(group, { kind: "host" }, "delete me", undefined, undefined, [file.id]);
+    for (let i = 0; i < 248; i += 1) hostedSend(group, { kind: "host" }, `line ${i}`);
+    await until(() => joinedEntries(roomId, 500).length === 250);
+    expect((await call("DELETE", `/api/rooms/${roomId}/files/${file.id}`)).status).toBe(200);
+    await until(() => filesOf(roomId, "delete me")[0]?.deleted === true);
+    expect(joinedEntries(roomId, 500)).toHaveLength(250);
+  });
+
   it("lists every room file newest first and only lets the host delete", async () => {
     const { c, group, roomId } = await joinedTeam();
     const host = await hostUpload(roomId, pdf(100), "plan.pdf");
@@ -380,6 +393,18 @@ describe("pictures and files in a team room, through the real door", () => {
     expect(store.messagesFor(group.threadId).at(-1)?.roomFiles?.[0]).toMatchObject({ deleted: true });
     expect(recentRoomEntries(roomId, 10).at(-1)?.files?.[0]).toMatchObject({ deleted: true });
     expect((await call("GET", `/api/joined/rooms/${roomId}/files/${guest.id}`)).status).toBe(404);
+  });
+
+  it("lets the user's own bot list, read and delete room files, but not post as the host", async () => {
+    const { roomId } = await joinedTeam();
+    const file = await hostUpload(roomId, pdf(100), "plan.pdf");
+    const bot = { authorization: BOT };
+    expect(await call("GET", `/api/rooms/${roomId}/files`, undefined, bot)).toMatchObject({ status: 200, json: { files: [{ id: file.id }] } });
+    expect(await call("GET", `/api/rooms/${roomId}/files-state`, undefined, bot)).toMatchObject({ status: 200 });
+    expect(await call("GET", "/api/room-files-folder", undefined, bot)).toMatchObject({ status: 200, json: { error: null } });
+    expect(await call("DELETE", `/api/rooms/${roomId}/files/${file.id}`, undefined, bot)).toMatchObject({ status: 200 });
+    expect(existsSync(join(DATA_DIR, "room-files", roomId, file.id))).toBe(false);
+    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "hi" })), bot)).status).toBe(403);
   });
 
   it("moves room files after verifying their size and sha256", async () => {
@@ -543,6 +568,93 @@ describe("pictures and files in a team room, through the real door", () => {
     hostedSend(store.groups[0] as HostedGroup, { kind: "host" }, "after");
     await until(() => joinedEntries(roomId, 10).some((entry) => entry.text === "after"));
     expect(joinedEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome", "after"]);
+  });
+});
+
+/** The entry 1.0.256 parses: one bad file type fails the whole line or snapshot. */
+const olderEntry = z.object({
+  seq: z.number().int().positive(),
+  id: z.string().regex(/^[\w-]{1,64}$/),
+  at: z.number(),
+  author: z.object({ kind: z.enum(["host", "person", "bot"]), id: z.string().regex(/^[\w-]{1,64}$/), name: z.string().max(200) }),
+  text: z.string().max(20_000),
+  replyToId: z.string().regex(/^[\w-]{1,64}$/).optional(),
+  files: z.array(z.object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
+    name: z.string().max(200),
+    type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
+    bytes: z.number().int().positive(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    deleted: z.boolean().optional(),
+  })).max(50).optional(),
+});
+const olderSnapshot = z.object({ head: z.number().int().nonnegative(), entries: z.array(olderEntry).max(1_000), state: z.unknown() });
+
+/** A 1.0.256 teammate's door request: it sends the large-files header and nothing newer. */
+function olderDoor(roomId: string, path: string, body?: Buffer) {
+  let text = "";
+  let status = 0;
+  const done = new Promise<void>((resolve) => {
+    const req = requestHttps({
+      hostname: HOST, port: hop.port, ca: caPem, lookup: loopbackLookup, method: body ? "POST" : "GET", path: `/room/v1/rooms/${roomId}/${path}`,
+      headers: {
+        host: HOST, origin: `https://${HOST}`, authorization: `Bearer ${joinedKey(roomId)!.key}`, "x-wink-device": "pc-mina-0123456789abcdef", "x-orbit-room-files": "1",
+        ...(body ? { "content-length": String(body.length) } : {}),
+      },
+    }, (res) => {
+      status = res.statusCode!;
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => { text += chunk; });
+      res.on("end", resolve);
+      res.on("error", resolve);
+    });
+    req.on("error", () => resolve());
+    req.end(body);
+    older.push(req);
+  });
+  const frames = () => text.split("\n\n").slice(0, -1).filter((block) => block.startsWith("data: ")).map((block) => JSON.parse(block.slice(6)) as { kind: string; entry?: unknown });
+  return { done, frames, status: () => status, json: () => JSON.parse(text) };
+}
+
+let older: Array<{ destroy(): void }> = [];
+afterEach(() => {
+  for (const req of older) req.destroy();
+  older = [];
+});
+
+describe("a teammate on 1.0.256 and video or audio files", () => {
+  const mp4 = (size: number) => Buffer.concat([Buffer.from("\0\0\0\x18ftypisom\0\0\x02\0isomiso2", "latin1"), randomBytes(size - 24)]);
+  const mp3 = (size: number) => Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), randomBytes(size - 10)]);
+
+  it("keeps the room live and loadable, with the media named in the line", async () => {
+    const { roomId } = await joinedTeam();
+    const stream = olderDoor(roomId, `stream?after=${recentRoomEntries(roomId, 1)[0]!.seq}&with=bots`);
+    await until(() => stream.frames().some((frame) => frame.kind === "state"));
+    const fileIds = [(await hostUpload(roomId, mp4(4096), "clip.mp4")).id, (await hostUpload(roomId, mp3(4096), "song.mp3")).id, (await hostUpload(roomId, pdf(2048), "plan.pdf")).id];
+    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "watch this", fileIds })))).status).toBe(200);
+
+    await until(() => filesOf(roomId, "watch this").length === 3);
+    expect(filesOf(roomId, "watch this").map((file) => file.type)).toEqual(["video/mp4", "audio/mpeg", "application/pdf"]);
+    await until(() => stream.frames().some((frame) => frame.kind === "entry"));
+    const live = olderEntry.safeParse(stream.frames().find((frame) => frame.kind === "entry")!.entry);
+    expect(live.success, JSON.stringify(live.error?.issues)).toBe(true);
+    expect(live.data).toMatchObject({ text: "watch this\nclip.mp4\nsong.mp3", files: [{ name: "plan.pdf" }] });
+
+    const snapshot = olderDoor(roomId, "snapshot?with=bots");
+    await snapshot.done;
+    const parsed = olderSnapshot.safeParse(snapshot.json());
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(parsed.data!.entries.at(-1)).toMatchObject({ text: "watch this\nclip.mp4\nsong.mp3" });
+  });
+
+  it("refuses its video upload before keeping any bytes, while a current teammate's goes through", async () => {
+    const { roomId } = await joinedTeam();
+    const upload = olderDoor(roomId, `files?${new URLSearchParams({ uploadId: newUploadId(), name: "clip.mp4" })}`, mp4(4096));
+    await upload.done;
+    expect(upload.status()).toBe(415);
+    expect((await call("GET", `/api/rooms/${roomId}/files`)).json.files).toEqual([]);
+    expect(existsSync(join(DATA_DIR, "room-files", roomId)) ? readdirSync(join(DATA_DIR, "room-files", roomId)) : []).toEqual([]);
+    expect((await guestUpload(roomId, mp4(4096), "clip.mp4")).json.file).toMatchObject({ type: "video/mp4" });
   });
 });
 

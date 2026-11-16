@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
+import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
 import { CallAudio } from "@/lib/live-call/audio";
-import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, type CallStatus, type Posted } from "@/lib/live-call/controller";
+import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
 import { usePresence } from "@/lib/use-presence";
 import { firstNeed } from "../../shared/call-status";
@@ -16,18 +17,21 @@ import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
     listening: "Listening",
     speaking: "Speaking",
     working: "Working",
+    paused: "Tap to resume",
     ended: "Call ended",
     failed: "Call failed",
-    send: "Send: {order}?",
+    send: "Ask {bot} to do this?",
     yes: "Yes",
     no: "No",
+    notSent: "Not sent",
+    noReply: "No reply",
     mute: "Mute",
     unmute: "Unmute",
     end: "End",
@@ -37,7 +41,12 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     micBlocked: "Microphone is off for Wink.",
     micMissing: "No microphone found. Plug one in, or type in the chat instead.",
     micBusy: "Your microphone is in use by another app.",
+    voiceOut: "Out of voice for today. Keep typing, I'm still here.",
     openSettings: "Open settings",
+    openCall: "Back to the call with {bot}",
+    hushed: "Quiet · tap to talk",
+    micSilent: "Can't hear your mic. Check your sound input.",
+    soundInput: "sound input",
   },
   ko: {
     starting: "연결 중…",
@@ -45,11 +54,14 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     listening: "듣는 중",
     speaking: "말하는 중",
     working: "작업 중",
+    paused: "탭해서 통화 이어가기",
     ended: "통화 종료",
     failed: "통화 실패",
-    send: "{order} 보낼까요?",
+    send: "{bot}에게 이렇게 요청할까요?",
     yes: "예",
     no: "아니요",
+    notSent: "보내지 않음",
+    noReply: "답 없음",
     mute: "음소거",
     unmute: "음소거 해제",
     end: "종료",
@@ -59,9 +71,33 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     micBlocked: "Wink에서 마이크가 꺼져 있습니다.",
     micMissing: "마이크를 찾을 수 없습니다. 마이크를 연결하거나 채팅으로 입력하세요.",
     micBusy: "다른 앱에서 마이크를 사용 중입니다.",
+    voiceOut: "오늘 음성 통화는 여기까지입니다. 채팅으로 계속 이야기하세요.",
     openSettings: "설정 열기",
+    openCall: "{bot} 통화로 돌아가기",
+    hushed: "조용히 하는 중 · 탭해서 말하기",
+    micSilent: "마이크 소리가 안 들려요. 입력 장치를 확인해 주세요.",
+    soundInput: "입력 장치",
   },
 };
+
+// Known outcome reasons; anything else (a server error) shows as sent in English and is dropped elsewhere.
+const REASONS: Record<LocaleId, Record<string, string>> = {
+  en: {},
+  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨", "call ended": "통화 종료" },
+};
+
+export function noticeText(notice: NonNullable<CallState["notice"]>, locale: LocaleId): string {
+  const words = WORDS[locale] ?? WORDS.en;
+  const why = notice.why && (REASONS[locale]?.[notice.why] ?? (locale === "en" ? notice.why : ""));
+  return `${words[notice.kind]}: ${notice.text}${why ? ` (${why})` : ""}`;
+}
+
+/** "Call failed: X. Not sent: Y"; a server error may bring its own period. */
+export function failedText(snap: CallState, locale: LocaleId): string {
+  const words = WORDS[locale] ?? WORDS.en;
+  const error = snap.error?.endsWith(".") ? snap.error.slice(0, -1) : snap.error;
+  return [error ? `${words.failed}: ${error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ");
+}
 
 async function post(path: string, body: object): Promise<Posted> {
   const res = await fetchResponse(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -115,12 +151,21 @@ function TimeLeft({ expiresAt }: { expiresAt: number }) {
   );
 }
 
-export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; onEnd: (note?: string) => void }) {
+/** Owns the live call above every view, so switching chats or opening a room never ends it. */
+export function LiveCallHost() {
+  const active = useActiveCall();
+  const { state } = useStore();
+  const bot = active && (state.bots.find((candidate) => candidate.id === active.botId) ?? active.bot);
+  return active && bot ? <Session key={active.id} active={active} bot={bot} /> : null;
+}
+
+function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const { state } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
+  const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
   const [live] = useState((): Live => {
-    const audio = new CallAudio(ctx);
+    const audio = new CallAudio(active.ctx);
     const call = new LiveCall({
       botId: bot.id,
       botName: bot.name,
@@ -128,19 +173,19 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
       engine: () => new GeminiLive(),
       audio,
       post,
+      opener: active.opener,
     });
     return { call, level: (mic) => audio.level(mic) };
   });
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
-  const [privacy] = useState(() => !seenPrivacy());
   const owner = useOnCall();
   const mounted = useRef(false);
   const kicked = useRef(false);
   const configured = Boolean(state.config?.gemini?.configured);
   const [fresh, setFresh] = useState(() => !seenIntro());
   // A key saved mid-call shows the intro too, so the call never goes live unseen.
-  const intro = (fresh && configured) || (snap.status === "needsKey" && configured);
+  const intro = (fresh && configured && !state.config?.gemini?.introSeen) || (snap.status === "needsKey" && configured);
   const introShown = usePresence(intro);
   const messages = visibleMessages(bot);
 
@@ -153,8 +198,10 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   useEffect(() => {
     if (!state.config || kicked.current) return;
     kicked.current = true;
+    // A rung call with no key only opens the chat, so the server keeps ringing until the blocker clears.
+    if (active.opener && !state.config.gemini?.configured) return onEnd();
     if (!intro) void call.start();
-  }, [call, intro, state.config]);
+  }, [active.opener, call, intro, onEnd, state.config]);
 
   useEffect(() => {
     mounted.current = true;
@@ -174,28 +221,77 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
     };
   }, [bot.id, call, onEnd]);
 
+  // The first render still reads the call it replaces as owner; only a later switch hangs this one up.
+  const owned = useRef(false);
   useEffect(() => {
-    if (snap.status !== "ended" && (owner === null || owner === bot.id)) return;
+    if (owner === bot.id) owned.current = true;
+    if (snap.status !== "ended" && (owner === null || owner === bot.id || !owned.current)) return;
     endCall(bot.id);
     onEnd();
   }, [bot.id, onEnd, owner, snap.status]);
 
-  // No mic to fix in settings: hang up and leave only the line.
-  const micGone = snap.status === "failed" && (snap.error === MIC_MISSING || snap.error === MIC_BUSY);
+  // Nothing to fix in settings: hang up and leave only the line.
+  const quietEnd = snap.status === "failed" && (snap.error === MIC_MISSING || snap.error === MIC_BUSY || snap.error === VOICE_OUT);
   useEffect(() => {
-    if (!micGone) return;
+    if (!quietEnd) return;
     endCall(bot.id);
-    onEnd(snap.error === MIC_MISSING ? words.micMissing : words.micBusy);
-  }, [bot.id, micGone, onEnd, snap.error, words]);
+    onEnd(snap.error === MIC_MISSING ? words.micMissing : snap.error === VOICE_OUT ? words.voiceOut : words.micBusy);
+  }, [bot.id, quietEnd, onEnd, snap.error, words]);
 
   useEffect(() => {
     call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });
   }, [bot.busy, bot.threadId, call, messages]);
 
-  const [sendBefore, sendAfter] = words.send.split("{order}");
+  useEffect(() => onQueueCancelled((sendIds) => call.dequeued(sendIds)), [call]);
+
+  return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
+}
+
+const TARGET = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
+
+export function OrderCard({ bot, live, narrow = false }: { bot: Bot; live: Live; narrow?: boolean }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  const { call } = live;
+  const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
+  return (
+    <div data-live-call-order className="mb-2 overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
+      {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}
+      <div className={cn("flex items-center gap-2 p-3", narrow ? "flex-wrap" : "max-md:flex-wrap")}>
+        <div className={cn("min-w-0 flex-1 text-sm text-ink", narrow ? "basis-full" : "max-md:basis-full")}>
+          <p>{words.send.replace("{bot}", () => bot.name)}</p>
+          <p className="font-medium break-words">{snap.pending?.order}</p>
+        </div>
+        <button type="button" onClick={() => void call.answer(true)} className={cn(TARGET, "bg-accent text-accent-ink", narrow && "flex-1")}>{words.yes}</button>
+        <button type="button" onClick={() => void call.answer(false)} className={cn(TARGET, "bg-control text-ink", narrow && "flex-1")}>{words.no}</button>
+      </div>
+    </div>
+  );
+}
+
+export function ResumeButton({ live }: { live: Live }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  return (
+    <button type="button" data-live-call-resume onClick={() => live.call.resume()} className="px-1 pb-1.5 text-left text-xs font-medium text-accent hover:underline max-md:min-h-10">
+      {words.paused}
+    </button>
+  );
+}
+
+/** The call's notes and order card in its own chat. */
+export function LiveCallBar({ bot }: { bot: Bot }) {
+  const live = useLive(bot.id);
+  return live ? <Bar bot={bot} live={live} /> : null;
+}
+
+function Bar({ bot, live }: { bot: Bot; live: Live }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  const snap = useSyncExternalStore(live.call.subscribe, live.call.state, live.call.state);
+  const [privacy] = useState(() => !seenPrivacy());
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
-  const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
+  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? failedText(snap, locale) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
   useEffect(() => {
@@ -209,21 +305,12 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
 
   return (
     <div data-live-call={snap.status} className="px-5 max-md:px-3">
-      {introShown.mounted && <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />}
       <Fold open={Boolean(snap.pending)} soft keep>
-        <div data-live-call-order className="mb-2 overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
-          {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}
-          <div className="flex items-center gap-2 p-3 max-md:flex-wrap">
-            <p className="min-w-0 flex-1 text-sm text-ink max-md:basis-full">
-              {sendBefore}<span className="font-medium">{snap.pending?.order.replace(/[.?!。]+$/, "")}</span>{sendAfter}
-            </p>
-            <button type="button" onClick={() => void call.answer(true)} className={cn(target, "bg-accent text-accent-ink")}>{words.yes}</button>
-            <button type="button" onClick={() => void call.answer(false)} className={cn(target, "bg-control text-ink")}>{words.no}</button>
-          </div>
-        </div>
+        <OrderCard bot={bot} live={live} />
       </Fold>
+      {snap.status === "paused" && <ResumeButton live={live} />}
       {note && (
-        <p role={snap.status === "failed" ? "alert" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
+        <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
           {note}
           {micBlocked && window.ogb?.permOpenSettings && (
             <button type="button" onClick={() => void window.ogb?.permOpenSettings("mic")} className="ml-2 font-medium text-accent hover:underline">{words.openSettings}</button>

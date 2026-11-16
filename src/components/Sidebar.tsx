@@ -37,6 +37,7 @@ import {
 } from "@/lib/sidebar-layout";
 import {
   api,
+  shownProfile,
   useStore,
   type Bot,
   type Group,
@@ -44,9 +45,11 @@ import {
 } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
+import { CallWidgetSlot } from "./CallSlots";
 import { updaterActions, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { showBotMenuCopy, showNewMenuExport, showPhoneDrawerCollapse, showSidebarPhone } from "@/lib/friends-chrome";
 import { nextRename } from "@/lib/rename";
@@ -56,7 +59,7 @@ import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
 import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./SidebarRooms";
-import { TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
+import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -99,6 +102,7 @@ import {
   type SidebarOrder,
 } from "@/lib/sidebar-order";
 import { useTouchDrag, type TouchDropMark } from "@/lib/use-touch-drag";
+import { useListMenuDismiss } from "@/lib/use-hold-menu";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
@@ -106,14 +110,16 @@ import { ArchivedBotsPanel, BotListItem, RecentlyDeletedPanel, type MenuState, t
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
+import { BoardButton } from "./BoardButton";
 import { DeviceSwitcher } from "./DeviceSwitcher";
-import { ChoosePcLink } from "./ChoosePcLink";
 import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
 import { useJoinedRooms } from "@/lib/joined-rooms";
+import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
@@ -215,21 +221,7 @@ function RoomContextMenu({
     if (!closing) renameRef.current?.focus();
   }, [closing]);
 
-  useEffect(() => {
-    if (closing) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest("[data-room-menu]")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [closing, onClose]);
+  useListMenuDismiss("[data-room-menu]", "[data-sidebar-list]", closing, onClose);
 
   if (!group) return null;
   const saveRename = () => {
@@ -253,7 +245,7 @@ function RoomContextMenu({
           dispatch({ type: "patchGroup", groupId: group.id, patch: { pinned: !group.pinned } });
           onClose();
         }}
-        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+        className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
       >
         {group.pinned ? <PinOff size={16} className="text-ink-secondary" /> : <Pin size={16} className="text-ink-secondary" />}
         {group.pinned ? t("chrome.unpin") : t("chrome.pin")}
@@ -305,7 +297,7 @@ function RoomContextMenu({
             setDraft(group.name);
             setRenaming(true);
           }}
-          className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+          className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
         >
           <Pencil size={16} className="text-ink-secondary" />
           {t("chrome.renameChannel", { name: group.name })}
@@ -316,7 +308,7 @@ function RoomContextMenu({
           onClose();
           onMoveToSection(group.id);
         }}
-        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+        className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
       >
         <FolderPlus size={16} className="text-ink-secondary" />
         {t("chrome.moveToContext")}
@@ -325,7 +317,8 @@ function RoomContextMenu({
       <TeamRoomSidebarActions group={group} onClose={onClose} />
       {!joined && <button
         onClick={() => {
-          dispatch({ type: "deleteGroup", groupId: group.id });
+          if (group.hosted) confirmRoomDelete(group);
+          else dispatch({ type: "deleteGroup", groupId: group.id });
           onClose();
         }}
         className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-danger hover:bg-raised/40"
@@ -367,21 +360,7 @@ function SectionPicker({
     if (!closing) nameRef.current?.focus();
   }, [closing]);
 
-  useEffect(() => {
-    if (closing) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest("[data-section-picker]")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [closing, onClose]);
+  useListMenuDismiss("[data-section-picker]", "[data-sidebar-list]", closing, onClose);
 
   // Hidden bots can carry a stale assignment; don't offer it as a context.
   // Channels and bots share one namespace, so Work or Personal can hold both.
@@ -419,7 +398,7 @@ function SectionPicker({
               onClick={() => assign(section)}
               className={cn(
                 "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px]",
-                section === current ? "bg-raised text-ink" : "text-ink hover:bg-raised/70",
+                section === current ? "bg-raised text-ink" : cn("text-ink", MENU_ITEM_HOVER),
               )}
             >
               <span className="truncate">{section}</span>
@@ -491,21 +470,7 @@ function BotContextMenu({
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
-  useEffect(() => {
-    if (closing) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest("[data-bot-menu]")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [closing, onClose]);
+  useListMenuDismiss("[data-bot-menu]", "[data-sidebar-list]", closing, onClose);
 
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
@@ -542,7 +507,7 @@ function BotContextMenu({
           ? "cursor-default opacity-40"
           : opts?.danger
             ? "hover:bg-raised/40"
-            : "hover:bg-raised/70",
+            : MENU_ITEM_HOVER,
       )}
     >
       {icon}
@@ -624,6 +589,7 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
+  const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -645,10 +611,13 @@ export function Sidebar({
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
+  useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
+  useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  useEffect(() => { if (archivedBotsOpen) trackScreen("archived"); }, [archivedBotsOpen]);
   const [trashOpen, setTrashOpen] = useState(false);
   const [trashBots, setTrashBots] = useState<TrashedBot[]>([]);
   const [exportingTeam, setExportingTeam] = useState(false);
@@ -665,9 +634,12 @@ export function Sidebar({
   const roomMenuPresence = usePresence(roomMenu);
   const roomSectionPickerPresence = usePresence(roomSectionPicker);
   const wizardPresence = usePresence(wizard);
+  const toast = usePresence(teamFeedback);
   const [query, setQuery] = useState("");
   const [savedCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
-  const sidebarCollapsed = savedCollapsed || folded;
+  // the phone drawer has no unfold button, so a fold saved in landscape waits for the wide layout
+  const phone = useIsPhone();
+  const sidebarCollapsed = (savedCollapsed && (!phone || showPhoneDrawerCollapse())) || folded;
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
@@ -718,6 +690,20 @@ export function Sidebar({
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
   }, [backOverlay]);
+  useEffect(() => {
+    if (!state.revealed) return;
+    setDeleteTarget(null);
+    setSectionPicker(null);
+    setRoomSectionPicker(null);
+    setMenu(null);
+    setRoomMenu(null);
+    setWizard(false);
+    setArchivedBotsOpen(false);
+    setTrashOpen(false);
+    setTeamLibraryOpen(false);
+    setTeamInstallUrl(null);
+    setPlusOpen(false);
+  }, [state.revealed]);
   // Desktop never opens the drawer, so only a phone drawer closing reaches this.
   useEffect(() => {
     if (!open) setPlusOpen(false);
@@ -901,6 +887,10 @@ export function Sidebar({
         motions.push(el.animate([{ transform: `translateX(${railShift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
       }
     }
+    // A closing panel docked inside the view would ride its slide; translate leaves its own exit's transform alone.
+    for (const el of view?.querySelectorAll<HTMLElement>("[data-side-panel][data-closing]") ?? []) {
+      motions.push(el.animate([{ translate: `${-railShift}px 0` }, { translate: "0 0" }], SIDEBAR_MOTION));
+    }
     // the list's raised badges would show through the view sliding off it
     const raised = shift < 0 && view instanceof HTMLElement ? view : null;
     if (raised) {
@@ -910,7 +900,10 @@ export function Sidebar({
     return () => {
       const progress = motions[0]?.effect?.getComputedTiming().progress;
       if (progress != null) shownSidebarWidth.current = from + (sidebarDisplayWidth - from) * progress;
-      for (const motion of motions) motion.cancel();
+      for (const motion of motions) {
+        motion.finished.catch(() => undefined);
+        motion.cancel();
+      }
       ghost.style.width = "";
       if (raised) raised.style.zIndex = "";
     };
@@ -1004,6 +997,7 @@ export function Sidebar({
   }, [deleteTarget]);
 
   const exportAllBots = async () => {
+    trackFeature("export");
     setExportingTeam(true);
     setTeamFeedback(null);
     try {
@@ -1469,6 +1463,19 @@ export function Sidebar({
   // over() runs every frame; the order is fixed until drop, so recompute only on a new row
   const touchEdgeRef = useRef<{ key: string; edge: TouchDropMark | undefined } | null>(null);
   const touchListRef = useTouchDrag("[data-sidebar-row], [data-sidebar-section-handle]", "[data-sidebar-row], [data-sidebar-item-drop-zone]", {
+    holdMenu: {
+      open: (pressed, x, y) => {
+        const item = touchRowItem(pressed);
+        if (!item) return false;
+        if (item.kind === "bot") setMenu({ botId: item.id, x, y });
+        else setRoomMenu({ groupId: item.id, x, y });
+        return true;
+      },
+      close: () => {
+        setMenu(null);
+        setRoomMenu(null);
+      },
+    },
     lift: (pressed) => {
       touchEdgeRef.current = null;
       const item = touchRowItem(pressed);
@@ -1511,7 +1518,8 @@ export function Sidebar({
       resetSectionDrag();
     },
   });
-  const pendingTeamUndo = teamFeedback?.undo;
+  const pendingTeamUndo = toast.value?.undo;
+  const pendingRestore = toast.value?.restoreBotId;
   const renderItem = (item: SidebarItem) => item.kind === "group" ? (
     <GroupListItem
       key={item.key}
@@ -1596,8 +1604,9 @@ export function Sidebar({
         {macInset ? (
           <div className={density === "icons" ? "h-5 w-full" : "w-14"} />
         ) : isPhone() && !window.ogb ? (
-          <div className={cn("min-w-0", density === "icons" ? "flex w-full justify-center" : "flex-1")}>
+          <div className={cn("flex min-w-0 items-center", density === "icons" ? "w-full flex-col justify-center gap-1" : "flex-1 gap-1")}>
             <DeviceSwitcher labeled iconOnly={density === "icons"} drawerOpen={open} />
+            <BoardButton onOpen={onClose} />
           </div>
         ) : density === "icons" ? (
           <div />
@@ -1609,6 +1618,7 @@ export function Sidebar({
           style={windowNoDragStyle}
         >
           {density !== "icons" && <DeviceSwitcher />}
+          {!(isPhone() && !window.ogb) && <BoardButton />}
           {(!isPhone() || showPhoneDrawerCollapse()) && <button
             type="button"
             onClick={toggleCollapsed}
@@ -1670,7 +1680,7 @@ export function Sidebar({
                       setPlusOpen(false);
                       dispatch({ type: "newBot" });
                     }}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                   >
                     <BotIcon size={16} className="text-ink-secondary" />
                     {t("chrome.newBot")}
@@ -1680,7 +1690,7 @@ export function Sidebar({
                       setPlusOpen(false);
                       setWizard(true);
                     }}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                   >
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
@@ -1692,7 +1702,7 @@ export function Sidebar({
                       void exportAllBots();
                     }}
                     disabled={exportingTeam}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                   >
                     {exportingTeam ? <Loader2 size={16} className="animate-spin text-ink-secondary" /> : <ArrowDownToLine size={16} className="text-ink-secondary" />}
                     {exportingTeam ? t("chrome.exporting") : t("chrome.exportAllBots")}
@@ -1704,7 +1714,7 @@ export function Sidebar({
                         setPlusOpen(false);
                         setArchivedBotsOpen(true);
                       }}
-                      className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                      className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                     >
                       <Archive size={16} className="text-ink-secondary" />
                       <span className="flex-1">{t("chrome.archivedBots")}</span>
@@ -1717,7 +1727,7 @@ export function Sidebar({
                         setPlusOpen(false);
                         setTrashOpen(true);
                       }}
-                      className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                      className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                     >
                       <Trash2 size={16} className="shrink-0 text-ink-secondary" />
                       <span className="flex-1 whitespace-nowrap">{t("chrome.recentlyDeleted")}</span>
@@ -1768,7 +1778,7 @@ export function Sidebar({
       )}
 
       {/* Bot list */}
-      <div ref={touchListRef} className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
+      <div ref={touchListRef} data-sidebar-list className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
         <div className="flex flex-col gap-0.5">
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("palette.noMatch", { query })}</div>
@@ -1850,7 +1860,6 @@ export function Sidebar({
 
       {/* Footer */}
       <div className={cn("min-w-0 overflow-x-hidden pb-3 pt-2", density === "icons" ? "px-2" : "px-3")} data-sidebar-footer>
-        <ChoosePcLink iconOnly={density === "icons"} />
         {density === "icons" && (
           <div className="flex min-h-10 items-center justify-center" data-sidebar-update>
             <UpdateButton />
@@ -1863,6 +1872,7 @@ export function Sidebar({
             onOpen={() => dispatch(phoneSettingsAction())}
           />
         )}
+        <CallWidgetSlot narrow={density === "icons"} className="mb-2 max-md:hidden" />
         <div className={cn("flex min-w-0 items-center", density === "icons" && "justify-center")} data-sidebar-profile-row>
           <button
             onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}
@@ -1870,10 +1880,10 @@ export function Sidebar({
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
           >
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} pending={!state.config} />
-            {state.config ? (
+            <InitialsAvatar initials={profileInitials(profile?.profile)} imageUrl={profile?.profile?.avatarUrl} size={28} pending={!profile} />
+            {profile ? (
               <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
-                {state.config.profile?.name?.trim() || state.config.profile?.email?.trim() || t("chrome.you")}
+                {profile.profile?.name?.trim() || profile.profile?.email?.trim() || t("chrome.you")}
               </span>
             ) : (
               <span aria-hidden="true" className={cn("h-3 w-20 animate-pulse rounded-full bg-raised motion-reduce:animate-none", density === "icons" && "hidden")} />
@@ -2009,19 +2019,21 @@ export function Sidebar({
           />
         )}
       </Presence>
-      {teamFeedback &&
+      {toast.value &&
         createPortal(
           <div
             role="status"
+            data-closing={toast.closing || undefined}
+            inert={toast.closing}
             className={cn(
-              "fixed bottom-4 left-4 z-[60] max-w-[300px] rounded-xl border px-3.5 py-2.5 text-[13px] shadow-xl",
-              teamFeedback.error
-                ? "border-danger/30 bg-card text-danger"
-                : "border-hairline/50 bg-card text-ink",
+              "animate-pop-in fixed bottom-4 left-4 z-[60] max-w-[300px] rounded-xl border bg-panel px-3.5 py-2.5 text-[13px] shadow-2xl shadow-black/50",
+              toast.value.error
+                ? "border-danger/30 text-danger"
+                : "border-hairline/40 text-ink",
             )}
           >
             <div className="flex items-center gap-3">
-              <span>{teamFeedback.text}</span>
+              <span>{toast.value.text}</span>
               {pendingTeamUndo && (
                 <button
                   onClick={() => void undoTeamLoad(pendingTeamUndo)}
@@ -2030,9 +2042,9 @@ export function Sidebar({
                   {t("chrome.undo")}
                 </button>
               )}
-              {teamFeedback.restoreBotId && (
+              {pendingRestore && (
                 <button
-                  onClick={() => void undoTrash(teamFeedback.restoreBotId!)}
+                  onClick={() => void undoTrash(pendingRestore)}
                   className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
                 >
                   {t("chrome.undo")}

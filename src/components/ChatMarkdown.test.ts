@@ -6,9 +6,10 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks } from "./ChatMarkdown";
+import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks, warmMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { applyLocale } from "@/lib/i18n";
-import { closeShow, showItem } from "@/lib/show-pane";
+import { closeShow, lastShown, showItem } from "@/lib/show-pane";
 import { applySkin } from "@/lib/skins";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,6 +18,66 @@ vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code
 
 beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
+
+describe("web links", () => {
+  it.each(["README.md", "deploy.sh", "file.ts", "notes.ai", "v1.0.259", "e.g.", "file.tsx", "file.js", "file.json", "file.py", "file.txt", "file.yml", "file.log", "www.notes.ai", "example.technology"])("keeps %s plain in user and bot text", (text) => {
+    for (const Component of [LinkedText, ChatMarkdown]) {
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+      expect(host.querySelector("a")).toBeNull();
+      expect(host.textContent).toBe(text);
+    }
+  });
+
+  it.each([["user", LinkedText], ["bot", ChatMarkdown]] as const)("links common domains in %s text", (kind, Component) => {
+    const text = "starzum.com x.co.kr www.x.io";
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", "https://x.co.kr", kind === "bot" ? "http://www.x.io" : "https://www.x.io",
+    ]);
+    expect(host.textContent).toBe(text);
+  });
+
+  it.each([
+    ["https://example.com/Edward's-notes", "https://example.com/Edward's-notes"],
+    ["www.starzum.com/Edward's-notes", "https://www.starzum.com/Edward's-notes"],
+    ["'www.starzum.com/notes'", "https://www.starzum.com/notes"],
+  ])("keeps apostrophes inside %s and surrounding quotes outside", (text, href) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(LinkedText, { text }));
+    expect(host.querySelector("a")?.getAttribute("href")).toBe(href);
+    expect(host.textContent).toBe(text);
+  });
+
+  it.each(["https://starzum.com", "www.x.io", "http://x.co.kr", "https://notes.ai", "http://x.io/a", "https://STARZUM.COM", "https://example.technology", "https://한글.kr"])("links %s in a bot reply", (text) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text }));
+    const link = host.querySelector("a");
+    expect(link?.textContent).toBe(text);
+    const href = text.startsWith("http") ? text : `${text.startsWith("www.") ? "http" : "https"}://${text}`;
+    expect(new URL(link?.getAttribute("href") ?? "about:blank").href).toBe(new URL(href).href);
+    expect(link?.target).toBe("_blank");
+  });
+
+  it("keeps files, versions, code and existing email links unchanged", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "file.ts v1.0.259 e.g. `starzum.com` person@example.com [notes](file.ts)" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["mailto:person@example.com"]);
+    expect(host.querySelector("code")?.textContent).toBe("starzum.com");
+  });
+
+  it("leaves explicit markdown labels and paths intact and trims sentence punctuation", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(starzum.com/a(b)). [starzum.com](https://example.org) [www.notes.ai](https://www.notes.ai) ./starzum.com wrong.invalidtld file.ts" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org", "https://www.notes.ai"]);
+  });
+});
+
+// warm-views swallows a throw, so a hook in react-markdown would silently undo the warm.
+it("warms the parser outside a render", () => {
+  expect(() => warmMarkdown()).not.toThrow();
+});
 
 describe("ChatMarkdown streaming", () => {
   it("preserves code card identity and spoiler state across deltas and settle", async () => {
@@ -622,43 +683,80 @@ describe("relative file links", () => {
   });
 
   describe("file link right-click", () => {
-    const rightClick = async (ogb: object | undefined, text: string, baseDir?: string) => {
+    const rightClick = async (ogb: object | undefined, text: string, baseDir?: string, then?: (host: HTMLElement) => Promise<void>) => {
       if (ogb) Object.defineProperty(window, "ogb", { configurable: true, value: ogb });
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
       try {
         await act(async () => root.render(createElement(ChatMarkdown, { text, baseDir })));
-        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
         await act(async () => void host.querySelector("button")!.dispatchEvent(event));
-        return { prevented: event.defaultPrevented, text: host.textContent };
+        const items = [...document.querySelectorAll("[data-file-menu] [role=menuitem]")].map((item) => item.textContent);
+        await then?.(host);
+        return { prevented: event.defaultPrevented, text: host.textContent, items };
       } finally {
         await act(async () => root.unmount());
         host.remove();
         Reflect.deleteProperty(window, "ogb");
       }
     };
+    const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>("[data-file-menu] [role=menuitem]")].find((each) => each.textContent === name)!;
 
-    it("opens the native menu and keeps the browser menu away", async () => {
-      const fileMenu = vi.fn().mockResolvedValue(undefined);
-      const openFile = vi.fn();
-      const result = await rightClick({ fileMenu, openFile }, "[1080p](clip.mp4)", "/p");
-      expect(fileMenu).toHaveBeenCalledWith("/p/clip.mp4", "/p");
-      expect(openFile).not.toHaveBeenCalled();
+    it("opens the app menu with the native menu's actions and keeps the browser menu away", async () => {
+      const fileMenu = vi.fn();
+      const openFile = vi.fn().mockResolvedValue(undefined);
+      const showInFolder = vi.fn().mockResolvedValue(undefined);
+      const saveFile = vi.fn().mockResolvedValue(undefined);
+      const localMediaFile = vi.fn().mockResolvedValue("/p/real/clip.mp4");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ fileMenu, openFile, showInFolder, saveFile, localMediaFile }, "[1080p](clip.mp4)", "/p", async () => {
+        expect(localMediaFile).toHaveBeenCalledWith({ path: "/p/clip.mp4" });
+        await act(async () => item("Show in folder").click());
+        expect(showInFolder).toHaveBeenCalledWith("/p/clip.mp4", "/p");
+        expect(document.querySelector("[data-file-menu]:not([data-closing])")).toBeNull();
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+        await act(async () => item("Save as").click());
+        expect(saveFile).toHaveBeenCalledWith("/p/real/clip.mp4");
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 1 })));
+        await act(async () => item("Copy path").click());
+        expect(writeText).toHaveBeenCalledWith("/p/real/clip.mp4");
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 2 })));
+        await act(async () => item("Open").click());
+        expect(openFile).toHaveBeenCalledWith("/p/clip.mp4", "/p");
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Save as", "Copy path"]);
+      expect(fileMenu).not.toHaveBeenCalled();
       expect(result.prevented).toBe(true);
+    });
+
+    it("offers no Save as and copies the link's own path when it resolves outside the bot's folder", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ openFile: vi.fn(), showInFolder: vi.fn(), saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue("/elsewhere/secret.py") }, "[report](report.py)", "/p", async () => {
+        await act(async () => item("Copy path").click());
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
+      expect(writeText).toHaveBeenCalledWith("/p/report.py");
     });
 
     it("leaves the default menu alone without the bridge", async () => {
       expect((await rightClick(undefined, "[notes](C:/My%20Drive/notes.md)")).prevented).toBe(false);
-      const older = await rightClick({ openFile: vi.fn() }, "[notes](C:/My%20Drive/notes.md)");
+      const older = await rightClick({ fileMenu: vi.fn() }, "[notes](C:/My%20Drive/notes.md)");
       expect(older.prevented).toBe(false);
     });
 
-    it("says why when the file is rejected", async () => {
-      const fileMenu = vi.fn().mockRejectedValue(new Error("That file no longer exists"));
-      const result = await rightClick({ fileMenu }, "[gone](gone.py)", "/p");
+    it("offers no Save as for a folder or a missing file, and says why Show in folder failed", async () => {
+      const showInFolder = vi.fn().mockRejectedValue(new Error("That file no longer exists"));
+      const result = await rightClick({ openFile: vi.fn(), showInFolder, saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue(null) }, "[gone](gone.py)", "/p", async (host) => {
+        await act(async () => item("Show in folder").click());
+        expect(host.textContent).toContain("That file no longer exists");
+      });
       expect(result.prevented).toBe(true);
-      expect(result.text).toContain("That file no longer exists");
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
     });
   });
 
@@ -671,7 +769,7 @@ describe("relative file links", () => {
     vi.stubGlobal("fetch", fetchFile);
     const host = document.createElement("div");
     const root = createRoot(host);
-    const file = "C:\\Users\\mredw\\Desktop\\donecheck-demo.mp4";
+    const file = "C:\\Users\\alice\\Desktop\\donecheck-demo.mp4";
     try {
       await act(async () => root.render(createElement(ChatMarkdown, { text: `[donecheck-demo.mp4](<${file}>)`, threadId: "t1" })));
       expect(host.textContent).toContain(message);
@@ -808,6 +906,7 @@ describe("relative file links", () => {
       const play = vi.spyOn(video, "play");
       const pause = vi.spyOn(video, "pause");
       expect(video.getAttribute("controlslist")).toBe("nofullscreen");
+      expect(video.className).toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       await act(async () => button()!.click());
       expect(shown).toBe(video.parentElement);
       expect(shown).not.toBe(video);
@@ -816,6 +915,7 @@ describe("relative file links", () => {
       expect(play).not.toHaveBeenCalled();
       expect(pause).not.toHaveBeenCalled();
       expect(video.className).toContain("object-contain");
+      expect(video.className).toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
     });
 
     it("exits with the same button and keeps the video element", async () => {
@@ -891,12 +991,13 @@ describe("relative file links", () => {
       expect(button()).toBeNull();
       const video = host.querySelector("video")!;
       expect(video.hasAttribute("controlslist")).toBe(false);
+      expect(video.className).not.toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       expect(video.parentElement!.tagName).not.toBe("SPAN");
     });
   });
 
   describe("show cards", () => {
-    const text = ["signups.png", "launch-deck.pdf", "sync-flow.html", "notes.md"].map((name) => `[${name}](C:\\w\\${name})`).join("\n\n");
+    const text = ["signups.png", "launch-deck.pdf", "sync-flow.html", "notes.md", "report.docx"].map((name) => `[${name}](C:\\w\\${name})`).join("\n\n");
     let host: HTMLElement;
     let root: Root;
     const cards = () => [...host.querySelectorAll<HTMLButtonElement>("[data-show-card]")];
@@ -916,15 +1017,30 @@ describe("relative file links", () => {
       applyLocale("en");
     });
 
-    it("turns image, PDF and web page links into cards with the panel icon", () => {
-      expect(cards().map((card) => card.textContent)).toEqual(["signups.pngImage", "launch-deck.pdfPDF", "sync-flow.htmlWeb page"]);
-      expect(cards().every((card) => card.querySelector("[data-show-icon]"))).toBe(true);
+    it("turns image, PDF, web page and document links into cards, the showable ones with the panel icon", () => {
+      expect(cards().map((card) => card.textContent)).toEqual(["signups.pngImage", "launch-deck.pdfPDF", "sync-flow.htmlWeb page", "report.docxDOCX"]);
+      expect(cards().map((card) => Boolean(card.querySelector("[data-show-icon]")))).toEqual([true, true, true, false]);
       expect(host.querySelector("[data-file-link]")?.textContent).toBe("notes.md");
+    });
+
+    it("opens a document card in its default app", async () => {
+      await act(async () => cards()[3]!.click());
+      expect(window.ogb!.openFile).toHaveBeenCalledWith("C:\\w\\report.docx", undefined);
+      expect(cards()[3]!.hasAttribute("data-showing")).toBe(false);
+    });
+
+    it("drops the parentheses a bot wraps around a card", async () => {
+      const wrapped = "- **PDF:**\n  `C:\\w\\a.pdf`\n  ([a.pdf](<C:\\w\\a.pdf>))\n- see (the [notes](C:\\w\\notes.md))";
+      await act(async () => root.render(createElement(ChatMarkdown, { key: "wrapped", text: wrapped, threadId: "t1" })));
+      const item = host.querySelector("li")!;
+      expect(item.querySelector("[data-show-card]")).not.toBeNull();
+      expect(item.textContent).not.toMatch(/[()]/);
+      expect(host.querySelectorAll("li")[1]!.textContent).toBe("see (the notes)");
     });
 
     it("lights the showing card and a tap shows it again after a close", async () => {
       await act(async () => showItem({ threadId: "t1", path: "C:\\w\\sync-flow.html", kind: "page" }));
-      expect(cards().map((card) => card.hasAttribute("data-showing"))).toEqual([false, false, true]);
+      expect(cards().map((card) => card.hasAttribute("data-showing"))).toEqual([false, false, true, false]);
       await act(async () => closeShow());
       expect(cards().some((card) => card.hasAttribute("data-showing"))).toBe(false);
       await act(async () => cards()[2]!.click());
@@ -935,11 +1051,272 @@ describe("relative file links", () => {
     it("names the kinds in Korean", async () => {
       applyLocale("ko");
       await act(async () => root.render(createElement(ChatMarkdown, { key: "ko", text, threadId: "t1" })));
-      expect(cards().map((card) => card.textContent)).toEqual(["signups.png이미지", "launch-deck.pdfPDF", "sync-flow.html웹 페이지"]);
+      expect(cards().map((card) => card.textContent)).toEqual(["signups.png이미지", "launch-deck.pdfPDF", "sync-flow.html웹 페이지", "report.docxDOCX"]);
     });
   });
 
-  it.each(["zip", "md", "txt", "docx"])("opens a linked %s from an authenticated browser without the desktop bridge", async (ext) => {
+  describe("files named in a sentence", () => {
+    const sentences = "Updated [test.txt](C:\\w\\test.txt) to say test4.\n\nGenerated a dog image: [the dog](C:\\w\\dog.png).\n\nSaved to [dog.png](C:\\w\\dog.png).";
+    const read = ["Updated test.txt to say test4.", "Generated a dog image: the dog.", "Saved to dog.png."];
+    let host: HTMLElement;
+    let root: Root;
+    const links = () => [...host.querySelectorAll<HTMLButtonElement>("[data-file-link]")];
+    const cards = () => [...host.querySelectorAll<HTMLButtonElement>("[data-show-card]")];
+    const lines = () => [...host.querySelectorAll("p")].map((line) => line.textContent);
+    const mount = (text: string, pictured = false) => act(async () => root.render(createElement(ChatMarkdown, { text, threadId: "t1", pictured })));
+    const desktop = () => Object.defineProperty(window, "ogb", { configurable: true, value: { openFile: vi.fn() } });
+    const phoneFiles = () => act(async () => {
+      await vi.waitFor(() => expect(host.querySelector("[data-show-card], [data-phone-media], [data-file-link]")).not.toBeNull());
+    });
+    beforeEach(() => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
+      host = document.createElement("div");
+      document.body.append(host);
+      root = createRoot(host);
+    });
+    afterEach(async () => {
+      await act(async () => root.unmount());
+      host.remove();
+      Reflect.deleteProperty(window, "ogb");
+      vi.unstubAllGlobals();
+    });
+
+    it("draws a file named in a sentence as the plain file link, with no box, icon or thumbnail", async () => {
+      desktop();
+      await mount(`${sentences}\n\nNotes: [notes.md](C:\\w\\notes.md)`);
+      expect(lines()).toEqual([...read, "Notes: notes.md"]);
+      expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png", "notes.md"]);
+      expect(new Set(links().map((link) => link.className)).size).toBe(1);
+      expect(links()[0]!.className).toContain("underline");
+      expect(cards()).toHaveLength(0);
+      expect(host.querySelector("p img, p svg")).toBeNull();
+    });
+
+    it("keeps the card for a file on its own line", async () => {
+      desktop();
+      await mount("Here it is:\n[dog.png](C:\\w\\dog.png)\n\n- [a.pdf](C:\\w\\a.pdf)\n- Report: [d.pdf](C:\\w\\d.pdf)\n\n**[b.pdf](C:\\w\\b.pdf)**");
+      expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage", "a.pdfPDF", "b.pdfPDF"]);
+      expect(links().map((link) => link.textContent)).toEqual(["d.pdf"]);
+    });
+
+    it("opens a sentence link's file in the pane, a text file too", async () => {
+      desktop();
+      await mount(sentences);
+      await act(async () => links()[0]!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\test.txt", kind: "text" });
+      await act(async () => links()[1]!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\dog.png", kind: "image" });
+      expect(window.ogb!.openFile).not.toHaveBeenCalled();
+    });
+
+    it("opens a sentence link the pane can't show in its default app, and keeps the file menu", async () => {
+      desktop();
+      await mount("Wrote [the report](C:\\w\\report.docx) for you.");
+      await act(async () => links()[0]!.click());
+      expect(window.ogb!.openFile).toHaveBeenCalledWith("C:\\w\\report.docx", undefined);
+      await act(async () => void links()[0]!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      expect(document.querySelector("[data-file-menu]")).not.toBeNull();
+    });
+
+    it("draws no second picture for a file the reply already showed", async () => {
+      desktop();
+      await mount("Generated a dog image: [dog.png](C:\\w\\dog.png).\n\n[dog.png](C:\\w\\dog.png)", true);
+      expect(links().map((link) => link.textContent)).toEqual(["dog.png"]);
+      expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage"]);
+      expect(host.querySelector("img")).toBeNull();
+      await act(async () => cards()[0]!.click());
+      expect(cards()[0]!.hasAttribute("data-showing")).toBe(true);
+    });
+
+    it("draws the same plain link on a phone, and a tap shows the file in the pane", async () => {
+      await mount(sentences);
+      await phoneFiles();
+      expect(lines()).toEqual(read);
+      expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
+      expect(links()[0]!.className).toContain("underline");
+      expect(cards()).toHaveLength(0);
+      expect(host.querySelector("p img, p svg, [data-phone-media]")).toBeNull();
+      await act(async () => links()[0]!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\test.txt", kind: "text" });
+      await act(async () => links()[1]!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\dog.png", kind: "image" });
+    });
+
+    it("saves a sentence link the pane can't show on a phone", async () => {
+      const saved: [string | null, string | null][] = [];
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push([this.getAttribute("href"), this.getAttribute("download")]); });
+      await mount("Wrote [the report](C:\\w\\report.docx) for you.");
+      await phoneFiles();
+      await act(async () => links()[0]!.click());
+      expect(saved).toEqual([["/api/threads/t1/linked-file?path=C%3A%5Cw%5Creport.docx", "report.docx"]]);
+      vi.restoreAllMocks();
+    });
+
+    describe("the picture a sentence links to", () => {
+      const src = (name: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(`C:\\w\\${name}`)}`;
+      const pictures = () => [...host.querySelectorAll<HTMLImageElement>("[data-linked-picture] img")];
+
+      it("draws once under the text and keeps the links", async () => {
+        desktop();
+        await mount(sentences);
+        expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("dog.png")]);
+        expect(host.querySelector(".chat-md")!.lastElementChild!.hasAttribute("data-linked-picture")).toBe(true);
+        expect(lines()).toEqual(read);
+        expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
+        expect(host.querySelector("[data-linked-picture]")!.textContent).toBe("");
+      });
+
+      it("marks the picture with the card's pane icon, and a click on it shows the picture", async () => {
+        desktop();
+        await act(async () => closeShow());
+        await mount("Saved to [plot.png](C:\\w\\plot.png).");
+        const icons = [...host.querySelectorAll<SVGElement>("[data-linked-picture] button svg")];
+        expect(icons.map((icon) => icon.hasAttribute("data-show-icon"))).toEqual([true]);
+        expect(icons[0]!.parentElement!.className).toContain("rounded-full bg-black/55 text-white");
+        expect(host.querySelectorAll("[data-linked-picture] button")).toHaveLength(1);
+        await act(async () => void icons[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\plot.png", kind: "image" });
+        expect(document.querySelector("[data-media-viewer]")).toBeNull();
+      });
+
+      it("opens the file card's menu on a right-click, on the link and on the picture", async () => {
+        desktop();
+        const menu = async (target: Element) => {
+          const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+          await act(async () => void target.dispatchEvent(event));
+          const open = [...document.querySelectorAll("[data-file-menu]:not([data-closing])")];
+          return { prevented: event.defaultPrevented, menus: open.length, name: open[0]?.getAttribute("aria-label"), items: [...(open[0]?.querySelectorAll("[role=menuitem]") ?? [])].map((item) => item.textContent) };
+        };
+        await mount("[chart.png](C:\\w\\chart.png)");
+        const card = await menu(cards()[0]!);
+        expect(card).toMatchObject({ prevented: true, menus: 1, name: "chart.png" });
+        expect(card.items.length).toBeGreaterThan(0);
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "", threadId: "t1" })));
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        expect(await menu(pictures()[0]!)).toEqual(card);
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "", threadId: "t1" })));
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        expect(await menu(links()[0]!)).toEqual(card);
+      });
+
+      it("leaves a long-press on a phone's picture alone, like the card", async () => {
+        await mount(sentences);
+        await phoneFiles();
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        await act(async () => void pictures()[0]!.dispatchEvent(event));
+        expect(event.defaultPrevented).toBe(false);
+        expect(document.querySelector("[data-file-menu]:not([data-closing])")).toBeNull();
+        expect(host.querySelectorAll("[data-linked-picture] [data-show-icon]")).toHaveLength(1);
+      });
+
+      it("draws different pictures in link order", async () => {
+        desktop();
+        await mount("Made [b.png](C:\\w\\b.png) and [a.png](C:\\w\\a.png), then [b.png](C:\\w\\b.png) again.");
+        expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("b.png"), src("a.png")]);
+      });
+
+      it("shows the picture in the pane on a click, and opens nothing before it", async () => {
+        desktop();
+        await act(async () => closeShow());
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        expect(lastShown("t1")?.path).not.toBe("C:\\w\\chart.png");
+        await act(async () => pictures()[0]!.click());
+        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\chart.png", kind: "image" });
+        expect(window.ogb!.openFile).not.toHaveBeenCalled();
+        expect(document.querySelector("[data-media-viewer]")).toBeNull();
+      });
+
+      it("draws no picture the bot already showed", async () => {
+        desktop();
+        await mount(sentences, true);
+        expect(pictures()).toHaveLength(0);
+        expect(links()).toHaveLength(3);
+      });
+
+      it("draws no picture for other files, or for a file on its own line", async () => {
+        desktop();
+        await mount("Updated [test.txt](C:\\w\\test.txt) and [d.pdf](C:\\w\\d.pdf), see [clip.mp4](C:\\w\\clip.mp4).\n\n[dog.png](C:\\w\\dog.png)");
+        expect(pictures()).toHaveLength(0);
+        expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage"]);
+      });
+
+      it("draws nothing for a picture that can't load, and keeps its link", async () => {
+        desktop();
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        await act(async () => void pictures()[0]!.dispatchEvent(new Event("error")));
+        expect(host.querySelector("[data-linked-picture]")).toBeNull();
+        expect(host.querySelector("img")).toBeNull();
+        expect(links().map((link) => link.textContent)).toEqual(["chart.png"]);
+      });
+
+      it("waits for the reply to settle", async () => {
+        desktop();
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "Saved to [chart.png](C:\\w\\chart.png).", threadId: "t1", streaming: true })));
+        expect(pictures()).toHaveLength(0);
+      });
+
+      it("draws the same picture on a phone, and a tap shows it in the pane", async () => {
+        await mount(sentences);
+        await phoneFiles();
+        expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("dog.png")]);
+        expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
+        await act(async () => pictures()[0]!.click());
+        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\dog.png", kind: "image" });
+      });
+    });
+
+    it("draws no second picture on a phone either", async () => {
+      await mount("[dog.png](C:\\w\\dog.png)", true);
+      await phoneFiles();
+      expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage"]);
+      expect(host.querySelector("img")).toBeNull();
+    });
+  });
+
+  it.each(["zip", "docx"])("saves a linked %s card from an authenticated browser without the desktop bridge", async (ext) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
+    const saved: [string | null, string | null][] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push([this.getAttribute("href"), this.getAttribute("download")]); });
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const file = `C:/Users/alice/Desktop/file.${ext}`;
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `([file](${file}))`, threadId: "t1" })));
+      const card = host.querySelector<HTMLButtonElement>("[data-show-card]")!;
+      expect(card.textContent).toBe(`file.${ext}${ext.toUpperCase()}`);
+      expect(host.textContent).not.toMatch(/[()]/);
+      await act(async () => card.click());
+      expect(saved).toEqual([[`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`, `file.${ext}`]]);
+    } finally {
+      await act(async () => root.unmount());
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows a linked txt card in the pane from a browser without the desktop bridge", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const file = "C:/Users/alice/Desktop/file.txt";
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `([file](${file}))`, threadId: "t1" })));
+      const card = host.querySelector<HTMLButtonElement>("[data-show-card]")!;
+      expect(card.textContent).toBe("file.txtTXT");
+      expect(card.querySelector("[data-show-icon]")).not.toBeNull();
+      await act(async () => card.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: file, kind: "text" });
+      expect(download).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens a linked md from an authenticated browser without the desktop bridge", async () => {
+    const ext = "md";
     vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
     const host = document.createElement("div");
     const root = createRoot(host);
@@ -983,7 +1360,7 @@ describe("relative file links", () => {
     }
   });
 
-  it.each([["unlisted-folder", 404, false], ["empty.zip", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
+  it.each([["unlisted-folder", 404, false], ["empty.py", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status, headers: { "content-range": "bytes */0" } })));
     const host = document.createElement("div");
     const root = createRoot(host);
@@ -1114,7 +1491,7 @@ describe("relative file links", () => {
     });
 
     it("a backslash folder link in angle brackets opens too", async () => {
-      const windows = String.raw`C:\Users\mredw\Desktop\Orbit-extras\showcase-1111`;
+      const windows = String.raw`C:\Users\alice\Desktop\projects\showcase-1111`;
       const { root } = await mount("en", files, `<${windows}>`);
       try {
         expect(fetch).toHaveBeenCalledWith(`/api/threads/t1/linked-folder?path=${encodeURIComponent(windows)}`);

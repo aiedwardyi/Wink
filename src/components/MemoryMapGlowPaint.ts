@@ -202,8 +202,17 @@ export function painter(): Painter | null {
   return (kept = { gl, renderer, ready });
 }
 
+// a cleared pixel reads back opaque from a buffer that lost its alpha
+function clears(gl: WebGL2RenderingContext) {
+  const pixel = new Uint8Array(4);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+  return pixel[3] === 0;
+}
+
 /** Paints every layer; blocks while the shader builds, so it runs in MemoryMapGlow.worker.ts. */
-export function render(source: Source): Rendered {
+export function render(source: Source, fresh = false): Rendered {
   const { dpr, size: [wide, high], live } = source, made = table(source);
   const tall = (bottom: number) => Math.min(high, Math.ceil(bottom * dpr));
   const jobs = [[wide, tall(made.deep), 0, 0, made.glow, 1], ...[1, 2, 3].map((layer) => [wide, tall(made.shallow), layer, 0, made.glow, 1])];
@@ -217,6 +226,12 @@ export function render(source: Source): Rendered {
   if (kit.ready) {
     canvas.width = Math.max(canvas.width, ...jobs.map((each) => each[0]));
     canvas.height = Math.max(canvas.height, ...jobs.map((each) => each[1]));
+    // a kept context can lose its alpha, and every layer would paint as a black box; a fresh one paints as before it was kept
+    if (!clears(gl)) {
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      kept = undefined;
+      return fresh ? { renderer, layers: null } : render(source, true);
+    }
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, WIDE, made.rows, 0, gl.RGBA, gl.FLOAT, made.data);
     gl.vertexAttrib3fv(3, source.back);
     layers = jobs.map(([w, h, layer, from, to, grit], seed) => {

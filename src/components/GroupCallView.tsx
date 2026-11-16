@@ -19,6 +19,7 @@ import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
 import { CallTargetButton } from "./CallView";
 import { isRoutineApproval, pendingApprovals, spokenApprovalPrompt } from "./PendingApproval";
+import { sendInput } from "@/lib/usage-stats";
 
 const YES = /^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|allow|approve|approved|fine|please do)\b/i;
 const NO = /^(no|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
@@ -286,6 +287,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
 
       allowBargeIn.current = false;
       move(busyRef.current ? "working" : "sending");
+      sendInput("call");
       dispatch({ type: "sendGroup", groupId: group.id, text: routed.text, threadId: group.threadId });
       scheduleListen(false, 600);
     });
@@ -446,7 +448,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       <button
         onClick={() => endCall(group.id)}
         aria-label="Hang up"
-        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
+        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
       >
         <X size={18} />
       </button>
@@ -467,7 +469,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
               <div
                 key={member.id}
                 className={cn(
-                  "flex w-[124px] flex-col items-center gap-2 rounded-3xl px-2 py-3 transition-all duration-200",
+                  "flex w-[124px] flex-col items-center gap-2 rounded-3xl px-2 py-3 transition-all",
                   focused ? "scale-105 bg-raised/70 shadow-lg" : "opacity-75",
                 )}
               >

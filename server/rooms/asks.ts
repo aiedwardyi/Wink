@@ -1,6 +1,5 @@
 // Team room asks: one row per request to a room's bot, moved only by
-// compare-and-set, plus the durable day and hour quotas. Both live in rooms.db
-// beside the log, in tables of their own.
+// compare-and-set. They live in rooms.db beside the log, in a table of their own.
 import { chmodSync, closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -32,7 +31,7 @@ export interface RoomAsk {
   quoteId?: string;
   /** Unset while held; Allow or Answer only picks it. */
   grant?: RoomGrant;
-  /** The grant came from the host's tap, not the asker's level. */
+  /** The grant came from the host's tap. */
   allowed: boolean;
   clean: boolean;
   state: AskState;
@@ -57,17 +56,7 @@ export interface RoomAskDeps {
 /** Words answers plug in here; with none, a words ask fails without a call. */
 export const roomAskHooks: { words?: (ask: RoomAsk, instance: ProviderInstance | null) => void } = {};
 
-export const ROOM_LIMITS = {
-  messagesPerPersonDay: 1_000,
-  messagesPerRoomDay: 5_000,
-  asksPerPersonHour: 30,
-  asksPerRoomHour: 120,
-  openWorkPerPerson: 1,
-  heldPerPerson: 3,
-};
-
-const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
+const DAY = 24 * 60 * 60 * 1000;
 const LIVE: readonly AskState[] = ["queued", "running"];
 const NEXT: Record<AskState, readonly AskState[]> = {
   held: ["queued", "failed", "cancelled"],
@@ -80,6 +69,8 @@ const NEXT: Record<AskState, readonly AskState[]> = {
 };
 
 let deps: RoomAskDeps | null = null;
+/** A running ask's riders: queued asks to the same only bot that its one turn answers too. */
+const riding = new Map<string, string[]>();
 
 export function configureRoomAsks(next: RoomAskDeps | null): void {
   deps = next;
@@ -125,13 +116,6 @@ function open(): DatabaseSync {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS asks_by_room ON asks (room_id, state);
-    CREATE TABLE IF NOT EXISTS room_spend (
-      room_id TEXT NOT NULL,
-      person_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS room_spend_by_room ON room_spend (room_id, kind, at);
   `);
   return db;
 }
@@ -189,10 +173,9 @@ export function roomAsks(roomId: string, states: readonly AskState[]): RoomAsk[]
   return rows.map(rowToAsk);
 }
 
-/** Terminal asks and spend older than a day go. */
+/** Terminal asks older than a day go. */
 function prune(now: number): void {
   db().prepare("DELETE FROM asks WHERE state IN ('done', 'failed', 'cancelled') AND updated_at < ?").run(now - DAY);
-  db().prepare("DELETE FROM room_spend WHERE at < ?").run(now - DAY);
 }
 
 export function createAsk(draft: Omit<RoomAsk, "id" | "at" | "state" | "reason" | "allowed">): RoomAsk {
@@ -239,8 +222,20 @@ export function hostedTurnRefused(group: GroupRecord | null | undefined, threadI
   return Boolean(invalid);
 }
 
-/** Queued > running, right before the engine is called. */
-export function startAsk(id: string): boolean {
+/** The queued asks that wait behind `id` for a group's only bot, oldest first. */
+export function askRiders(id: string): RoomAsk[] {
+  const { store } = need();
+  const ask = askById(id);
+  const bots = ask ? store.groupByThread(ask.threadId)?.memberIds.filter((botId) => {
+    const bot = store.bot(botId);
+    return bot && !bot.hidden;
+  }) : [];
+  if (!ask || bots?.length !== 1) return [];
+  return roomAsks(ask.roomId, ["queued"]).filter((row) => row.id !== id && row.threadId === ask.threadId && row.botId === ask.botId && row.grant === "work");
+}
+
+/** Queued > running, right before the engine is called. `riders` from askRiders start with it, off the queue. */
+export function startAsk(id: string, riders: readonly RoomAsk[] = []): boolean {
   const ask = askById(id);
   if (ask?.state !== "queued") return false;
   const invalid = askInvalid(ask);
@@ -248,13 +243,48 @@ export function startAsk(id: string): boolean {
     void endAsk(id, invalid.end, invalid.line);
     return false;
   }
-  return moveAsk(id, "queued", "running");
+  if (!moveAsk(id, "queued", "running")) return false;
+  const started = riders.filter((rider) => {
+    const live = askById(rider.id);
+    if (live?.state !== "queued") return false;
+    const gone = askInvalid(live);
+    if (gone) void endAsk(rider.id, gone.end, gone.line);
+    if (gone || !moveAsk(rider.id, "queued", "running")) return false;
+    cancelQueuedAsk(rider.id);
+    return true;
+  }).map((rider) => rider.id);
+  if (started.length) riding.set(id, started);
+  return true;
+}
+
+/** The riders' own moves once their lead ask is over. */
+function endRiders(id: string, answered: boolean): void {
+  const riders = riding.get(id);
+  riding.delete(id);
+  for (const rider of riders ?? []) settleAsk(rider, answered);
 }
 
 /** A native step may run only inside a running ask; stopping denies. */
 export function askAllowsRequest(id: string): boolean {
   const ask = askById(id);
   return ask?.state === "running" && !askInvalid(ask);
+}
+
+/** The deny for a card on a teammate's request: only the host could answer it. */
+export const ASK_DENY_NOTE =
+  "Wink: only the host could answer this step, and a teammate's request can't wait for them. Skip it and say so in your reply.";
+
+const teammateAsks = (roomId: string, threadId: string, botId: string) =>
+  roomAsks(roomId, ["running", "stopping"]).filter((ask) => ask.asker.kind === "person" && ask.threadId === threadId && ask.botId === botId);
+
+/** A teammate's request is this bot's live turn on the thread. */
+export function teammateAskTurn(roomId: string, threadId: string, botId: string): boolean {
+  return teammateAsks(roomId, threadId, botId).length > 0;
+}
+
+/** A deny that never reached the engine leaves a step open with no card; the request ends so the room moves on. */
+export function failTeammateAskTurn(roomId: string, threadId: string, botId: string): void {
+  for (const ask of teammateAsks(roomId, threadId, botId)) void endAsk(ask.id, "failed");
 }
 
 function writeEnd(ask: RoomAsk, text: string): void {
@@ -284,6 +314,7 @@ export function settleAsk(id: string, answered: boolean): RoomAsk | null {
   const ask = askById(id);
   if (!ask || !moveAsk(id, "running", answered ? "done" : "failed")) return null;
   if (!answered) writeEnd(ask, endLine(ask, "failed"));
+  endRiders(id, answered);
   return ask;
 }
 
@@ -298,7 +329,12 @@ export function beginEnd(id: string, end: AskEnd, line?: string): "ended" | "sto
     return "ended";
   }
   if (ask.state !== "running" || !moveAsk(id, "running", "stopping", line ? `${end}:${line}` : end)) return null;
-  return "stopping";
+  // A rider ends alone; the turn goes on for its lead ask.
+  const lead = [...riding].find(([, riders]) => riders.includes(id));
+  if (!lead) return "stopping";
+  riding.set(lead[0], lead[1].filter((rider) => rider !== id));
+  if (moveAsk(id, "stopping", end)) writeEnd(ask, line ?? endLine(ask, end));
+  return "ended";
 }
 
 /** Waits for the native session to end, then makes the terminal move and writes its entry. */
@@ -309,10 +345,11 @@ export async function finishEnd(id: string): Promise<boolean> {
   const [end, ...line] = (ask.reason ?? "failed").split(":") as [AskEnd, ...string[]];
   if (!moveAsk(id, "stopping", end)) return false;
   writeEnd(ask, line.length ? line.join(":") : endLine(ask, end));
+  endRiders(id, false);
   return true;
 }
 
-/** Every ending of a live ask: Cancel, Leave, Remove, a level drop, the deadline, room Stop. */
+/** Every ending of a live ask: Cancel, Leave, Remove, the deadline, room Stop. */
 export async function endAsk(id: string, end: AskEnd, line?: string): Promise<boolean> {
   const first = beginEnd(id, end, line);
   if (first !== "stopping") return first === "ended";
@@ -326,7 +363,7 @@ export function stopRoomAsks(roomId: string): string[] {
   return roomAsks(roomId, ["queued", "running"]).filter((ask) => beginEnd(ask.id, "cancelled") === "stopping").map((ask) => ask.id);
 }
 
-/** Remove, Leave or a level change: end what the person's level no longer covers. */
+/** Remove or Leave: end the person's asks once they are out of the room. */
 export function revalidatePersonAsks(roomId: string, personId: string): Promise<boolean[]> {
   const asks = roomAsks(roomId, ["held", "queued", "running"]).filter((ask) => ask.asker.kind === "person" && ask.asker.id === personId);
   return Promise.all(asks.map((ask) => {
@@ -352,40 +389,10 @@ export function failInterruptedAsks(): number {
   return failed;
 }
 
-function spent(roomId: string, kind: "message" | "ask", since: number, personId?: string): number {
-  const row = (personId === undefined
-    ? db().prepare("SELECT COUNT(*) AS n FROM room_spend WHERE room_id = ? AND kind = ? AND at > ?").get(roomId, kind, since)
-    : db().prepare("SELECT COUNT(*) AS n FROM room_spend WHERE room_id = ? AND kind = ? AND at > ? AND person_id = ?").get(roomId, kind, since, personId)) as { n: number };
-  return row.n;
-}
-
-export function spend(roomId: string, personId: string, kind: "message" | "ask"): void {
-  db().prepare("INSERT INTO room_spend (room_id, person_id, kind, at) VALUES (?, ?, ?, ?)").run(roomId, personId, kind, Date.now());
-}
-
-/** Why this person can't send now, if they can't. The host has no quota. */
-export function sendRefusal(roomId: string, personId: string, ask: RoomGrant | "held" | null): string | null {
-  const now = Date.now();
-  if (spent(roomId, "message", now - DAY, personId) >= ROOM_LIMITS.messagesPerPersonDay) return "you've sent today's limit of messages in this room";
-  if (spent(roomId, "message", now - DAY) >= ROOM_LIMITS.messagesPerRoomDay) return "this room has reached today's message limit";
-  if (!ask) return null;
-  const mine = roomAsks(roomId, ["held", "queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === personId);
-  if (ask === "held") return mine.filter((row) => row.state === "held").length >= ROOM_LIMITS.heldPerPerson ? "you already have 3 requests waiting" : null;
-  return askRefusal(roomId, personId, ask, mine);
-}
-function askRefusal(roomId: string, personId: string, ask: RoomGrant, mine: RoomAsk[]): string | null {
-  const now = Date.now();
-  if (ask === "work" && mine.filter((row) => row.grant === "work" && row.state !== "held").length >= ROOM_LIMITS.openWorkPerPerson) return "wait for your last request to finish";
-  if (spent(roomId, "ask", now - HOUR, personId) >= ROOM_LIMITS.asksPerPersonHour) return "you've asked the bot the most it takes in an hour";
-  if (spent(roomId, "ask", now - HOUR) >= ROOM_LIMITS.asksPerRoomHour) return "this room has asked the bot the most it takes in an hour";
-  return null;
-}
-
 /** A queued ask starts: work on the room's queue, words through its hook. */
 export function runAsk(ask: RoomAsk): void {
   const { dispatch, instance } = need();
   if (peopleOnlyRoom(ask.roomId)) return void endAsk(ask.id, "failed");
-  if (ask.asker.kind === "person") spend(ask.roomId, ask.asker.id, "ask");
   if (ask.grant === "work") return dispatch(ask);
   if (roomAskHooks.words) return roomAskHooks.words(ask, instance(ask.botId, ask.threadId));
   void endAsk(ask.id, "failed");
@@ -395,11 +402,6 @@ export function runAsk(ask: RoomAsk): void {
 export function admitAsk(id: string, grant: RoomGrant): RoomAsk | null {
   const ask = askById(id);
   if (ask?.state !== "held") return null;
-  if (ask.asker.kind === "person") {
-    const mine = roomAsks(ask.roomId, ["queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === ask.asker.id);
-    const refusal = askRefusal(ask.roomId, ask.asker.id, grant, mine);
-    if (refusal) throw Object.assign(new Error(refusal), { status: 429 });
-  }
   const moved = db().prepare("UPDATE asks SET state = 'queued', grant_kind = ?, allowed = 1, updated_at = ? WHERE id = ? AND state = 'held'")
     .run(grant, Date.now(), id).changes === 1;
   if (!moved) return null;

@@ -73,6 +73,7 @@ it("lists every startTurn caller with its RootStart kind", () => {
     { call: "bot.id, TASK_RESUME_PROMPT", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "automationSource: triggerSource" },
     { call: "source.bot.id, line", kind: "automatic", marker: "automationSource" },
+    { call: "botId, prompt", kind: "human", marker: "transcriptText: typed" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
@@ -148,9 +149,8 @@ it.each(["folded", "queued"])("adopts every human at the production %s fold and 
   turnRegistry.settle("fold-turn");
 });
 
-it("keeps depth and room-hop caps and wires captured roots into every busy room path", () => {
+it("keeps the comms depth cap and wires captured roots into every busy room path", () => {
   expect(source.text).toContain("const MAX_COMMS_DEPTH = 1;");
-  expect(source.text).toContain("const MAX_GROUP_HOPS = 1;");
   const busy = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "queueBusyRoomMember");
   expect(busy).toHaveLength(3);
   for (const call of busy) expect(call.arguments.slice(-2).map((arg) => arg.getText(source))).toEqual(["rootId", "authority"]);

@@ -8,8 +8,8 @@ import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Message, Store } from "../store.ts";
-import type { HostedGroup } from "./asks.ts";
-import { committedRoomText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
+import { revalidatePersonAsks, type HostedGroup } from "./asks.ts";
+import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, RoomError, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
   broadcastDoorReactions,
@@ -21,7 +21,7 @@ import {
   openDoorStream,
   sendDoorState,
   trackDoorSocket,
-  writeFrame,
+  writeCatchUp,
   type DoorEntry,
   type DoorFrame,
   type DoorState,
@@ -30,11 +30,14 @@ import {
 import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
 import { deletedRoomFiles } from "./files.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
-import { hostedSend } from "./send.ts";
+import { hostedSend, teamBotSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
+import { addTeamBot, removePersonTeamBots, removeTeamBot, teamBot, teamBots } from "./team-bots.ts";
 
 const MINUTE = 60_000;
 const BODY_BYTES = 16 * 1024;
+/** A bot answer is up to 20k characters of any script. */
+const BOT_BODY_BYTES = 96 * 1024;
 const JOIN_BODY_BYTES = 1024;
 const SNAPSHOT_ENTRIES = 200;
 /** Under the 4 MiB reply cap older guests read, with room left for state. */
@@ -43,8 +46,8 @@ const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
 /** Under the 256 KB frame cap guests read. */
 const REACTION_FRAME_BYTES = 192 * 1024;
-const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|bots|bot-send|asks\/[\w-]{1,64}\/cancel|bots\/([\w-]{1,64})\/remove)$/;
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", bots: "POST", "bot-send": "POST", "remove-bot": "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SHORT = /^[2-9A-HJ-NP-Z]{6}$/i;
 const JOIN_STATUS = {
@@ -104,6 +107,11 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
         if (group) broadcastDoorReactions(group.hosted.roomId, [lineReactions(change.message)]);
         return;
       }
+      if (change.type === "bot") {
+        if (!anyDoorStreams()) return;
+        for (const roomId of new Set(door!.watched.values())) if (doorGroup(roomId)?.memberIds.includes(change.botId)) pushRoomState(roomId);
+        return;
+      }
       const roomId = (change.type === "group" || change.type === "group.deleted") && door?.watched.get(change.groupId);
       if (!roomId || !anyDoorStreams()) return;
       if (doorGroup(roomId)) return pushRoomState(roomId);
@@ -127,16 +135,19 @@ function doorGroup(roomId: string): HostedGroup | null {
 }
 
 /** The host's and the bots' names, which no guest may take. */
-const takenNames = (group: HostedGroup) => [door!.deps.hostName(), ...group.memberIds.flatMap((id) => door!.deps.store.bot(id)?.name ?? [])];
+const takenNames = (group: HostedGroup) => [
+  door!.deps.hostName(), ...group.memberIds.flatMap((id) => door!.deps.store.bot(id)?.name ?? []), ...teamBots(group.hosted.roomId).map((bot) => bot.name),
+];
 
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
   const bots = group.memberIds.flatMap((id) => {
     const bot = door!.deps.store.bot(id);
-    return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
+    return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color, ...(bot.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) }] : [];
   });
+  const teamBotList = teamBots(group.hosted.roomId).map(({ id, name, color, owner, mascotStyle }) => ({ id, name, color, owner, ...(mascotStyle ? { mascotStyle } : {}) }));
   return {
-    roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots,
+    roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, teamBots: teamBotList,
     ...(group.picture ? { picture: group.picture } : {}),
     ...(group.notice ? { notice: group.notice } : {}),
   };
@@ -247,10 +258,79 @@ async function pinNotice(req: IncomingMessage, res: ServerResponse, roomId: stri
     return send(res, 200, { notice: null });
   }
   if (typeof entryId !== "string") return send(res, 400, { error: "bad request" });
-  if (!/^[\w-]{1,64}$/.test(entryId) || !roomEntry(roomId, entryId)) return send(res, 404, { error: "no such message in this room" });
-  const notice = { entryId, by, at: Date.now() };
+  const entry = /^[\w-]{1,64}$/.test(entryId) ? roomEntry(roomId, entryId) : null;
+  if (!entry) return send(res, 404, { error: "no such message in this room" });
+  const notice = { entryId, by, at: Date.now(), text: noticeText(entry.text) };
   door!.deps.store.patchGroup(call.group.id, { notice });
   send(res, 200, { notice });
+}
+
+/** A teammate adds one of their own bots; it answers only them, from their PC. */
+async function addBot(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  if (!door!.names.take(person.id)) return send(res, 429, { error: "rate-limited" });
+  const call = await guestFields(req, res, roomId, person);
+  if (!call) return;
+  try {
+    const people = roomPeople(roomId).map((candidate) => candidate.name);
+    const bot = addTeamBot(roomId, person.id, call.fields.name, call.fields.color, [...takenNames(call.group), ...people], call.fields.mascotStyle);
+    pushRoomState(roomId);
+    tellHost(roomId);
+    send(res, 200, { bot });
+  } catch (error) {
+    if (!(error instanceof RoomError)) throw error;
+    send(res, error.status, { error: error.message });
+  }
+}
+
+async function removeBot(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson, botId: string): Promise<void> {
+  const call = await guestFields(req, res, roomId, person);
+  if (!call) return;
+  if (!removeTeamBot(roomId, botId, person.id)) return notFound(res);
+  pushRoomState(roomId);
+  tellHost(roomId);
+  send(res, 200, { ok: true });
+}
+
+/** The host's Remove for any teammate's bot. */
+export function removeRoomTeamBot(roomId: string, botId: string): boolean {
+  const removed = removeTeamBot(roomId, botId);
+  if (removed) {
+    pushRoomState(roomId);
+    tellHost(roomId);
+  }
+  return removed;
+}
+
+async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  const body = await readJson(req, BOT_BODY_BYTES);
+  if (!body.ok) return bodyError(res, body.status);
+  const group = doorGroup(roomId);
+  if (!group) return notFound(res);
+  const bearer = bearerOf(req);
+  const still = bearer ? guestByKey(bearer) : null;
+  if (still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
+  const fields = record(body.value);
+  const { botId, text, replyToId } = fields ?? {};
+  if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
+  const bot = /^[\w-]{1,64}$/.test(botId) ? teamBot(roomId, botId) : null;
+  if (!bot || bot.owner !== person.id) return send(res, 403, { error: "forbidden" });
+  if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return send(res, 404, { error: "no such message in this room" });
+  let sendId: string | undefined;
+  try {
+    sendId = parseSendId(fields?.sendId === undefined ? undefined : String(fields.sendId));
+  } catch {
+    return send(res, 400, { error: "bad sendId" });
+  }
+  try {
+    const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
+    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId);
+    if (!entry) return send(res, 409, { error: "sendId was used for another message" });
+    send(res, 200, { entry: doorEntry(entry) });
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    if (status === undefined) throw error;
+    send(res, status, { error: (error as Error).message });
+  }
 }
 
 type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
@@ -341,15 +421,16 @@ function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
   return entries.slice(from);
 }
 
-function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
+function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean, media: boolean): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
-  const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES);
+  const before = url.searchParams.get("before") ?? "";
+  const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES, /^\d{1,15}$/.test(before) ? Number(before) : undefined);
   const bots = url.searchParams.get("with") === "bots";
-  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles))), state: doorState(group, person) });
+  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles, media))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
-function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
+async function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean, media: boolean): Promise<void> {
   const roomId = group.hosted.roomId;
   const raw = url.searchParams.get("after") ?? "";
   if (!/^\d{1,15}$/.test(raw)) return send(res, 400, { error: "bad after" });
@@ -358,18 +439,16 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   const after = Number(raw);
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
-  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
-  writeFrame(open, { kind: "state", state: doorState(group, person) });
-  for (const frame of reactionFrames(group)) writeFrame(open, frame);
-  // A teammate who was away missed the reset a delete sends.
-  const deleted = deletedRoomFiles(roomId);
-  if (deleted.length) writeFrame(open, { kind: "deleted", ids: deleted });
+  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles, media);
+  const frames: DoorFrame[] = [{ kind: "state", state: doorState(group, person) }, ...reactionFrames(group)];
+  // A teammate who was away missed the deletions sent live.
+  const seen = url.searchParams.get("deleted") ?? "";
+  const deleted = deletedRoomFiles(roomId, /^\d{1,15}$/.test(seen) ? Number(seen) : 0);
+  if (deleted.ids.length) frames.push({ kind: "deleted", ...deleted });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
-  if (after > head || head - after > REPLAY_ENTRIES) {
-    writeFrame(open, { kind: "reset" });
-    return goLive(open, head);
-  }
-  for (const entry of roomEntriesAfter(roomId, after, REPLAY_ENTRIES)) writeFrame(open, { kind: "entry", entry: doorEntry(entry) });
+  if (after > head || head - after > REPLAY_ENTRIES) frames.push({ kind: "reset" });
+  else for (const entry of roomEntriesAfter(roomId, after, REPLAY_ENTRIES)) frames.push({ kind: "entry", entry: doorEntry(entry) });
+  await writeCatchUp(open, frames);
   goLive(open, head);
 }
 
@@ -422,6 +501,8 @@ function tellHost(roomId: string): void {
 export function removeRoomPerson(roomId: string, personId: string, keep?: Duplex): boolean {
   const removed = removeGuest(roomId, personId, keep);
   if (removed) {
+    removePersonTeamBots(roomId, personId);
+    void revalidatePersonAsks(roomId, personId);
     pushRoomState(roomId);
     tellHost(roomId);
   }
@@ -436,7 +517,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (url.pathname === "/room/v1/join") return method === "POST" ? join(req, res, relay.host) : notFound(res);
   const file = url.pathname.startsWith("/room/v1/") ? FILE_PATH.exec(url.pathname.slice("/room/v1".length)) : null;
   const route = file ?? ROUTE.exec(url.pathname);
-  const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[2];
+  const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[3] ? "remove-bot" : route?.[2];
   if (!route || !action || (method !== (METHODS[action] ?? "POST") && !(file && method === "DELETE"))) return notFound(res);
   const guest = guestFor(req, res, relay.peer);
   if (!guest) return;
@@ -445,14 +526,19 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
-  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
+  // Not a new x-orbit-room-files value: older hosts give large files only when that header is exactly "1".
+  const media = req.headers["x-orbit-room-media"] === "1";
+  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null, media);
   const largeFiles = req.headers["x-orbit-room-files"] === "1";
-  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles);
-  if (action === "stream") return stream(res, url, group, guest.person, largeFiles);
+  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles, media);
+  if (action === "stream") return stream(res, url, group, guest.person, largeFiles, media);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "react") return react(req, res, guest.roomId, guest.person);
   if (action === "notice") return pinNotice(req, res, guest.roomId, guest.person);
+  if (action === "bots") return addBot(req, res, guest.roomId, guest.person);
+  if (action === "remove-bot") return removeBot(req, res, guest.roomId, guest.person, route![3]!);
+  if (action === "bot-send") return botSend(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

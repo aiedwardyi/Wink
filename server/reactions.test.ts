@@ -95,6 +95,11 @@ describe("reaction annotations", () => {
     expect(reactorName("bot_unknown", "Milind", roster)).toBe("Bot");
   });
 
+  it("names a teammate who reacted in a shared group", () => {
+    const roster = [{ ...message({ role: "user" }), author: { kind: "person", id: "p1", name: "Mina" } }];
+    expect(reactorName("person:p1", "Milind", roster)).toBe("Mina");
+  });
+
   it("omits an annotation when nobody has reacted", () => {
     expect(formatReactionAnnotation(message())).toBeNull();
     expect(formatReactionAnnotation(message({ reactions: [] }))).toBeNull();

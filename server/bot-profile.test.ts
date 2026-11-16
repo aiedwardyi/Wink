@@ -44,6 +44,11 @@ describe("parseBotProfilePatch (both modes)", () => {
     expect(result).toEqual({ ok: true, patch: { name: "Mira" } });
   });
 
+  it("keeps instructions of any length", () => {
+    const description = "Follow this rule. ".repeat(2_000);
+    expect(parseBotProfilePatch({ description }, true)).toEqual({ ok: true, patch: { description } });
+  });
+
   it("rejects a blank or oversized name", () => {
     expect(parseBotProfilePatch({ name: "   " }, true).ok).toBe(false);
     expect(parseBotProfilePatch({ name: "x".repeat(101) }, true).ok).toBe(false);

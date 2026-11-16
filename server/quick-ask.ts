@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { isVoiceLine } from "../shared/live-call.ts";
-import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
+import { isOpenRequest, scanQuestion, typedReply } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
@@ -38,6 +38,7 @@ export interface QuickGate {
   deliverAfter: boolean;
   replyTo?: Message;
   queueId?: string;
+  answersCard?: string;
   room: boolean;
   accountReady: boolean;
 }
@@ -46,10 +47,13 @@ export interface QuickGate {
 export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
   if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
-  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
+  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  if (scanQuestion(gate.messages) || gate.messages.some(isOpenRequest)) return false;
+  // typing answers the pinned card, unless it only types past its choices
+  const question = scanQuestion(gate.messages);
+  if (question && typedReply(question, gate.text) !== null) return false;
+  if (gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
 
@@ -138,7 +142,7 @@ export function requeueDroppedCall(store: AskStore, botId: string, threadId: str
   try {
     const queued = queueSteeredMessage(botId, threadId, row.text ?? "", { sendId: row.sendId, call: row.call });
     if (queued.skipped) return;
-    store.patchMessage(threadId, row.id, { steered: undefined, queueId: queued.id });
+    store.patchMessage(threadId, row.id, { steered: undefined, queueId: queued.id, queued: true });
   } catch (error) {
     console.warn(`[queue] dropped call send could not requeue: ${error instanceof Error ? error.message : String(error)}`);
     return;
@@ -203,11 +207,13 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
 }
 
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
   // the open chats plus the threads of asks still running at shutdown; no other thread is read
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   for (const [threadId, id] of threads) {
+    // Loading every open chat here held the server for ~30 s on a big messages.db.
+    if (!store.hasUnansweredQuickAsk(threadId)) continue;
     const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
     for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
   }
@@ -261,7 +267,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {

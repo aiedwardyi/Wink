@@ -4,7 +4,7 @@ import { parseReply } from "./memory-clean-call.ts";
 import { cleanFileSchema, filePointers, historyPointer, isHistory, lineHash, pointerLine } from "./memory-clean-format.ts";
 import type { ArchiveEntry, ChangeList, CleanBudget, CleanFile, RejectReason, SleepLine, ValidateInput, ValidateResult } from "./memory-clean-types.ts";
 import { day, secretLike } from "./memory-pass.ts";
-import { withSystemChanges } from "./turn-context.ts";
+import { systemChangeChars } from "./turn-context.ts";
 import { isMemoryTopicName } from "./workspace.ts";
 
 export { pointerLine } from "./memory-clean-format.ts";
@@ -126,15 +126,9 @@ export function sizeFits(old: string, text: string): boolean {
   return bytes && text.split("\n").length <= Math.max(200, old.split("\n").length);
 }
 
+// the edit's size; a resumed turn's reorder rule would count a removed duplicate as a full rewrite
 export function changedChars(before: string, after: string): number {
-  let low = 0;
-  let high = before.length + after.length + 1;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (withSystemChanges("", before, after, middle) === null) low = middle + 1;
-    else high = middle;
-  }
-  return low;
+  return systemChangeChars(before, after);
 }
 
 export function measureChanges(file: CleanFile, before: string, raw: string, entries: ArchiveEntry[], target?: string) {

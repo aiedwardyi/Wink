@@ -75,7 +75,9 @@ const REPORT_TEXT = workerReportText(process.platform);
 
 // Kept here, not imported from antigravity.ts: this proxy runs as its own light process.
 export const WORKER_GEMINI_FAMILIES = [
+  { name: "Gemini 4 Carbon", id: "gemini-4-carbon" },
   { name: "Gemini 4 Argon", id: "gemini-4-argon" },
+  { name: "Gemini 4 Hydrogen", id: "gemini-4-hydrogen" },
   { name: "Gemini 3.8 Flash", id: "gemini-3.8-flash" },
 ];
 export const WORKER_GEMINI_EFFORTS = ["high", "medium", "low"];
@@ -106,6 +108,19 @@ export function claudeState(screenText = ""): "busy" | "idle" | undefined {
   if (CLAUDE_BUSY_RE.test(screenText)) return "busy";
   return CLAUDE_PROMPT_RE.test(screenText) ? "idle" : undefined;
 }
+
+// Handed out by terminal_playbook: only a session that launches workers pays for it.
+export const WORKER_LAUNCH_TEXT =
+  "To run a worker: cwd is a git worktree, never the live checkout, except one editing worker in place for a plain folder or a checkout with uncommitted changes, after a safety copy (a read-only review of a plain folder runs in a scratch copy of it, never in place); label is \"NICKNAME | MODEL | EFFORT\". Wrap the prompt in single quotes, fill every <...> slot, never use \\\" escapes. " +
+  `Claude: claude --model <model-id> --effort <effort> --dangerously-skip-permissions ${REPORT_TEXT.claude}'Read <card path> and do it.' Never send /effort in a pane: it changes the user's own default. Wink answers the folder-trust menu itself. ` +
+  `Codex: codex --model <model-id> -c model_reasoning_effort=<effort> -c "projects={'<cwd>'={trust_level='trusted'}}" --dangerously-bypass-approvals-and-sandbox ${REPORT_TEXT.env}${REPORT_TEXT.notify}'<prompt>'. Use the pane's absolute native cwd in the trust table; this trusts only that launch, without editing config. ` +
+  "Muse: muse --model <model-id> --reasoning-effort <effort> --yolo '<prompt>'. " +
+  "Grok: grok -m <model-id> --effort <effort> --always-approve --trust '<prompt>' (it may ask a y/n trust question first; send y). " +
+  `Gemini: ${REPORT_TEXT.agy}agy --model <model-id> --dangerously-skip-permissions -i '<prompt>'. ` +
+  `${workerModelsText()} ` +
+  "Engine CLIs run in the PowerShell pane; check them there, not from another shell. " +
+  "Only when the user requests an account, prefix with $env:CODEX_HOME='Usage name or known home'; or $env:CLAUDE_CONFIG_DIR='Usage name or known home'; otherwise workers use Main. Accounts marked unavailable in Usage cannot run Codex workers. " +
+  REPORT_TEXT.spawn;
 
 export const TOOLS = [
   {
@@ -143,23 +158,16 @@ export const TOOLS = [
   {
     name: "terminal_spawn",
     description:
-      "Open a labeled pane (a terminal-view tab) in cwd and type command plus Enter if given. Returns sessionId and generation. Max 16 live panes per bot; a new pane needs up to 0.6 GB free. The shell is PowerShell on Windows. " +
-      "To run a worker: cwd is a git worktree, never the live checkout, except one editing worker in place for a plain folder or a checkout with uncommitted changes, after a safety copy (a read-only review of a plain folder runs in a scratch copy of it, never in place); label is \"NICKNAME | MODEL | EFFORT\". Wrap the prompt in single quotes, fill every <...> slot, never use \\\" escapes. " +
-      `Claude: claude --model <model-id> --effort <effort> --dangerously-skip-permissions ${REPORT_TEXT.claude}'Read <card path> and do it.' Never send /effort in a pane: it changes the user's own default. Wink answers the folder-trust menu itself. ` +
-      `Codex: codex --model <model-id> -c model_reasoning_effort=<effort> -c "projects={'<cwd>'={trust_level='trusted'}}" --dangerously-bypass-approvals-and-sandbox ${REPORT_TEXT.env}${REPORT_TEXT.notify}'<prompt>'. Use the pane's absolute native cwd in the trust table; this trusts only that launch, without editing config. ` +
-      "Muse: muse --model <model-id> --reasoning-effort <effort> --yolo '<prompt>'. " +
-      "Grok: grok -m <model-id> --effort <effort> --always-approve --trust '<prompt>' (it may ask a y/n trust question first; send y). " +
-      `Gemini: ${REPORT_TEXT.agy}agy --model <model-id> --dangerously-skip-permissions -i '<prompt>'. ` +
-      `${workerModelsText()} ` +
-      "Engine CLIs run in the PowerShell pane; check them there, not from another shell. " +
-      "Only when the user requests an account, prefix with $env:CODEX_HOME='Usage name or known home'; or $env:CLAUDE_CONFIG_DIR='Usage name or known home'; otherwise workers use Main. Accounts marked unavailable in Usage cannot run Codex workers. " +
-      REPORT_TEXT.spawn,
+      "Open a labeled pane (a terminal-view tab) in cwd and type command plus Enter if given. Returns sessionId and generation. Max 128 live panes per bot; a new one needs up to 0.6 GB free. " +
+      "Panes with host run claude on that PC: up to 64 per host, memory permitting. The shell is PowerShell on Windows. " +
+      "To run a worker, call terminal_playbook first: it returns each engine's launch command, the model ids and the card rules. A worker launch is held until this session has read it.",
     inputSchema: {
       type: "object",
       properties: {
         label: { type: "string", description: "Short pane label shown on its tab, e.g. \"NICKNAME | MODEL | EFFORT\". Max 40 characters." },
         cwd: { type: "string", description: "Absolute working folder. Omit for the bot's terminal folder." },
         command: { type: "string", description: "Optional first command; Enter is added." },
+        host: { type: "string", description: "Optional PC from ~/.orbit/remote-hosts.json, e.g. \"work\". Needs a one-line claude command; cwd is a folder on that PC (default its root)." },
       },
       required: ["label"],
       additionalProperties: false,
@@ -181,11 +189,18 @@ export const TOOLS = [
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
+  {
+    name: "terminal_playbook",
+    description:
+      "Return the worker playbook's on-demand part: cards, token budget, audit cards, worktrees, clean up, verify before push, reports and panes, then each engine's launch command and the worker model ids. Call it before you write a card or launch a worker, when a worker report arrives, and before you verify, land, push or clean up a worker's result. Skip it when that text is already in this conversation. A worker launch is held until this session has read it.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
 ] as const;
 
 type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string | undefined };
 type SendInput = { sessionId: string; generation: number; text: string };
-type SpawnInput = { label: string; cwd?: string; command?: string };
+type SpawnInput = { label: string; cwd?: string; command?: string; host?: string };
 type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number }; account?: { id: string; generation: number } };
 
 type Snapshot = {
@@ -290,12 +305,12 @@ export function readTerminalSnapshot(fetchImpl: typeof fetch = fetch, config: Te
 
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
 export function spawnTerminalPane(args: Record<string, unknown>, fetchImpl: typeof fetch = fetch, config: TerminalConfig = {}): Promise<{ sessionId: string; generation: number; hold?: string; line?: string }> {
-  const { label, cwd, command } = args;
+  const { label, cwd, command, host } = args;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
-  if (typeof label !== "string" || !label.trim() || (cwd !== undefined && typeof cwd !== "string") || (command !== undefined && typeof command !== "string")) {
-    return Promise.reject(new Error("terminal_spawn needs a label, with optional string cwd and command"));
+  if (typeof label !== "string" || !label.trim() || (cwd !== undefined && typeof cwd !== "string") || (command !== undefined && typeof command !== "string") || (host !== undefined && typeof host !== "string")) {
+    return Promise.reject(new Error("terminal_spawn needs a label, with optional string cwd, command and host"));
   }
-  return terminalRequest(fetchImpl, config, { spawn: { label, cwd, command } });
+  return terminalRequest(fetchImpl, config, { spawn: { label, cwd, command, host } });
 }
 
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
@@ -421,6 +436,24 @@ async function spawnUsage(fetchImpl: typeof fetch, config: TerminalConfig, args:
   return { hold: typeof body?.hold === "string" ? body.hold : undefined, line: typeof body?.line === "string" ? body.line : undefined };
 }
 
+async function workerPlaybook(fetchImpl: typeof fetch, config: TerminalConfig): Promise<string> {
+  const harness = config.harness ?? HARNESS;
+  const token = config.commsToken ?? COMMS_TOKEN;
+  if (!harness || !token) throw new Error("the worker playbook is not reachable from this terminal");
+  const response = await fetchImpl(`${harness}/api/internal/worker-playbook`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ fromBotId: config.botId ?? BOT_ID }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const payload: unknown = await response.json().catch(() => ({}));
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion -- JSON response is narrowed to the documented text envelope before reading it.
+  const text = payload && typeof payload === "object" ? (payload as { text?: unknown }).text : undefined;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The field is checked as a string before the model sees it.
+  if (!response.ok || typeof text !== "string" || !text) throw new Error(`worker playbook: HTTP ${response.status}`);
+  return `${text}\n\n## Launch commands\n\n${WORKER_LAUNCH_TEXT}`;
+}
+
 const TOOL_NAMES = new Set<string>(TOOLS.map((tool) => tool.name));
 
 export async function callTool(
@@ -442,6 +475,7 @@ export async function callTool(
       const line = pane.line ?? usage.line;
       return { content: [{ type: "text", text: line ? `${opened}\n${line}` : opened }] };
     }
+    if (name === "terminal_playbook") return { content: [{ type: "text", text: await workerPlaybook(fetchImpl, config) }] };
     if (name === "terminal_close") {
       const result = await closeTerminalPane(args, fetchImpl, config);
       const text = result.alreadyClosed ? `Pane ${String(args.sessionId)} was already closed` : `Closed pane ${String(args.sessionId)}`;

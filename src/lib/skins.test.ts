@@ -166,6 +166,7 @@ describe("skins", () => {
       "wink-day",
       "paper-tape",
       "dim-sand",
+      "snow",
     ];
     for (const id of remapped) {
       expect([...tokensOf(id)]).toEqual(expect.arrayContaining(roles));
@@ -218,11 +219,11 @@ describe("skins", () => {
   it("sets Precision in Space Grotesk with bubbles on both sides, wide, and no side line", () => {
     expect(css.match(/\[data-skin="precision"\]\s*\{([^}]*)\}/)![1]).toMatch(/--font-sans:\s*"Space Grotesk"/);
     expect(css).toMatch(/\[data-skin="precision"\]:lang\(ko\) \{\s*--font-sans: "Inter"/);
-    const own = css.match(/@scope \(\[data-skin="precision"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{([\s\S]*?)\n\}/)![1];
+    const own = css.match(/@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{([\s\S]*?)\n\}/)![1];
     expect(own).toContain("max-width: min(54rem, 94%);");
     expect(own).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
     expect(own).toMatch(/\[data-orbit-message="user"\] \[data-orbit-message-content\] \{\s*box-shadow: none;/);
-    expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
+    expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
   });
 
   it("gives every non-Midnight skin its own focus and control tokens", () => {
@@ -714,10 +715,10 @@ describe("bundled-face skins", () => {
 const FRESH_SKINS = [
   { id: "inkwell", name: "Inkwell", face: "Atkinson Hyperlegible Next", file: "AtkinsonHyperlegibleNext-Variable.woff2", ratios: [12.4, 11.5, 1.12, 1.2] },
   { id: "graphite", name: "Graphite", face: "Lexend", file: "Lexend-Variable.woff2", ratios: [10.9, 9.8, 1.15, 1.28] },
-  { id: "moss", name: "Moss", face: "Nunito", file: "Nunito-Variable.woff2", ratios: [12.6, 9.3, 1.12, 1.5] },
+  { id: "merlot", name: "Merlot", face: "Manrope", file: "Manrope-Variable.woff2", ratios: [14.1, 11.6, 1.12, 1.36] },
 ] as const;
 
-describe("Inkwell, Graphite and Moss", () => {
+describe("Inkwell, Graphite and Merlot", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
   it("registers the three dark skins and keeps Wink Violet, Wink Black, Pewter and the default", () => {
@@ -744,7 +745,7 @@ describe("Inkwell, Graphite and Moss", () => {
   });
 
   it("puts both sides in wide bubbles", () => {
-    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {';
+    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="merlot"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {';
     const body = css.slice(css.indexOf(scope), css.indexOf("\n}\n", css.indexOf(scope)));
     expect(body).toContain("max-width: min(54rem, 94%);");
     expect(body).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
@@ -773,12 +774,12 @@ const EDGE_SKINS = ["precision-dimmed", "bronze", "dim-sand", "wink-day", "ateli
 
 describe("Precision Dimmed, Bronze, Dim Sand and the Light and Atelier fixes", () => {
   it("registers the three skins, with Dim Sand as the light one", () => {
-    expect(SKINS.slice(-3)).toEqual([
+    expect(SKINS.filter((skin) => ["precision-dimmed", "bronze", "dim-sand"].includes(skin.id))).toEqual([
       { id: "precision-dimmed", name: "Precision Dimmed" },
       { id: "bronze", name: "Bronze" },
       { id: "dim-sand", name: "Dim Sand" },
     ]);
-    expect(SKINS.find((skin) => skin.id === "moss")?.name).toBe("Moss");
+    expect(SKINS.find((skin) => skin.id === "merlot")?.name).toBe("Merlot");
     expect([...LIGHT_SKIN_IDS].filter((id) => ["precision-dimmed", "bronze", "dim-sand"].includes(id))).toEqual(["dim-sand"]);
   });
 
@@ -826,10 +827,10 @@ describe("Precision Dimmed, Bronze, Dim Sand and the Light and Atelier fixes", (
 });
 
 describe("Bot name on wide bubbles", () => {
-  const WIDE = ["precision", "inkwell", "graphite", "moss", "precision-dimmed", "bronze", "dim-sand"];
+  const WIDE = ["precision", "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand", "snow-night"];
   const NAMED_ALREADY = [
     "wink", "wink-cyber", "wink-violet", "wink-black", "wink-day", "community", "community-light", "code-review",
-    "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
+    "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio", "snow",
   ];
 
   function scopeBodies(id: string): string {
@@ -1359,7 +1360,6 @@ describe("dark ink skins", () => {
 
     const sidebarSrc = readFileSync(join(repoRoot, "src/components/Sidebar.tsx"), "utf8");
     const avatarSrc = readFileSync(join(repoRoot, "src/components/BotProfileAvatarCard.tsx"), "utf8");
-    const compSrc = readFileSync(join(repoRoot, "src/components/CompanionSection.tsx"), "utf8");
 
     const deleteChannelIdx = sidebarSrc.indexOf("chrome.deleteChannel");
     expect(deleteChannelIdx, "chrome.deleteChannel found in Sidebar.tsx").toBeGreaterThanOrEqual(0);
@@ -1391,7 +1391,6 @@ describe("dark ink skins", () => {
       const raised = skinToken(skin, "--color-raised");
       const raisedHover = skinToken(skin, "--color-raised-hover");
       const control = skinToken(skin, "--color-control");
-      const inset = skinToken(skin, "--color-inset");
 
       // 1. Sidebar "chrome.deleteChannel"
       const deleteChannelRest = /(?<!hover:)bg-raised\b/.test(deleteChannelSlice) ? raised : card;
@@ -1416,10 +1415,6 @@ describe("dark ink skins", () => {
       // Icon-only control 2: BotProfileAvatarCard remove button
       const avatarHover = avatarSrc.includes("hover:bg-danger/10") ? blend(danger, card, 0.1) : control;
       expect.soft(contrast(danger, avatarHover), `${skin} BotProfileAvatarCard hover`).toBeGreaterThanOrEqual(3.0);
-
-      // Icon-only control 3: CompanionSection remove button
-      const compHover = compSrc.includes("hover:bg-danger/10") ? blend(danger, inset, 0.1) : control;
-      expect.soft(contrast(danger, compHover), `${skin} CompanionSection hover`).toBeGreaterThanOrEqual(3.0);
     }
   });
 
@@ -1685,6 +1680,11 @@ describe("skin persistence", () => {
     expect(readSkin()).toBe("tui-smoke");
   });
 
+  it("migrates a stored Moss to Merlot", () => {
+    store.set("omb-skin", "moss");
+    expect(readSkin()).toBe("merlot");
+  });
+
   it("lists the same light skins as the desktop overlay", () => {
     const { skinThemeSource } = createRequire(import.meta.url)("../../electron/skin-overlay.cjs");
     for (const id of SKIN_IDS) {
@@ -1701,5 +1701,48 @@ describe("skin persistence", () => {
     const renderAt = main.indexOf("createRoot(");
     expect(applyAt).toBeGreaterThan(-1);
     expect(applyAt).toBeLessThan(renderAt);
+  });
+});
+
+describe("Lagoon and Snow scene themes", () => {
+  it("pairs Lagoon with Lagoon Night and Snow with Snow Night, Day light and Night dark", () => {
+    for (const id of ["lagoon", "lagoon-night", "snow", "snow-night"] as const) expect(SKIN_IDS).toContain(id);
+    expect(["lagoon", "lagoon-night", "snow", "snow-night"].filter((id) => LIGHT_SKIN_IDS.has(id as SkinId))).toEqual(["lagoon", "snow"]);
+    expect(SKINS.find((skin) => skin.id === "lagoon-night")?.name).toBe("Lagoon Night");
+    expect(SKINS.find((skin) => skin.id === "snow-night")?.name).toBe("Snow Night");
+  });
+
+  it("gives Lagoon Night the prototype's water palette", () => {
+    const night = { app: "#0b242a", panel: "#081c21", raised: "#12323a", card: "#10303a", ink: "#e4f5f3", "ink-secondary": "#9fc2c0", accent: "#3ed6c8", "bubble-user": "#134a4b" };
+    for (const [name, value] of Object.entries(night)) expect(cssToken("lagoon-night", `--color-${name}`), name).toBe(value);
+  });
+
+  it("adds Neon Grid as a dark theme with its own indigo, pink and cyan palette", () => {
+    expect(SKIN_IDS).toContain("neon-grid");
+    expect(LIGHT_SKIN_IDS.has("neon-grid")).toBe(false);
+    expect(SKINS.find((skin) => skin.id === "neon-grid")?.name).toBe("Neon Grid");
+    const grid = { app: "#100c25", card: "#161233", ink: "#f2edff", accent: "#ff4fd8", focus: "#5ce1f5", "bubble-user": "#1d3fa8" };
+    for (const [name, value] of Object.entries(grid)) expect(cssToken("neon-grid", `--color-${name}`), name).toBe(value);
+  });
+
+  it.each([
+    ["samurai-ink", "Samurai Ink", { app: "#0c0c0d", card: "#151516", ink: "#f1efea", accent: "#e8e4dc", focus: "#ffffff", "bubble-user": "#2e2e31" }],
+    ["night-rain", "Night Rain", { app: "#0a0b1a", card: "#131429", ink: "#eef0ff", accent: "#ff5277", focus: "#4fe3ff", "bubble-user": "#0f4f66" }],
+    ["warp", "Warp", { app: "#080a18", card: "#0e1126", ink: "#edf2ff", accent: "#7aa8ff", focus: "#9ad7ff", "bubble-user": "#2b3a8f" }],
+    ["circuit", "Circuit", { app: "#08111f", card: "#0b1628", ink: "#eaf4ff", accent: "#2e9bff", focus: "#44e0ff", "bubble-user": "#0f3a73" }],
+  ] as const)("adds %s as a dark theme with its own palette", (id, name, palette) => {
+    expect(SKIN_IDS).toContain(id);
+    expect(LIGHT_SKIN_IDS.has(id)).toBe(false);
+    expect(SKINS.find((skin) => skin.id === id)?.name).toBe(name);
+    for (const [token, value] of Object.entries(palette)) expect(cssToken(id, `--color-${token}`), token).toBe(value);
+  });
+
+  it("dresses Snow in Wink Day's palette and Snow Night in Precision's, everywhere those skins are styled", () => {
+    for (const [twin, base] of [["snow", "wink-day"], ["snow-night", "precision"]] as const) {
+      const lists = [...css.matchAll(/[^{}]*\{/g)].map(([selector]) => selector).filter((selector) => selector.includes(`[data-skin="${base}"]`));
+      expect(lists.length).toBeGreaterThan(2);
+      for (const selector of lists) expect(selector, selector.trim()).toContain(`[data-skin="${twin}"]`);
+      expect(tokensOf(twin)).toEqual(tokensOf(base));
+    }
   });
 });

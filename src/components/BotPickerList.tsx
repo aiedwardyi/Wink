@@ -1,10 +1,9 @@
-// The checkbox roster shared by "New Room" and "Manage Members": one row per
-// bot, a tick on the ones picked. Both callers own their own selection state —
-// this only draws it, so the two lists can never drift apart visually.
+// Room creation and details share the same bot rows.
 import { Check } from "lucide-react";
 import type { Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useI18n } from "@/lib/i18n";
 import { answerOrderKey, answerOrderVars } from "@/lib/room-members";
 
@@ -34,7 +33,7 @@ export function BotPickerList({
           onClick={() => onToggle(b.id)}
           role="checkbox"
           aria-checked={picked.has(b.id)}
-          className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-raised/50"
+          className={cn("flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left", MENU_ITEM_HOVER)}
         >
           <BotAvatar bot={b} state="happy" size={28} />
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5">

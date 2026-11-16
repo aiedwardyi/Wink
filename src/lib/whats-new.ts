@@ -1,21 +1,24 @@
 import memoryClip from "@/assets/whats-new/1.0.246-memory.webp";
 import memoryLightClip from "@/assets/whats-new/1.0.246-memory-light.webp";
 import verifyClip from "@/assets/whats-new/1.0.246-verify.webp";
+import hydrogenClip from "@/assets/whats-new/1.0.263-hydrogen.webp";
+import hydrogenLightClip from "@/assets/whats-new/1.0.263-hydrogen-light.webp";
+import mapClip from "@/assets/whats-new/1.0.263-map.webp";
+import mapLightClip from "@/assets/whats-new/1.0.263-map-light.webp";
+import themesClip from "@/assets/whats-new/1.0.273-samurai-ink.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
+import type { SkinId } from "./skins";
 
 type Copy = Record<LocaleId, string>;
 
-export type WhatsNewTile = {
-  clip: string;
-  lightClip?: string;
-  title: Copy;
-  line: Copy;
-  /** "memory" opens the current bot's Memory tab; a how-to line is for features that start on their own. */
-  show: "memory" | Copy;
-};
+/** What Show me opens in this chat. */
+export type WhatsNewTarget = "memory" | "map" | "models" | { skins: SkinId[] };
 
-export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile, WhatsNewTile]; more: Copy };
+/** `how`: a line in place of Show me's target, only for a feature that starts on its own. */
+export type WhatsNewTile = { clip: string; lightClip?: string; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
+
+export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile] | [WhatsNewTile, WhatsNewTile]; more: Copy };
 
 // One entry per release that has notes; a release with no entry shows the newest earlier one still unseen.
 export const WHATS_NEW: Record<string, WhatsNewEntry> = {
@@ -33,10 +36,42 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
         clip: verifyClip,
         title: { en: "Live Verify checks your site", ko: "Live Verify가 사이트를 확인" },
         line: { en: "Desktop and phone, after every build.", ko: "만들 때마다 데스크톱과 휴대폰에서." },
-        show: {
+        how: {
           en: "Starts on its own when a bot builds a page. Press Watch to see the cursors live.",
           ko: "봇이 페이지를 만들면 저절로 시작돼요. 보기를 누르면 커서가 실시간으로 보여요.",
         },
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.263": {
+    title: { en: "New in Wink 1.0.263", ko: "Wink 1.0.263 새 기능" },
+    tiles: [
+      {
+        clip: mapClip,
+        lightClip: mapLightClip,
+        title: { en: "Watch every worker on the Map", ko: "Map에서 모든 작업자 보기" },
+        line: { en: "Your project as a family tree, live.", ko: "프로젝트를 가계도처럼 실시간으로." },
+        show: "map",
+      },
+      {
+        clip: hydrogenClip,
+        lightClip: hydrogenLightClip,
+        title: { en: "Gemini 4 Carbon + Hydrogen are here", ko: "Gemini 4 Carbon + Hydrogen 추가" },
+        line: { en: "Google's fast Gemini for everyday work.", ko: "일상 작업에 빠른 Google Gemini." },
+        show: "models",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.273": {
+    title: { en: "New in Wink 1.0.273", ko: "Wink 1.0.273 새 기능" },
+    tiles: [
+      {
+        clip: themesClip,
+        title: { en: "Four new themes that move", ko: "움직이는 새 테마 4개" },
+        line: { en: "Samurai Ink, Night Rain, Warp and Circuit.", ko: "사무라이 잉크, 나이트 레인, 워프, 서킷." },
+        show: { skins: ["samurai-ink", "night-rain", "warp", "circuit"] },
       },
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },

@@ -10,7 +10,7 @@ import { _resetPending, discardDelegations, discardOrphanedDelegations, drainWai
 import { createInternalRoutes } from "./internal-routes.ts";
 import { mailForTurn, markMailRead, markPaneMailRead, settleMail, toolMailResult, unreadMail } from "./mail.ts";
 import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
-import { Store, type Message } from "./store.ts";
+import { Store, type BotRecord, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 
 let store: Store;
@@ -169,6 +169,7 @@ function response() {
 function routes(askBotAndWait = vi.fn(), resolveCommsCaller?: Parameters<typeof createInternalRoutes>[0]["resolveCommsCaller"]) {
   return createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
+    createdBotSelection: (chief: BotRecord["modelSelection"]) => ({ ok: true, selection: { ...chief } }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     delegationWatch: new Map(), askBotAndWait, resolveCommsCaller,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);

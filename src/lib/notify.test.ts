@@ -203,6 +203,20 @@ describe("desktop notifications", () => {
     expect(showNative.mock.calls.map(([payload]) => payload.botId)).toEqual(["group-2"]);
   });
 
+  it("keeps a bot's reply quiet in a group whose bell is off", async () => {
+    installNotification("granted");
+    const showNative = vi.fn();
+    vi.stubGlobal("window", { focus: vi.fn(), ogb: { showNotification: showNative } });
+    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "openmausbot.roomAlertsOff.v1" ? JSON.stringify(["group-1"]) : null) });
+
+    showNotification(frame, vi.fn(), null, "group-1");
+    showNotification({ ...frame, threadId: "thread-2" }, vi.fn(), null, "group-2");
+    showNotification({ ...frame, threadId: "thread-3" }, vi.fn());
+
+    await vi.waitFor(() => expect(showNative).toHaveBeenCalledTimes(2));
+    expect(showNative.mock.calls.map(([payload]) => payload.threadId)).toEqual(["thread-2", "thread-3"]);
+  });
+
   it("carries the terminal session to the native toast", async () => {
     const { notices } = installNotification("default");
     const showNative = vi.fn();

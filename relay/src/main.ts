@@ -18,6 +18,7 @@ async function main(): Promise<void> {
     acme: config.acme,
     google: config.google,
     teamOwnerEmail: config.teamOwnerEmail,
+    stats: config.stats,
     limits: config.limits,
     log,
   });

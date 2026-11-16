@@ -104,6 +104,7 @@ const upload = (roomId: string, body: Buffer | Buffer[], query: Record<string, s
 const newUploadId = () => randomBytes(12).toString("base64url");
 
 const png = (size: number) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), randomBytes(size - 8)]);
+const ftyp = (brand: string) => Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from(`ftyp${brand}`, "latin1"), randomBytes(40)]);
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const roomDir = (roomId: string) => join(DATA_DIR, "room-files", roomId);
 const rows = (roomId: string) => {
@@ -131,6 +132,14 @@ describe("room file types", () => {
       [Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...randomBytes(60)]), "image/jpeg"],
       [Buffer.from("%PDF-1.7\n...", "latin1"), "application/pdf"],
       [Buffer.concat([Buffer.from("PK\x03\x04", "latin1"), randomBytes(40)]), "application/zip"],
+      [ftyp("isom"), "video/mp4"],
+      [ftyp("qt  "), "video/quicktime"],
+      [ftyp("M4V "), "video/x-m4v"],
+      [ftyp("M4A "), "audio/mp4"],
+      [Buffer.from([0x1a, 0x45, 0xdf, 0xa3, ...randomBytes(60)]), "video/webm"],
+      [Buffer.from([0x49, 0x44, 0x33, 0x04, ...randomBytes(60)]), "audio/mpeg"],
+      [Buffer.from([0xff, 0xfb, 0x90, 0x64, ...randomBytes(60)]), "audio/mpeg"],
+      [Buffer.concat([Buffer.from("RIFF"), randomBytes(4), Buffer.from("WAVEfmt "), randomBytes(40)]), "audio/wav"],
       [Buffer.from("name,amount\n김민아,3\n", "utf8"), "text/plain"],
       [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'), "text/plain"],
     ];
@@ -139,11 +148,18 @@ describe("room file types", () => {
       expect(res.status).toBe(200);
       expect(res.json.file).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9_-]{24}$/), name: "photo.png", type, bytes: bytes.length, sha256: sha(bytes) });
     }
-    for (const bytes of [Buffer.concat([Buffer.from("MZ"), randomBytes(200)]), Buffer.from([0x68, 0x69, 0x00, 0x21, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a])]) {
-      expect(await upload(room, bytes)).toMatchObject({ status: 415, json: { error: "this kind of file can't be shared" } });
+    for (const bytes of [Buffer.from([0xff, 0xe1, ...randomBytes(60)]), ftyp("heic"), ftyp("avif"), Buffer.concat([Buffer.from("MZ"), randomBytes(200)]), Buffer.from([0x68, 0x69, 0x00, 0x21, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a])]) {
+      expect(await upload(room, bytes)).toMatchObject({ status: 415, json: { error: "only pictures, video, audio, PDF, zip, Office and text files can be shared" } });
     }
     expect(await upload(room, Buffer.alloc(0))).toMatchObject({ status: 400, json: { error: "file is empty" } });
     expect(rows(room)).toHaveLength(cases.length);
+  });
+
+  it("take an isom .m4a as audio and never a UTF-16 text file as audio", async () => {
+    const room = createRoom("Team").id;
+    expect((await upload(room, ftyp("isom"), { name: "voice memo.m4a" })).json.file).toMatchObject({ type: "audio/mp4" });
+    expect((await upload(room, ftyp("isom"), { name: "clip.mp4" })).json.file).toMatchObject({ type: "video/mp4" });
+    expect(await upload(room, Buffer.from("﻿meeting notes\r\n", "utf16le"), { name: "notes.txt" })).toMatchObject({ status: 415 });
   });
 
   it("serve pictures under their fixed type, inline only as a preview, and everything else as a download", async () => {
@@ -156,10 +172,16 @@ describe("room file types", () => {
     expect(download.body.equals(picture)).toBe(true);
     expect(download.headers).toMatchObject({ ...safe, "content-type": "image/png", "content-disposition": expect.stringMatching(/^attachment;/) });
     const preview = await call("GET", `/rooms/${room}/files/${image.id}/preview`);
-    expect(preview.headers).toMatchObject({ ...safe, "content-type": "image/png", "content-disposition": expect.stringMatching(/^inline;/) });
+    expect(preview.headers).toMatchObject({ ...safe, "cache-control": "private, max-age=31536000, immutable", "content-type": "image/png", "content-disposition": expect.stringMatching(/^inline;/) });
     const text = await call("GET", `/rooms/${room}/files/${svg.id}`);
     expect(text.headers).toMatchObject({ ...safe, "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/) });
     expect((await call("GET", `/rooms/${room}/files/${svg.id}/preview`)).status).toBe(404);
+    const clip = ftyp("isom");
+    const video = (await upload(room, clip, { name: "clip.mp4" }, "p1")).json.file;
+    const played = await call("GET", `/rooms/${room}/files/${video.id}`, { owner: "p1" });
+    expect(played.body.equals(clip)).toBe(true);
+    expect(played.headers).toMatchObject({ ...safe, "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/) });
+    expect((await call("GET", `/rooms/${room}/files/${video.id}/preview`)).status).toBe(404);
   });
 });
 

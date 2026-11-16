@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { DATA_DIR } from "./config.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
@@ -122,7 +124,7 @@ describe("quick route", () => {
     await h.settled();
     const [ask, answer] = h.rows().slice(-2);
     expect(ask).toMatchObject({ role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
-    expect(answer).toMatchObject({ role: "bot", kind: "text", text: "Port 8787.", quick: { state: "answer", askId: ask!.id } });
+    expect(answer).toMatchObject({ role: "bot", kind: "text", text: "Port 8787.", engine: "claudeAgent", quick: { state: "answer", askId: ask!.id } });
     expect(h.steer).not.toHaveBeenCalled();
     const retry = await h.send({ text: QUESTION, sendId: "send-quick-0000000001" });
     expect(retry.data).toMatchObject({ quick: true, message: { id: ask!.id } });
@@ -447,7 +449,7 @@ describe("quick route", () => {
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Let me check.", call: { ...call, voice: true } });
     await h.send({ text: QUESTION, call: { ...call, ask: true } });
     await h.settled();
-    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nYou: Let me check.") });
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nVoice: Let me check.") });
   });
 });
 
@@ -468,12 +470,59 @@ describe("boot recovery", () => {
     expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
   });
 
+  it("recovers an ask in an old, long thread after a restart, reading only that thread", () => {
+    const before = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = before.createBot({}, { seedMessages: false });
+    const quiet = before.createBot({}, { seedMessages: false });
+    const old = before.appendMessage(bot.threadId, { role: "user", kind: "text", text: "which branch?", quick: { state: "asked" } });
+    before.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: old.id } });
+    const ask = before.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    for (let i = 0; i < 400; i++) {
+      before.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "Bash", ok: true, detail: { input: `step ${i}`, output: ["ok"] } } });
+      before.appendMessage(quiet.threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: `line ${i}` });
+    }
+    const after = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const read = vi.spyOn(Store.prototype, "messagesFor");
+    const path = vi.spyOn(Store.prototype, "activePath");
+    recoverQuickAsks(after);
+    expect([...read.mock.calls, ...path.mock.calls].filter(([threadId]) => threadId === quiet.threadId)).toEqual([]);
+    expect(_queuedCount(bot.threadId)).toBe(1);
+    expect(after.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
+    expect(after.messagesFor(bot.threadId).find((row) => row.id === old.id)?.quick).toEqual({ state: "asked" });
+  });
+
+  it("recovers an ask from a thread that is still a legacy file", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const legacy = [
+      { id: "m1", at: 1, role: "user", kind: "text", text: "build it" },
+      { id: "m2", at: 2, role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } },
+    ];
+    writeFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), JSON.stringify(legacy));
+    recoverQuickAsks(new Store(() => ({ instanceId: "claude", model: "opus" })));
+    expect(_queuedCount(bot.threadId)).toBe(1);
+  });
+
   it("moves an orphaned ask to handoff", () => {
     const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = store.createBot({}, { seedMessages: false });
     const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
     recoverQuickAsks(store);
     expect(store.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
+  });
+
+  it("leaves chats with no pending ask unread", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    const asked = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: asked.id } });
+    const messages = vi.spyOn(store, "messagesFor");
+    const path = vi.spyOn(store, "activePath");
+    recoverQuickAsks(store);
+    expect(messages).not.toHaveBeenCalledWith(bot.threadId);
+    expect(path).not.toHaveBeenCalledWith(bot.threadId);
+    expect(_queuedCount(bot.threadId)).toBe(0);
   });
 
   it("leaves an ask stopped before a restart", async () => {
@@ -548,6 +597,20 @@ describe("Gate 0", () => {
     ])("skips the helper: %s", (_name, messages) => {
       expect(routesQuick({ ...base, text, messages })).toBe(false);
     });
+  });
+
+  it("passes past a live card with choices, but not a tap on one of them", () => {
+    const choices = closed({ staysOpen: true, options: ["Ship today", "Hold for QA"] });
+    expect(routesQuick({ ...base, messages: [choices] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [closed({ staysOpen: true, options: [QUESTION, "Hold for QA"] })] })).toBe(false);
+    expect(routesQuick({ ...base, messages: [closed({ staysOpen: true })] })).toBe(false);
+  });
+
+  it("skips the helper for a tapped choice, even when an older card is the one still open", () => {
+    const older = closed({ staysOpen: true, options: ["Yes", "No"] });
+    const tapped: Message = { ...closed({ staysOpen: true, options: [QUESTION, "Later"], answered: QUESTION }), id: "c2", at: 2 };
+    expect(routesQuick({ ...base, messages: [older, tapped] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [older, tapped], answersCard: tapped.id })).toBe(false);
   });
 
   it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {

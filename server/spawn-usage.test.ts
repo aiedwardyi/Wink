@@ -8,10 +8,7 @@ import { createSpawnUsage, spawnEngine } from "./spawn-usage.ts";
 const NOW = new Date(2026, 9, 25, 12, 30).getTime();
 const RESET = new Date(2026, 9, 25, 13, 40).getTime();
 const WEEKLY_RESET = NOW + 3 * 24 * 60 * 60_000;
-const BOT = "career";
-const LABEL = "CAREER | gpt-6-astra | high";
 const CODEX = "codex --model gpt-6-astra -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox 'Read C:/cards/CAREER.md and do it.'";
-const HOLD_TAIL = "Pick another engine, or send the same spawn again within 2 min to launch anyway.";
 const WIN = workerReportText("win32", true);
 
 function reading(sessionUsed: number, weeklyUsed: number, at = NOW - 60_000, sessionReset: number | null = RESET, weeklyReset: number | null = WEEKLY_RESET): RateLimitsReport {
@@ -59,7 +56,7 @@ describe("spawnEngine", () => {
 });
 
 describe("createSpawnUsage", () => {
-  it("names the account in the spawn usage line and the hold", async () => {
+  it("names the account in the spawn usage line", async () => {
     const account = { id: "acct-worker", generation: 2, name: "Claude" };
     const rateLimits: RateLimitsMap = new Map([[account.id, { observedAt: new Date(NOW).toISOString(), windows: [
       { id: "seven_day", usedPercent: 2, resetsAt: null },
@@ -67,90 +64,31 @@ describe("createSpawnUsage", () => {
     let name = "Claude 2";
     const nameOf = vi.fn(() => name);
     const check = createSpawnUsage({ rateLimits, save() {}, refresh: async () => ({}), environment: () => ({}), now: () => NOW, nameOf });
-    expect(await check(BOT, LABEL, "claude task", account)).toEqual({ line: "Claude 2 usage left: weekly 98%." });
+    expect(await check("claude task", account)).toEqual({ line: "Claude 2 usage left: weekly 98%." });
     name = "Studio";
-    expect(await check(BOT, LABEL, "claude task", account)).toEqual({ line: "Studio usage left: weekly 98%." });
-    rateLimits.set(account.id, reading(80, 2, NOW));
-    expect(await check(BOT, LABEL, "claude task", account)).toEqual({ hold: `Held: Studio 5h 20% left (resets 13:40), weekly 98% left. ${HOLD_TAIL}` });
+    expect(await check("claude task", account)).toEqual({ line: "Studio usage left: weekly 98%." });
     expect(nameOf).toHaveBeenLastCalledWith(account.id, "Claude");
+  });
+
+  it("launches on low usage with the usage line", async () => {
+    expect(await setup(reading(95, 96)).check(CODEX)).toEqual({ line: "Codex usage left: 5h 5% (resets 13:40), weekly 4%." });
   });
 
   it("adds the usage line when both windows have room", async () => {
     const { check, refresh } = setup(reading(38, 13));
-    expect(await check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 62% (resets 13:40), weekly 87%." });
+    expect(await check(CODEX)).toEqual({ line: "Codex usage left: 5h 62% (resets 13:40), weekly 87%." });
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("holds under 25% left in the 5h window", async () => {
-    expect(await setup(reading(85, 13)).check(BOT, LABEL, CODEX)).toEqual({ hold: `Held: Codex 5h 15% left (resets 13:40), weekly 87% left. ${HOLD_TAIL}` });
-    expect(await setup(reading(75, 13)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 25% (resets 13:40), weekly 87%." });
-  });
-
-  it("holds under 10% left in the weekly window", async () => {
-    expect(await setup(reading(20, 91)).check(BOT, LABEL, CODEX)).toEqual({ hold: `Held: Codex 5h 80% left (resets 13:40), weekly 9% left. ${HOLD_TAIL}` });
-    expect(await setup(reading(20, 90)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 80% (resets 13:40), weekly 10%." });
-  });
-
-  it("launches the same spawn sent again within 2 min, once", async () => {
-    const { check, clock } = setup(reading(85, 13));
-    expect(await check(BOT, LABEL, CODEX)).toHaveProperty("hold");
-    expect(await check(BOT, "OTHER | gpt-6-astra | high", CODEX)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, `${CODEX} `)).toHaveProperty("hold");
-    expect(await check("orch", LABEL, CODEX)).toHaveProperty("hold");
-    clock.now += 2 * 60_000;
-    expect(await check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 15% (resets 13:40), weekly 87%." });
-    expect(await check(BOT, LABEL, CODEX)).toHaveProperty("hold");
-    clock.now += 2 * 60_000 + 1;
-    expect(await check(BOT, LABEL, CODEX)).toHaveProperty("hold");
-  });
-
-  it("recovery holds never authorize another recovery or a normal spawn", async () => {
-    const { check } = setup(reading(85, 13));
-    const account = { id: "codex", generation: 0, name: "Codex" };
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
-  });
-
-  it("recovery never uses or consumes a normal spawn override", async () => {
-    const { check } = setup(reading(85, 13));
-    const account = { id: "codex", generation: 0, name: "Codex" };
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
-  });
-
-  it("recovery with sufficient quota preserves a pending normal spawn override", async () => {
-    const { check, rateLimits } = setup(reading(85, 13));
-    const account = { id: "codex", generation: 0, name: "Codex" };
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
-    rateLimits.set("codex", reading(20, 13));
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("line");
-    rateLimits.set("codex", reading(85, 13));
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
-  });
-
-  it("recovery holds a low window whose reset is unknown", async () => {
-    const { check } = setup(reading(95, 13, NOW - 60_000, null));
-    const account = { id: "codex", generation: 0, name: "Codex" };
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
-    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
-  });
-
-  it("never holds on a window whose reset has passed or is unknown", async () => {
-    expect(await setup(reading(95, 13, NOW - 60_000, NOW - 1)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: weekly 87%." });
-    expect(await setup(reading(20, 95, NOW - 60_000, RESET, NOW)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 80% (resets 13:40)." });
-    expect(await setup(reading(95, 13, NOW - 60_000, null)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 5%, weekly 87%." });
+  it("drops a window whose reset has passed", async () => {
+    expect(await setup(reading(95, 13, NOW - 60_000, NOW - 1)).check(CODEX)).toEqual({ line: "Codex usage left: weekly 87%." });
+    expect(await setup(reading(20, 95, NOW - 60_000, RESET, NOW)).check(CODEX)).toEqual({ line: "Codex usage left: 5h 80% (resets 13:40)." });
+    expect(await setup(reading(95, 13, NOW - 60_000, null)).check(CODEX)).toEqual({ line: "Codex usage left: 5h 5%, weekly 87%." });
   });
 
   it("skips another account without reading or refreshing usage", async () => {
     const { check, refresh } = setup(reading(85, 13, NOW - 60 * 60_000));
-    expect(await check(BOT, LABEL, `$env:CODEX_HOME='C:\\Users\\me\\.codex-work'; ${CODEX}`)).toEqual({});
+    expect(await check(`$env:CODEX_HOME='C:\\Users\\me\\.codex-work'; ${CODEX}`)).toEqual({});
     expect(refresh).not.toHaveBeenCalled();
   });
 
@@ -158,17 +96,17 @@ describe("createSpawnUsage", () => {
     const environments: Record<string, string>[] = [{ CODEX_HOME: "C:\\Users\\me\\.codex-work" }, { Claude_Config_Dir: "C:\\Users\\me\\.claude-2" }, { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-work" }];
     for (const environment of environments) {
       const { check, refresh } = setup(reading(85, 13, NOW - 60 * 60_000), undefined, environment);
-      expect(await check(BOT, LABEL, CODEX)).toEqual({});
+      expect(await check(CODEX)).toEqual({});
       expect(refresh).not.toHaveBeenCalled();
     }
-    expect(await setup(reading(85, 13), undefined, { PATH: "C:\\bin" }).check(BOT, LABEL, CODEX)).toHaveProperty("hold");
+    expect(await setup(reading(85, 13), undefined, { PATH: "C:\\bin" }).check(CODEX)).toHaveProperty("line");
   });
 
   it("says nothing for an unknown engine or no data", async () => {
     const { check, refresh } = setup();
-    expect(await check(BOT, "dev server", "pnpm dev")).toEqual({});
+    expect(await check("pnpm dev")).toEqual({});
     expect(refresh).not.toHaveBeenCalled();
-    expect(await check(BOT, LABEL, CODEX)).toEqual({});
+    expect(await check(CODEX)).toEqual({});
     expect(refresh).toHaveBeenCalledWith("codex", undefined);
   });
 
@@ -176,12 +114,12 @@ describe("createSpawnUsage", () => {
     const stale = reading(38, 13, NOW - 5 * 60_000 - 1);
     const fresh = reading(85, 13, NOW);
     const { check, refresh, rateLimits, save } = setup(stale, vi.fn<Refresh>(async () => ({ report: fresh })));
-    expect(await check(BOT, LABEL, CODEX)).toEqual({ hold: `Held: Codex 5h 15% left (resets 13:40), weekly 87% left. ${HOLD_TAIL}` });
+    expect(await check(CODEX)).toEqual({ line: "Codex usage left: 5h 15% (resets 13:40), weekly 87%." });
     expect(refresh).toHaveBeenCalledWith("codex", stale);
     expect(rateLimits.get("codex")).toBe(fresh);
     expect(save).toHaveBeenCalledOnce();
     const recent = setup(reading(38, 13, NOW - 5 * 60_000));
-    await recent.check(BOT, LABEL, CODEX);
+    await recent.check(CODEX);
     expect(recent.refresh).not.toHaveBeenCalled();
   });
 
@@ -190,11 +128,11 @@ describe("createSpawnUsage", () => {
     let land!: (value: { report?: RateLimitsReport }) => void;
     const { check, rateLimits } = setup(reading(85, 13, NOW - 10 * 60_000), vi.fn<Refresh>(() => new Promise((resolve) => { land = resolve; })));
     let settled = false;
-    const result = check(BOT, LABEL, CODEX).finally(() => { settled = true; });
+    const result = check(CODEX).finally(() => { settled = true; });
     await vi.advanceTimersByTimeAsync(2_999);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await result).toEqual({ hold: `Held: Codex 5h 15% left (resets 13:40), weekly 87% left. ${HOLD_TAIL}` });
+    expect(await result).toEqual({ line: "Codex usage left: 5h 15% (resets 13:40), weekly 87%." });
     const late = reading(38, 13, NOW);
     land({ report: late });
     await vi.waitFor(() => expect(rateLimits.get("codex")).toBe(late));
@@ -203,6 +141,6 @@ describe("createSpawnUsage", () => {
   it("is wired to the bot's own spawn-usage route", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const route = source.slice(source.indexOf('path === "/api/internal/spawn-usage"'));
-    expect(route.slice(0, route.indexOf("\n      }\n"))).toContain("spawnUsage(from.id, String(body.label ?? \"\"), String(body.command ?? \"\"))");
+    expect(route.slice(0, route.indexOf("\n      }\n"))).toContain("spawnUsage(String(body.command ?? \"\"))");
   });
 });

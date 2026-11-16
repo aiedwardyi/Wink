@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 
-/** Watch live, Show, Bot Details and the Inspector share one right slot. */
-export type SlotPanel = "watch" | "show" | "details" | "inspector";
+/** The pane (Show, Check, Media), Bot Details and the Inspector share one right slot. */
+export type SlotPanel = "show" | "details" | "inspector";
 
 /** Every open panel but the one that just opened. */
 export function slotEvictions(was: readonly SlotPanel[], now: readonly SlotPanel[]): SlotPanel[] {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pasteAttachment } from "@/lib/composer-attachments";
 import { getDraftAttachments, getRoomHolds, setDraftAttachments } from "@/lib/drafts";
+import { STOP_AFTER_SEND_MS } from "@/lib/send-hold";
 import { StoreProvider, useStore, type Bot, type Group } from "@/state/store";
 
 import { Composer } from "./Composer";
@@ -88,12 +89,16 @@ async function mount(target: { bot?: Bot; group?: Group }) {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  const send = async (value: string) => {
+  const send = async (value: string, after = false) => {
     await type(value);
     await act(async () =>
-      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, ctrlKey: after, bubbles: true, cancelable: true })));
   };
-  const stop = () => act(async () => host.querySelector<HTMLElement>('button[aria-label="Stop this turn"]')!.click());
+  const stop = async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + STOP_AFTER_SEND_MS);
+    await act(async () => host.querySelector<HTMLElement>('button[aria-label="Stop this turn"]')!.click());
+    now.mockRestore();
+  };
   const frame = (data: Record<string, unknown>) =>
     act(async () => FakeEventSource.last!.onmessage!({ data: JSON.stringify(data), lastEventId: "" }));
   return { box, host, posts, type, send, stop, frame, store: () => store };
@@ -139,8 +144,8 @@ describe("stop with queued sends", () => {
 
   it("hands held room lines back instead of flushing them when the room settles", async () => {
     const ui = await mount({ group: room });
-    await ui.send("held one");
-    await ui.send("held two");
+    await ui.send("held one", true);
+    await ui.send("held two", true);
     expect(getRoomHolds(localStorage, `group:${room.id}:${room.threadId}`)).toHaveLength(2);
     await ui.stop();
     expect(ui.box.value).toBe("held one\n\nheld two");

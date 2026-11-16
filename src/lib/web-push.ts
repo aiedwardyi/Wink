@@ -3,8 +3,9 @@ import { api } from "@/state/store";
 import type { NotificationTarget } from "./notify";
 import { roomAlertsOff } from "./room-alerts";
 import { joinedSelection } from "./team-rooms";
+import { trackFeature, trackSetting } from "./usage-stats";
 
-export type WebPushState = "unsupported" | "off" | "on" | "blocked";
+export type WebPushState = "unsupported" | "install" | "off" | "on" | "blocked";
 
 export function webPushSupported(): boolean {
   return (
@@ -22,8 +23,15 @@ async function currentSubscription(): Promise<PushSubscription | null> {
   return (await registration?.pushManager.getSubscription()) ?? null;
 }
 
+// iOS has push only in an app opened from the Home Screen; iPadOS calls itself a Mac.
+function needsHomeScreen(): boolean {
+  if (typeof window === "undefined" || window.ogb || !window.isSecureContext) return false;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes("Macintosh") && navigator.maxTouchPoints > 1);
+  return ios && !window.matchMedia?.("(display-mode: standalone)").matches;
+}
+
 export async function readWebPushState(): Promise<WebPushState> {
-  if (!webPushSupported()) return "unsupported";
+  if (!webPushSupported()) return needsHomeScreen() ? "install" : "unsupported";
   if (Notification.permission === "denied") return "blocked";
   return Notification.permission === "granted" && (await currentSubscription()) ? "on" : "off";
 }
@@ -39,6 +47,8 @@ export async function enableWebPush(): Promise<WebPushState> {
     (await registration.pushManager.getSubscription()) ??
     (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(publicKey) }));
   await postSubscription(subscription);
+  trackSetting("phoneNotifications", "off", "on");
+  trackFeature("push.on");
   return "on";
 }
 
@@ -57,6 +67,7 @@ export async function disableWebPush(): Promise<void> {
   if (!subscription) return;
   await api("/api/web-push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: subscription.endpoint }) });
   await subscription.unsubscribe();
+  trackSetting("phoneNotifications", "on", "off");
 }
 
 export async function testWebPush(botId?: string): Promise<void> {
@@ -73,6 +84,11 @@ export function webPushTarget(search: string): NotificationTarget | null {
   const botId = params.get("bot");
   const threadId = params.get("thread");
   return botId && threadId ? { botId, threadId } : null;
+}
+
+/** The blocker a tapped bot call rang about, from its `call=` param. */
+export function webPushCall(search: string): string | null {
+  return new URLSearchParams(search).get("call")?.trim() || null;
 }
 
 function base64UrlBytes(value: string): Uint8Array<ArrayBuffer> {

@@ -23,6 +23,7 @@ const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement
 const star = () => [...document.querySelectorAll<HTMLAnchorElement>('[role="dialog"] a')].find((node) => node.textContent === "Star on GitHub");
 const analyticsPuts = () => fetchMock.mock.calls.filter(([url, init]) => url === "/api/analytics" && init?.method === "PUT");
 const sent = () => analyticsPuts().map(([, init]) => JSON.parse(String(init.body)));
+const cover = () => document.querySelector(".orbit-inset-aware.fixed.inset-0.z-50.bg-app");
 const checkbox = () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!;
 
 async function toFinalStep() {
@@ -67,6 +68,23 @@ describe("first run end", () => {
     await wait(300);
     expect(document.querySelector('[aria-labelledby="onboarding-title"]')).toBeNull();
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/bots?messages=0")).toHaveLength(1);
+  });
+
+  it("covers the app while setup loads only on the desktop", async () => {
+    // a fresh App each time, so an Onboarding chunk loaded earlier can't skip the fallback
+    const fresh = async () => {
+      vi.resetModules();
+      return (await import("./App")).default;
+    };
+    const browserApp = await fresh();
+    act(() => root.render(createElement(browserApp)));
+    expect(cover()).toBeNull();
+    await act(async () => root.unmount());
+    vi.stubGlobal("ogb", {});
+    const desktopApp = await fresh();
+    root = createRoot(host);
+    act(() => root.render(createElement(desktopApp)));
+    expect(cover()).not.toBeNull();
   });
 
   it("shows Star on GitHub once, then never again", async () => {

@@ -5,7 +5,19 @@ export const SHORT_CODE_LENGTH = 6;
 const KEEP = /[^2-9A-HJ-NP-Z]/g;
 const PASTED = /^[2-9A-HJ-NP-Z]{1,6}$/;
 
-export const shortCodeChars = (text: string) => text.toUpperCase().replace(KEEP, "");
+// With Korean input on, letters arrive as Hangul; NFKD turns IME jamo and syllables into conjoining jamo, keyed here by 2-set layout.
+const HANGUL_KEYS: Array<[number, string[]]> = [
+  [0x1100, "R R S E E F A Q Q T T D W W C Z X V G".split(" ")],
+  [0x1161, "K O I O J P U P H HK HO HL Y N NJ NP NL B M ML L".split(" ")],
+  [0x11a8, "R R RT S SW SG E F FR FA FQ FT FX FV FG A Q QT T T D W C Z X V G".split(" ")],
+];
+const keyOf = (ch: string) => {
+  const point = ch.codePointAt(0)!;
+  for (const [start, keys] of HANGUL_KEYS) if (point >= start && point < start + keys.length) return keys[point - start];
+  return ch;
+};
+
+export const shortCodeChars = (text: string) => [...text.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(KEEP, "");
 
 export const BOX = "size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold text-ink";
 
@@ -28,11 +40,11 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
     want.current = null;
   });
 
-  const put = (from: number, chars: string) => {
-    const next = (value.slice(0, from) + chars).slice(0, SHORT_CODE_LENGTH);
+  const put = (from: number, chars: string, keep = false) => {
+    const next = (value.slice(0, from) + chars + (keep ? value.slice(from + chars.length) : "")).slice(0, SHORT_CODE_LENGTH);
     onChange(next);
-    focus(next.length);
-    if (next.length === SHORT_CODE_LENGTH) onDone(next);
+    focus(from + chars.length);
+    if (next.length === SHORT_CODE_LENGTH && !next.includes(" ")) onDone(next);
   };
 
   return (
@@ -41,7 +53,7 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
         <input
           key={i}
           ref={(el) => { boxes.current[i] = el; }}
-          value={value[i] ?? ""}
+          value={value[i]?.trim() ?? ""}
           readOnly={disabled}
           aria-label={`${label} ${i + 1}`}
           inputMode="text"
@@ -56,7 +68,7 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
           }}
           onChange={(e) => {
             const chars = shortCodeChars(e.target.value.replace(value[i] ?? "", ""));
-            if (chars) put(Math.min(i, value.length), chars);
+            if (chars) put(Math.min(i, value.length), chars, chars.length === 1);
             else onChange(value);
           }}
           onPaste={(e) => {
@@ -69,9 +81,10 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
           onKeyDown={(e) => {
             if (e.key !== "Backspace") return;
             e.preventDefault();
-            const at = value[i] ? i : i - 1;
+            const at = value[i]?.trim() ? i : i - 1;
             if (at < 0) return;
-            onChange(value.slice(0, at));
+            // A cleared box mid-code holds a space, so the boxes after it keep their letters.
+            onChange(`${value.slice(0, at)} ${value.slice(at + 1)}`.trimEnd());
             focus(at);
           }}
           className={`${BOX} outline-none focus:border-accent disabled:opacity-60`}

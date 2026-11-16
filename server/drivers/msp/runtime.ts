@@ -26,22 +26,24 @@ import { newEventId, newId } from "../../contracts.ts";
 import { applyCredentialAllowlist } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
-import { execCli, killCliTree, spawnCli } from "../../procs.ts";
+import { execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { warmFingerprint, warmToolsKey, type WarmEligibilityInput } from "../acp/warm-eligibility.ts";
 import { finishNative } from "../native.ts";
+import { experimentalAgents } from "../tool-catalog.ts";
 import { museUsageReport } from "../rate-limits.ts";
+import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
+import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
 const INTERRUPT_GRACE_MS = 5_000;
 const ASK_TIMEOUT_MS = 15 * 60_000;
-const HANDSHAKE_IDLE_MS = 60_000;
 const HANDSHAKE = "__handshake__";
 
 const DENY_TIMEOUT_NOTE =
@@ -82,6 +84,10 @@ export interface MspSupport {
   wslResolveCli?: (cli: string, probeEnv: NodeJS.ProcessEnv) => Promise<string | null>;
   /** Tests inject their own; idle session hosts follow its TTL. */
   warmPool?: WarmPool;
+  /** Extra `serve` argv for this CLI's `--version` line. */
+  serveArgs?(version: string | null, wsl: boolean): string[];
+  /** The engine exe and env to start a host with, skipping the CLI's launcher; null keeps the launcher. */
+  directHost?(cli: string, env: Record<string, string | undefined>): { command: string; env: Record<string, string | undefined> } | null;
   /** One-shot text for summaries, outside any MSP session. */
   text?(ctx: CliTextContext): CliText;
 }
@@ -180,7 +186,7 @@ export function mspMcpServers(
     };
     servers[name] = opts.wsl ? translateMspServerForWsl(stdio) : stdio;
   };
-  if (integrations?.agents) add("agents", integrations.agents);
+  if (integrations?.agents) add("agents", experimentalAgents(integrations.agents, true));
   if (integrations?.composio) add("composio", integrations.composio);
   if (integrations?.browser) add("browser", integrations.browser);
   if (integrations?.terminal) add("terminal", integrations.terminal);
@@ -264,13 +270,15 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       // WSL engine does not flap to "not found" on every passive refresh.
       let lastSnapshot: ProviderSnapshot | null = null;
       const effectiveCli = () => wslCli ?? baseCli;
+      let cliVersion: string | null = null;
       const isWslCli = () => /^\s*wsl(\.exe)?(\s|$)/i.test(effectiveCli());
       const probe = (target: string, probeEnv: NodeJS.ProcessEnv): Promise<string | null> =>
         new Promise((resolve) => {
           if (isWslCommand(target) && !wslProbeAllowed()) return resolve(null);
-          execCli(target, ["--version"], { timeout: 8000, env: probeEnv }, (err, stdout) =>
-            resolve(err ? null : stdout.trim()),
-          );
+          execCli(target, ["--version"], { timeout: 8000, env: probeEnv }, (err, stdout) => {
+            if (!err) cliVersion = stdout.trim();
+            resolve(err ? null : stdout.trim());
+          });
         });
       // Same 3-step fallback as the ACP core: bare, wrapped, resolved — one
       // resolution steers snapshot probes and every turn alike.
@@ -335,6 +343,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       }
       const active = new Map<string, Turn>();
       const children = new Set<ReturnType<typeof spawnCli>>();
+      const systemHeld = systemLedger(false, instanceId);
 
       // Idle hosts live in the warm pool. A session host keeps its session
       // across turns only while its sign-in is still the CLI's current one;
@@ -427,7 +436,23 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         return host.closed;
       };
       const spawnHost = (cwd: string, env: Record<string, string | undefined>): Host => {
-        const child = spawnCli(effectiveCli(), ["serve"], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+        const args = ["serve", ...(support.serveArgs?.(cliVersion, isWslCli()) ?? [])];
+        const launch = (command: string, childEnv: typeof env) =>
+          spawnCli(command, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+        // A failed direct start throws (bad image) or has no pid (ENOENT, EACCES); the launcher still runs.
+        const startDirect = () => {
+          const direct = support.directHost?.(effectiveCli(), env);
+          if (!direct) return null;
+          try {
+            const started = launch(direct.command, direct.env);
+            if (started.pid !== undefined) return started;
+            started.once("error", () => {});
+          } catch {
+            // fall through to the launcher
+          }
+          return null;
+        };
+        const child = startDirect() ?? launch(effectiveCli(), env);
         children.add(child);
         const host: Host = {
           child,
@@ -528,6 +553,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           let host: Host;
           try {
             host = spawnHost(cwd, childEnv());
+            if (lease.key.threadId === HANDSHAKE) setCliPriority(host.child, "low");
           } catch {
             lease.release("spawn failed");
             return false;
@@ -561,7 +587,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         if (host && !host.inUse && !host.ttl && !lease.signal.aborted) {
           host.ttl = setTimeout(() => {
             if (!host.inUse) lease.release("idle");
-          }, HANDSHAKE_IDLE_MS);
+          }, pool.handshakeIdleMs());
           host.ttl.unref?.();
         }
       };
@@ -603,6 +629,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         }
         const turnId = newId();
   const turnTimer = startTurnTimer({
+    threadId,
     engine: support.driverKind ?? "msp",
     model: turn.model,
     effort: turn.effort ?? null,
@@ -743,6 +770,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const reused = !!host && !raced;
         const turnHost = host ?? spawnHost(cwd, env);
         turnHost.inUse = true;
+        setCliPriority(turnHost.child, "normal");
         // The turn owns its lease and offers it back; an adopted handshake
         // lease is released without killing the host it hands over.
         let lease = turnHost.lease === claimed && claimed ? claimed : undefined;
@@ -763,7 +791,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           mspTurnId: null as string | null,
           sessionId: null as string | null,
           model: null as string | null,
+          usage: undefined as { input: number; output: number; cachedInput: number } | undefined,
         };
+        const tokenReports = new Set<string>();
         const kinds: ItemKinds = new Map();
         const openTools = new Set<string>();
         const buffers = new Map<string, string>();
@@ -779,6 +809,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         let pendingText = "";
         // Poisoned-resume retry state (one retry max): recovered flips on the single retry.
         let recovered = false;
+        // The system text this turn carried, and whether the host compacted it away.
+        let systemSent: string | undefined;
+        let compacted = false;
         const bound: Array<() => void> = [];
 
         const stop = () => {
@@ -798,6 +831,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const settle = (ok: boolean, stopReason: string | null) => {
           if (state.settled) return;
           state.settled = true;
+          if (state.sessionId && compacted) systemHeld.forget(state.sessionId);
+          else if (state.sessionId && systemSent && ok && stopReason === null) systemHeld.record(state.sessionId, systemSent);
+          else if (state.sessionId) systemHeld.keep(state.sessionId);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const ask of [...asks.values()]) ask.finish("deny", "system");
           // The entry drops BEFORE turn.completed: the queue drain on that
@@ -809,7 +845,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           for (const itemId of openTools) completeTool(itemId, false);
           turnTimer.mark("turnDone");
     turnTimer.finish();
-    emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason });
+    emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, ...(state.usage ? { usage: state.usage } : {}) });
           if (!kept) stop();
         };
         /** Hands the host back with its session after a clean native completion. */
@@ -828,7 +864,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (lease) {
             if (!pool.offer(lease, turnHost.session)) return false;
           } else {
-            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "speculative");
+            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "kept");
             let fresh = reserve();
             // Another host already idles under this key: this one replaces it.
             if (typeof fresh === "object" && (hosts.has(fresh) || preparing.has(fresh))) {
@@ -868,7 +904,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             emit({ ...base(threadId, turnId), type: "turn.stage", stage: "prompt-sent" });
           }
           const ack: any = await request;
-          if (ack?.status !== "accepted" || ack?.disposition !== "started") {
+          if (ack?.status !== "accepted" || (ack?.disposition !== "started" && ack?.disposition !== "queued")) {
             throw new Error(`turn/start not started (status ${ack?.status}, disposition ${ack?.disposition})`);
           }
           state.mspTurnId = typeof ack?.turnId === "string" ? ack.turnId : commandId;
@@ -902,6 +938,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             // Callers record the cursor from session.started: the fresh id
             // steers Retry onto the recovered session, not the poisoned one.
             emit({ ...base(threadId, turnId), type: "session.started", sessionId: freshId, model: state.model ?? turn.model ?? null });
+            systemSent = turn.system;
             const retryText = turn.system
               ? `${turn.system}\n\n${turn.resumeFallback?.text ?? turn.text}`
               : (turn.resumeFallback?.text ?? turn.text);
@@ -1174,6 +1211,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const onNotification = (method: string, params: any) => {
           if (state.settled) return;
           const p = (params ?? {}) as Record<string, any>;
+          if (p.item?.kind === "compaction") compacted = true;
           const tag = tagOf(p);
           if (state.mspTurnId === null) {
             // Ack-before-id race: hold in order until the ack names our turn.
@@ -1254,6 +1292,19 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             }
             case "usage/changed": {
               emitUsage(p);
+              break;
+            }
+            case "session/tokenUsage": {
+              const usage = p.usage;
+              if (typeof p.viewCursor !== "string" || tokenReports.has(p.viewCursor)) break;
+              if (!Number.isSafeInteger(usage?.inputTokens) || usage.inputTokens < 0
+                || !Number.isSafeInteger(usage?.outputTokens) || usage.outputTokens < 0) break;
+              tokenReports.add(p.viewCursor);
+              const cached = usage.cacheReadTokens ?? usage.cachedTokens;
+              const total = state.usage ??= { input: 0, output: 0, cachedInput: 0 };
+              total.input += usage.inputTokens;
+              total.output += usage.outputTokens;
+              total.cachedInput += Number.isSafeInteger(cached) && cached >= 0 ? Math.min(cached, usage.inputTokens) : 0;
               break;
             }
             case "turn/foregroundCompleted": {
@@ -1348,7 +1399,13 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             const promptText = turnHost.fellBack ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
             emit({ ...base(threadId, turnId), type: "session.started", sessionId, model: state.model ?? turn.model ?? null });
             turnTimer.mark("cliReady");
-            const text = turn.system ? `${turn.system}\n\n${promptText}` : promptText;
+            // A session that already holds this exact system text gets only the turn text.
+            const system = turn.system && (turnHost.fellBack || !systemHeld.holds(sessionId, turn.system)) ? turn.system : undefined;
+            if (system) {
+              systemHeld.forget(sessionId);
+              systemSent = system;
+            } else systemHeld.begin(sessionId);
+            const text = system ? `${system}\n\n${promptText}` : promptText;
             await startTurnOn(sessionId, text);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -1408,6 +1465,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             localComputerMcp: !config.fullAuto,
           },
           sendTurn,
+          // fullAuto answers every approval itself (openApproval); the rest reach Wink
+          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
           interruptTurn: async (threadId) => {
             active.get(threadId)?.interrupt();
           },

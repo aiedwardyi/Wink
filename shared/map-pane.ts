@@ -1,0 +1,42 @@
+export interface MapFile {
+  path: string;
+  added: number;
+  removed: number;
+  binary?: boolean;
+  ranges?: [number, number][];
+}
+
+export interface MapWorker {
+  id: string;
+  nick: string;
+  git: boolean;
+  editedAt: number;
+  path?: string;
+  reason?: string;
+  files: MapFile[];
+  more?: number;
+  error?: boolean;
+}
+
+export interface MapSnapshot {
+  workers: MapWorker[];
+  error?: boolean;
+}
+
+export interface MapDiffLine {
+  kind: "add" | "remove" | "context" | "fold";
+  text: string;
+  line?: number;
+  count?: number;
+}
+
+export interface MapDiff {
+  lines: MapDiffLine[];
+  binary?: boolean;
+  capped?: boolean;
+}
+
+export interface MapRepo {
+  name: string;
+  paths: string[];
+}

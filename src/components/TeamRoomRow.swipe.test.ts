@@ -159,6 +159,25 @@ describe("room line swipe", () => {
     expect(onReply).toHaveBeenCalledTimes(1);
   });
 
+  it("listens once on the list, passively, however many rows", async () => {
+    const add = vi.spyOn(HTMLElement.prototype, "addEventListener");
+    await render();
+    const touches = add.mock.calls.filter(([type]) => String(type).startsWith("touch"));
+    expect(touches.map(([type]) => type)).toEqual(["touchstart", "touchmove", "touchend", "touchcancel"]);
+    expect(touches.every(([, , options]) => (options as AddEventListenerOptions | undefined)?.passive)).toBe(true);
+  });
+
+  it("draws the swipe icons only while a swipe is on", async () => {
+    await render();
+    const icons = () => row("mirror-1").querySelectorAll(":scope > svg").length;
+    expect(icons()).toBe(0);
+    const target = content("mirror-1");
+    await act(async () => { touch("touchstart", target, 100); touch("touchmove", target, 140); touch("touchmove", target, 190); });
+    expect(icons()).toBe(2);
+    await act(async () => { touch("touchend", target, 190); await wait(60); });
+    expect(icons()).toBe(0);
+  });
+
   it("attaches nothing at desktop width", async () => {
     phone = false;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });

@@ -6,6 +6,8 @@ import { acceptedSendMatch, parseSendId, SendSequencer, sendFingerprint } from "
 import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
+import { applyPendingModel, switchHeld } from "./pending-model.ts";
+import { routesQuick } from "./quick-ask.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -22,7 +24,7 @@ const runPost = new Function("scope", `return (async () => { with (scope) { ${ro
 
 afterEach(() => { queue._resetSteerQueue(); _resetPeerUserReplies(); vi.restoreAllMocks(); });
 
-function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = true) {
+function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = true, extra: Record<string, unknown> = {}) {
   const bot = { id: "bot", threadId: "thread", busy: true, modelSelection: { instanceId: "fake", model: "fake" } } as BotRecord;
   const messages: Message[] = [];
   const appendMessage = (_thread: string, message: Omit<Message, "id" | "at">) => {
@@ -41,7 +43,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, sendPostReceipt, parseCallTag,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop,
@@ -52,6 +54,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [],
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
     resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
+    ...extra,
   };
   const hold = (text: string) => {
     const sendId = `send-now-${text.padEnd(16, "0")}`;
@@ -181,5 +184,56 @@ describe("queued send through the message POST", () => {
     h.drain();
     expect(h.drainRun).toHaveBeenCalledTimes(1);
     expect(h.messages).toMatchObject([{ text: "failure", sendId: selected.sendId }]);
+  });
+});
+
+describe("a model switch during a busy turn", () => {
+  const grok = { instanceId: "grok", model: "grok-4.7", mode: "pinned" as const };
+
+  it("queues every later send for the new model in order and never steers or stops the old turn", async () => {
+    const h = harness();
+    h.bot.pendingModelSelection = grok;
+    for (const text of ["one", "two", "three"]) expect((await h.post({ text })).body).toMatchObject({ queued: true });
+    expect(h.steer).not.toHaveBeenCalled();
+    expect(h.interruptTurn).not.toHaveBeenCalled();
+    const models: string[] = [];
+    h.drainRun.mockImplementation(() => { models.push(h.bot.modelSelection.model); h.bot.busy = true; });
+    for (let turn = 0; turn < 3; turn++) {
+      h.bot.busy = false;
+      applyPendingModel(h.bot);
+      h.drain();
+    }
+    expect(h.messages.map((m) => m.text)).toEqual(["one", "two", "three"]);
+    expect(models).toEqual(["grok-4.7", "grok-4.7", "grok-4.7"]);
+  });
+
+  it("keeps a Send now on a held send queued for the new model", async () => {
+    const h = harness();
+    const selected = h.hold("first");
+    h.bot.pendingModelSelection = grok;
+    expect((await h.post(selected)).body).toMatchObject({ queued: true, queueId: selected.queueId });
+    expect(h.steer).not.toHaveBeenCalled();
+  });
+
+  it("still steers when only the effort changed", async () => {
+    const h = harness();
+    h.bot.pendingModelSelection = { ...h.bot.modelSelection, effort: "low" };
+    expect((await h.post({ text: "keep going" })).body).toMatchObject({ steered: true });
+    expect(h.steer).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fork the old Claude turn for a quick answer once the bot switched away from Claude", async () => {
+    const startQuick = vi.fn();
+    const fork = vi.fn();
+    const h = harness(undefined, true, {
+      routesQuick, startQuick, quick: { accountReady: () => true },
+      instanceForBot: () => ({ driverKind: "claudeAgent", fork, adapter: { capabilities: { queueing: true }, steer: vi.fn(async () => true), interruptTurn: vi.fn() } }),
+    });
+    Object.assign(h.store, { groupByThread: () => undefined });
+    h.bot.modelSelection = { instanceId: "claude", model: "claude-haiku-5-5" };
+    expect((await h.post({ text: "what model r u?" })).body).toMatchObject({ quick: true });
+    h.bot.pendingModelSelection = grok;
+    expect((await h.post({ text: "what model r u now?" })).body).toMatchObject({ queued: true });
+    expect(startQuick).toHaveBeenCalledTimes(1);
   });
 });

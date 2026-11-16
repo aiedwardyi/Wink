@@ -1,5 +1,6 @@
 // A phone's cold open downloads every chat's newest page; only the one on
 // screen needs it. The rest page in when opened (ChatView's fill paging).
+import { scanQuestion } from "../shared/open-question.ts";
 import type { Message } from "./store.ts";
 
 export const OPEN_CHAT_HEADER = "x-open-chat";
@@ -19,6 +20,8 @@ export function offscreenLimit(
   limit: number,
   chat: { unread?: boolean; readAt?: number },
   activeLeafId?: string | null,
+  /** Ask cards older than `messages`, when `messages` is only a thread's tail. */
+  earlier: readonly Message[] = [],
 ): number {
   // A branched page's active path can sit anywhere in insertion order, so keep it whole.
   if (activeLeafId && activeLeafId !== messages.at(-1)?.id) return limit;
@@ -29,9 +32,10 @@ export function offscreenLimit(
   }
   let rows = Math.min(limit, OFFSCREEN_TAIL);
   let prompt = false, ask = false, user = false, preview = false, read = !chat.unread;
+  const waiting = scanQuestion(earlier.length ? [...earlier, ...messages] : messages);
   for (let i = messages.length - 1; i >= floor; i--) {
     const message = messages[i]!;
-    const keep = (!prompt && isPrompt(message)) || (!prompt && !ask && isAsk(message)) || (!preview && isPreview(message))
+    const keep = (!prompt && isPrompt(message)) || (!prompt && !ask && isAsk(message)) || message === waiting || (!preview && isPreview(message))
       || (!read && (chat.readAt === undefined ? !user : message.at > chat.readAt))
       || isOpenRequest(message) || message.kind === "launch" || message.kind === "note";
     if (keep) rows = Math.max(rows, messages.length - i);

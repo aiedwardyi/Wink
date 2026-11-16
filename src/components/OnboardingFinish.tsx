@@ -3,6 +3,7 @@ import { Star } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/state/store";
 import { OrbitMark } from "./OrbitMark";
+import { trackFeature, trackOnboard, usageStatsSwitched } from "@/lib/usage-stats";
 
 const REPO = "https://github.com/aiedwardyi/Wink";
 
@@ -10,7 +11,9 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
   const { t } = useI18n();
   const [share, setShare] = useState(true);
   const open = () => {
-    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).catch(() => {});
+    trackOnboard("finish");
+    if (!share) usageStatsSwitched(false);
+    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
     onDone();
   };
   return (
@@ -21,12 +24,13 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
           <OrbitMark size={82} />
         </div>
         <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t("onboarding.doneTitle")}</h1>
-        <button type="button" onClick={open} className="mt-7 w-full max-w-60 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99]">{t("onboarding.openOrbit")}</button>
+        <button type="button" onClick={open} className="mt-7 w-full max-w-60 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110">{t("onboarding.openOrbit")}</button>
         <a
           href={REPO}
           target="_blank"
           rel="noreferrer"
           onClick={(event) => {
+            trackFeature("star.click");
             if (window.ogb?.openExternal) {
               event.preventDefault();
               void window.ogb.openExternal(REPO).catch(() => {});

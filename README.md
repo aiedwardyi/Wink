@@ -10,9 +10,11 @@
 </p>
 
 <p align="center">
-  Your AI coding subscriptions, in one desktop app, at terminal speed.
+  <b>Context switching, in style.</b>
   <br>
-  Runs on the Claude Code, Codex, Gemini, Grok and Muse logins you already have. No API keys. No analytics.
+  Claude, Codex, Grok, Gemini and Muse in one app, at terminal speed.
+  <br>
+  Runs on the Claude Code, Codex, Gemini, Grok and Muse logins you already have. No API keys. Usage stats are anonymous and never include your chats.
 </p>
 
 <p align="center">
@@ -84,14 +86,14 @@ Engine logins stay in each CLI's own store. Wink drives the CLI with the session
 
 ## Trust and security
 
-- No analytics. Error reports are off by default.
+- Usage stats are anonymous and never include chats, files or names. Turn them off at first run or in **Settings > General**. GlitchTip error reports are off by default.
 - Listens on this PC only, behind a per-launch token.
 - Engine logins stay in each CLI's own store.
 
 <details>
 <summary>Everything Wink listens on, sends and stores</summary>
 
-Wink has no analytics. This is everything it listens on, sends and stores.
+This is everything Wink listens on, sends and stores, usage stats included.
 
 **Listens** (this PC only)
 
@@ -101,6 +103,7 @@ Wink has no analytics. This is everything it listens on, sends and stores.
 
 **Sends with no setup**
 
+- Anonymous usage stats, while they're on (the first-run box, on by default; **Settings > General > Crash reports and stats** turns them off from this PC, your phone or the browser): a random install ID (deleted when you turn stats off), app version, OS, CPU cores, rounded RAM and screen scale, languages, how many bots, rooms and phones you have, which services have a key set (never the key), and counts and timings of screens, settings (old and new value), features, engines (with CLI versions), models, turns, tokens, cost, workers, crashes and errors, with error locations hashed. Never message text, file names or paths, bot or room names, emails, account IDs, room codes or error text. Batches go about every 30 minutes, at most 256 KB each, to the relay in the build's `WINK_STATS_URL` (no host is configured in this repo). The relay sees the PC's IP address but doesn't write it down, and keeps stats for 90 days.
 - Update checks to GitHub Releases (`aiedwardyi/orbit-releases`) 15 s after launch, then hourly. The stock updater adds a random per-install ID header (`x-user-staging-id`) for staged rollouts. Downloads start only when you press the button and are checked against the release's sha512 hash. The build isn't code-signed yet.
 - Your engine CLIs, which Wink starts to list models and check sign-in at launch, on refocus and in the model picker. Each talks to its own vendor with your login and keeps its own telemetry settings.
 - `tailscale serve --bg --https=443` at launch when Tailscale is installed and logged in, so your phone can reach Wink over your tailnet. Tailnet only, never Funnel, and the API still needs the phone link's sign-in key. The rule stays after Wink quits. `ORBIT_REMOTE_AUTO=0` turns it off.
@@ -124,9 +127,11 @@ Wink has no analytics. This is everything it listens on, sends and stores.
 **Stores**
 
 - `~/.orbit` (or `OMB_DATA_DIR`): bots, chats (`messages.db`), each bot's `MEMORY.md`, task records, attachments, redacted engine event logs, phone pairing keys, and a decision log. `orbit-msg` lives in `~/.orbit/bin`.
+- In `~/.orbit`: `analytics.json` (stats on or off), `stats-id` (the random install ID), `stats-queue.ndjson` (batches waiting to send, at most 1 MB, dropped after 14 days) and `stats-active` (marks a running session, to count unclean exits). Wink doesn't sync these.
 - `%APPDATA%\orbit-desktop`: Wink's own API keys in `credentials.bin`, encrypted with the Windows credential store through Electron `safeStorage`, the updater's install ID, and logs. It also holds Electron's browser data: local storage (UI settings and unsent drafts), plus the cookies and logins of the bots' built-in browser and of the windows that open your other PCs.
 - In the same userData folder: `error-report-consent.json` (consent), `error-report-queue.json` (pending reports), `error-report-budget.json` (daily upload count and backoff), and `error-report-active` (previous-run marker). These files are not synced by Wink.
 - Outside those, only while needed: `~/.gemini/config/mcp_config.json` during Antigravity turns (restored after) and a temp `mcp.json` per Claude turn (deleted after). Picking a local model for Grok adds it to `~/.grok/config.toml`, with that server's API key if it has one, and the entry stays.
+- Names: Wink was OpenMausBot, then Orbit. The old names in `~/.orbit`, `%APPDATA%\orbit-desktop`, the `OMB_` and `ORBIT_` variables, `orbit-msg` and the `orbit-releases` update feed stay on purpose, so existing installs keep their data, settings and updates.
 
 **Approvals**
 
@@ -165,8 +170,8 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 ## Build from source
 
 ```powershell
-git clone https://github.com/aiedwardyi/Wink.git Orbit
-cd Orbit
+git clone https://github.com/aiedwardyi/Wink.git
+cd Wink
 pnpm install --frozen-lockfile
 pnpm dev:desktop    # the desktop app
 pnpm dev            # or the browser UI at http://127.0.0.1:5199

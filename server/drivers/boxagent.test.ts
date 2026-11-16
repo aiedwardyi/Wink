@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDirs } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { buildResumeFallback, buildTurnContext, replayMessageText } from "../turn-context.ts";
 import { BoxAgentDriver } from "./boxagent.ts";
 
 const BOX = "box-1";
@@ -145,6 +146,34 @@ describe("BoxAgentDriver turns (fake API)", () => {
       expect(promptBodies[0]).toContain(expected);
     }
     expect(promptBodies[0]).not.toContain("must not be consumed separately");
+  });
+
+  it.each([
+    [undefined, "claudeAgent", "codex", "Codex", "claude-code"],
+    ["sonnet", "claudeAgent", "codex", "Codex", "claude-code"],
+    ["gpt-5.4", "codex", "claudeAgent", "Claude", "codex"],
+  ])("replays only real engine switches on cloud model %s", async (model, engine, otherEngine, otherName, provider) => {
+    const promptBodies: string[] = [];
+    restoreFetch = installFakeBox([{ events: [], status: { promptRun: { status: "finished", result: "done" } } }], promptBodies);
+    await create();
+    const driverKind = instance.driverKind;
+    const transcript = [
+      { role: "user" as const, text: "Continue the plan" },
+      { role: "assistant" as const, text: "Earlier answer", engine },
+      { role: "assistant" as const, text: "Spoken answer", engine: "geminiAgent" },
+      { role: "assistant" as const, text: "Earlier cloud answer", engine: "boxAgent" },
+    ];
+    const input = { text: "Next step", transcript, driverKind, model, rewound: false, fresh: true, replaysNatively: false };
+    const plain = { ...input, transcript: transcript.map(({ role, text }) => ({ role, text })) };
+    const context = buildTurnContext(input);
+    expect(context).toEqual(buildTurnContext(plain));
+    expect(buildResumeFallback(input)).toBe(buildResumeFallback(plain));
+    expect(transcript.map((message) => replayMessageText(message, driverKind, undefined, model))).toEqual(transcript.map((message) => message.text));
+    await instance.adapter.sendTurn({ threadId: "t-engine", text: context.turnText, model, integrations: { computer } });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(JSON.parse(promptBodies[0]!)).toMatchObject({ provider });
+    expect(JSON.parse(promptBodies[0]!).prompt).toContain(buildTurnContext(plain).turnText);
+    expect(buildTurnContext({ ...input, transcript: [{ role: "assistant", text: "Other engine answer", engine: otherEngine }] }).turnText).toContain(`Assistant (on ${otherName}): Other engine answer`);
   });
 
   it("keeps a non-prefix response after a flush instead of slicing it away", async () => {

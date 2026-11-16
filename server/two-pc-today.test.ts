@@ -6,7 +6,7 @@ import { ReportStore } from "../relay/src/reports.ts";
 import { SnagStore } from "../relay/src/snags.ts";
 import { claimTeamReports } from "./team-report-owner.ts";
 import { claimTeamSnags } from "./team-snags-owner.ts";
-import { teamOwnerHash } from "./team-route.ts";
+import { teamOwnerHash } from "./team-stats.ts";
 import { teamTodayRoute } from "./team-today.ts";
 it("the upgraded home PC shows reports already filed today by the still-running work PC", async () => {
   const root = mkdtempSync(join(tmpdir(), "two-owner-pcs-"));

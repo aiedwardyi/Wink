@@ -1,31 +1,23 @@
-// The sidebar's way in: Join with code (one code box), plus each room's own menu items.
+// The sidebar's way in: Join group (one code box), plus each room's own menu items.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Files, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
+import { Copy, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
+import { openRoomDetails } from "@/lib/room-details";
 import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom, typedRoomName } from "@/lib/team-rooms";
 import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
-import { TeamRoomFiles } from "./TeamRoomFiles";
-import { TeamRoomPeople } from "./TeamRoomPeople";
+import { trackFeature } from "@/lib/usage-stats";
 
-export function TeamRoomFilesMenu({ roomId }: { roomId: string }) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  return <>
-    <button type="button" onClick={() => setOpen(true)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>
-    <Presence open={open}>{(closing) => <TeamRoomFiles roomId={roomId} closing={closing} onClose={() => setOpen(false)} />}</Presence>
-  </>;
-}
-
-type Sheet = "join" | "rejoin" | "people" | "leave" | "remove" | null;
+type Sheet = "join" | "rejoin" | "leave" | "remove" | "delete" | null;
 
 let sheet: Sheet = null;
 let roomTarget: { id: string; name: string } | null = null;
@@ -36,12 +28,17 @@ function openSheet(next: Sheet) {
   for (const watcher of [...watchers]) watcher();
 }
 
+export function confirmRoomDelete(group: Group) {
+  roomTarget = { id: group.id, name: group.name };
+  openSheet("delete");
+}
+
 const watch = (watcher: () => void) => {
   watchers.add(watcher);
   return () => void watchers.delete(watcher);
 };
 
-const ITEM = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70";
+const ITEM = `flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink ${MENU_ITEM_HOVER}`;
 
 export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClose: () => void }) {
   const { t } = useI18n();
@@ -108,7 +105,7 @@ export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClo
   };
   return (
     <>
-      <button type="button" onClick={() => pick("people")} className={ITEM}>
+      <button type="button" onClick={() => { dispatch({ type: "select", id: group.id }); openRoomDetails(dispatch); onClose(); }} className={ITEM}>
         <UsersRound size={16} className="text-ink-secondary" />
         {t("teamRoom.people")}
       </button>
@@ -141,7 +138,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -153,7 +150,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
         role={closing ? undefined : "dialog"}
         aria-modal={!closing || undefined}
         aria-label={label}
-        className="animate-pop-in w-full max-w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl"
+        className="animate-pop-in w-full max-w-[380px] rounded-[24px] border border-hairline/50 bg-panel p-4 shadow-2xl shadow-black/50"
       >
         {children}
       </div>
@@ -170,10 +167,10 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   const { state, dispatch } = useStore();
   const [askName] = useState(() => !rejoin && !state.config?.profile?.name?.trim());
   const [name, setName] = useState("");
-  const [guessed, setGuessed] = useState(!askName);
   const [code, setCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [hosting, setHosting] = useState(false);
   const busy = useRef(false);
   const waiting = useRef<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -181,13 +178,13 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   const join = async (value: string) => {
     if (busy.current) return;
     waiting.current = value;
-    if (!guessed) return;
     const typed = askName ? typedRoomName(name) : "";
     if (askName && !typed) return setProblem("teamRoom.nameRequired");
     waiting.current = null;
     busy.current = true;
     setJoining(true);
     setProblem(null);
+    setHosting(false);
     if (typed) {
       try {
         dispatch({ type: "configStatus", config: await api("/api/config", { method: "PUT", body: JSON.stringify({ profile: { name: typed } }) }) });
@@ -201,15 +198,20 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     const result = rejoin ? await rejoinRoom(rejoin.roomId, value) : await joinRoom(value);
     if ("room" in result) {
       noteJoinedRoom(result.room);
+      trackFeature("room.join");
       dispatch({ type: "select", id: joinedSelection(result.room.roomId) });
       onClose();
       return;
     }
     busy.current = false;
     setJoining(false);
+    if (result.groupId) {
+      dispatch({ type: "select", id: result.groupId });
+      setHosting(true);
+      return;
+    }
     const short = !rejoin && !looksLikeRoomCode(value);
     setProblem(joinErrorKey(result.status, result.error, short));
-    if (short) setCode("");
     input.current?.select();
   };
 
@@ -220,12 +222,6 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   };
 
   useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>(askName ? "[data-join-name]" : "[data-join-boxes] input"))?.focus(), []);
-  useEffect(() => {
-    if (askName) void request("/api/joined/name").then((body) => setName((typed) => typed || String(body?.name ?? ""))).catch(() => {}).finally(() => setGuessed(true));
-  }, []);
-  useEffect(() => {
-    if (guessed && waiting.current) void join(waiting.current);
-  }, [guessed]);
 
   const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
@@ -284,7 +280,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
         />
       </div>}
       <p role={problem ? "alert" : "status"} className={problem ? "mt-2 text-[12.5px] text-danger" : "mt-2 min-h-[1.25rem] text-[12.5px] text-ink-secondary"}>
-        {problem ? t(problem) : joining ? t("teamRoom.joining") : ""}
+        {problem ? t(problem) : joining ? t("teamRoom.joining") : hosting ? t("teamRoom.youHost") : ""}
       </p>
     </Shell>
   );
@@ -297,13 +293,12 @@ export function TeamRoomDialogs() {
   const [removeFailed, setRemoveFailed] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [leaveFailed, setLeaveFailed] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const open = useSyncExternalStore(watch, () => sheet);
   const close = () => openSheet(null);
-  const group = state.groups.find((each) => each.id === roomTarget?.id);
   const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
   const leave = async () => {
     if (!joinedId || leaving) return;
+    trackFeature("room.leave");
     setLeaving(true);
     setLeaveFailed(false);
     try {
@@ -339,9 +334,6 @@ export function TeamRoomDialogs() {
       <Presence open={open === "rejoin" && Boolean(joinedId)}>
         {(closing) => <JoinSheet closing={closing} onClose={close} rejoin={{ roomId: joinedId!, name: roomTarget?.name ?? "" }} />}
       </Presence>
-      <Presence open={open === "people" && isTeamRoom(group)}>
-        {(closing) => isTeamRoom(group) && createPortal(<TeamRoomPeople group={group} closing={closing} onClose={close} triggerRef={triggerRef} />, document.body)}
-      </Presence>
       <Presence open={open === "leave" && Boolean(joinedId)}>
         {(closing) => <ConfirmDialog
           closing={closing}
@@ -367,6 +359,19 @@ export function TeamRoomDialogs() {
         >
           {removeFailed && <div role="alert" className="mt-2 text-[12.5px] text-danger">{t("errors.request")}</div>}
         </ConfirmDialog>}
+      </Presence>
+      <Presence open={open === "delete"}>
+        {(closing) => <ConfirmDialog
+          closing={closing}
+          title={t("teamRoom.deleteTitle", { name: roomTarget?.name ?? "" })}
+          body={t("teamRoom.deleteBody")}
+          confirmLabel={t("chrome.delete")}
+          onCancel={close}
+          onConfirm={() => {
+            if (roomTarget) dispatch({ type: "deleteGroup", groupId: roomTarget.id });
+            close();
+          }}
+        />}
       </Presence>
     </>
   );

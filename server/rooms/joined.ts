@@ -1,6 +1,7 @@
 // joined.db: team rooms this PC joined on someone else's PC. Never groups, so
-// no bot, routine or continuation here ever sees host content. The guest key
-// lives only in this file and is dropped once the room ends.
+// no bot, routine or continuation here sees host content, except this PC's own
+// bot in the room, and only when this PC's person asks it. The guest key lives
+// only in this file and is dropped once the room ends.
 import { chmodSync, closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,7 +12,7 @@ export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person" | "bot"; id: string; name: string };
+  author: { kind: "host" | "person" | "bot"; id: string; name: string; owner?: string };
   text: string;
   replyToId?: string;
   files?: JoinedFile[];
@@ -36,13 +37,23 @@ export interface JoinedFile {
 export interface JoinedState {
   version: number;
   picture?: string;
-  notice?: { entryId: string; by: string; at: number };
+  notice?: { entryId: string; by: string; at: number; text?: string };
   roomName: string;
   instructions: string;
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
-  bots: Array<{ id: string; name: string; color: string }>;
+  bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
+  /** Only from a host that takes teammates' bots. */
+  teamBots?: Array<{ id: string; name: string; color: string; owner: string; mascotStyle?: string }>;
+}
+
+/** One of this PC's bots in a joined room: the host's id for it, and its hidden room task. */
+export interface MyRoomBot {
+  id: string;
+  botId: string;
+  threadId: string | null;
+  seenSeq: number;
 }
 
 /** `removed` and `left` rooms are read-only. */
@@ -106,6 +117,10 @@ function open(): DatabaseSync {
       room_id TEXT PRIMARY KEY,
       name TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS deleted_counts (
+      room_id TEXT PRIMARY KEY,
+      count INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS entries_id ON entries(room_id, json_extract(body, '$.id'));
     CREATE TABLE IF NOT EXISTS translations (
       room_id TEXT NOT NULL,
@@ -123,6 +138,15 @@ function open(): DatabaseSync {
       marks TEXT NOT NULL,
       PRIMARY KEY (room_id, entry_id)
     );
+    CREATE TABLE IF NOT EXISTS my_room_bots (
+      room_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      bot_id TEXT NOT NULL,
+      thread_id TEXT,
+      seen_seq INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (room_id, id)
+    );
+    CREATE TABLE IF NOT EXISTS room_task_threads (thread_id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS pictures (
       room_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -182,8 +206,12 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+    // The host keeps a returning person's bots, so this PC keeps its record of them.
+    const before = database.prepare("SELECT person_id FROM joined WHERE room_id = ?").get(roomId) as { person_id: string } | undefined;
+    if (before?.person_id !== me.id) database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -208,6 +236,15 @@ export function joinedSentName(roomId: string): string | null {
 
 export function setJoinedSentName(roomId: string, name: string): void {
   db().prepare("INSERT OR REPLACE INTO sent_names (room_id, name) VALUES (?, ?)").run(roomId, name);
+}
+
+/** How many of the host's file deletions this PC has applied, so a reconnect asks only for newer ones. */
+export function joinedDeletedCount(roomId: string): number {
+  return (db().prepare("SELECT count FROM deleted_counts WHERE room_id = ?").get(roomId) as { count: number } | undefined)?.count ?? 0;
+}
+
+export function setJoinedDeletedCount(roomId: string, count: number): void {
+  db().prepare("INSERT OR REPLACE INTO deleted_counts (room_id, count) VALUES (?, ?)").run(roomId, count);
 }
 
 /** Only the guest client reads this. */
@@ -257,13 +294,13 @@ export function resetJoined(roomId: string): void {
   });
 }
 
-/** The newest `limit` entries, oldest first, each with its reactions. */
-export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
+/** The newest `limit` entries below `before`, oldest first, each with its reactions. */
+export function joinedEntries(roomId: string, limit: number, before = Number.MAX_SAFE_INTEGER): JoinedEntry[] {
   const rows = db().prepare(`
     SELECT entries.body, reactions.marks FROM entries
     LEFT JOIN reactions ON reactions.room_id = entries.room_id AND reactions.entry_id = json_extract(entries.body, '$.id')
-    WHERE entries.room_id = ? ORDER BY entries.seq DESC LIMIT ?
-  `).all(roomId, limit) as Array<{ body: string; marks: string | null }>;
+    WHERE entries.room_id = ? AND entries.seq < ? ORDER BY entries.seq DESC LIMIT ?
+  `).all(roomId, before, limit) as Array<{ body: string; marks: string | null }>;
   return rows.reverse().map((row) => {
     const entry = botLine(JSON.parse(row.body) as JoinedEntry);
     return row.marks ? { ...entry, reactions: JSON.parse(row.marks) as JoinedMark[] } : entry;
@@ -348,10 +385,10 @@ export function joinedCursor(roomId: string): number {
   return (db().prepare("SELECT cursor FROM joined WHERE room_id = ?").get(roomId) as { cursor: number } | undefined)?.cursor ?? 0;
 }
 
-/** Keeps the highest version; an older state is ignored, and a held state without bots takes them at its version. */
+/** An equal-version state can fill a bot roster a previous build did not keep. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND json_extract(state, '$.bots') IS NULL))")
-    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version).changes > 0;
+  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
+    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
 }
 
 /** Read-only from here on; the key is gone. */
@@ -371,8 +408,39 @@ export function removeJoined(roomId: string): boolean {
       database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
     }
     return removed;
   });
+}
+
+export function myRoomBots(roomId: string): MyRoomBot[] {
+  const rows = db().prepare("SELECT id, bot_id, thread_id, seen_seq FROM my_room_bots WHERE room_id = ? ORDER BY rowid").all(roomId) as
+    Array<{ id: string; bot_id: string; thread_id: string | null; seen_seq: number }>;
+  return rows.map((row) => ({ id: row.id, botId: row.bot_id, threadId: row.thread_id, seenSeq: row.seen_seq }));
+}
+
+export function saveMyRoomBot(roomId: string, id: string, botId: string): void {
+  db().prepare("INSERT OR REPLACE INTO my_room_bots (room_id, id, bot_id) VALUES (?, ?, ?)").run(roomId, id, botId);
+}
+
+export function dropMyRoomBot(roomId: string, id: string): void {
+  db().prepare("DELETE FROM my_room_bots WHERE room_id = ? AND id = ?").run(roomId, id);
+}
+
+export function setMyRoomBotTurn(roomId: string, id: string, threadId: string, seenSeq: number): void {
+  db().prepare("UPDATE my_room_bots SET thread_id = ?, seen_seq = MAX(seen_seq, ?) WHERE room_id = ? AND id = ?").run(threadId, seenSeq, roomId, id);
+  db().prepare("INSERT OR IGNORE INTO room_task_threads (thread_id) VALUES (?)").run(threadId);
+}
+
+/** Every room task thread on this PC, so chat sync leaves them alone. */
+export function myRoomBotThreads(): Set<string> {
+  return new Set((db().prepare("SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
+}
+
+/** Every thread that ever ran a room turn, kept after the bot leaves the room, so it never reads as a 1:1. */
+export function roomTaskThreads(): Set<string> {
+  return new Set((db().prepare("SELECT thread_id FROM room_task_threads UNION SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
 }

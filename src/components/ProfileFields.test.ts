@@ -8,6 +8,7 @@ const mock = vi.hoisted(() => ({
   config: {
     profile: { name: "", email: "" },
   } as { profile: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean } } | null,
+  cachedProfile: undefined as { name: string; email: string; avatarUrl?: string } | undefined,
 }));
 
 vi.mock("@/state/store", async (importOriginal) => {
@@ -15,7 +16,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   return {
     ...actual,
     useStore: () => ({
-      state: { config: mock.config },
+      state: { config: mock.config, cachedProfile: mock.cachedProfile },
       dispatch: mock.dispatch,
     }),
   };
@@ -187,6 +188,34 @@ describe("ProfileFields photo", () => {
     expect(host.textContent).not.toContain("?");
     await act(async () => root.unmount());
     mock.config = loaded;
+  });
+
+  it("shows the last profile while the config is still on its way", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    mock.cachedProfile = { name: "Ada", email: "", avatarUrl: "/api/attachments/ada.png" };
+    const { host, root, name } = await renderProfile();
+    expect(name.value).toBe("Ada");
+    expect(name.className).not.toContain("animate-pulse");
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/ada.png");
+    await act(async () => root.unmount());
+    mock.config = loaded;
+    mock.cachedProfile = undefined;
+  });
+
+  it("clears a cached name on a blank Save", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    mock.cachedProfile = { name: "Ada", email: "" };
+    const request = vi.fn<(input: string, init?: RequestInit) => Promise<FetchResult>>(async () => ({ ok: true, json: async () => ({ profile: { name: "", email: "" } }) }));
+    vi.stubGlobal("fetch", request);
+    const { root, name, save } = await renderProfile();
+    await act(async () => fillInput(name, " "));
+    await act(async () => save.click());
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({ profile: { name: "" } });
+    await act(async () => root.unmount());
+    mock.config = loaded;
+    mock.cachedProfile = undefined;
   });
 
   it("never paints an empty editable name in the frame the profile arrives", async () => {

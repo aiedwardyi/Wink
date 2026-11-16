@@ -7,7 +7,7 @@ import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import test from "node:test";
 import { removeTempDir } from "../server/testing/cleanup.ts";
-import { createPaneCleanup, createPaneCleanupWorker, readCleanupPins } from "./pane-cleanup.mjs";
+import { SWEEP_BUDGET, createPaneCleanup, createPaneCleanupWorker, readCleanupPins } from "./pane-cleanup.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 
 const DAY_MS = 86_400_000;
@@ -666,12 +666,19 @@ test("a sweep walks the link roots once for every scratch it removes", { skip: p
   assert.deepEqual(f.warnings, []);
 });
 
-test("a reported scratch close walks the link roots once", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+test("reported scratch closes walk the link roots once between them", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
   const f = fixture(t);
   const walks = await walkCounter(t, f);
   f.cleanup.opened(f.session);
   await f.cleanup.closed(f.session);
   assert.equal(fs.existsSync(f.scratch), false);
+  assert.equal(walks(), 1);
+  const second = path.join(f.tempRoot, "wink-SECOND");
+  fs.mkdirSync(second);
+  const session = { ...f.session, id: "pane-2", label: "SECOND | model | high" };
+  f.cleanup.opened(session);
+  await f.cleanup.closed(session);
+  assert.equal(fs.existsSync(second), false);
   assert.equal(walks(), 1);
   assert.deepEqual(f.warnings, []);
 });
@@ -886,30 +893,93 @@ test("a link in a worktree root renamed aside and recreated still blocks its del
   fs.unlinkSync(link);
 });
 
-test("no link watcher outlives its close or sweep", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
-  const f = fixture(t);
-  const open = new Set();
-  let opened = 0;
+function openWatchers(t) {
+  const open = new Map();
   const watch = fs.watch;
   t.mock.method(fs, "watch", (...args) => {
     const watcher = watch(...args);
-    opened++;
-    open.add(watcher);
+    open.set(watcher, args[0]);
     const close = watcher.close.bind(watcher);
     watcher.close = () => { open.delete(watcher); close(); };
     return watcher;
   });
+  return open;
+}
+
+test("link watchers stay between runs and none outlives dispose", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const open = openWatchers(t);
   f.cleanup.opened(f.session);
   await f.cleanup.closed(f.session);
   assert.equal(fs.existsSync(f.scratch), false);
-  assert.equal(open.size, 0);
+  const kept = [...open.keys()];
+  assert.ok(kept.length >= 2, `${kept.length} watchers`);
   await scratchRows(f, ["FAILS"]);
   const promises = await import("node:fs/promises");
   t.mock.method(promises.default, "rm", async () => { throw Object.assign(new Error("disk failure"), { code: "EIO" }); });
   await f.cleanup.sweep();
   assert.match(f.warnings[0]?.message ?? "", /disk failure/);
-  assert.ok(opened >= 4, `${opened} watchers`);
+  assert.deepEqual(kept.filter((watcher) => !open.has(watcher)), []);
+  f.cleanup.dispose();
   assert.equal(open.size, 0);
+});
+
+test("a kept watcher is closed as soon as its folder is deleted", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(path.join(host, "inner"), { recursive: true });
+  const open = openWatchers(t);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  const watching = () => [...open.values()].includes(host);
+  assert.equal(watching(), true);
+  fs.rmSync(host, { recursive: true });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(watching(), false);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a link made in a folder flooded with changes between runs still blocks the delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const inner = path.join(f.worktreeRoot, "host", "inner");
+  fs.mkdirSync(inner, { recursive: true });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.existsSync(f.scratch), false);
+  const second = path.join(f.tempRoot, "wink-SECOND");
+  fs.mkdirSync(second);
+  fs.writeFileSync(path.join(second, "file"), "kept");
+  // Small batches, so the watcher's own buffer never overflows and every change is counted.
+  for (let index = 0; index < 1_200; index++) {
+    fs.writeFileSync(path.join(inner, `file-${index}`), "");
+    if (index % 20 === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  fs.symlinkSync(second, path.join(inner, "incoming"), "junction");
+  const session = { ...f.session, id: "pane-2", label: "SECOND | model | high" };
+  f.cleanup.opened(session);
+  await f.cleanup.closed(session);
+  assert.equal(fs.readFileSync(path.join(second, "file"), "utf8"), "kept");
+  assert.match(fs.readFileSync(path.join(f.home, ".orbit", "cleanup.log"), "utf8"), /"kind":"kept".*wink-SECOND","reason":"linked"/);
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(path.join(inner, "incoming"));
+});
+
+test("a close after the kept link index lost its root events still removes the scratch", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  // One unbroken burst overflows the root watcher's buffer.
+  for (let index = 0; index < 1_200; index++) fs.writeFileSync(path.join(host, `file-${index}`), "");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const second = path.join(f.tempRoot, "wink-SECOND");
+  fs.mkdirSync(second);
+  const session = { ...f.session, id: "pane-2", label: "SECOND | model | high" };
+  f.cleanup.opened(session);
+  await f.cleanup.closed(session);
+  assert.equal(fs.existsSync(second), false);
+  assert.deepEqual(f.warnings, []);
 });
 
 test("reported scratch is removed and its junction target survives", async (t) => {
@@ -1786,6 +1856,56 @@ test("a crash before removal never deletes a different worktree at the same path
   assert.deepEqual(f.warnings, []);
 });
 
+function squashLanded(f) {
+  const { main, target } = repo(f);
+  fs.writeFileSync(path.join(target, "file"), "worker change");
+  git(target, "commit", "--quiet", "-am", "work");
+  git(main, "merge", "--quiet", "--squash", "test-worker");
+  git(main, "commit", "--quiet", "-m", "squashed");
+  const base = git(main, "symbolic-ref", "--short", "HEAD");
+  git(main, "config", "remote.test.url", main);
+  git(main, "config", "remote.test.fetch", "+refs/heads/*:refs/remotes/test/*");
+  git(main, "config", `branch.${base}.remote`, "test");
+  git(main, "config", `branch.${base}.merge`, "refs/heads/main");
+  return { main, target };
+}
+
+test("a worktree whose branch was squash-merged into the pushed base is swept", async (t) => {
+  const f = fixture(t);
+  const { main, target } = squashLanded(f);
+  git(main, "update-ref", "refs/remotes/test/main", "HEAD");
+  assert.notEqual(git(target, "rev-list", "HEAD", "--not", "--remotes"), "");
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false);
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept"), []);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a squash that is not on the remote base yet keeps the worktree as unpushed", async (t) => {
+  const f = fixture(t);
+  const { target } = squashLanded(f);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), true);
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["unpushed"]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a worktree with one change the base lacks stays unpushed after a squash of the rest", async (t) => {
+  const f = fixture(t);
+  const { main, target } = squashLanded(f);
+  git(main, "update-ref", "refs/remotes/test/main", "HEAD");
+  fs.writeFileSync(path.join(target, "later"), "not landed");
+  git(target, "add", "later");
+  git(target, "commit", "--quiet", "-m", "later");
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "later"), "utf8"), "not landed");
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["unpushed"]);
+  assert.deepEqual(f.warnings, []);
+});
+
 test("a commit made after the first unpushed check keeps the worktree", async (t) => {
   const f = fixture(t);
   const { target } = repo(f);
@@ -2094,5 +2214,33 @@ test("a fresh reflog keeps an otherwise idle worktree", async (t) => {
   fs.utimesSync(path.join(git(target, "rev-parse", "--absolute-git-dir"), "logs", "HEAD"), future, future);
   await f.cleanup.sweep();
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(f.warnings, []);
+});
+
+test("an ignored-file walk past its cap keeps the worktree", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  for (let index = 0; index < 5; index++) fs.mkdirSync(path.join(target, "node_modules", `pkg-${index}`), { recursive: true });
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, budget: { ...SWEEP_BUDGET, walk: 3 } });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["walk cap"]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a fresh ignored file deep inside keeps an otherwise idle worktree", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const deep = path.join(target, "node_modules", "run", "out", "result.bin");
+  fs.mkdirSync(path.dirname(deep), { recursive: true });
+  fs.writeFileSync(deep, "running");
+  await eligible(f);
+  const future = new Date(Date.now() + 4 * DAY_MS);
+  fs.utimesSync(deep, future, future);
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(deep, "utf8"), "running");
   assert.deepEqual(f.warnings, []);
 });

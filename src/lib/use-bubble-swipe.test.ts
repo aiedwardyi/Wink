@@ -22,14 +22,14 @@ function Harness({ canReply = true, canTranslate = true }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   useBubbleSwipe({ row: rowRef, bubble: bubbleRef, canReply, canTranslate, onReply, onTranslate });
-  return createElement("div", { ref: rowRef, "data-row": true },
+  return createElement("div", { "data-swipe-list": true }, createElement("div", { ref: rowRef, "data-row": true },
     createElement("div", { ref: bubbleRef, "data-bubble": true },
       createElement("p", null, "hello"),
       createElement("a", { href: "#x", onClick: click }, "file"),
       createElement("pre", null, "code"),
       createElement("div", { "data-no-swipe": true }, createElement("span", null, "inner")),
     ),
-  );
+  ));
 }
 
 function touch(type: string, x: number, y = 200, target: Element = bubble().querySelector("p")!, dt = 16, count = 1) {

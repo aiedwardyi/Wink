@@ -13,7 +13,7 @@ export function createAccountRuntime(deps: {
   accounts: AccountService; registry: ProviderRegistry; providers: ProviderReload; store: Store;
   reload(): Promise<void>; rateLimits: RateLimitsMap; saveRateLimits(): void;
   usage: ReturnType<typeof createUsageRefresh>; availability: Map<string, boolean>;
-  invalidateHolds(id: string): void; invalidateWaits(id: string): void;
+  invalidateWaits(id: string): void;
   botActive(id: string): boolean; terminal(): TerminalBridgeAccess | null; configBusy(): boolean;
   bots?: BotAccounts;
   changed?(usageId?: string): void;
@@ -50,7 +50,6 @@ export function createAccountRuntime(deps: {
       deps.rateLimits.delete(id);
       deps.saveRateLimits();
       deps.availability.delete(id);
-      deps.invalidateHolds(id);
       deps.invalidateWaits(id);
       deps.store.clearAccountSessions(id);
     },

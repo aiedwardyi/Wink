@@ -97,13 +97,14 @@ brain. It runs in any browser, phone first; the desktop app keeps Call mode.
   shows "Send: <order>?", and a tapped or spoken yes (en/ko, `consent.ts`) sends
   it through the normal send route as a `call.order` row. 45 s with no answer
   expires it.
-- **Reports come back.** When a voice order settles, the reply goes to the voice as a
-  `[Wink]` line (`realtimeInput.text`) and is spoken in 1-3 sentences. A reply to a
-  typed message stays silent: it goes in as context (`clientContent`,
-  `turnComplete: false`) once the voice is quiet. The voice never says done
-  before the bot does; a slip is corrected and counted.
-- **Language.** The voice speaks the app language and switches only when asked by
-  name; misheard speech never switches it.
+- **Reports come back.** When a voice order or a message typed during the call
+  settles, the reply goes to the voice as a `[Wink]` line (`realtimeInput.text`)
+  and is spoken in 1-3 sentences. Other context rides the next text, never a lone
+  `clientContent` (that leaves the turn open and the voice stops answering). Paths,
+  ids and long numbers are spoken as a pointer to the chat. The voice never says
+  done before the bot does; a slip is corrected and counted.
+- **Language.** The voice answers English or Korean in kind; any other language
+  gets the app language. One voice per call: every setup names it.
 - **Stats.** `/call/end` appends one line to `diag/live-call.jsonl`.
 - Live code is a lazy chunk; chats without a call pay nothing.
 

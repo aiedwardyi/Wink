@@ -1,5 +1,5 @@
 // Turn-latency baseline runner: drives ONE fixed tiny task headlessly through
-// Orbit's real driver code (create → sendTurn → adapter events) and records a
+// Wink's real driver code (create → sendTurn → adapter events) and records a
 // decomposed timeline per turn. Live engines spend their own quota; fake-CLI
 // engines calibrate the Orbit-side overhead floor deterministically offline.
 //

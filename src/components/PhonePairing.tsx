@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/state/store";
+import { trackFeature } from "@/lib/usage-stats";
 
 interface Pairing {
   url: string;
@@ -13,7 +14,7 @@ interface Pairing {
 }
 
 const PAIRING_POLL_MS = 2_000;
-const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-control/70 disabled:cursor-not-allowed disabled:opacity-50";
+const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50";
 
 function countdown(ms: number): string {
   const seconds = Math.ceil(ms / 1000);
@@ -67,6 +68,7 @@ export function PhonePairing({ request = api, onPaired, onClose }: { request?: t
           const added = list.find((phone) => !pairing.known.includes(phone.id));
           if (!added || !live.current) return;
           setPairing(null);
+          trackFeature("phone.pair");
           setPaired(added.name);
           onPaired();
         })

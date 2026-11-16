@@ -18,9 +18,12 @@ import {
 } from "react";
 import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
+import { answerText } from "../../shared/open-question";
+import { canAnswerCard, typedAnswer } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
+import { queueCancelled } from "@/lib/live-call/active";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { preferredStartupSelectionId } from "@/lib/sidebar-order";
@@ -29,18 +32,22 @@ import { loadReplyStyle } from "@/lib/reply-style";
 import { nextTurnOrigins, turnOriginRow } from "@/lib/turn-origin";
 import { appSettingsNavigation } from "@/lib/settings-chrome";
 import { createBotPatchQueue } from "./bot-patch-queue";
+import { setSaveStatus } from "./description-save-status";
 import { createViewedReplies } from "./viewed-replies";
 import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstChatPeripherals, reconcileCoveredChatFrame, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
-import { joinedRoomIdOf } from "@/lib/team-rooms";
+import { joinedRoomIdOf, roomFileRefusal } from "@/lib/team-rooms";
+import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
+import { trackReplyText, trackStream } from "@/lib/usage-stats";
+import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
-import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
+import { botDraftId, recoverFailedComposerSend, returnSendsToComposer, takeClosedRoomHold, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
 import { isShownMessage } from "@/lib/shown-message";
 import { arrivalChatForFrame, arrivalChatForRoutinePatch, noteArrival } from "@/lib/arrival-glow";
@@ -48,6 +55,7 @@ import {
   acceptedSendPaint,
   applyOptimisticBusy,
   clearAcceptedThinking,
+  composerIsBusy,
   dropIdleAcceptedThinking,
   forgetAcceptedSend,
   hasAcceptedThinking,
@@ -67,6 +75,7 @@ import {
   liveTurnIdAfter,
   liveTurnIdAfterDispatch,
   nextStreamState,
+  rampStream,
   rememberStreamTail,
   retargetStreamTurn,
   revealStream,
@@ -81,7 +90,7 @@ import type { OptionCardData, Message, Group, Bot, InstanceInfo, AppState, StopH
 export type { MausColor } from "@/lib/mascot";
 export type { RoutineRunCardData } from "../../shared/routine-run";
 export type { OptionCardData, ConnectorCardData, SecretRequestCardData, Message, GroupDefaultResponder, Group, GroupTask, ModelSelection, Task, TaskResumePacket, TaskUsage, Bot, TerminalAttention, TerminalAttentionMap, ConfigStatus, ConfigStatusFrame, EngineInstall, RateLimitReport, InstanceInfo, AppSettingsSection, AppState, BotAnnouncement, Action, PeripheralSnapshotLoad } from "./store-types";
-export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread } from "./store-transforms";
+export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread, shownProfile } from "./store-transforms";
 
 /** The visible conversation: walk parentId links from the active leaf back
  * to the root. Falls back to the flat list for pre-branching payloads. */
@@ -94,6 +103,28 @@ export function visibleMessages(bot: Pick<Bot, "messages" | "activeLeafId" | "ha
   const visible = walkVisible(bot.messages, leafId, hasMore);
   visibleCache.set(bot.messages, { leafId, hasMore, visible });
   return visible;
+}
+
+/** Undoes a rejected send's settlement, unless something settled the card since. */
+function reopenCard(state: AppState, threadId: string, settles: { cardId: string; answered: string }): AppState {
+  const settledHere = (messages: readonly Message[]) => messages.some((message) => message.id === settles.cardId && message.card?.answered === settles.answered);
+  const bot = state.bots.find((candidate) => candidate.threadId === threadId);
+  if (bot && settledHere(bot.messages)) return patchCard(state, bot.id, settles.cardId, { answered: undefined });
+  const group = state.groups.find((candidate) => candidate.threadId === threadId);
+  return group && settledHere(group.messages) ? patchGroupCard(state, group.id, settles.cardId, { answered: undefined }) : state;
+}
+
+/** The open question a typed send settles in chat; a queued line's Send now was typed before. */
+function typedPast(state: AppState, action: Action) {
+  if (action.type === "send" && !action.queueId) {
+    const bot = state.bots.find((candidate) => candidate.id === action.botId);
+    return bot ? typedAnswer(visibleMessages(bot), action.text) : null;
+  }
+  if (action.type === "sendGroup" && !action.cardId) {
+    const group = state.groups.find((candidate) => candidate.id === action.groupId);
+    return group ? typedAnswer(group.messages, action.text) : null;
+  }
+  return null;
 }
 
 // Shared across callers, so nobody may mutate the returned array.
@@ -132,9 +163,9 @@ export function openNotificationTarget(
   state: NotificationRoutingState & Pick<AppState, "hydrated">,
   freshState = false,
 ) {
-  if (joinedRoomIdOf(target.threadId)) return dispatch({ type: "select", id: target.threadId });
+  if (joinedRoomIdOf(target.threadId)) return dispatch({ type: "select", id: target.threadId, reveal: true });
   const owner = notificationOwner(state, target);
-  if (owner) dispatch({ type: "select", id: owner.id });
+  if (owner) dispatch({ type: "select", id: owner.id, reveal: true });
   if (!state.hydrated) dispatch({ type: "notificationSwitchPending", target });
   else if (owner) switchToNotificationThread(dispatch, target, state, freshState);
 }
@@ -176,17 +207,24 @@ export function useMascotMotionExpiry(nonce: number | undefined, dispatch: (acti
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null;
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null || isForumSelection(id);
       const selectedId =
         state.selectedId && known(state.selectedId)
           ? state.selectedId
           : preferredStartupSelectionId(action.bots, action.groups, action.sidebarOrder);
+      const pendingQueued = { ...state.pendingQueued };
+      for (const [threadId, entries] of Object.entries(action.queued ?? {})) {
+        const held = pendingQueued[threadId] ?? [];
+        const fresh = entries.filter((entry) => !state.consumedQueueIds[entry.queueId] && !held.some((shown) => shown.queueId === entry.queueId));
+        if (fresh.length) pendingQueued[threadId] = [...held, ...fresh];
+      }
       const hydrated = reconcileSnapshotQueues(
         {
           ...state,
           bots: action.bots.map((b) => (b.messages ? { ...b, messages: keepNewestScreenFrames(b.messages) } : b)),
           groups: action.groups,
           olderPatches: {},
+          pendingQueued,
           snapshots: state.snapshots + 1,
           terminalAttention: Object.fromEntries(
             Object.entries(state.terminalAttention).filter(([, attention]) => action.bots.some((bot) => bot.id === attention.botId)),
@@ -257,8 +295,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, routineRuns: runs.sort((a, b) => b.scheduledFor - a.scheduledFor) };
     }
     case "groupPatched": {
-      const exists = state.groups.some((g) => g.id === action.group.id);
-      const groups = exists
+      const before = state.groups.find((g) => g.id === action.group.id);
+      const groups = before
         ? state.groups.map((g) =>
             g.id === action.group.id
               ? { ...g, ...action.group, messages: action.group.messages ?? g.messages, hasMore: action.group.messages ? action.group.hasMore : g.hasMore }
@@ -266,16 +304,18 @@ export function reducer(state: AppState, action: Action): AppState {
           )
         : [{ ...(action.group as Group), messages: action.group.messages ?? [] }, ...state.groups];
       const patchedGroup = groups.find((group) => group.id === action.group.id);
+      // a turn that fails before any member starts ends without a busyBotId frame
+      const settled = Boolean(before?.working) && patchedGroup?.working === false;
       const acceptedSends =
-        patchedGroup?.busyBotId
+        patchedGroup && (patchedGroup.busyBotId || settled)
           ? clearAcceptedThinking(state.acceptedSends, patchedGroup.threadId)
           : state.acceptedSends;
       return { ...state, groups, acceptedSends };
     }
     case "groupDeleted": {
       const groups = state.groups.filter((g) => g.id !== action.groupId);
-      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
-      return { ...state, groups, selectedId };
+      if (state.selectedId !== action.groupId) return { ...state, groups };
+      return { ...reducer(state, { type: "toggleSettings", open: false }), groups, selectedId: state.bots.find((b) => !b.hidden)?.id ?? state.bots[0]?.id ?? "" };
     }
     case "instances":
       return {
@@ -293,6 +333,7 @@ export function reducer(state: AppState, action: Action): AppState {
         config: action.config,
       };
     case "select": {
+      if (action.reveal) state = { ...state, ...appSettingsNavigation(state, { open: false }), pluginsOpen: false, createBotOpen: false, revealed: state.revealed + 1 };
       // the slot's panels belong to the chat being left
       if (action.id !== state.selectedId) state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
       // reselecting the conversation a workspace covers does not reveal it
@@ -311,6 +352,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "answerCard": {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
       const card = bot?.messages.find((message) => message.id === action.messageId)?.card;
+      if (bot && !canAnswerCard(visibleMessages(bot), action.messageId)) return state;
       const patch: Partial<OptionCardData> = { answered: action.answer };
       // talking past the first-run quiz hides it; live asks stay until
       // resolved, and an ask_user question reads as answered, not dismissed
@@ -319,8 +361,11 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
-    case "answerGroupCard":
+    case "answerGroupCard": {
+      const group = state.groups.find((candidate) => candidate.id === action.groupId);
+      if (group && !canAnswerCard(group.messages, action.messageId)) return state;
       return patchGroupCard(state, action.groupId, action.messageId, { answered: action.answer });
+    }
     case "dismissGroupCard":
       return patchGroupCard(state, action.groupId, action.messageId, { dismissed: true });
     case "decideRequest":
@@ -469,7 +514,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) {
-        // room thread — plain linear append, no branching/mascot machinery
+        // room thread: plain linear append, no branching/mascot machinery
         const group = state.groups.find((g) => g.threadId === action.threadId);
         if (!group) return state;
         if (group.messages.some((m) => m.id === action.message.id)) return state;
@@ -642,6 +687,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         ...appSettingsNavigation(state, action),
+        appSettingsSkins: open && action.skins ? action.skins : null,
         settingsOpen: open ? false : state.settingsOpen,
         inspectorOpen: open ? false : state.inspectorOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -764,7 +810,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case "sendQueuedNow":
       return state;
     case "send": {
-      const dismissed = dismissOnboardingCard(state, action.botId);
+      const typed = typedPast(state, action);
+      const dismissed = dismissOnboardingCard(typed ? patchCard(state, action.botId, typed.question.id, { answered: typed.answered }) : state, action.botId);
       const bot = dismissed.bots.find((candidate) => candidate.id === action.botId);
       if (!bot) return withMascotMotion(dismissed, action.botId, "working");
       const sendId = action.sendId ?? crypto.randomUUID();
@@ -781,6 +828,7 @@ export function reducer(state: AppState, action: Action): AppState {
           text: action.text,
           at: Date.now(),
           after: action.after,
+          settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
       };
       if (paint.kind === "thinking") {
@@ -797,12 +845,16 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!group) return state;
       const sendId = action.sendId ?? crypto.randomUUID();
       const paint = acceptedSendPaint({ alreadyBusy: Boolean(group.busyBotId) });
+      const typed = typedPast(state, action);
+      if (typed) state = patchGroupCard(state, action.groupId, typed.question.id, { answered: typed.answered });
       return {
         ...state,
         acceptedSends: rememberAcceptedSend(state.acceptedSends, action.threadId ?? group.threadId, {
           sendId,
           kind: paint.kind,
           text: action.text,
+          answersCard: action.cardId,
+          settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
       };
     }
@@ -817,6 +869,8 @@ export function reducer(state: AppState, action: Action): AppState {
       );
       const acceptedSends = forgetAcceptedSend(state.acceptedSends, action.threadId, action.sendId);
       let next: AppState = { ...state, acceptedSends };
+      // a sync hold queued the send; only its paint goes
+      if (rejected?.settles && !action.held) next = reopenCard(next, action.threadId, rejected.settles);
       if (
         rejected?.kind === "thinking" &&
         action.botId &&
@@ -964,13 +1018,16 @@ function saveSnapshotCache(state: AppState): void {
     selectedId: state.selectedId,
     // preserveRateLimits would keep a stale usage window past the live fetch.
     instances: state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance),
+    profile: state.config ? state.config.profile : state.cachedProfile,
   });
 }
 
 function withCachedSnapshot(state: AppState): AppState {
   const cached = readSnapshotCache();
   noteCacheLoaded(cached !== null);
-  return cached ? { ...state, ...cached } : state;
+  if (!cached) return state;
+  const { profile, ...snapshot } = cached;
+  return { ...state, ...snapshot, cachedProfile: profile };
 }
 
 export const initialState: AppState = {
@@ -989,11 +1046,13 @@ export const initialState: AppState = {
   settingsKeepGoingRequest: 0,
   settingsMemoryTarget: null,
   settingsMemoryNonce: 0,
+  revealed: 0,
   pluginsOpen: false,
   inspectorOpen: false,
   appSettingsOpen: false,
   appSettingsSection: "general",
   appSettingsPage: false,
+  appSettingsSkins: null,
   provisioning: {},
   focusMessage: null,
   connected: false,
@@ -1112,6 +1171,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // state is intentionally OUTSIDE the reducer so token frames re-render
   // only StreamContext consumers
   const [stream, setStream] = useState<TurnStreamState>(EMPTY_STREAM);
+  const streamRef = useRef(stream);
+  streamRef.current = stream;
   const deltaBuffer = useRef(new Map<string, PendingDeltas>());
   const deltaFlush = useRef<number | null>(null);
   // A settled reply waits for its live text to finish typing; the thread's
@@ -1230,6 +1291,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (buf.size) scheduleDeltaFlush();
     releaseSettled();
   };
+  // Stop: each thread's next frame lands its text whole, other threads keep typing.
+  const landTyping = (threadIds: readonly (string | null | undefined)[]) => {
+    for (const threadId of threadIds) {
+      const pending = threadId ? deltaBuffer.current.get(threadId) : undefined;
+      if (threadId && pending?.ramps) deltaBuffer.current.set(threadId, { ...pending, ramps: undefined });
+    }
+  };
   const scheduleDeltaFlush = () => {
     if (deltaFlush.current !== null) return;
     deltaFlush.current = requestAnimationFrame(() => {
@@ -1273,23 +1341,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const dispatch = useMemo(() => {
     const showError = errorBanner.show;
-    // fire-and-forget card persistence; the route is optional server-side
+    // 409: the question settled elsewhere (a screen that missed the close), so show its row and send nothing
+    const stillOpen = async (res: Response, threadId: string | undefined) => {
+      if (res.status !== 409) return true;
+      const { message } = await res.json().catch(() => ({}));
+      if (message && threadId) rawDispatch({ type: "messagePatched", threadId, message });
+      return false;
+    };
+
+    // card persistence; the route is optional server-side, so only a 409 holds the answer back
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>) => {
+      const threadId = stateRef.current.bots.find((b) => b.id === botId)?.threadId;
       const saving = fetch(`/api/bots/${botId}/cards/${messageId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
-      }).catch(() => {});
+      }).then((res) => stillOpen(res, threadId), () => true);
       void holdReload(saving);
+      return saving;
     };
 
     const persistGroupCard = (groupId: string, messageId: string, patch: Partial<OptionCardData>) => {
+      const threadId = stateRef.current.groups.find((g) => g.id === groupId)?.threadId;
       const saving = fetch(`/api/groups/${groupId}/cards/${messageId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
-      }).catch(() => {});
+      }).then((res) => stillOpen(res, threadId), () => true);
       void holdReload(saving);
+      return saving;
     };
 
     const wrapped: React.Dispatch<Action> = (rawAction) => {
@@ -1305,6 +1385,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.type === "updateBot"
           ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
           : undefined;
+      const typedBeforeSend = typedPast(stateRef.current, action);
       const quizBeforeSend = (() => {
         if (action.type !== "send") return undefined;
         const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
@@ -1342,6 +1423,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       // A queued message is still real until the server confirms deletion.
       // All other actions keep their existing optimistic behavior.
+      trackAction(action, stateRef.current);
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
         case "olderMessages": {
@@ -1390,6 +1472,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
+          // only once the server took the send, so it routed it with the question still open; a line in the transcript settles it there
+          const saveTyped = (queued: boolean) => { if (typedBeforeSend && (queued || !typedBeforeSend.byLine)) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           const post = () =>
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1455,11 +1539,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
               });
-              if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
+              if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId, held: true });
             }
             if (typeof settledThread === "string") {
               rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.queued === true });
             }
+            saveTyped(body?.queued === true);
           };
           const sending = post()
             .then(settle)
@@ -1471,6 +1556,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
+                saveTyped(false);
                 return;
               }
               // A queued send stays off the transcript until drain; the same
@@ -1552,12 +1638,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 message: behavior === "answer" ? action.answer : undefined,
               }),
             }).catch(showError);
-          } else {
-            persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true });
-            api(`/api/bots/${action.botId}/messages`, {
-              method: "POST",
-              body: JSON.stringify({ text: action.answer }),
-            }).catch(showError);
+          } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
+            const asked = bot?.messages.find((m) => m.id === action.messageId);
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined });
+            void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
+              .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
           break;
         }
@@ -1574,10 +1659,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
-        case "answerGroupCard":
-          persistGroupCard(action.groupId, action.messageId, { answered: action.answer });
-          wrapped({ type: "sendGroup", groupId: action.groupId, text: action.answer });
+        case "answerGroupCard": {
+          const room = stateRef.current.groups.find((group) => group.id === action.groupId);
+          const messages = room?.messages ?? [];
+          if (!canAnswerCard(messages, action.messageId)) break;
+          const asked = messages.find((m) => m.id === action.messageId);
+          const text = asked ? answerText(messages, asked, action.answer) : action.answer;
+          void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
+            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId }); }));
           break;
+        }
         case "dismissGroupCard":
           persistGroupCard(action.groupId, action.messageId, { dismissed: true });
           break;
@@ -1721,10 +1812,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
+          const saveTyped = () => { if (typedBeforeSend && !typedBeforeSend.byLine) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -1752,8 +1844,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
               }
               if (typeof settledThread === "string") {
-                rawDispatch({ type: "sendSettled", threadId: settledThread, sendId });
+                // idle: no turn will start, so settle it like a queued send or Thinking never ends
+                rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.idle === true });
               }
+              saveTyped();
             })
             .catch(async (error) => {
               cancelledSendsRef.current.delete(sendId);
@@ -1762,12 +1856,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (accepted && typeof threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
+                saveTyped();
                 return;
               }
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", threadId, sendId });
               }
-              showError(error);
+              showError(roomFileRefusal(error) ?? error);
               action.onError?.();
             });
           void holdReload(sending);
@@ -1781,6 +1876,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }
             const generation = (groupPatchGeneration.current.get(action.groupId) ?? 0) + 1;
             groupPatchGeneration.current.set(action.groupId, generation);
+            const bulletin = "bulletin" in action.patch;
+            if (bulletin) setSaveStatus(action.groupId, "saving");
             api(`/api/groups/${action.groupId}`, {
               method: "PATCH",
               body: JSON.stringify(action.patch),
@@ -1792,6 +1889,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 groupPatchSettledGeneration.current.set(action.groupId, generation);
                 groupPatchFallback.current.delete(action.groupId);
                 groupPatchLatestSuccess.current.delete(action.groupId);
+                if (bulletin) setSaveStatus(action.groupId, "saved");
                 if (body.group) rawDispatch({ type: "groupPatched", group: body.group });
               })
               .catch((error) => {
@@ -1801,6 +1899,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 groupPatchFallback.current.delete(action.groupId);
                 groupPatchLatestSuccess.current.delete(action.groupId);
                 if (fallback) rawDispatch({ type: "groupPatched", group: fallback });
+                setSaveStatus(action.groupId, "idle");
                 showError(error);
               });
           }
@@ -1824,6 +1923,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
           break;
         case "interrupt": {
+          // Like the server's Stop: the bot's chat, the thread it is working on and a room it is busy in.
+          const stopped = stateRef.current.bots.find((bot) => bot.id === action.botId);
+          landTyping([stopped?.threadId, stopped?.workingThreadId, ...stateRef.current.groups.filter((group) => group.busyBotId === action.botId).map((group) => group.threadId)]);
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
@@ -1890,6 +1992,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "interruptGroup":
+          landTyping([stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId]);
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
@@ -1916,6 +2019,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (owner.id !== fresh.selectedId) dispatch({ type: "select", id: owner.id });
     switchToNotificationThread(dispatch, target, fresh);
   }, [dispatch, state.hydrated]);
+
+  // a held room line goes out when its room settles, even with that room closed
+  useEffect(() => {
+    // a cached snapshot can show a room idle that is still mid-turn
+    if (!state.hydrated) return;
+    for (const group of state.groups) {
+      if (composerIsBusy(Boolean(group.working), state.acceptedSends[group.threadId])) continue;
+      const draftId = `group:${group.id}:${group.threadId}`;
+      const hold = takeClosedRoomHold(draftId);
+      if (!hold) continue;
+      const { text, requestText, sendId, threadId, revision, replyToId, attachments } = hold;
+      dispatch({
+        type: "sendGroup",
+        groupId: group.id,
+        text: requestText,
+        sendId,
+        replyToId,
+        threadId,
+        onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
+      });
+    }
+  }, [dispatch, state.hydrated, state.groups, state.acceptedSends]);
 
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
@@ -2029,6 +2154,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           bots,
           groups: groups ?? [],
           botsUnreadable: snapshot.botsUnreadable,
+          queued: snapshot.queued,
           sidebarOrder: loadSidebarOrder(),
         });
         // Snapshot has busy, not StreamState.signal. Without SSE replay a
@@ -2118,7 +2244,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         held.push(() => handleFrame(frame));
         return;
       }
-      // At most STREAM_REVEAL_MS: the tail types out, then the settled reply takes over.
+      // At most STREAM_PACE_MS: the tail types out, then the settled reply takes over.
       if (
         frame.kind === "message" &&
         frame.message?.role === "bot" &&
@@ -2136,6 +2262,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         bumpPeripheralVersion("routines");
       }
       switch (frame.kind) {
+        case "picture":
+          window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: frame.name }));
+          break;
+        case "board":
+          window.dispatchEvent(new Event(BOARD_CHANGED_EVENT));
+          break;
         case "turn.dispatch":
           if (frame.threadId) {
             liveTurns.current = liveTurnIdAfterDispatch(liveTurns.current, frame.threadId, frame.createdAt);
@@ -2144,7 +2276,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         case "message": {
-          const launchFrom = frame.message?.kind === "launch" ? lastMessageIdFor(frame.threadId) : undefined;
+          const needsRetarget = frame.message?.kind === "launch" || (frame.message?.role === "user" && frame.message.steered);
+          const launchFrom = needsRetarget ? lastMessageIdFor(frame.threadId) : undefined;
           viewedReplies.current.note(stateRef.current, frame.threadId, frame.message, document.visibilityState === "visible" && document.hasFocus());
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           noteStreamTail(frame.threadId, frame.message?.id);
@@ -2256,6 +2389,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               frame.notification,
               (target) => openNotificationTarget(dispatch, target, stateRef.current),
               visibleNotificationThread(stateRef.current),
+              notificationGroup(stateRef.current, frame.notification)?.id,
             );
           }
           break;
@@ -2290,8 +2424,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const next: PendingDeltas = { ...applyStreamDelta(base, event.streamKind, event.delta), tail };
               // Only a live turn's reply types out; text after the turn ended lands whole.
               if (event.streamKind === "assistant_text") {
+                trackReplyText(event.threadId);
                 next.ramps = loadReplyStyle() === "live" && event.threadId in liveTurns.current
-                  ? [...(base.ramps ?? []), [event.delta.length, performance.now()]]
+                  ? rampStream(base.ramps ?? [], event.delta.length, next.streaming?.length ?? 0, streamRef.current.streaming[event.threadId]?.length ?? 0, performance.now())
                   : undefined;
               }
               buf.set(event.threadId, next);
@@ -2334,6 +2469,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           for (const send of frame.sends ?? []) {
             rawDispatch({ type: "cancelQueued", botId: frame.botId, threadId: send.threadId, queueId: send.queueId });
           }
+          queueCancelled((frame.sends ?? []).flatMap((send: { sendId?: string }) => send.sendId ? [send.sendId] : []));
           break;
         case "bot.deleted":
           botPatchQueue.cancel(frame.botId);
@@ -2377,12 +2513,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onOpen: () => {
+        trackStream(true);
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
-      onError: () => rawDispatch({ type: "connected", value: false }),
+      onError: () => {
+        trackStream(false);
+        rawDispatch({ type: "connected", value: false });
+      },
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);
         // Frames buffered before this non-resumable stream belong to an

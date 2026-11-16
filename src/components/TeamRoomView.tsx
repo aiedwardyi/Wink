@@ -1,6 +1,5 @@
-// The host's people-only room: the shared transcript, People, and a composer. No bot controls.
-import { useMemo, useRef, useState } from "react";
-import { Users } from "lucide-react";
+// The host's people-only room: the shared transcript and a composer; Room details holds People and Bots.
+import { useMemo, useRef } from "react";
 
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { cn } from "@/lib/cn";
@@ -8,70 +7,57 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useOlderMessages } from "@/lib/message-pages";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { hostLines, hostRoomBase, reactionNames, roomPeople, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
-import { Presence } from "@/lib/use-presence";
+import { useSkin } from "@/lib/skins";
+import { hostLines, hostRoomBase, reactionNames, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
 import { useStore } from "@/state/store";
 
+import { AppErrorBanner } from "./AppErrorBanner";
+import { ChatScene, sceneOf } from "./ChatScene";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ShowPaneButton } from "./ShowPaneButton";
 import { RoomAlertsBell } from "./RoomAlertsBell";
-import { TeamRoomPicture } from "./RoomPicture";
+import { RoomPicture } from "./RoomPicture";
+import { RoomTitle } from "./RoomTitle";
 import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
-import { TeamRoomPeople } from "./TeamRoomPeople";
-import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
-export function TeamRoomView({ group }: { group: TeamRoom }) {
+export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidden?: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const loadOlder = useOlderMessages(dispatch, group.threadId, group.messages[0]?.id, group.hasMore);
   const sidebarOnRight = useSidebarSide() === "right";
-  const [peopleOpen, setPeopleOpen] = useState(false);
-  const peopleButton = useRef<HTMLButtonElement>(null);
-  const lines = useMemo(() => hostLines(group.messages), [group.messages]);
+  const teamBots = roomTeamBots(group);
+  const lines = useMemo(() => hostLines(group.messages, teamBots), [group.messages, teamBots]);
   const base = hostRoomBase(group.hosted.roomId);
-  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
-  const count = roomPeople(group).length;
+  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useTeamRoomReply(base, group.id, group.messages);
   const names = useMemo(() => reactionNames(roomPeople(group)), [group]);
   const noticeEntry = group.notice?.entryId;
   const missing = Boolean(group.room && "missing" in group.room);
+  const skin = useSkin();
+  const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   return (
-    <main data-team-room="host" className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      <Presence open={peopleOpen && !missing}>
-        {(closing) => <TeamRoomPeople group={group} closing={closing} onClose={() => setPeopleOpen(false)} triggerRef={peopleButton} />}
-      </Presence>
+    <main data-team-room="host" data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {scene && <ChatScene scene={scene} skin={skin} working={Boolean(group.busyBotId || group.botChain)} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
-        <div className="flex min-w-0 items-center gap-2.5">
-          {!missing && <TeamRoomPicture key={group.id} group={group} />}
-          <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
-        </div>
+        <RoomTitle name={group.name} picture={!missing && <RoomPicture key={group.id} src={roomPictureUrl(base, group.picture)} />} disabled={missing} />
         {!missing && (
           <div className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
-            <TeamRoomFilesMenu roomId={group.hosted.roomId} />
             <ShowPaneButton threadId={group.threadId} />
-            <button
-              ref={peopleButton}
-              type="button"
-              onClick={() => setPeopleOpen(true)}
-              aria-label={t("teamRoom.people")}
-              title={t("teamRoom.people")}
-              className="flex shrink-0 items-center gap-1 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-            >
-              <Users size={18} />
-              {count > 0 && <span className="text-[12.5px] tabular-nums">{count}</span>}
-            </button>
           </div>
         )}
       </div>
+      <AppErrorBanner />
       <ReconnectingCue />
       <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply}
         reactionNames={names}
         onReact={(message, emoji) => dispatch({ type: "toggleReaction", threadId: group.threadId, messageId: message.id, emoji, message })}
-        notice={{ entryId: noticeEntry, canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
+        notice={{ entryId: noticeEntry, text: roomNoticeText(group), canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
+        empty={missing ? undefined : { name: group.name, members: [state.config?.profile?.name ?? "", ...roomPeople(group).map((person) => person.name)].filter(Boolean), picture: roomPictureUrl(base, group.picture) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} replyTo={replyTo} onClearReply={clearReply} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} onSend={() => sceneSend.current?.()} chain={group.botChain} onStop={group.botChain ? () => dispatch({ type: "interruptGroup", groupId: group.id }) : undefined} />}
       </div>
     </main>
   );

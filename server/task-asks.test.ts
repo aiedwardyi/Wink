@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 12, 9, 0).getTime();
@@ -33,43 +33,77 @@ describe("task asks", () => {
   });
 
   it("updates an ask by id and keeps every ask the update left out", () => {
-    const { asks } = saved(mergeTaskAsks([ask(1), ask(2, { ref: "PR #3" })], [{ id: "a2", status: "building", ref: "card RELEASE" }], NOW));
+    const { asks } = saved(mergeTaskAsks({ asks: [ask(1), ask(2, { ref: "PR #3" })] }, [{ id: "a2", status: "building", ref: "card RELEASE" }], NOW));
     expect(asks).toEqual([ask(1), ask(2, { status: "building", ref: "card RELEASE", changedAt: NOW })]);
-    const cleared = saved(mergeTaskAsks(asks, [{ id: "A2", status: "building", ref: "" }], NOW)).asks;
+    const cleared = saved(mergeTaskAsks({ asks: asks }, [{ id: "A2", status: "building", ref: "" }], NOW)).asks;
     expect(cleared[1]).not.toHaveProperty("ref");
   });
 
   it("closes an ask into history instead of deleting it", () => {
-    const { asks, note } = saved(mergeTaskAsks([ask(1), ask(2)], [{ id: "A1", status: "done" }], NOW));
+    const { asks, note } = saved(mergeTaskAsks({ asks: [ask(1), ask(2)] }, [{ id: "A1", status: "done" }], NOW));
     expect(asks).toEqual([ask(1, { status: "done", changedAt: NOW }), ask(2)]);
     expect(note).toBe("Asks saved; 1 open.");
     expect(asksBlock(asks, NOW)).toBe("[Wink asks list - 1 open.]\n- A2 open 11-12: ask number 2");
   });
 
   it("updates the open ask with the same words instead of adding a twin", () => {
-    const { asks } = saved(mergeTaskAsks([ask(1, { ask: "Fix the login redirect" })], [{ ask: "fix the LOGIN  redirect", status: "building" }], NOW));
+    const { asks } = saved(mergeTaskAsks({ asks: [ask(1, { ask: "Fix the login redirect" })] }, [{ ask: "fix the LOGIN  redirect", status: "building" }], NOW));
     expect(asks).toEqual([ask(1, { ask: "Fix the login redirect", status: "building", changedAt: NOW })]);
   });
 
   it("restarts an ask's clock when the bot raises it again unchanged", () => {
-    const { asks } = saved(mergeTaskAsks([ask(1, { status: "waiting-for-user", changedAt: 0 })], [{ id: "A1", status: "waiting-for-user" }], NOW));
+    const { asks } = saved(mergeTaskAsks({ asks: [ask(1, { status: "waiting-for-user", changedAt: 0 })] }, [{ id: "A1", status: "waiting-for-user" }], NOW));
     expect(asks).toEqual([ask(1, { status: "waiting-for-user", changedAt: NOW })]);
     expect(asksNudge(asks, NOW, "thanks")).toBe("");
   });
 
   it("refuses an unknown id and a new ask with no words", () => {
-    expect(mergeTaskAsks([ask(1)], [{ id: "A9", status: "done" }], NOW)).toEqual({ error: "Unknown ask id A9. Open asks: A1." });
-    expect(mergeTaskAsks([ask(1)], [{ status: "open" }], NOW)).toEqual({ error: "A new ask needs ask, the user's words in brief; send id to update one." });
+    expect(mergeTaskAsks({ asks: [ask(1)] }, [{ id: "A9", status: "done" }], NOW)).toEqual({ error: "Unknown ask id A9. Open asks: A1." });
+    expect(mergeTaskAsks({ asks: [ask(1)] }, [{ status: "open" }], NOW)).toEqual({ error: "A new ask needs ask, the user's words in brief; send id to update one." });
   });
 
-  it("drops the oldest closed asks past the cap and refuses when every kept ask is open", () => {
+  it("drops the oldest closed asks past 40 and never refuses an open one", () => {
     const kept = Array.from({ length: 40 }, (_, index) => ask(index + 1, { status: index < 3 ? "done" : "open" }));
-    const { asks } = saved(mergeTaskAsks(kept, [{ ask: "One more", status: "open" }, { ask: "And another", status: "open" }], NOW));
+    const { asks } = saved(mergeTaskAsks({ asks: kept }, [{ ask: "One more", status: "open" }, { ask: "And another", status: "open" }], NOW));
     expect(asks.map((item) => item.id)).toEqual([...Array.from({ length: 38 }, (_, index) => `A${index + 3}`), "A41", "A42"]);
     const open = Array.from({ length: 40 }, (_, index) => ask(index + 1));
-    expect(mergeTaskAsks(open, [{ ask: "One too many", status: "open" }], NOW)).toEqual({
-      error: "That would leave 41 asks open; Wink keeps 40. Close finished ones as done or declined first.",
-    });
+    const forty = saved(mergeTaskAsks({ asks: open }, [{ ask: "The 41st", status: "open" }], NOW));
+    expect(forty.asks.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
+    expect(forty.note).toBe("Asks saved: added A41; 41 open.");
+    let many: TaskAsk[] = forty.asks;
+    for (let index = 42; index <= 100; index += 1) many = saved(mergeTaskAsks({ asks: many }, [{ ask: `ask ${index}`, status: "open" }], NOW)).asks;
+    expect(many).toHaveLength(100);
+    expect(many.at(-1)).toMatchObject({ id: "A100", ask: "ask 100", status: "open" });
+  });
+
+  it("never gives a closed id that fell off to a new ask", () => {
+    const open = Array.from({ length: 41 }, (_, index) => ask(index + 1));
+    const closed = saved(mergeTaskAsks({ asks: open }, [{ id: "A41", status: "done" }], NOW));
+    expect(closed.asks.map((item) => item.id)).not.toContain("A41");
+    const added = saved(mergeTaskAsks(closed, [{ ask: "A new one", status: "open" }], NOW));
+    expect(added.asks.at(-1)).toMatchObject({ id: "A42", ask: "A new one" });
+    expect(addQuestionAsk(added, "Ship it?", [], NOW)?.asks.at(-1)?.id).toBe("A43");
+    expect(mergeTaskAsks(added, [{ id: "A41", status: "building" }], NOW)).toEqual({ error: expect.stringMatching(/^Unknown ask id A41\./) });
+  });
+
+  it("fits a status turn's open asks to a size budget and counts the rest", () => {
+    const open = Array.from({ length: 300 }, (_, index) => ask(index + 1, { ask: "가".repeat(80), ref: "r".repeat(80) }));
+    const block = asksBlock(open, NOW, true);
+    const lines = block.split("\n");
+    const listed = lines.filter((line) => line.startsWith("- A"));
+    expect(Buffer.byteLength(listed.join("\n"), "utf8")).toBeLessThanOrEqual(MAX_STATUS_ASKS_BYTES);
+    expect(listed.length).toBeGreaterThan(5);
+    expect(lines[0]).toContain("300 open");
+    expect(lines.at(-1)).toBe(`+${300 - listed.length} more open`);
+    expect(asksBlock(open.slice(0, 20), NOW, true).split("\n").filter((line) => line.startsWith("- A"))).toHaveLength(20);
+  });
+
+  it("keeps the brief at five open asks however many are open", () => {
+    const open = Array.from({ length: 100 }, (_, index) => ask(index + 1));
+    const block = asksBlock(open, NOW);
+    expect(block.split("\n")).toHaveLength(7);
+    expect(block).toMatch(/\+95 more open$/);
+    expect(tokens(block)).toBeLessThanOrEqual(tokens(asksBlock(open.slice(0, 40), NOW)) + 1);
   });
 
   it.each(["open", "building", "waiting-for-user"] as const)("flags a %s ask with no change for 6 hours as stale", (status) => {
@@ -125,5 +159,75 @@ describe("task asks", () => {
     expect(tokens(asksBlock(list(5), NOW))).toBeLessThanOrEqual(150);
     expect(tokens(asksBlock(list(30), NOW))).toBeLessThanOrEqual(150);
     expect(tokens(asksBlock(list(30), NOW, true))).toBeLessThanOrEqual(700);
+  });
+
+  describe("skipped questions", () => {
+    const question = (id: number, overrides: Partial<TaskAsk> = {}) => ask(id, { ask: `question ${id}?`, kind: "question", choices: "Yes / No", ...overrides });
+    const GUIDE = " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones.";
+
+    it("files a skipped card as an open question with its choices, clipped to the ask limits", () => {
+      expect(addQuestionAsk({ asks: [ask(1)] }, "  Ship   it now?  ", ["Ship", "Wait"], NOW)).toEqual({ asks: [
+        ask(1),
+        { id: "A2", ask: "Ship it now?", status: "open", kind: "question", choices: "Ship / Wait", at: NOW, changedAt: NOW },
+      ], lastAskId: 2 });
+      const [long] = addQuestionAsk(undefined, "q".repeat(500), ["c".repeat(200)], NOW)!.asks;
+      expect(long).toMatchObject({ ask: `${"q".repeat(79)}…`, choices: `${"c".repeat(79)}…` });
+      expect(addQuestionAsk(undefined, "Free text?", [], NOW)!.asks[0]).not.toHaveProperty("choices");
+    });
+
+    it("dedupes by words against open asks, and files again once the old one closed", () => {
+      expect(addQuestionAsk({ asks: [question(1, { ask: "Ship it?" })] }, "ship  IT?", [], NOW)).toBeNull();
+      expect(addQuestionAsk({ asks: [question(1, { ask: "Ship it?", status: "done" })] }, "Ship it?", [], NOW)?.asks.map((item) => item.id)).toEqual(["A1", "A2"]);
+    });
+
+    it("drops the oldest closed ask past 40 and files past 40 open", () => {
+      const kept = Array.from({ length: 40 }, (_, index) => ask(index + 1, { status: index < 2 ? "done" : "open" }));
+      expect(addQuestionAsk({ asks: kept }, "One more?", [], NOW)?.asks.map((item) => item.id)).toEqual([...Array.from({ length: 39 }, (_, index) => `A${index + 2}`), "A41"]);
+      const open = Array.from({ length: 40 }, (_, index) => ask(index + 1));
+      expect(addQuestionAsk({ asks: open }, "One more?", [], NOW)?.asks.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
+    });
+
+    it("keeps every open question, so they never block the bot's own asks", () => {
+      const questions = Array.from({ length: 10 }, (_, index) => question(index + 1));
+      expect(addQuestionAsk({ asks: questions }, "One more?", [], NOW)?.asks.map((item) => item.id)).toEqual(Array.from({ length: 11 }, (_, index) => `A${index + 1}`));
+      const full = [...questions, ...Array.from({ length: 30 }, (_, index) => ask(index + 11))];
+      const { asks } = saved(mergeTaskAsks({ asks: full }, [{ ask: "One more", status: "open" }], NOW));
+      expect(asks.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
+    });
+
+    it("lets the bot close a question with the usual asks update", () => {
+      const { asks } = saved(mergeTaskAsks({ asks: [question(1)] }, [{ id: "A1", status: "declined" }], NOW));
+      expect(asks).toEqual([question(1, { status: "declined", changedAt: NOW })]);
+      expect(asksBlock(asks, NOW, true)).toBe("");
+    });
+
+    it("takes back a question filed for the card just answered and closes an older one", () => {
+      expect(answerQuestionAsk([question(1, { at: NOW })], "question 1?", NOW, NOW)).toEqual([]);
+      expect(answerQuestionAsk([question(1)], "Question 1?", NOW, NOW)).toEqual([question(1, { status: "done", changedAt: NOW })]);
+      expect(answerQuestionAsk([ask(1, { ask: "question 1?" })], "question 1?", NOW, NOW)).toBeNull();
+    });
+
+    it("lists questions after the user's asks, never stale, with the re-ask line", () => {
+      const asks = [question(1, { changedAt: 0 }), ask(2)];
+      expect(asksBlock(asks, NOW, true).split("\n")).toEqual([
+        `[Wink asks list - 2 open. Build any summary or status from this list.${GUIDE}]`,
+        "- A2 open 11-12: ask number 2",
+        "- A1 open question 11-12: question 1? (choices: Yes / No)",
+      ]);
+      expect(asksNudge(asks, NOW, "thanks")).toBe("");
+      expect(asksBlock([ask(1, { changedAt: 0 }), ...Array.from({ length: 4 }, (_, index) => ask(index + 2)), question(9)], NOW)).not.toContain("question");
+    });
+
+    it("adds nothing to an ordinary turn and stays small on a status turn", () => {
+      const list = (count: number) => Array.from({ length: count }, (_, index) => question(index + 1, {
+        ask: "Should the model picker row keep the old look?",
+        choices: "Keep / New look / Ask me later",
+        changedAt: 0,
+      }));
+      expect([0, 5, 30].map((count) => tokens(asksNudge(list(count), NOW, "fix the login bug")))).toEqual([0, 0, 0]);
+      expect(tokens(asksBlock(list(30), NOW))).toBeLessThanOrEqual(250);
+      expect(tokens(asksNudge(list(5), NOW, "status?"))).toBeLessThanOrEqual(260);
+      expect(tokens(asksNudge(list(30), NOW, "status?"))).toBeLessThanOrEqual(1_250);
+    });
   });
 });

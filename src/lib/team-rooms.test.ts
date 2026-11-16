@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { request } from "./api-request";
+import { t } from "./i18n";
+
 import type { Group, Message } from "@/state/store-types";
 
 import {
@@ -16,7 +19,9 @@ import {
   looksLikeRoomCode,
   ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
   ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
+  roomFileRefusal,
   roomMessage,
+  roomNoticeText,
   sendToRoom,
   type JoinedView,
 } from "./team-rooms";
@@ -49,6 +54,11 @@ describe("team room shape", () => {
     expect(roomMessage(hostLines(messages)[0]!)).toBe(messages[0]);
   });
 
+  it("keeps a bot's room answer after its bot leaves", () => {
+    const messages: Message[] = [{ id: "c", role: "bot", kind: "text", text: "On it", at: 3, from: { botId: "wink", name: "Wink", color: "blue" }, roomEntryId: "e3" }];
+    expect(hostLines(messages)).toEqual([{ id: "c", entryId: "e3", at: 3, author: { kind: "bot", id: "wink", name: "Wink" }, text: "On it", files: [], color: "blue", message: messages[0] }]);
+  });
+
   it("keeps joined reply ids on the line and its message adapter", () => {
     const entry = { seq: 2, id: "e2", at: 2, author: { kind: "person" as const, id: "mina", name: "Mina Park" }, text: "reply", replyToId: "e1" };
     const line = joinedLines([entry])[0]!;
@@ -75,6 +85,23 @@ describe("team room shape", () => {
     expect(lines.map((line) => line.color)).toEqual(["blue", undefined, undefined]);
   });
 
+  it("gives a room bot line its owner's pick, joined or hosted", () => {
+    const joined = joinedLines([{ seq: 1, id: "e1", at: 1, author: { kind: "bot", id: "tb-1", name: "포키", owner: "jj" }, text: "hi" }], [{ id: "tb-1", name: "포키", color: "", mascotStyle: "icon-11" }]);
+    expect(joined[0]).toMatchObject({ mascotStyle: "icon-11" });
+    const messages: Message[] = [{ id: "c", role: "bot", kind: "text", text: "hi", at: 3, from: { botId: "tb-1", name: "포키", color: "teal" }, roomEntryId: "e3" }];
+    expect(hostLines(messages, [{ id: "tb-1", name: "포키", color: "", owner: "jj", mascotStyle: "icon-11" }])[0]).toMatchObject({ mascotStyle: "icon-11" });
+    expect(hostLines(messages)[0]).not.toHaveProperty("mascotStyle");
+    const mirrored: Message[] = [{ ...messages[0]!, author: { kind: "bot", id: "tb-1", name: "포키", owner: "jj" } }];
+    expect(hostLines(mirrored, [{ id: "tb-1", name: "포키", color: "", owner: "jj", mascotStyle: "icon-11" }])[0]).toMatchObject({ mascotStyle: "icon-11" });
+  });
+
+  it("shows the host's full pinned line when the room has it, else the pin's preview", () => {
+    const notice = { entryId: "e1", by: "host", at: 1, text: "preview…" };
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [], noticeText: "the whole line" } }))).toBe("the whole line");
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [] } }))).toBe("preview…");
+    expect(roomNoticeText(group({ notice, room: { missing: true } }))).toBe("preview…");
+  });
+
   it("selects a joined room by an id no bot or group can have", () => {
     expect(joinedRoomIdOf(joinedSelection("r9"))).toBe("r9");
     expect(joinedRoomIdOf("nova")).toBeNull();
@@ -94,7 +121,9 @@ describe("room codes", () => {
     expect(joinErrorKey(409, "room-full")).toBe("teamRoom.full");
     expect(joinErrorKey(429, "busy")).toBe("teamRoom.busy");
     expect(joinErrorKey(503, "unavailable")).toBe("teamRoom.unreachable");
-    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "removed"], [404, "no-invite"], [409, "name-taken"]] as const) {
+    expect(joinErrorKey(403, "removed")).toBe("teamRoom.removed");
+    expect(joinErrorKey(403, "removed", true)).toBe("teamRoom.removed");
+    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "forbidden"], [404, "no-invite"], [409, "name-taken"]] as const) {
       expect(joinErrorKey(status, error)).toBe("teamRoom.badCode");
     }
     expect(inviteErrorKey(409)).toBe("teamRoom.phoneOff");
@@ -164,7 +193,7 @@ describe("sending to a room", () => {
   it("names what went wrong and never sends after a refused upload", async () => {
     for (const [status, problem] of [
       [413, { key: "teamRoom.tooBig", vars: { name: "a.png" } }],
-      [415, { key: "teamRoom.fileType" }],
+      [415, { key: "teamRoom.fileKinds" }],
       [429, { key: "teamRoom.tooFast" }],
       [500, { key: "teamRoom.sendFailed" }],
     ] as const) {
@@ -175,6 +204,22 @@ describe("sending to a room", () => {
     }
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     expect(await sendToRoom("/api/rooms/r1", "hi", [], "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
+  });
+
+  it("words a group send refused over the host's file as a teammate's upload", async () => {
+    const refused = (status: number, body: object) => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status })));
+      return request("/api/groups/g/messages", { method: "POST" }).catch(roomFileRefusal);
+    };
+    expect(await refused(413, { error: "pictures can be up to 100 MB", code: "ROOM_FILE", file: "big.png" })).toBe(t("teamRoom.tooBig", { name: "big.png" }));
+    expect(await refused(507, { error: "this room is out of space for files", code: "ROOM_FILE", file: "a.pdf" })).toBe(t("teamRoom.outOfSpace"));
+    expect(await refused(400, { error: "at most 50 files per message", code: "ROOM_FILE" })).toBe(t("teamRoom.tooMany"));
+    expect(await refused(409, { error: "sendId already belongs to another message" })).toBeNull();
+  });
+
+  it("names a rate-limited send", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "rate-limited" }), { status: 429 })));
+    expect(await sendToRoom("/api/joined/rooms/r9", "@Wink hi", [], "send-0123456789abcdef")).toEqual({ key: "teamRoom.askLimit" });
   });
 
   it("uploads only the files a failed send didn't finish when it is retried", async () => {

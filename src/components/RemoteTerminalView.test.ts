@@ -200,7 +200,7 @@ describe("RemoteTerminalView", () => {
       path.endsWith("/start") ? { screenText: "PS>", sessionId: "s1", generation: 1, panes: [{ sessionId: "s1", main: true }] } : { state: "no-terminal", screenText: "", recentText: "" });
     const { host, root } = await renderView();
     try {
-      const open = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal"))!;
+      const open = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal") && !item.closest("[data-closing]"))!;
       await act(async () => click(open));
       expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal/start", { method: "POST" });
       expect(host.querySelector("pre")?.textContent).toBe("PS>");
@@ -217,7 +217,7 @@ describe("RemoteTerminalView", () => {
     });
     const { host, root } = await renderView();
     try {
-      const open = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal"))!;
+      const open = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal") && !item.closest("[data-closing]"))!;
       await act(async () => click(open));
       expect(host.querySelector('[role="alert"]')?.textContent).toContain("Shell unavailable: Terminal folder is unavailable");
       expect(open.disabled).toBe(false);
@@ -593,7 +593,7 @@ describe("RemoteTerminalView", () => {
       await pickPane(host, "Worker");
       expect(host.querySelector("pre")?.textContent).toBe("$ worker");
       await pickMain(host);
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal");
       expect(host.querySelector("pre")?.textContent).toBe("$ main");
       expect(title(host)).toBe("Terminal / Ada");
@@ -609,7 +609,7 @@ describe("RemoteTerminalView", () => {
       await pickPane(host, "Worker");
       expect(title(host)).toBe("Terminal / Worker");
       expect(host.querySelector('[aria-label="Close pane"], [title="Close pane"]')).toBeNull();
-      expect([...host.querySelectorAll("header button:not([data-worker-strip])")].map((el) => el.getAttribute("aria-label"))).toEqual(["Refresh", "Copy", "Close terminal"]);
+      expect([...host.querySelectorAll("header button:not([data-worker-strip])")].filter((el) => !el.closest("[data-closing]")).map((el) => el.getAttribute("aria-label"))).toEqual(["Refresh", "Copy", "Close terminal"]);
     } finally {
       await act(async () => root.unmount());
     }
@@ -630,7 +630,7 @@ describe("RemoteTerminalView", () => {
   describe("with workers and no main", () => {
     type Pane = { sessionId: string; main: boolean; label?: string };
     const workers: Pane[] = [{ sessionId: "one", label: "one", main: false }, { sessionId: "two", label: "two", main: false }];
-    const openButton = (host: HTMLElement) => [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal"))!;
+    const openButton = (host: HTMLElement) => [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal") && !item.closest("[data-closing]"))!;
 
     function mainServer(initial: Pane[] = workers, mainLast = false) {
       const server = { panes: initial };
@@ -665,7 +665,7 @@ describe("RemoteTerminalView", () => {
       try {
         await pickMain(host);
         expect(title(host)).toBe("Terminal / Ada");
-        expect(host.querySelector("[data-worker-list]")).toBeNull();
+        expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
         expect(host.textContent).toContain("No active terminal");
         expect(host.querySelector("pre")).toBeNull();
         expect(composer(host)).toBeNull();

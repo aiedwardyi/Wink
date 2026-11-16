@@ -34,12 +34,15 @@ function harness() {
         bot: (id) => store.bot(id),
         conversation: (botId, threadId) => store.conversationForBot(botId, threadId),
         appendMessage: (threadId, message) => store.appendMessage(threadId, message),
+        activePath: (threadId) => store.activePath(threadId),
+        patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
+        cancelHeld: (botId, threadId, question) => hold.cancel(botId, threadId, question),
         alertThread: (_bot, threadId) => routineSource ?? threadId,
         notifyQuestion: (_bot, target, question) => {
           alerts.push({ target, question });
           log.push(`alert:${question}`);
         },
-        whenSettled: (botId, threadId, post) => hold.whenSettled(botId, threadId, post),
+        whenSettled: (botId, threadId, post, question) => hold.whenSettled(botId, threadId, post, question),
       },
       askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: bot.threadId, ...body }),
     );

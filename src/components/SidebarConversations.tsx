@@ -22,7 +22,9 @@ import { chatNeedsYou } from "@/lib/open-question";
 import { routineRinging } from "@/lib/routine-ring";
 import { formatCollapsedUnreadBadge, unreadReplyCount } from "@/lib/unread";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { useLoadedJoinedRooms } from "@/lib/joined-rooms";
 import { sidebarWorkerStatus } from "@/lib/worker-status";
+import { turnElsewhere } from "@/lib/turn-stage";
 import { terminalAttentionCopy } from "@/lib/notify";
 
 export function compactSidebarModelLabel(label: string): string {
@@ -100,6 +102,7 @@ function GroupListItem({
   drag,
   onReselect,
   joined = false,
+  picture,
   preview,
   unread,
   at,
@@ -110,6 +113,7 @@ function GroupListItem({
   drag?: SidebarRowDrag;
   onReselect?: () => void;
   joined?: boolean;
+  picture?: string;
   preview?: string;
   unread?: number;
   at?: number;
@@ -236,7 +240,7 @@ function GroupListItem({
         aria-keyshortcuts={drag?.onMove ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
       >
         <span className="relative shrink-0">
-          {group.hosted && (isTeamRoom(group) || group.picture) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
+          {joined ? <RoomPicture src={picture} size={density === "compact" ? 32 : 48} /> : group.hosted && (isTeamRoom(group) || group.picture) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
           <UnreadCountBadge count={unreadCount} selected={selected} />
         </span>
         <div className={cn("@container/rowtext min-w-0 flex-1", density === "icons" && "hidden")}>
@@ -310,7 +314,7 @@ function BotListItem({
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
-  const avatarSize = iconOnly ? 44 : density === "compact" ? 32 : 48;
+  const avatarSize = iconOnly ? 44 : density === "compact" ? 32 : 40;
   // the visible branch, so a version switch changes the row with the chat
   const visible = previewMessages(bot);
   const last = visible.filter(isShownMessage).at(-1);
@@ -324,6 +328,11 @@ function BotListItem({
   const terminalCopy = terminalAttention ? terminalAttentionCopy(terminalAttention.reason, locale) : null;
   const paneLabels = state.terminalPanes[bot.id];
   const workerStatus = useMemo(() => sidebarWorkerStatus(visible, paneLabels ?? [], t), [visible, paneLabels, t]);
+  const joinedRooms = useLoadedJoinedRooms();
+  const elsewhere = useMemo(
+    () => turnElsewhere(bot, state.groups, state.routineRuns, joinedRooms),
+    [bot, state.groups, state.routineRuns, joinedRooms],
+  );
   const question = chatNeedsYou(bot.messages);
   const asking = question || routineRinging(state.routineRuns, bot.threadId, bot.tasks);
   const unreadCount = useMemo(() => unreadReplyCount(bot.unread, bot.readAt, visible), [bot.unread, bot.readAt, visible]);
@@ -417,7 +426,7 @@ function BotListItem({
           <span
             className={cn(
               "flex min-w-0 flex-1 items-center gap-1.5 text-ink",
-              density === "compact" ? "text-[13px] font-medium" : "text-[15px] font-semibold",
+              density === "compact" ? "text-[13px] font-medium" : "text-[14px] font-semibold",
             )}
           >
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
@@ -430,7 +439,7 @@ function BotListItem({
               className={cn("min-w-0 truncate", !bot.chiefOfStaff && "flex-1")}
               inputClassName={cn(
                 "w-full rounded bg-inset px-1 py-0.5",
-                density === "compact" ? "text-[13px] font-medium" : "text-[15px] font-semibold",
+                density === "compact" ? "text-[13px] font-medium" : "text-[14px] font-semibold",
               )}
             />
             {bot.chiefOfStaff && (
@@ -464,7 +473,9 @@ function BotListItem({
                 )}
               >
                 {expandedModelLabel && <span data-sidebar-model-label className="min-w-0 flex-1 truncate">{expandedModelLabel}</span>}
-                {bot.busy && <span className="shrink-0 truncate">{t("chrome.working")}</span>}
+                {bot.busy && (elsewhere
+                  ? <span data-sidebar-working-where className={cn("min-w-0 truncate", expandedModelLabel && "max-w-[70%]")}>{t(elsewhere.kind === "routine" ? "chrome.workingOn" : "chrome.workingIn", { name: elsewhere.name })}</span>
+                  : <span className="shrink-0 truncate">{t("chrome.working")}</span>)}
               </div>
             )}
           </div>

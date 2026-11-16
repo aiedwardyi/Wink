@@ -10,6 +10,7 @@ import type {
   RuntimeEvent,
   RuntimeEventListener,
 } from "../contracts.ts";
+import { routedAccess } from "../drivers/turn-access.ts";
 
 export interface FakeDriverOptions {
   kind?: string;
@@ -69,6 +70,7 @@ export function makeFakeDriver(opts: FakeDriverOptions = {}): FakeDriverHandle {
             provider: kind,
             capabilities: { sessionModelSwitch: "unsupported", effortLevels: opts.effortLevels, askApproval: opts.askApproval },
             sendTurn: async () => ({ turnId: "fake-turn" }),
+            access: routedAccess,
             interruptTurn: async () => {},
             respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
             hasSession: () => false,

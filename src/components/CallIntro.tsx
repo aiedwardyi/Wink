@@ -2,6 +2,7 @@ import { useRef, useState, type ComponentType } from "react";
 import { AudioLines, MessageSquareText } from "lucide-react";
 
 import { useI18n, type LocaleId } from "@/lib/i18n";
+import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { GeminiMark } from "./ProviderIcons";
 
@@ -45,8 +46,9 @@ export function CallIntro({ closing, onStart, onLater }: { closing: boolean; onS
     try {
       localStorage.setItem(INTRO_SEEN, "1");
     } catch {
-      // shown again next time
+      // the server keeps it too
     }
+    void api("/api/call-intro/seen", { method: "POST" }).catch(() => {});
     onStart();
   };
   return (

@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { DATA_DIR } from "../config.ts";
 import { json } from "../http-helpers.ts";
 import { relayVerdict } from "../phone-auth.ts";
+import type { Message } from "../store.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, saveRoomTranslation } from "./db.ts";
 import { addJoinedEntries, closeJoinedDb, resetJoined, saveJoined, saveJoinedTranslation, setJoinedState } from "./joined.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
@@ -14,7 +15,8 @@ import { createPeopleOnlyRoom } from "./people-only.ts";
 const modulePath = "./translate.ts";
 const translate = existsSync(join(import.meta.dirname, modulePath)) ? await import(modulePath) : null;
 const generateText = vi.fn(async (..._args: unknown[]) => "The launch is ready.");
-const groups: Array<{ hosted: { roomId: string }; memberIds: string[] }> = [];
+const groups: Array<{ hosted: { roomId: string }; memberIds: string[]; threadId?: string }> = [];
+const messages = new Map<string, Message[]>();
 const instances = [{ driverKind: "claudeAgent", enabled: true, generateText }];
 let server: Server;
 let base: string;
@@ -25,7 +27,7 @@ beforeAll(async () => {
   mkdirSync(DATA_DIR, { recursive: true });
   server = createServer(async (req, res) => {
     if (await translate?.translateRoute(req, res, req.method!, req.url!, {
-      store: { groups }, instances, key: "", hostName: "Edward", botCaller: req.headers.authorization === "Bearer bot",
+      store: { groups, messagesFor: (threadId: string) => messages.get(threadId) ?? [] }, instances, key: "", hostName: "Edward",
     })) return;
     json(res, 404, { error: "not found" });
   });
@@ -36,6 +38,7 @@ beforeAll(async () => {
 beforeEach(() => {
   generateText.mockReset().mockResolvedValue("The launch is ready.");
   instances[0]!.enabled = true;
+  messages.clear();
   roomId = createPeopleOnlyRoom("Private room title").id;
   groups.push({ hosted: { roomId }, memberIds: [] });
   entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "Private name" }, text: "출시 준비 끝났어요." }).id;
@@ -60,9 +63,40 @@ function joinRoom() {
 }
 
 describe("room translation", () => {
+  it("translates each hosted bubble independently without a committed entry link", async () => {
+    groups.find((group) => group.hosted.roomId === roomId)!.threadId = "held-thread";
+    const first: Message = { id: "first", role: "bot", kind: "text", at: Date.now(), text: "준비를 모두 마쳤어요.", from: { botId: "b1", name: "Rando", color: "blue" } };
+    messages.set("held-thread", [first, { ...first, id: "last", text: "For Eddie: ready.", roomEntryId: entryId }]);
+    const path = `/api/rooms/${roomId}/entries/m-first/translate`;
+    expect((await call(path)).status).toBe(200);
+    expect(String(generateText.mock.calls[0]?.[0])).toContain(first.text);
+    expect(String(generateText.mock.calls[0]?.[0])).not.toContain("For Eddie");
+    closeRoomsDb();
+    expect((await call(path)).status).toBe(200);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    first.text = "내용을 수정했어요.";
+    generateText.mockResolvedValue("The content has changed.");
+    expect((await call(path)).body).toEqual({ text: "The content has changed." });
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps local bubble lookup inside the held room", async () => {
+    groups.find((group) => group.hosted.roomId === roomId)!.threadId = "held-thread";
+    const bot: Message = { id: "private", role: "bot", kind: "text", at: Date.now(), text: "비공개 대화", from: { botId: "b1", name: "Rando", color: "blue" } };
+    messages.set("private-thread", [bot]);
+    const path = `/api/rooms/${roomId}/entries/m-private/translate`;
+    expect((await call(path)).status).toBe(404);
+    messages.set("held-thread", [{ ...bot, role: "user" }]);
+    expect((await call(path)).status).toBe(404);
+    messages.set("held-thread", [bot]);
+    joinRoom();
+    expect((await call(path.replace("/api/rooms/", "/api/joined/rooms/"))).status).toBe(404);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("restores romanized member names and replaces legacy cache: joined=%s", async (joined) => {
-    addPerson(roomId, "이서연", "chat", []);
-    addPerson(roomId, "Unmentioned Person", "chat", []);
+    addPerson(roomId, "이서연", []);
+    addPerson(roomId, "Unmentioned Person", []);
     entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "Mina" }, text: "이서연님, 준비됐어요." }).id;
     if (joined) {
       joinRoom();
@@ -98,8 +132,8 @@ describe("room translation", () => {
   });
 
   it("restores repeated and overlapping names without changing mentions or suffixes", async () => {
-    addPerson(roomId, "서연", "chat", []);
-    addPerson(roomId, "Mina Park", "chat", []);
+    addPerson(roomId, "서연", []);
+    addPerson(roomId, "Mina Park", []);
     const text = "@이서연님, 서연, Mina Park, 이서연.";
     entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "이서연" }, text }).id;
     generateText.mockImplementation(async (...args: unknown[]) => String(args[0]).match(/<message>\n([\s\S]*)\n<\/message>/)![1]!
@@ -148,6 +182,23 @@ describe("room translation", () => {
     expect(await call(hostPath())).toEqual({ status: 200, body: { text: "The launch is ready." } });
   });
 
+  it.each([false, true])("translates host and teammate bot entries locally: joined=%s", async (joined) => {
+    roomId = createRoom("Shared group").id;
+    groups.push({ hosted: { roomId }, memberIds: ["bot-1"] });
+    if (joined) saveJoined(roomId, "unreachable.example", { id: "me", name: "Viewer" }, "private-guest-key");
+    for (const owner of [undefined, "me", "p1"]) {
+      const entry = appendRoomEntry(roomId, { author: { kind: "bot", id: "bot-1", name: "Rando", ...(owner ? { owner } : {}) }, text: "출시 준비를 모두 마쳤어요. (For Eddie: ready)" });
+      entryId = entry.id;
+      if (joined) addJoinedEntries(roomId, [entry]);
+      const path = joined ? joinedPath() : hostPath();
+      expect(await call(path)).toEqual({ status: 200, body: { text: "The launch is ready." } });
+      closeRoomsDb();
+      closeJoinedDb();
+      expect((await call(path)).status).toBe(200);
+    }
+    expect(generateText).toHaveBeenCalledTimes(3);
+  });
+
   it("sends only the selected line and uses an isolated text call", async () => {
     appendRoomEntry(roomId, { author: { kind: "person", id: "p2", name: "Another name" }, text: "Another private line" });
     expect((await call(hostPath())).status).toBe(200);
@@ -157,10 +208,10 @@ describe("room translation", () => {
     );
   });
 
-  it("refuses bot callers on both routes before generation", async () => {
+  it("translates for the user's own bot on both routes", async () => {
     joinRoom();
-    for (const path of [hostPath(), joinedPath()]) expect((await call(path, "en", true)).status).toBe(403);
-    expect(generateText).not.toHaveBeenCalled();
+    for (const path of [hostPath(), joinedPath()]) expect(await call(path, "en", true)).toEqual({ status: 200, body: { text: "The launch is ready." } });
+    expect(generateText).toHaveBeenCalled();
   });
 
   it("refuses invalid languages, foreign entries and own host lines", async () => {
@@ -246,12 +297,12 @@ describe("room translation", () => {
     }
   });
 
-  it("mounts before catch-all room routes with bot-token refusal", () => {
+  it("mounts before catch-all room routes, bots included", () => {
     const source = readFileSync(join(import.meta.dirname, "../index.ts"), "utf8");
     const start = source.indexOf("await translateRoute(");
     expect(start).toBeGreaterThan(0);
     expect(start).toBeLessThan(source.indexOf("await joinedFileRoute("));
-    expect(source.slice(start, source.indexOf("\n", start))).toContain("botCaller: Boolean(commsCallers.resolve(req.headers.authorization))");
+    expect(source.slice(start, source.indexOf("\n", start))).not.toContain("botCaller");
   });
 });
 

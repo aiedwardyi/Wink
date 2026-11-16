@@ -50,7 +50,7 @@ async function wired(main = "claude") {
   const scope = {
     createUsageBoard, createUsageHistory: (path: string) => createUsageHistory(path, { schedule: () => {} }), DATA_DIR: dir,
     accounts, accountNames, registry: { accountBlocked: () => false }, providerSnapshots: new Map(),
-    instanceConfigs: () => ({ claude: { driver: "claudeAgent" }, grok: { driver: "grokAgent" } }), cfg: {},
+    instanceConfigs: () => ({ claude: { driver: "claudeAgent" }, muse: { driver: "museAgent" } }), cfg: {},
     rateLimitsByInstance: new Map(), liveWorkerRuns: async () => ({ known: false, reason: "no-host" }), terminalBridgeAccess: null,
     store: { bots: [{ id: "atlas", name: "Atlas", modelSelection: { instanceId: "claude" } }] }, broadcast,
     providerReload: { current: (): { instanceId: string; account?: { generation: number } } | null => null },
@@ -72,7 +72,7 @@ it("serves the usage board with a committed revision", async () => {
   const answer = await serve({ method: "GET", path: "/api/usage/board", url: new URL("http://127.0.0.1/api/usage/board"), res: {}, json, usageBoard: s.usageBoard });
   expect(answer.status).toBe(200);
   expect(answer.body).toMatchObject({ version: 1, revision, full: true });
-  expect(answer.body.engines.map((group: { base: string }) => group.base)).toEqual(["claude", "grok"]);
+  expect(answer.body.engines.map((group: { base: string }) => group.base)).toEqual(["claude", "muse"]);
   await vi.advanceTimersByTimeAsync(2_000);
   expect(s.broadcast).toHaveBeenCalledWith({ kind: "usage.board", revision });
 });
@@ -168,10 +168,10 @@ it("holds a starting turn's account until it is accepted", async () => {
   expect(section("    } finally {\n      releaseStarting();", "\n  })()", turn)).toBeTruthy();
   expect(section("  } finally {", "\n    turnStartClaims.delete(botId);", section("async function startTurn(", "\n}\n"))).toContain("takeStartingHold(botId)();");
   const roomTurn = section("async function runClaimedGroupMemberTurn(", "\n}\n");
-  expect(roomTurn.indexOf("  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
-  expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(bot.id);\n  releaseTurnStart?.();")).toBeGreaterThan(0);
+  expect(roomTurn.indexOf("  startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
+  expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(turnKey);\n  releaseTurnStart?.();")).toBeGreaterThan(0);
   expect(roomTurn).toContain("      .catch((err) => {\n        releaseStarting();");
-  expect(section("  const releaseTurnStart = () => {", "\n  };")).toContain("takeStartingHold(botId)();");
+  expect(section("  const releaseTurnStart = () => {", "\n  };")).toContain("takeStartingHold(lane ? laneKey(botId) : botId)();");
 
   const held = new Set<string>();
   const accountRuntime = { holdStarting: (id: string, generation: number) => { const key = `${id}:${generation}`; held.add(key); return () => held.delete(key); } };
@@ -256,7 +256,7 @@ it("renders one name on every surface", async () => {
     const note = notices.forTurn("atlas");
     note.commit();
     notices.forget("atlas");
-    const spawn = await spawnUsage("atlas", "ATLAS-2", "claude", { id: "acct_studio", name: "Claude", generation: 3 });
+    const spawn = await spawnUsage("claude", { id: "acct_studio", name: "Claude", generation: 3 });
     const board = (await s.usageBoard.read()).engines[0].accounts.find((account: { id: string }) => account.id === "acct_studio");
     return { spawn: spawn.line, panes: panes.split("\n").find((line) => line.includes("ATLAS-2")), note: note.text, board: board.name };
   };

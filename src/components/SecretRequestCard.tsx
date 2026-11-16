@@ -164,12 +164,12 @@ export function SecretRequestCard({
                 placeholder={secret.placeholder}
                 disabled={saving || savedLocally}
                 aria-label={secret.label}
-                className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-60"
+                className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-60 max-md:text-[16px]"
               />
               <button
                 type="submit"
                 disabled={saving || (!value.trim() && !savedLocally)}
-                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12.5px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-50"
               >
                 {saving ? <Loader2 size={13} className="animate-spin" /> : <LockKeyhole size={13} />}
                 {savedLocally ? t("secret.continueTask") : t("secret.saveSecurely")}
@@ -200,7 +200,7 @@ export function SecretRequestCard({
               <button
                 onClick={() => void retryResume()}
                 disabled={saving}
-                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-50"
               >
                 {saving ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} {t("onboarding.tryAgain")}
               </button>

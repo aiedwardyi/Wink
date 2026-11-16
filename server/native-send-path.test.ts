@@ -29,6 +29,7 @@ const harbor = (tokens: number) => "the harbor lights came on early and the tide
 const fillers = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => turn(`fill${from + index}`, harbor(63_000))).flat();
 
 const builds: SummaryBuild[] = [];
+const quiet = () => vi.advanceTimersByTimeAsync(2_000);
 
 function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MODEL, catalog = 1_000_000, env = {} }: {
   messages: Message[];
@@ -112,6 +113,7 @@ async function afterClaudeCompacted() {
   const window = { model: MODEL, tokens: 1_000_000 };
   const h = setup({ messages: [...turn("plant", "remember the code word"), ...fillers(1, 12)], nativePrompt: { cursor: "s1", first: 11_254, last: 832_054, growth: 68_400, window } });
   h.build.onSettled("bot", THREAD);
+  await quiet();
   await h.build.idle();
   expect(h.appended).toHaveLength(1);
   h.rows.push(...fillers(13, 15));
@@ -128,11 +130,13 @@ const nearPoint = () => setup({
 });
 
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
 
 afterEach(() => {
   for (const build of builds.splice(0)) build.dispose();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -170,6 +174,7 @@ describe("native send path", () => {
     let finish!: (text: string) => void;
     h.generateText.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
     h.build.onSettled("bot", THREAD);
+    await quiet();
     await vi.waitFor(() => expect(h.generateText).toHaveBeenCalledOnce());
     const { prepared, summarySkipped, summaryWaitMs } = await h.send();
     expect(summarySkipped).toBe(true);
@@ -189,6 +194,7 @@ describe("native send path", () => {
     let finish!: (text: string) => void;
     h.generateText.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
     h.build.onSettled("bot", THREAD);
+    await quiet();
     await vi.waitFor(() => expect(h.generateText).toHaveBeenCalledOnce());
     h.task.resumeSeed = undefined;
     const sending = h.send();
@@ -208,6 +214,7 @@ describe("native send path", () => {
     let finish!: (text: string) => void;
     h.generateText.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
     h.build.onSettled("bot", THREAD);
+    await quiet();
     await vi.waitFor(() => expect(h.generateText).toHaveBeenCalledOnce());
     h.task.nativePrompt = { cursor: "s1", first: 11_254, last: 118_622, growth: -781_378, window };
     h.task.resumeSeed = undefined;
@@ -232,6 +239,7 @@ describe("native send path", () => {
   it("counts a landed build as the cycle's one summary, through Claude's boundary", async () => {
     const h = nearPoint();
     h.build.onSettled("bot", THREAD);
+    await quiet();
     await h.build.idle();
     expect(h.appended).toHaveLength(1);
     h.generateText.mockClear();
@@ -249,6 +257,7 @@ describe("native send path", () => {
     h.rows.push(message("reply", "noted", { role: "bot" }));
     h.generateText.mockClear();
     h.build.onSettled("bot", THREAD);
+    await quiet();
     await h.build.idle();
     expect((await h.send()).prepared.compaction).toBeUndefined();
     expect(h.generateText).not.toHaveBeenCalled();

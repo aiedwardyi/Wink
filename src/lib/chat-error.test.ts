@@ -37,6 +37,17 @@ describe("chat errors", () => {
     }
   });
 
+  it("localizes a send held for a missing CLI or an unconfirmed sign-in", async () => {
+    const { chatBannerError } = await import("./error-text");
+    try {
+      applyLocale("ko");
+      expect(chatBannerError(new Error("Claude isn't installed or isn't answering on this PC."))).toBe("이 PC에서 Claude 설치를 찾지 못했거나 응답이 없어요.");
+      expect(chatBannerError(new Error("This account's sign-in isn't confirmed yet."))).toBe("이 계정의 로그인이 아직 확인되지 않았어요.");
+    } finally {
+      applyLocale("en");
+    }
+  });
+
   it("says in both languages when the engine or the sign-in ended a reply nobody stopped", async () => {
     const { chatBannerError } = await import("./error-text");
     try {
@@ -71,6 +82,21 @@ describe("chat errors", () => {
     const html = renderToStaticMarkup(createElement(ErrorRow, { message: "Grok stopped this reply on its own (QuotaGuard)", botId: "atlas", botName: "Atlas" }));
     expect(html).toContain("Grok stopped this reply on its own. Send your message again.");
     expect(html).toMatch(/<details[^>]*>.*QuotaGuard.*<\/details>/);
+  });
+
+  it.each([
+    ["this group is working or waiting on you - finish that turn first", "This group is working or waiting on you. Finish that turn first.", "이 그룹이 작업 중이거나 답을 기다리고 있어요. 그 턴을 먼저 끝내 주세요."],
+    ["this group is working - stop that turn first", "This group is working. Stop that turn first.", "이 그룹이 작업 중이에요. 그 턴을 먼저 멈춰 주세요."],
+  ])("says a busy group refusal in group words: %s", async (line, english, korean) => {
+    const { chatBannerError } = await import("./error-text");
+    for (const [locale, expected] of [["en", english], ["ko", korean]] as const) {
+      applyLocale(locale);
+      try {
+        expect(chatBannerError(new Error(line))).toBe(expected);
+      } finally {
+        applyLocale("en");
+      }
+    }
   });
 
   it.each(["bot", "channel"])("shows a %s send task switch as a known failure in 1:1 and rooms", async (target) => {

@@ -1,4 +1,6 @@
+import { sidebarOrderedItems, type SidebarOrder, type SidebarStartupBot, type SidebarStartupGroup } from "./sidebar-order";
 import { SIDEBAR_INLINE_BREAKPOINT, type SidebarSide } from "./sidebar-preferences";
+import { trackSetting } from "./usage-stats";
 
 export const SWIPE_SLOP = 10;
 export const SWIPE_EDGE = 24;
@@ -79,8 +81,15 @@ export function dragOffset(dx: number, canMove: boolean): number {
   return canMove ? dx : dx / 3;
 }
 
-export function sidebarBotIds(doc: Document = document): string[] {
-  return [...doc.querySelectorAll('[data-sidebar-row-kind="bot"]')].flatMap((row) => row.getAttribute("data-sidebar-row-id") ?? []);
+/** Swipe order: the sidebar's bots whatever search or folded sections hide; from an archived bot, the Archived list. */
+export function swipeBotIds(
+  bots: readonly SidebarStartupBot[],
+  groups: readonly SidebarStartupGroup[],
+  order: SidebarOrder,
+  currentId: string | undefined,
+): string[] {
+  if (bots.some((bot) => bot.id === currentId && bot.hidden)) return bots.filter((bot) => bot.hidden).map((bot) => bot.id);
+  return sidebarOrderedItems(bots, groups, order).flatMap((item) => (item.kind === "bot" ? [item.id] : []));
 }
 
 export function swipeBlocked(target: EventTarget | null, startX: number, win: typeof window = window): boolean {
@@ -111,6 +120,7 @@ export function vibrationEnabled(storage?: Pick<Storage, "getItem"> | null): boo
 }
 
 export function saveVibration(on: boolean, storage?: Pick<Storage, "setItem"> | null): void {
+  trackSetting("vibration", vibrationEnabled() ? "on" : "off", on ? "on" : "off", "settings", VIBRATION_KEY);
   sessionVibration = on;
   try {
     const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;

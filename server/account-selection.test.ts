@@ -29,6 +29,7 @@ function fixture(useDefault = true) {
   })) as unknown as ProviderInstance[];
   const availability = new Map(instances.map((instance) => [instance.instanceId, true]));
   const rates = new Map();
+  const signedOut = new Set<string>();
   const patch = vi.fn();
   const accounts = { defaultFor: (of: string) => useDefault && of === "claude" ? "added" : undefined,
     get: (id: string) => ["added", "other"].includes(id) ? { of: "claude", state: "ready" } : undefined,
@@ -41,15 +42,17 @@ function fixture(useDefault = true) {
   const botAccounts = new BotAccounts(accounts, registry, {} as Store, { captured: () => null });
   const globals = { accounts, botAccounts, registry,
     automaticAvailability: availability, rateLimitsByInstance: rates, resolveAutomaticSelection,
+    providerSnapshots: { get: (id: string) => signedOut.has(id) ? { state: "available", authenticated: false } : undefined },
     store: { patchBot: patch }, rememberAutomaticAvailability: () => {},
     describeInstances: async () => instances.map((instance) => ({ ...instance, accountOf: instance.account?.of,
-      snapshot: { state: availability.get(instance.instanceId) === false ? "unavailable" : "available" }, capabilities: instance.adapter.capabilities })),
+      snapshot: { state: availability.get(instance.instanceId) === false ? "unavailable" : "available", ...(signedOut.has(instance.instanceId) ? { authenticated: false } : {}) },
+      capabilities: instance.adapter.capabilities })),
   };
   const context = runInNewContext(ts.transpile(`${extracted}\n({ resolvedBotSelection, defaultSelection });`, { target: ts.ScriptTarget.ES2022 }), globals) as {
     resolvedBotSelection: (record: BotRecord, task?: { lastInstanceId: string; lastModel: string }) => Promise<ModelSelection>;
     defaultSelection: () => Promise<ModelSelection>;
   };
-  return { ...context, bot, instances, availability, rates, patch };
+  return { ...context, bot, instances, availability, rates, signedOut, patch };
 }
 
 describe("server account selection paths", () => {
@@ -66,6 +69,14 @@ describe("server account selection paths", () => {
     const task = { lastInstanceId: "other", lastModel: "picked" };
     expect((await f.resolvedBotSelection(f.bot, task)).instanceId).toBe("added");
     expect(task.lastInstanceId).toBe("other");
+  });
+
+  it("starts a new bot on a signed-in engine when Claude reads signed out", async () => {
+    const f = fixture(false);
+    f.signedOut.add("claude");
+    expect((await f.defaultSelection()).instanceId).toBe("codex");
+    f.signedOut.add("codex");
+    expect((await f.defaultSelection()).instanceId).toBe("claude");
   });
 
   it.each(["auth", "capability"])("lets Auto choose another engine when the default fails %s", async (reason) => {

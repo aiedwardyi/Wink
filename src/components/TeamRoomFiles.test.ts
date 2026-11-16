@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
-import { TeamRoomFiles } from "./TeamRoomFiles";
 import { TeamRoomRow } from "./TeamRoomRow";
 
 const mock = vi.hoisted(() => ({ request: vi.fn(), phone: false }));
@@ -58,21 +57,6 @@ describe("room files", () => {
     await render(createElement(RoomFilesFolderRow));
     expect(host.textContent).toBe("");
     expect(mock.request).not.toHaveBeenCalled();
-  });
-
-  it("confirms before deleting and refreshes the used space", async () => {
-    const file = { id: "a".repeat(24), name: "계획.pdf", bytes: 1024 ** 3, type: "application/pdf", sender: "Mina", at: Date.now() };
-    mock.request.mockResolvedValue({ files: [file], used: file.bytes, capacity: 100 * 1024 ** 3, error: null });
-    await render(createElement(TeamRoomFiles, { roomId: "room1", closing: false, onClose: vi.fn() }));
-    expect(document.body.textContent).toContain("1 GB used / 100 GB");
-    await act(async () => document.querySelector<HTMLButtonElement>("[data-room-file] button")!.click());
-    expect(mock.request).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("Delete this file for everyone?");
-    mock.request.mockResolvedValue({ files: [], used: 0, capacity: 100 * 1024 ** 3, error: null });
-    const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Delete" && button.closest('[aria-modal="true"]')?.getAttribute("data-room-files") === null)!;
-    await act(async () => confirm.click());
-    expect(mock.request).toHaveBeenCalledWith(`/api/rooms/room1/files/${file.id}`, { method: "DELETE" });
-    expect(document.body.textContent).toContain("0 B used / 100 GB");
   });
 
   it("renders a deleted file without a download or preview in both languages", () => {

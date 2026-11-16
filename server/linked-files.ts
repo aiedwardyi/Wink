@@ -8,6 +8,7 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
+import { cardFile } from "../shared/file-cards.ts";
 import { windowsPathLinks } from "../shared/windows-path-links.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 
@@ -192,6 +193,13 @@ function decodedRuns(text: string): string {
   return text.includes("%") ? text.replace(/(?:%[0-9a-f]{2})+/gi, decodeHref) : text;
 }
 
+const ENTITY: Record<string, string> = { quot: "\"", lt: "<", gt: ">", amp: "&" };
+
+function attachedFiles(text: string): string[] {
+  return [...text.matchAll(/<attached-file\s+path="([^"]*)"/g)].map(([, path]) =>
+    path!.replace(/&(?:#(\d+)|(\w+));/g, (entity, code?: string, name?: string) => (code ? String.fromCharCode(Number(code)) : ENTITY[name!] ?? entity)));
+}
+
 function contentDisposition(name: string, attachment: boolean): string {
   const fallback = name.replace(/[^\x20-\x7E]/g, "_").replaceAll("\\", "_").replaceAll("\"", "") || "file";
   const encoded = encodeURIComponent(name).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -209,7 +217,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
   return roots.some((root) => {
     if (/^[\\/]{2}/.test(root)) return false;
     try {
-      const from = relative(realpathSync(root), real);
+      const from = relative(realpathSync.native(root), real);
       return from !== "" && !from.startsWith("..") && !isAbsolute(from);
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) console.warn("linked file: root check failed", root, error);
@@ -219,7 +227,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
 }
 
 function outsideMedia(real: string): boolean {
-  if (!mediaType(real) || /^[\\/]{2}/.test(real)) return false;
+  if (!(mediaType(real) || cardFile(real)) || /^[\\/]{2}/.test(real)) return false;
   const normalized = real.replaceAll("\\", "/").toLowerCase();
   if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
   return !systemFolder(real);
@@ -234,7 +242,7 @@ function systemFolder(real: string): boolean {
   return system.some((root) => {
     if (!root) return false;
     let canonical = root;
-    try { canonical = realpathSync(root); } catch { /* folder may not exist */ }
+    try { canonical = realpathSync.native(root); } catch { /* folder may not exist */ }
     const prefix = canonical.replaceAll("\\", "/").toLowerCase().replace(/\/+$/, "");
     return normalized === prefix || normalized.startsWith(`${prefix}/`);
   });
@@ -247,11 +255,11 @@ function listable(name: string): boolean {
 /** The real path of a linked folder inside one of its message's roots, or null. */
 function folderGrant(folder: string, roots: readonly string[]): string | null {
   try {
-    const real = realpathSync(folder);
+    const real = realpathSync.native(folder);
     const root = roots.find((root) => insideRoot(real, [root]));
     if (!root || !statSync(real).isDirectory() || systemFolder(real)) return null;
     // A root may be a whole home folder, whose dot folders and AppData stay private.
-    const from = relative(realpathSync(root), real).split(/[\\/]/);
+    const from = relative(realpathSync.native(root), real).split(/[\\/]/);
     return from.some((part) => part.startsWith(".") || part.toLowerCase() === "appdata") ? null : real;
   } catch {
     return null;
@@ -261,7 +269,13 @@ function folderGrant(folder: string, roots: readonly string[]): string | null {
 function linkingMessages(options: ServeLinkedFileOptions, target: string, folder = false): { id: string; roots: readonly string[] }[] {
   const forms = nameForms(target);
   const hits: { id: string; roots: readonly string[] }[] = [];
+  const picture = !folder && mediaType(target)?.startsWith("image/");
   for (const message of options.messages) {
+    // A picture the user attached by path shows on its own file chip.
+    if (picture && message.role === "user" && attachedFiles(message.text ?? "").some((path) => samePath(path, target))) {
+      hits.push({ id: message.id, roots: [] });
+      continue;
+    }
     if (message.role !== undefined && message.role !== "bot") continue;
     const text = message.text ?? "";
     // Parsing every message of a long chat took seconds; only a message naming the file can link it.
@@ -392,7 +406,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
   }
   let real: string | null = null;
   try {
-    real = realpathSync(requested);
+    real = realpathSync.native(requested);
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
       sendJson(res, 404, { error: "not found" });
@@ -430,7 +444,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     if (asset) {
       const folder = dirname(real);
       try {
-        real = realpathSync(join(folder, asset));
+        real = realpathSync.native(join(folder, asset));
       } catch {
         sendJson(res, 404, { error: "not found" });
         return;

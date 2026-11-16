@@ -182,6 +182,18 @@ describe("bot trash", () => {
     projectUntouched();
   });
 
+  it("sends the restored bot with its transcript", () => {
+    const { store, trash } = open();
+    const bot = stockedBot(store);
+    trash.trash(bot.id);
+    const changes: unknown[] = [];
+    store.onChange((change) => changes.push(change));
+
+    trash.restore(bot.id);
+
+    expect(changes).toContainEqual({ type: "bot", botId: bot.id, switched: true });
+  });
+
   it("demotes a restored Chief of Staff when the section has another", () => {
     const { store, trash } = open();
     const first = store.createBot({ name: "First", section: "Ops" }, { seedMessages: false });

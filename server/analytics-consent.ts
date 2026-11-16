@@ -7,13 +7,15 @@ import { writeFileAtomic } from "./atomic.ts";
 // Its own file: profile-sync.json and the Google binding are parsed strictly by older builds.
 const ANALYTICS_FILE = "analytics.json";
 
-export function loadAnalyticsConsent(dataDir: string): boolean {
+export function loadAnalyticsConsent(dataDir: string, unset = false): boolean {
+  let saved: unknown;
   try {
-    const parsed = z.object({ enabled: z.boolean() }).safeParse(JSON.parse(readFileSync(join(dataDir, ANALYTICS_FILE), "utf8")));
-    return parsed.success && parsed.data.enabled;
+    saved = JSON.parse(readFileSync(join(dataDir, ANALYTICS_FILE), "utf8"));
   } catch {
-    return false;
+    return unset;
   }
+  const parsed = z.object({ enabled: z.boolean() }).safeParse(saved);
+  return parsed.success && parsed.data.enabled;
 }
 
 export function saveAnalyticsConsent(dataDir: string, enabled: boolean): boolean {

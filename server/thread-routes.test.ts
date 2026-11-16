@@ -96,3 +96,25 @@ describe("search", () => {
     expect(JSON.parse(body).hits.map((hit: { threadId: string }) => hit.threadId)).toEqual([bot.threadId]);
   });
 });
+
+describe("media", () => {
+  it("lists a chat's files in one answer, then the version alone, and 404s an unknown chat", async () => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.createBot({ name: "Live" }, { seedMessages: false });
+    const sent = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "[a.png](C:\\w\\a.png)", at: 1_000 });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const get = async (threadId: string, query = "") => {
+      let status = 0;
+      let body = "";
+      const res = { writeHead: (code: number) => { status = code; }, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.media(res, ["", threadId] as RegExpMatchArray, new URL(`http://localhost/media${query}`));
+      return { status, body: JSON.parse(body) };
+    };
+
+    expect((await get("nope")).status).toBe(404);
+    const first = await get(bot.threadId);
+    expect(first).toMatchObject({ status: 200, body: { ids: [sent.id], kind: "l", name: ["a.png"], ref: ["C:\\w\\a.png"] } });
+    expect(await get(bot.threadId, `?v=${first.body.v}`)).toEqual({ status: 200, body: { v: first.body.v } });
+  });
+});

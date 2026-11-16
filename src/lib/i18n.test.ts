@@ -47,7 +47,7 @@ const modelPicker = readFileSync(join(here, "../components/ModelPicker.tsx"), "u
 const renameTitle = readFileSync(join(here, "../components/RenameTitle.tsx"), "utf8");
 const enginesSettings = readFileSync(join(here, "../components/EnginesSettings.tsx"), "utf8");
 const searchResults = readFileSync(join(here, "../components/SearchResults.tsx"), "utf8");
-const manageMembers = readFileSync(join(here, "../components/ManageMembersPanel.tsx"), "utf8");
+const roomDetails = readFileSync(join(here, "../components/RoomDetailsPanel.tsx"), "utf8");
 const pluginsPanel = readFileSync(join(here, "../components/PluginsPanel.tsx"), "utf8");
 const usageSection = readFileSync(join(here, "../components/UsageSection.tsx"), "utf8");
 const usageDesk = readFileSync(join(here, "../components/UsageDesk.tsx"), "utf8");
@@ -188,7 +188,7 @@ describe("catalogs", () => {
 
   it("substitutes template values across different runtime values", () => {
     const phrases = [
-      ["composer.roomLead", "{name}에 메시지"],
+      ["composer.roomLead", "{name}에게 메시지 보내기"],
       ["room.hint.lead", "답변할 봇을 고르려면 @로 언급하세요."],
       ["chat.conversationAria", "대화 상대: {name}"],
       ["palette.noMatch", "“{query}” 검색 결과가 없습니다"],
@@ -363,14 +363,6 @@ describe("complete phrases", () => {
     expect(ko["room.chooseSharedFolder"]).toBe("건너뛰기 — 봇마다 자신의 폴더");
     expect(en["room.eachBotFolder"]).toBe("Each bot's own folder");
     expect(ko["room.eachBotFolder"]).toBe("봇마다 자신의 폴더");
-    expect(en["room.eachBotFolderPath"]).toMatch(/Skip — each bot's own folder/);
-    expect(ko["room.eachBotFolderPath"]).toMatch(/건너뛰기 — 봇마다 자신의 폴더/);
-    expect(en["room.workingFolderChip"]).toMatch(/No shared folder/i);
-    expect(ko["room.workingFolderChip"]).toMatch(/공유 폴더 없음/);
-    expect(en["room.workingFolderNamed"]).toBe("Shared folder: {folder}");
-    expect(ko["room.workingFolderNamed"]).toBe("공유 폴더: {folder}");
-    expect(en["room.projectFolderChip"]).toBe("No shared folder");
-    expect(ko["room.projectFolderChip"]).toBe("공유 폴더 없음");
     expect(en["chrome.resizeSidebar"]).toBe("Resize sidebar");
     expect(ko["chrome.resizeSidebar"]).toBe("사이드바 너비 조절");
     expect(en["chrome.sidebarWidthPixels"]).toBe("{width} pixels");
@@ -418,13 +410,14 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(ko["connectedApps.unavailable"]).not.toMatch(/temporarily unavailable/);
     expect("room.manageMembersTitle" in en).toBe(false);
     expect("room.manageMembersTitle" in ko).toBe(false);
-    expect(en["room.manageMembersOf"]).toBe("Manage members of {name}");
-    expect(ko["room.manageMembersOf"]).toBe("{name}의 구성원 관리");
-    expect(ko["room.manageMembersOf"]).not.toMatch(/Manage members of/);
+    expect(en["room.details"]).toBe("Group details");
+    expect(ko["room.details"]).toBe("그룹 세부 정보");
     expect(en["bot.details"]).toBe("Bot Details");
     expect(ko["bot.details"]).toBe("봇 세부 정보");
-    expect(en["bot.collapseDetails"]).toBe("Collapse Bot Details");
-    expect(ko["bot.collapseDetails"]).toBe("봇 세부 정보 접기");
+    for (const key of ["show.collapse", "bot.collapseDetails", "room.collapseDetails"]) {
+      expect(key in en).toBe(false);
+      expect(key in ko).toBe(false);
+    }
     expect(en["bot.closeDetails"]).toBe("Close Bot Details");
     expect(ko["bot.closeDetails"]).toBe("봇 세부 정보 닫기");
   });
@@ -436,15 +429,11 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(pluginsPanel).not.toMatch(/>Connected apps</);
     expect(pluginsPanel).not.toMatch(/aria-label="Connected apps view"/);
     expect(pluginsPanel).not.toMatch(/temporarily unavailable\. You can retry/);
-    expect(manageMembers).toContain('t("room.manageMembers")');
-    expect(manageMembers).toContain('t("room.manageMembersOf"');
-    expect(manageMembers).not.toContain("room.manageMembersTitle");
-    expect(manageMembers).not.toMatch(/>Manage Members</);
-    expect(manageMembers).not.toMatch(/Manage members of \$\{group\.name\}/);
+    expect(roomDetails).toContain('t("room.details")');
+    expect(roomDetails).not.toMatch(/>Room details</);
     expect(settingsPanel).not.toContain('t("chrome.connectedApps")');
     expect(settingsPanel).not.toContain("connectedAppsEnabled");
     expect(settingsPanel).toContain('t("bot.details")');
-    expect(settingsPanel).toContain('t("bot.collapseDetails")');
     expect(settingsPanel).toContain('t("bot.closeDetails")');
     expect(settingsPanel).not.toMatch(/>Bot details</);
     expect(settingsPanel).not.toMatch(/Collapse bot details/);
@@ -807,7 +796,7 @@ describe("sidebar empty message search", () => {
     expect(Object.hasOwn(catalogs.en, "keep this query")).toBe(false);
   });
 
-  it("wires those phrases into SearchResults and Manage Members without t(query)", () => {
+  it("wires those phrases into SearchResults without t(query)", () => {
     expect(searchResults).toContain('t("palette.messages")');
     expect(searchResults).toContain('t("search.messagesCount"');
     expect(searchResults).toContain('t("search.noMatch"');
@@ -816,10 +805,6 @@ describe("sidebar empty message search", () => {
     expect(searchResults).not.toMatch(/Messages\{hits/);
     expect(searchResults).toContain('t("search.noMatch", { query: q })');
     expect(searchResults).not.toMatch(/\bt\(\s*(q|query)\s*\)/);
-    expect(manageMembers).toContain('t("createBot.cancel")');
-    expect(manageMembers).toContain('t("room.save")');
-    expect(manageMembers).not.toMatch(/>Cancel</);
-    expect(manageMembers).not.toMatch(/Save\{memberIds/);
   });
 });
 

@@ -6,6 +6,10 @@ import { useI18n } from "@/lib/i18n";
 import { typedRoomName } from "@/lib/team-rooms";
 import { api, useStore } from "@/state/store";
 
+import { InitialsAvatar, profileInitials } from "./Avatar";
+import { DETAILS_ROW } from "./BotDetailsRows";
+import { RenameActions } from "./RenameActions";
+
 export function RoomOwnName({ name }: { name: string }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -30,8 +34,9 @@ export function RoomOwnName({ name }: { name: string }) {
     }
   };
   return (
-    <li className="rounded-lg px-2 py-1.5">
-      <div className="flex min-w-0 items-center gap-2">
+    <li className={`${DETAILS_ROW} py-2`}>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <InitialsAvatar initials={profileInitials({ name })} size={24} tone="bg-control" />
         {editing ? (
           <>
             <input
@@ -49,13 +54,13 @@ export function RoomOwnName({ name }: { name: string }) {
               }}
               className="min-w-0 flex-1 rounded-md border border-hairline/40 bg-inset px-2 py-1 text-[14px] text-ink outline-none focus:border-accent"
             />
-            <button type="button" disabled={saving} onClick={() => void save()} className="shrink-0 rounded-md px-2 py-1 text-[12px] text-accent-text hover:bg-control">{t("settings.profile.save")}</button>
+            <RenameActions disabled={saving} onSave={() => void save()} onCancel={() => { setEditing(false); setError(false); }} />
           </>
         ) : (
           <>
             <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
             <span className="shrink-0 text-[12px] text-ink-secondary">{t("chat.you")}</span>
-            <button type="button" aria-label={t("teamRoom.renameSelf")} onClick={() => { setValue(state.config?.profile?.name ?? name); setEditing(true); }} className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><Pencil size={14} /></button>
+            <button type="button" aria-label={t("teamRoom.renameSelf")} onClick={() => { composing.current = false; setValue(state.config?.profile?.name ?? name); setEditing(true); }} className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><Pencil size={14} /></button>
           </>
         )}
       </div>

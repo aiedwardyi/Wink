@@ -1,6 +1,7 @@
 // Saved paths resolve through the attachment route before loading.
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ImageOff, Maximize2 } from "lucide-react";
+import { CHAT_IMAGE, chatImageBox, rememberChatImage } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { usePresence } from "@/lib/use-presence";
 import { previewImage, type PreviewImage } from "@/lib/media-viewer";
@@ -22,7 +23,9 @@ function usePictureRetry(src: string) {
   const [waiting, setWaiting] = useState(false);
   const [seen, setSeen] = useState(src);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const landed = useRef(false);
   if (seen !== src) {
+    landed.current = false;
     setSeen(src);
     setAttempt(0);
     setWaiting(false);
@@ -30,6 +33,12 @@ function usePictureRetry(src: string) {
   useLayoutEffect(() => () => clearTimeout(timer.current), [src]);
   const onError = () => {
     clearTimeout(timer.current);
+    // The file landed while this request was still out, so its failure is stale.
+    if (landed.current) {
+      landed.current = false;
+      setAttempt((current) => current + 1);
+      return;
+    }
     const delay = PICTURE_RETRY_MS[attempt];
     setWaiting(true);
     if (delay === undefined) return;
@@ -43,6 +52,16 @@ function usePictureRetry(src: string) {
     setWaiting(false);
     setAttempt((current) => current + 1);
   };
+  // The other PC's picture can land long after its message: the server says when the file is here.
+  useEffect(() => {
+    const onLanded = (event: Event) => {
+      if (!(event instanceof CustomEvent && src.split("?")[0]!.endsWith(`/${event.detail}`))) return;
+      if (waiting) retryNow();
+      else landed.current = true;
+    };
+    window.addEventListener("orbit:picture-landed", onLanded);
+    return () => window.removeEventListener("orbit:picture-landed", onLanded);
+  }, [src, waiting, retryNow]);
   return { src: pictureSrc(src, attempt), failed: waiting, onError, retryNow };
 }
 
@@ -72,7 +91,7 @@ function Thumbnail({ image, onPreview }: { image: PreviewImage; onPreview: (open
         alt={image.name}
         loading="lazy"
         onError={retry.onError}
-        className="block max-h-[220px] w-full object-cover transition-transform duration-200 group-hover/image:scale-[1.015]"
+        className="block max-h-[220px] w-full object-cover transition-transform group-hover/image:scale-[1.015]"
       />
       <span className="absolute right-1.5 top-1.5 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/image:opacity-100 group-focus-visible/image:opacity-100">
         <Maximize2 size={13} />
@@ -120,14 +139,17 @@ export function ShownImage({ name, caption }: { name: string; caption?: string }
           onClick={(event) => { if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setOpen(true); } }}
           aria-label={`Open image ${image.name}`}
           title={`Open ${image.name}`}
-          className="block w-fit max-w-[min(42rem,78%)] cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          style={CHAT_IMAGE}
+          className="block w-fit cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <img
             src={retry.src}
             alt={caption || image.name}
             loading="lazy"
+            onLoad={rememberChatImage}
             onError={retry.onError}
-            className="block w-full rounded-2xl border border-hairline/40"
+            style={chatImageBox(retry.src)}
+            className="block rounded-2xl border border-hairline/40"
           />
         </button>
       ) : image ? (

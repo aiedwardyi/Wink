@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
@@ -22,6 +22,12 @@ const topics = [{ name: "reps-content-preferences.md", bytes: 1135 }, { name: "i
 const sleep = { sleptAt: new Date(2026, 10, 7, 3, 12), kept: 24, merged: 1, forgot: 1, learned: 3, onUndo: vi.fn() };
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
+beforeEach(() => {
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+    matches: query.includes("prefers-reduced-motion"), media: query, onchange: null,
+    addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
+  }));
+});
 async function mount(props: Partial<Parameters<typeof MemoryMap>[0]> = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div"); document.body.append(host);
@@ -31,6 +37,7 @@ async function mount(props: Partial<Parameters<typeof MemoryMap>[0]> = {}) {
 afterEach(async () => {
   await act(async () => root?.unmount()); host?.remove();
   applyLocale("en");
+  vi.restoreAllMocks();
 });
 
 describe("MemoryMap", () => {
@@ -45,7 +52,7 @@ describe("MemoryMap", () => {
     expect(host.querySelector(".mm-live")!.textContent).toContain("Uses VS Code");
   });
 
-  it("opens Muscle Memory to its lessons on a tap", async () => {
+  it("opens Habits to its lessons on a tap", async () => {
     await mount();
     const muscle = host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="muscle"]')!;
     await act(async () => muscle.click());
@@ -75,7 +82,7 @@ describe("MemoryMap", () => {
     for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
   });
 
-  it("tints the Muscle Memory icon the Knowledge violet and keeps its count plain", () => {
+  it("tints the Habits icon the Knowledge violet and keeps its count plain", () => {
     const icon = (kind: string) => css.match(new RegExp(`^\\[data-kind="${kind}"\\] \\.mm-icon \\{([^}]*)\\}`, "m"))?.[1] ?? "";
     expect(icon("muscle")).toContain("color: rgb(var(--mm-violet));");
     expect(icon("muscle")).toBe(icon("knowledge"));
@@ -111,10 +118,21 @@ describe("MemoryMap", () => {
     await mount({ bot: asked(["building", "waiting-for-user", "open", "done"]) });
     const live = host.querySelector(".mm-live")!;
     const box = live.querySelector(".mm-asks")!;
-    expect([...live.querySelectorAll(".mm-sec-name")].map((each) => each.textContent)).toEqual(["Working Memory", "Asks · 3 open", "Just Learned"]);
+    expect([...live.querySelectorAll(".mm-sec-name")].map((each) => each.textContent)).toEqual(["Working Memory", "To Do · 3 open", "Just Learned"]);
     const rows = [...box.querySelectorAll(".mm-asks-open li")];
-    expect(rows.map((row) => row.textContent)).toEqual(["Ask 0building", "Ask 1waiting for you", "Ask 2to do"]);
+    expect(rows.map((row) => row.textContent)).toEqual(["Ask 0building", "Ask 1waiting for you", "Ask 2open"]);
     expect(rows.map((row) => row.getAttribute("data-status"))).toEqual(["building", "waiting-for-user", "open"]);
+  });
+
+  it("labels the bot's own question as a question, en and ko", async () => {
+    const asks = [{ text: "Ship it?", at: 1, status: "open", kind: "question" }, { text: "Fix login", at: 2, status: "open" }];
+    const questioned = { ...bot, tasks: [{ threadId: "t", taskState: { goal: "g", plan: [], nextAction: "", updatedAt: 1, asks } }] } as unknown as Bot;
+    await mount({ bot: questioned });
+    expect([...host.querySelectorAll(".mm-asks-open li")].map((row) => row.textContent)).toEqual(["Ship it?question for you", "Fix loginopen"]);
+    await act(async () => root.unmount());
+    applyLocale("ko");
+    await mount({ bot: questioned });
+    expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ship it?답할 질문");
   });
 
   it("folds done and declined asks behind a count and keeps them", async () => {
@@ -129,7 +147,7 @@ describe("MemoryMap", () => {
 
   it("says so in one line when nothing was asked, and when all are done", async () => {
     await mount({ bot: asked([]) });
-    expect(host.querySelector(".mm-asks")!.textContent).toBe("AsksWhat you asked forNothing asked yet.");
+    expect(host.querySelector(".mm-asks")!.textContent).toBe("To DoWhat you asked forNothing asked yet.");
     await act(async () => root.unmount());
     await mount({ bot: asked(["done"]) });
     expect(host.querySelector(".mm-asks .mm-empty")!.textContent).toBe("All done.");
@@ -138,14 +156,37 @@ describe("MemoryMap", () => {
   it("shows the asks in Korean", async () => {
     applyLocale("ko");
     await mount({ bot: asked(["waiting-for-user", "done"]) });
-    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("요청 · 1개 남음");
+    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("할 일 · 1개 남음");
     expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ask 0확인 기다림");
     expect(host.querySelector(".mm-asks-done-toggle")!.textContent).toBe("1개 완료");
   });
 
-  it("scrolls a long ask list inside its box in gray tones only", () => {
-    expect(rule(".mm-asks-list")).toMatch(/max-height: \d+px;/);
-    expect(rule(".mm-asks-list")).toContain("overflow-y: auto;");
+  it("shows the first 3 open asks, then all of them in place, en and ko", async () => {
+    await mount({ bot: asked([...Array(11).fill("open"), "building", "done"]) });
+    const shown = () => [...host.querySelectorAll(".mm-asks-open li")].map((row) => row.textContent);
+    const more = host.querySelector<HTMLButtonElement>(".mm-asks-more")!;
+    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("To Do · 12 open");
+    expect(shown()).toEqual(["Ask 0open", "Ask 1open", "Ask 2open"]);
+    expect(more.textContent).toBe("Show all 12");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => more.click());
+    expect(shown()).toHaveLength(12);
+    expect(more.textContent).toBe("Show less");
+    await act(async () => root.unmount());
+    applyLocale("ko");
+    await mount({ bot: asked(["open", "open", "open", "building"]) });
+    expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ask 0시작 전");
+    expect(host.querySelector(".mm-asks-more")!.textContent).toBe("4개 모두 보기");
+  });
+
+  it("keeps three or fewer open asks without a Show all row", async () => {
+    await mount({ bot: asked(["open", "building", "waiting-for-user"]) });
+    expect(host.querySelectorAll(".mm-asks-open li")).toHaveLength(3);
+    expect(host.querySelector(".mm-asks-more")).toBeNull();
+  });
+
+  it("lets the Live card do the only scrolling, in gray tones only", () => {
+    expect(rule(".mm-asks-list")).not.toMatch(/max-height|overflow/);
     const asks = css.split("\n").filter((line) => line.startsWith(".mm-asks")).join("\n");
     expect(asks).not.toMatch(/--mm-(cyan|indigo|violet|pale|live-ink)|--color-(accent|success)/);
   });
@@ -201,6 +242,20 @@ describe("smooth glow", () => {
     expect(render({ dpr: 1, size: [980, 808], back: [0, 0, 0], aura: [aura, 0, 0, 980, 760], lift: 0.7, ray: null, halo: [aura, 18], badge: [460, 60, 60], shadow, veil: [aura, 1], swell: shadow, orbits: [44, 48], live: null })).toEqual({ layers: null });
   });
 
+  it("rebuilds a context that lost its alpha, and paints no layer when a fresh one has none either", async () => {
+    const source = { dpr: 1, size: [40, 40], back: [0, 0, 0], aura: [aura, 0, 0, 40, 30], lift: 0.7, ray: null, halo: [aura, 18], badge: [10, 5, 20], shadow: "", veil: [aura, 1], swell: "", orbits: [], live: null } as Parameters<typeof render>[0];
+    const fake = (alpha: number) => new Proxy({ isContextLost: () => false, getProgramParameter: () => true, getExtension: () => null, readPixels: (...args: unknown[]) => { (args[6] as Uint8Array).fill(alpha); } } as Record<string, unknown>, { get: (gl, key) => key in gl ? gl[key as string] : () => ({}) });
+    const paint = async (...alphas: number[]) => {
+      vi.resetModules();
+      const made: unknown[] = [];
+      vi.stubGlobal("OffscreenCanvas", class { width = 1; height = 1; getContext() { const gl = fake(alphas[made.length] ?? 0); (gl as { canvas: unknown }).canvas = this; made.push(gl); return gl; } });
+      const { render: fresh } = await import("./MemoryMapGlowPaint");
+      return { layers: fresh(source).layers, made: made.length };
+    };
+    expect(await paint(255, 0)).toMatchObject({ made: 2, layers: expect.any(Array) });
+    expect(await paint(255, 255)).toEqual({ made: 2, layers: null });
+  });
+
   it("answers with no layers when the painter throws", async () => {
     const sent = vi.fn(), page = self, warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("self", { postMessage: sent, close() {} });
@@ -220,6 +275,7 @@ describe("smooth glow", () => {
   // a browser that reports a map `wide` device pixels across and answers the painter with `reply`
   function browser(reply: unknown, wide: number) {
     const seen: (() => void)[] = [];
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(wide);
     vi.stubGlobal("ResizeObserver", class { constructor(private report: (entries: unknown[]) => void) {} observe(target: Element) { seen.push(() => this.report([{ target, devicePixelContentBoxSize: [{ inlineSize: wide, blockSize: 808 }] }])); } disconnect() {} });
     vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { queueMicrotask(() => this.onmessage?.({ data: reply })); } });
     vi.stubGlobal("getComputedStyle", () => ({ backgroundImage: aura, maskImage: aura, backgroundColor: "rgb(13, 14, 22)", boxShadow: "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px", display: "none", top: "-18px", opacity: "1", getPropertyValue: () => "0.7" }));

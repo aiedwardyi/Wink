@@ -17,12 +17,15 @@ export const SERVER_TIMEOUTS = { keepAliveTimeout: 95_000, headersTimeout: 100_0
 export const EARLY_MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
+  ".mjs": "text/javascript",
   ".css": "text/css",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".webp": "image/webp",
   ".ico": "image/x-icon",
   ".json": "application/json",
   ".woff2": "font/woff2",
+  ".mp3": "audio/mpeg",
 };
 
 export type HarnessHandler = (req: IncomingMessage, res: ServerResponse) => unknown;

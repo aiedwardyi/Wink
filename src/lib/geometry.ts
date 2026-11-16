@@ -1,3 +1,5 @@
+import { trackSetting } from "./usage-stats";
+
 export type Geometry = "soft" | "boxy";
 
 const KEY = "omb-shape";
@@ -11,6 +13,7 @@ export function readGeometry(): Geometry {
 }
 
 export function applyGeometry(geometry: Geometry): void {
+  trackSetting("shape", document.documentElement.dataset["shape"], geometry, "settings", KEY);
   document.documentElement.dataset["shape"] = geometry;
   try {
     localStorage.setItem(KEY, geometry);

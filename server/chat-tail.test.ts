@@ -30,6 +30,12 @@ describe("offscreen chat tail", () => {
     expect(offscreenLimit(messages, 200, read)).toBe(150);
   });
 
+  it("reaches back to a question still waiting past a later prompt", () => {
+    const messages = thread(300, 290);
+    messages[150] = { ...reply(150), kind: "options", card: { askUser: true, staysOpen: true, options: ["Yes"] } as Message["card"] };
+    expect(offscreenLimit(messages, 200, read)).toBe(150);
+  });
+
   it("reaches back to an open request and the oldest worker launch", () => {
     const messages = thread(300, 290);
     messages[200] = { ...reply(200), kind: "options", card: { requestId: "r1" } as Message["card"] };

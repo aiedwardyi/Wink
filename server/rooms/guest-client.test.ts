@@ -101,13 +101,6 @@ describe("room codes", () => {
     expect(c.room("r1")?.entries).toHaveLength(200);
   });
 
-  it("answers the name a join would send, for the join screen to prefill", async () => {
-    const c = guest({ joiner: () => ({ name: "DESKTOP-4F2K", device: PC }) });
-    vi.spyOn(c, "start").mockImplementation(() => {});
-    expect(await joinedRoute("GET", "/api/joined/name", c, async () => null)).toEqual({ status: 200, body: { name: "DESKTOP-4F2K" } });
-    expect((await joinedRoute("POST", "/api/joined/name", c, async () => null))?.status).toBe(404);
-  });
-
   it("clears only observed entries through the local read route and broadcasts", async () => {
     saveJoined("r1", HOST, STATE.me, KEY);
     const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });
@@ -128,6 +121,15 @@ describe("room codes", () => {
     expect((await read(0))?.status).toBe(400);
     expect((await read(999))?.status).toBe(400);
     expect((await joinedRoute("POST", "/api/joined/rooms/missing/read", c, async () => ({ seq: 0 })))?.status).toBe(404);
+  });
+
+  it("hands the owner's Stop to this PC's own room turns", async () => {
+    const stop = vi.fn(async () => {});
+    const c = guest();
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    expect(await joinedRoute("POST", "/api/joined/rooms/r1/stop", c, async () => ({}), undefined, undefined, stop)).toEqual({ status: 200, body: { ok: true } });
+    expect(stop).toHaveBeenCalledWith("r1");
+    expect((await joinedRoute("GET", "/api/joined/rooms/r1/stop", c, async () => ({}), undefined, undefined, stop))?.status).toBe(404);
   });
 
   it("keeps delayed teammate lines unread when an own-send reply leads the stream", async () => {
@@ -242,9 +244,19 @@ describe("join", () => {
     expect(JSON.parse(seen[0]!.body)).toEqual({ code: CODE, name: "Mina Park", device: PC });
     expect(seen[0]!.headers.authorization).toBeUndefined();
     await until(() => seen.some((row) => row.url.includes("/stream")));
-    expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=0&with=bots"]);
+    expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=0&with=bots&deleted=0"]);
     expect(seen[1]!.headers).toMatchObject({ authorization: `Bearer ${KEY}` });
     expect(seen.every((row) => row.headers.cookie === undefined)).toBe(true);
+  });
+
+  it("never joins this PC's own room: it names the hosted group and sends nothing", async () => {
+    route = quietDoor;
+    const own = vi.fn((code: string) => (code.trim() === CODE ? "g-host" : null));
+    expect(await guest({ ownRoom: own }).join(`  ${CODE}
+`)).toEqual({ ok: false, status: 409, error: "own-room", groupId: "g-host" });
+    expect(await joinedRoute("POST", "/api/joined/join", client!, async () => ({ code: CODE }))).toEqual({ status: 409, body: { error: "own-room", groupId: "g-host" } });
+    expect(seen).toEqual([]);
+    expect(joinedRoom("r1")).toBeNull();
   });
 
   it("follows no redirect and stores nothing on a refusal", async () => {
@@ -280,7 +292,7 @@ describe("sync", () => {
     await until(() => seen.some((row) => row.url.includes("/stream")));
     expect(seen.some((row) => row.url === "/room/v1/join")).toBe(false);
     expect(seen.filter((row) => row.url.includes("/snapshot"))).toHaveLength(cached ? 0 : 1);
-    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC });
+    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC, "x-orbit-room-files": "1", "x-orbit-room-media": "1" });
   });
 
   it("keeps the live stream when started after joining", async () => {
@@ -373,7 +385,7 @@ describe("races and floods", () => {
     await guest({ timing: { retryMs: 20 } }).join(CODE);
     await until(() => urls("/stream").length >= 2);
     expect(snapshots).toBe(3);
-    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0&with=bots");
+    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0&with=bots&deleted=0");
   });
 
   it("a late 401 or leave from before a rejoin leaves the new key alone", async () => {
@@ -412,14 +424,14 @@ describe("races and floods", () => {
     expect(urls("/snapshot")).toHaveLength(2);
   });
 
-  it("refuses sends past a small queue instead of waiting on a silent host", async () => {
+  it("queues every send behind a silent host, each waiting its turn", async () => {
     const held: ServerResponse[] = [];
     route = (req, res) => (req.url?.endsWith("/send") ? void held.push(res) : quietDoor(req, res));
     const c = guest();
     await c.join(CODE);
-    const queued = Array.from({ length: 20 }, (_, i) => c.send("r1", `m${i}`));
-    const extra = await Promise.race([c.send("r1", "one too many"), new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
-    expect(extra).toEqual({ ok: false, status: 429, error: "too many messages waiting to send" });
+    const queued = Array.from({ length: 21 }, (_, i) => c.send("r1", `m${i}`));
+    const last = await Promise.race([queued[20], new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
+    expect(last).toBe("waiting");
     route = (req, res) => (req.url?.endsWith("/send") ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res));
     for (const res of held) reply(res, 503, { error: "phone access is off" });
     await until(() => held.every((res) => res.writableEnded));
@@ -477,6 +489,21 @@ describe("room alerts on a teammate", () => {
     expect(alert.mock.calls).toEqual([ping("second")]);
   });
 
+  it("stays quiet for a bot handing off to a bot and pings the closing line", async () => {
+    const state = { ...STATE, people: [...STATE.people, { id: "p2", name: "JJ" }], bots: [{ id: "b1", name: "Rando", color: "blue" }], teamBots: [{ id: "tb-AAAAAAAAAAAAAAAA", name: "스타줌", color: "", owner: "p2" }] };
+    const rando = { kind: "bot" as const, id: "b1", name: "Rando" };
+    const star = { kind: "bot" as const, id: "tb-AAAAAAAAAAAAAAAA", name: "스타줌", owner: "p2" };
+    route = stream([[0, `data: ${JSON.stringify({ kind: "state", state })}
+
+`], [100, entry(1, rando, "@스타줌 what works for JJ?")], [250, entry(2, star, "@Rando Sat after 7")], [400, entry(3, star, "Done: Sat 7:30. @Edward @JJ")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 50 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 3);
+    await sleep(200);
+    expect(alert.mock.calls).toEqual([[{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "스타줌", text: "Done: Sat 7:30. @Edward @JJ" }]]);
+  });
+
   it("pings a reconnect replay once with its latest line, then live lines again", async () => {
     const replay = Array.from({ length: 60 }, (_, index): [number, string] => [0, entry(index + 1, edward, `line ${index + 1}`)]);
     route = stream([...replay, [300, entry(61, edward, "live")]]);
@@ -507,6 +534,62 @@ describe("deleted files", () => {
     guest().start();
     await until(() => !existsSync(cached));
     expect(joinedEntries("r1", 5)[0]!.files).toEqual([{ ...file, deleted: true }]);
+  });
+
+  it("asks only for deletions past the count it holds, and keeps the host's new count", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    const asked: string[] = [];
+    let count: number | undefined = 3;
+    route = (req, res) => {
+      quietDoor(req, res);
+      if (!req.url?.includes("/stream")) return;
+      asked.push(new URL(req.url, "https://x").searchParams.get("deleted") ?? "");
+      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["a".repeat(24)], ...(count === undefined ? {} : { count }) })}\n\n`);
+      setTimeout(() => res.destroy(), 50);
+    };
+    guest({ timing: { retryMs: 10 } }).start();
+    await until(() => asked.length >= 2);
+    count = undefined;
+    await until(() => asked.length >= 4);
+    expect(asked.slice(0, 4)).toEqual(["0", "3", "3", "3"]);
+  });
+
+  it("holds the count while a deleted file's copy can't be dropped, so the next stream sends it again", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    // Not the last test's id: its stopped client can still be mid-rm on that path, and fs.rm takes a dir made meanwhile
+    const copy = join(DATA_DIR, "joined-files", "r1", "b".repeat(24));
+    mkdirSync(join(copy, "held"), { recursive: true });
+    const asked: string[] = [];
+    route = (req, res) => {
+      quietDoor(req, res);
+      if (!req.url?.includes("/stream")) return;
+      asked.push(new URL(req.url, "https://x").searchParams.get("deleted") ?? "");
+      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["b".repeat(24)], count: 3 })}\n\n`);
+      setTimeout(() => res.destroy(), 50);
+    };
+    guest({ timing: { retryMs: 10 } }).start();
+    await until(() => asked.length >= 2);
+    expect(asked.slice(0, 2)).toEqual(["0", "0"]);
+    rmSync(copy, { recursive: true });
+    await until(() => asked.includes("3"));
+    expect(existsSync(copy)).toBe(false);
+  });
+});
+
+describe("teammate media files", () => {
+  it("takes a video or audio file back from an upload", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    for (const type of ["video/mp4", "video/quicktime", "video/webm", "video/x-m4v", "audio/mp4", "audio/mpeg", "audio/wav"]) {
+      const file = { id: "f".repeat(24), name: "clip", type, bytes: 5, sha256: "0".repeat(64) };
+      route = (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ file }));
+      };
+      expect(await guest().upload("r1", Buffer.from("hello"), "clip", "u".repeat(16), "5")).toMatchObject({ ok: true, value: file });
+    }
   });
 });
 
@@ -634,10 +717,38 @@ describe("bot lines", () => {
     const c = guest();
     expect((await c.join(CODE)).ok).toBe(true);
     await until(() => (c.room("r1")?.entries.length ?? 0) === 2);
-    expect(seen.map((row) => row.url).slice(1)).toEqual(["/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=1&with=bots"]);
+    expect(seen.map((row) => row.url).slice(1)).toEqual(["/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=1&with=bots&deleted=0"]);
     expect(c.room("r1")!.entries.map((entry) => entry.author)).toEqual([bot, bot]);
     expect(c.room("r1")!.state!.bots).toEqual([WINK]);
     expect(c.room("r1")!.unread).toBe(2);
+  });
+
+  it("hands on each new line once, never a backfill, and a Stop", async () => {
+    const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
+    const frame = (body: unknown) => `data: ${JSON.stringify(body)}
+
+`;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 1, entries: [line(1, "@Pete old")], state: STATE });
+      if (req.url?.includes("/bot-send")) return reply(res, 200, { entry: { seq: 4, id: "e4", at: 4, author: mine, text: "@Wink yours" } });
+      if (req.url?.includes("/stream")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(frame({ kind: "entry", entry: line(2, "@Pete new") }) + frame({ kind: "entry", entry: line(2, "@Pete new") }));
+        res.write(frame({ kind: "entry", entry: { seq: 3, id: "e3", at: 3, author: { kind: "person", ...STATE.me }, text: "@Pete hi" } }) + frame({ kind: "stop" }));
+        return;
+      }
+      reply(res, 404, { error: "not found" });
+    };
+    const onLine = vi.fn();
+    const onStop = vi.fn();
+    const c = guest({ onLine, onStop });
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => onStop.mock.calls.length === 1);
+    expect(c.room("r1")!.entries).toHaveLength(3);
+    await c.botSend("r1", "tb-pete", "@Wink yours");
+    expect(onLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e3"], ["r1", "e4"]]);
+    expect(onStop).toHaveBeenCalledWith("r1");
   });
 
   it("reads an older host's state with no bots as none", async () => {

@@ -17,6 +17,7 @@ import { Presence } from "@/lib/use-presence";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WorkerChip, WorkerMark } from "./WorkerRows";
 import "@xterm/xterm/css/xterm.css";
+import { trackFeatureOnce } from "@/lib/usage-stats";
 
 type SessionInfo = { cwd: string; shell: string };
 type OutputEvent = LiveOutput;
@@ -24,7 +25,7 @@ type TerminalSnapshot = { id: string; cwd: string; shell: string; output: string
 type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?: number };
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
-const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text";
+const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink";
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a && !b) return true;
@@ -289,6 +290,7 @@ export function TerminalWorkspace({
     // onBinary carries non-UTF8 mouse reports (wheel in X10/RXVT mode); without it the wheel is dropped.
     const forwardInput = (data: string, track = true) => {
       if (!id || !replayComplete || terminal.options.disableStdin || exits.has(id)) return;
+      if (track) trackFeatureOnce("terminal.type");
       const sessionId = id;
       let submitted = false;
       if (track && panesRef.current.some((pane) => pane.id === sessionId)) {

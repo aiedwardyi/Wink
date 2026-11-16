@@ -4,12 +4,17 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
+import { applyLocale } from "@/lib/i18n";
+import { answerCall } from "@/lib/live-call/active";
 import { LiveCall } from "@/lib/live-call/controller";
+import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
+import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
+import * as desktop from "./DesktopCapabilities";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -29,15 +34,15 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture() { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); }
+    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
+    stopMic() {}
     play() {}
     flush() {}
     close() {}
-    ring() {}
-    stopRing() {}
     boop() {}
     heardShare() { return 1; }
     level() { return fakes.level; }
+    micLevel() { return 0; }
   },
 }));
 
@@ -55,7 +60,7 @@ const fetchImpl = async (input: RequestInfo | URL) => {
   if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false } });
   if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
-  if (path.endsWith("/messages")) return Response.json({ ok: true }, { status: 202 });
+  if (path.endsWith("/messages")) return fakes.messages?.() ?? Response.json({ ok: true }, { status: 202 });
   if (fakes.key && path.startsWith("/api/bots?")) return Response.json({ bots: [atlas], groups: [], computerControl: {} });
   return new Response("{}", { status: 404 });
 };
@@ -67,26 +72,28 @@ async function saveKey(configured = true) {
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured } }), lastEventId: "qa:2" }));
 }
 
-async function mount(key = false) {
+async function mount(key = false, mic = true) {
   vi.stubGlobal("EventSource", class { onmessage = null; constructor() { fakes.sse = this; } close() {} });
   vi.stubGlobal("fetch", vi.fn(fetchImpl));
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("AudioContext", class { resume() { return Promise.resolve(); } close() { return Promise.resolve(); } });
+  if (mic) Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({}) } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }))));
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }), createElement(CallHostSlot))));
   if (!fakes.config) await saveKey(key);
   return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
 const frame = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-orbit-composer-frame]")!;
 const button = (root: HTMLElement, label: string) => root.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+const corner = (host: HTMLElement) => [...frame(host).querySelectorAll("button")].at(-1)!;
 
-async function connect(host: HTMLElement) {
+async function connect(host: HTMLElement, name = "Atlas") {
   const before = fakes.engines.length;
-  await act(async () => button(host, "Call Atlas")!.click());
+  await act(async () => button(host, `Call ${name}`)!.click());
   await vi.waitFor(() => expect(fakes.engines.length).toBe(before + 1));
   const engine = fakes.engines.at(-1)!;
   await act(async () => engine.events.ready());
@@ -107,6 +114,7 @@ async function type(host: HTMLElement, text: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -115,15 +123,99 @@ afterEach(() => {
   fakes.engines.length = 0;
   fakes.micError = "";
   fakes.capture.mockClear();
+  fakes.frame = undefined;
   fakes.config = undefined;
   fakes.token = undefined;
+  fakes.messages = undefined;
   fakes.key = false;
   fakes.sse = undefined;
   Reflect.deleteProperty(window, "ogb");
+  Reflect.deleteProperty(navigator, "mediaDevices");
+});
+
+describe("call button in the message box", () => {
+  it("is Call while the box is empty and Send while typing, with none in the header", async () => {
+    const { host, unmount } = await mount();
+    try {
+      expect(corner(host).getAttribute("aria-label")).toBe("Call Atlas");
+      expect(host.querySelectorAll('button[aria-label="Call Atlas"]')).toHaveLength(1);
+      await type(host, "hi");
+      expect(corner(host).getAttribute("aria-label")).toBe("Send message");
+      expect(button(host, "Call Atlas")).toBeNull();
+      await type(host, "");
+      expect(corner(host).getAttribute("aria-label")).toBe("Call Atlas");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("turns into a red End during the call and back to Call after", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      expect(corner(host).getAttribute("aria-label")).toBe("End");
+      expect(corner(host).className).toContain("bg-danger");
+      expect(button(host, "Call Atlas")).toBeNull();
+      expect(button(host, "Hang up on Atlas")).toBeNull();
+      await type(host, "also check the reset email");
+      expect(corner(host).getAttribute("aria-label")).toBe("Send message");
+      expect(button(frame(host), "End")).not.toBeNull();
+      await type(host, "");
+      await act(async () => corner(host).click());
+      await vi.waitFor(() => expect(corner(host).getAttribute("aria-label")).toBe("Call Atlas"));
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("shows no Call button where the device has no mic", async () => {
+    const { host, unmount } = await mount(false, false);
+    try {
+      expect(host.querySelector('button[aria-label^="Call"]')).toBeNull();
+      await type(host, "hi");
+      expect(corner(host).getAttribute("aria-label")).toBe("Send message");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("keeps the keyless desktop call setup in the composer", async () => {
+    Object.assign(window, { ogb: { speechStart: vi.fn() } });
+    vi.spyOn(desktop, "useDesktopCapabilities").mockReturnValue({
+      ready: true,
+      capabilities: { ...initialDesktopCapabilities(), dictation: { available: true, engine: "apple-speech", onDevice: true } },
+    });
+    const { host, unmount } = await mount();
+    const label = "Set up a voice in an agent profile to make calls";
+    try {
+      expect(button(frame(host), label)).not.toBeNull();
+      expect(button(host, "Call Atlas")).toBeNull();
+      await act(async () => button(frame(host), label)!.click());
+      expect(frame(host).querySelector('[aria-label="Call unavailable"]')).not.toBeNull();
+      expect(frame(host).querySelector('[aria-label="Call unavailable"]')!.className).toContain("bottom-full");
+      await type(host, "hi");
+      expect(corner(host).getAttribute("aria-label")).toBe("Send message");
+      expect(button(host, label)).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("labels Call in Korean", async () => {
+    applyLocale("ko");
+    const { host, unmount } = await mount();
+    try {
+      expect(corner(host).getAttribute("aria-label")).toBe("Atlas에게 전화");
+      expect(corner(host).title).toBe("Atlas에게 전화");
+    } finally {
+      applyLocale("en");
+      await unmount();
+    }
+  });
 });
 
 describe("live call in the message box", () => {
-  it("puts the controls in the box's bottom row, with no bar above it and a quiet header button", async () => {
+  it("puts the controls in the box's bottom row, with no bar above it", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
@@ -131,10 +223,7 @@ describe("live call in the message box", () => {
       expect(box.className).toContain("row-start-3");
       for (const label of ["Captions", "Mute", "End"]) expect(button(box, label)).not.toBeNull();
       expect(host.querySelector("[data-live-call]")?.querySelector("button")).toBeNull();
-      const header = button(host, "Hang up on Atlas")!;
-      expect(header.className).toContain("bg-accent/15");
       expect(button(box, "End")!.className).toContain("bg-danger");
-      expect(header.className).not.toContain("text-white");
       expect(host.textContent).toContain("Free Gemini");
 
       await act(async () => button(box, "End")!.click());
@@ -168,6 +257,7 @@ describe("live call in the message box", () => {
     }
     const second = await mount();
     try {
+      await type(second.host, "");
       await connect(second.host);
       expect(button(frame(second.host), "Captions")!.getAttribute("aria-pressed")).toBe("true");
     } finally {
@@ -184,10 +274,76 @@ describe("live call in the message box", () => {
       expect(order.closest("[data-fold]")).not.toBeNull();
       expect(frame(host).contains(order)).toBe(false);
       expect(order.querySelector("[data-live-call-time-left]")).not.toBeNull();
-      expect(order.textContent).toContain("Send: Fix the login page bug?");
+      expect([...order.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["Ask Atlas to do this?", "Fix the login page bug."]);
+      expect(order.querySelector("p + p")!.className).toContain("font-medium");
       await act(async () => [...order.querySelectorAll("button")].find((b) => b.textContent === "Yes")!.click());
       await vi.waitFor(() => expect(posts.some((path) => path.endsWith("/api/bots/atlas/messages"))).toBe(true));
     } finally {
+      await unmount();
+    }
+  });
+
+  it("asks in Korean which bot gets the order", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      applyLocale("ko");
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "체크리스트를 워드 파일로 만들어 줘" } }]));
+      const order = host.querySelector<HTMLElement>("[data-live-call-order]")!;
+      expect([...order.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["Atlas에게 이렇게 요청할까요?", "체크리스트를 워드 파일로 만들어 줘"]);
+      expect(pick(order, "예")).toBeDefined();
+    } finally {
+      applyLocale("en");
+      await unmount();
+    }
+  });
+
+  it("shows an order that was not sent in the bar, en and ko", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login page bug." } }]));
+      await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "No")!.click());
+      expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("Not sent: Fix the login page bug. (declined)");
+      applyLocale("ko");
+      await act(async () => engine.events.toolCall([{ id: "t2", name: "propose_work", args: { order: "로그인 버그 고쳐 줘" } }]));
+      expect(host.querySelector("[data-live-call-notice]")).toBeNull();
+      await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "아니요")!.click());
+      expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘 (거절됨)");
+    } finally {
+      applyLocale("en");
+      await unmount();
+    }
+  });
+
+  it("never shows a raw English reason in the Korean bar", async () => {
+    fakes.messages = () => Response.json({ error: "the bot switched tasks before it could receive the message" }, { status: 409 });
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      applyLocale("ko");
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "로그인 버그 고쳐 줘" } }]));
+      await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "예")!.click());
+      await vi.waitFor(() => expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘"));
+    } finally {
+      applyLocale("en");
+      await unmount();
+    }
+  });
+
+  it("wraps a long unbroken order and keeps a $ in the bot name", async () => {
+    const name = atlas.name;
+    atlas.name = "Cash$&Bot";
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host, "Cash$&Bot");
+      const path = `C:\Users\${"very-long-folder-name".repeat(6)}\report.docx`;
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: `Open ${path}` } }]));
+      const [ask, order] = host.querySelectorAll<HTMLElement>("[data-live-call-order] p");
+      expect(ask!.textContent).toBe("Ask Cash$&Bot to do this?");
+      expect(order!.className).toContain("break-words");
+    } finally {
+      atlas.name = name;
       await unmount();
     }
   });
@@ -231,16 +387,11 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("shows the same phone button in the desktop app and calls from it", async () => {
+  it("shows the same Call button in the desktop app and calls from it", async () => {
     Object.assign(window, { ogb: { permOpenSettings: vi.fn(), speechStop: vi.fn() } });
     const { host, unmount } = await mount();
     try {
-      const header = button(host, "Call Atlas")!;
-      expect(header.className).toContain("size-9");
-      await connect(host);
-      expect(button(host, "Hang up on Atlas")).not.toBeNull();
-      await act(async () => button(host, "Hang up on Atlas")!.click());
-      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+      expect(corner(host).getAttribute("aria-label")).toBe("Call Atlas");
       await connect(host);
       await act(async () => button(frame(host), "End")!.click());
       await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
@@ -260,6 +411,63 @@ describe("live call in the message box", () => {
       expect(alert.textContent).toBe("Microphone is off for Wink.Open settings");
       await act(async () => [...alert.querySelectorAll("button")].find((b) => b.textContent === "Open settings")!.click());
       expect(permOpenSettings).toHaveBeenCalledWith("mic");
+    } finally {
+      await unmount();
+    }
+  });
+
+  async function silentHint(host: HTMLElement) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await connect(host);
+    vi.setSystemTime(Date.now() + 6_000);
+    fakes.frame!(new ArrayBuffer(320));
+    await vi.waitFor(() => expect(host.querySelector("[data-call-mic-hint]")).not.toBeNull(), { timeout: 3_000 });
+    return host.querySelector<HTMLElement>("[data-call-mic-hint]")!;
+  }
+
+  it.each(["win32", "darwin"])("links sound input in the mic hint to the %s sound settings", async (platform) => {
+    const permOpenSettings = vi.fn();
+    Object.assign(window, { ogb: { platform, permOpenSettings, speechStop: vi.fn() } });
+    const { host, unmount } = await mount();
+    try {
+      const hint = await silentHint(host);
+      expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
+      await act(async () => pick(hint, "sound input").click());
+      expect(permOpenSettings).toHaveBeenCalledWith("sound");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([["the browser", undefined], ["Linux", { platform: "linux", permOpenSettings: vi.fn(), speechStop: vi.fn() }]])("keeps the mic hint plain text in %s", async (_where, ogb) => {
+    if (ogb) Object.assign(window, { ogb });
+    const { host, unmount } = await mount();
+    try {
+      const hint = await silentHint(host);
+      expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
+      expect(hint.querySelector("button, a")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("an answered bot call with no key opens the chat with no call and no token request", async () => {
+    const { host, unmount } = await mount();
+    try {
+      expect(answerCall(atlas, "Sign in to Claude on Home.")).not.toBeNull();
+      await act(() => new Promise((done) => setTimeout(done, 300)));
+      expect(tokens()).toBe(0);
+      expect(host.querySelector("[data-live-call]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("an answered bot call with a key still opens the call", async () => {
+    const { unmount } = await mount(true);
+    try {
+      await act(async () => void answerCall(atlas, "Sign in to Claude on Home."));
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
     } finally {
       await unmount();
     }
@@ -331,10 +539,11 @@ describe("live call in the message box", () => {
       expect(start).toHaveBeenCalledTimes(1);
       expect(confirm.disabled).toBe(true);
       expect(tokens()).toBe(2);
-      expect(fakes.capture).not.toHaveBeenCalled();
+      // The mic opens on each tap, beside the token: once for the keyless try, once for this start.
+      expect(fakes.capture).toHaveBeenCalledTimes(2);
       await act(async () => finish(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" })));
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
-      expect(fakes.capture).toHaveBeenCalledTimes(1);
+      expect(fakes.capture).toHaveBeenCalledTimes(2);
     } finally {
       finish?.(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" }));
       await unmount();
@@ -372,7 +581,7 @@ describe("live call in the message box", () => {
       await act(async () => pick(intro()!, "Start call").click());
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
       await act(async () => fakes.engines[0]!.events.ready());
-      await act(async () => button(host, "Hang up on Atlas")!.click());
+      await act(async () => button(frame(host), "End")!.click());
       await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
       await connect(host);
       expect(intro()).toBeNull();
@@ -431,10 +640,24 @@ describe("live call in the message box", () => {
         ["NotReadableError", "Your microphone is in use by another app."],
       ] as const) {
         fakes.micError = error;
+        await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
         await act(async () => button(host, "Call Atlas")!.click());
         await vi.waitFor(() => expect(host.textContent).toContain(line));
         expect(host.textContent).not.toContain(error);
       }
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("voice limit at start shows a plain line and leaves no live call", async () => {
+    fakes.token = () => Response.json({ error: "You exceeded your current quota" }, { status: 429 });
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(host.textContent).toContain("Out of voice for today. Keep typing, I'm still here."));
+      expect(host.textContent).not.toContain("quota");
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
     } finally {
       await unmount();
     }
@@ -445,9 +668,8 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(button(host, "Call Atlas")?.getAttribute("aria-pressed")).toBe("false"));
-      expect(button(host, "Hang up on Atlas")).toBeNull();
-      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+      await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+      expect(frame(host).querySelector("[data-call-box]")).toBeNull();
       expect(button(host, "End")).toBeNull();
       fakes.micError = "";
       await connect(host);

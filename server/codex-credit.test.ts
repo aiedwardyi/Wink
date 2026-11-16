@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { accountLaunch } from "./account-policy.ts";
 import { DATA_DIR } from "./config.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
-import { TOOLS, workerReportText } from "./drivers/terminal-proxy.ts";
+import { WORKER_LAUNCH_TEXT, workerReportText } from "./drivers/terminal-proxy.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createUsageBoard } from "./usage-board.ts";
@@ -62,9 +62,8 @@ function powershell(command: string, env: NodeJS.ProcessEnv) {
 
 describe("OpenAI credit Codex account", () => {
   it("does not recommend OpenAI credit in the worker description", () => {
-    const description = TOOLS.find((tool) => tool.name === "terminal_spawn")!.description;
-    expect(description).not.toContain("CODEX_HOME='OpenAI credit'");
-    expect(description).toContain("Accounts marked unavailable in Usage cannot run Codex workers");
+    expect(WORKER_LAUNCH_TEXT).not.toContain("CODEX_HOME='OpenAI credit'");
+    expect(WORKER_LAUNCH_TEXT).toContain("Accounts marked unavailable in Usage cannot run Codex workers");
   });
 
   it("names the key's env var in argv and puts the key only in the child env", () => {

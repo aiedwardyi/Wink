@@ -10,6 +10,7 @@ import { _resetPending, drainDelegations, finishDelegatedTurn, queueDelegation, 
 import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
+import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
@@ -79,7 +80,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
   const reply = `BEGIN-REPLY\n${Array.from({ length: 520 }, (_, i) => `Result ${i}: verified the complete payload.`).join("\n")}\nEND-REPLY`;
   let turnNumber = 0;
   const sendTurn = vi.fn(async (_input: { text: string; transcript: Array<{ text: string }>; resumeCursor?: unknown }) => ({ turnId: `turn-${++turnNumber}` }));
-  const instance = { driverKind: "fake", adapter: { capabilities: { sessionModelSwitch: "in-session" }, sendTurn } };
+  const instance = { driverKind: "fake", adapter: { capabilities: { sessionModelSwitch: "in-session" }, sendTurn, access: () => ({}) } };
 
   const send = async (text: string) => {
     const userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
@@ -90,7 +91,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
     expect(prepared.compacted).toBe(false);
     const task = store.taskByThread(sender.id, threadId)!;
     const result = await runDispatch({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
@@ -106,7 +107,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
       commsDepth: 0, MAX_COMMS_DEPTH: 1,
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
-      ALWAYS_REPLY_INSTRUCTIONS: "", CORPUS_SEARCH_INSTRUCTIONS: "", keepGoing: { rules: () => "" },
+      ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
       skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", tagged: [],
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { AskUserRecord } from "./AskUserRecord";
 import { isOnboardingCard } from "./OptionCard";
+import { applyLocale } from "@/lib/i18n";
 import { pinnedQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store";
 
@@ -23,7 +24,7 @@ describe("AskUserRecord", () => {
     const markup = render(question, [question]);
     expect(markup).toContain("Ada asks");
     expect(markup).toContain("Prod or staging?");
-    expect(markup).toContain("Waiting for your answer below");
+    expect(markup).toContain("Waiting for your answer<");
     expect(markup).not.toContain("<button");
   });
 
@@ -34,6 +35,30 @@ describe("AskUserRecord", () => {
     const dismissed = ask("q1", { dismissed: true });
     expect(render(dismissed, [dismissed])).toContain("Dismissed");
     expect(render(question, [question, ask("q2")])).toContain("Superseded by a newer question");
+  });
+
+  it("keeps an older waiting question's choices live, and closes it once asked again", () => {
+    const older = ask("q1", { staysOpen: true });
+    const newer = ask("q2", { staysOpen: true, subtitle: "Which branch?" });
+    const markup = renderToStaticMarkup(createElement(AskUserRecord, { message: older, transcript: [older, newer], askerName: "Ada", onPick: () => {} }));
+    expect(markup).toContain("Waiting for your answer<");
+    expect(markup).toContain(">Staging</button>");
+    expect(render(older, [older, ask("q3", { staysOpen: true })])).toContain("Asked again below");
+  });
+
+  it("reads a card the bot closed as answered in chat, with no live choices", () => {
+    const closed = ask("q1", { staysOpen: true, answered: "Answered in chat" });
+    const transcript = [closed, ask("q2", { staysOpen: true, subtitle: "Which branch?" })];
+    const markup = renderToStaticMarkup(createElement(AskUserRecord, { message: closed, transcript, askerName: "Ada", onPick: () => {} }));
+    expect(markup).toContain("Answered in chat<");
+    expect(markup).not.toContain("Answered: ");
+    expect(markup).not.toContain("<button");
+    applyLocale("ko");
+    try {
+      expect(render(closed, transcript)).toContain("채팅으로 답변함<");
+    } finally {
+      applyLocale("en");
+    }
   });
 
   it("renders nothing while the composer pins the question", () => {

@@ -397,6 +397,7 @@ export function writeSyncOperation(folder: string, operation: ProfileSyncOperati
   mkdirSync(directory, { recursive: true });
   const path = join(directory, syncOperationFileName(parsed));
   writeFileAtomic(path, serializeSyncOperation(parsed));
+  statusReads.delete(folder);
   return path;
 }
 
@@ -571,6 +572,20 @@ export function syncOperationsSignature(folder: string): string {
     return "";
   }
   return createHash("sha256").update(names.filter(isSyncOperationFile).sort().join("\n")).digest("hex");
+}
+
+const statusReads = new Map<string, { key: string; operations: number }>();
+
+// Keeps only clean reads: import rereads while any file is invalid, so status does too.
+export function syncOperationsStatus(folder: string): { operations: number; invalidFiles: string[] } {
+  let key = syncOperationsSignature(folder);
+  try { key += `\n${statSync(join(folder, PROFILE_SYNC_CHANGES_DIR)).mtimeMs}`; } catch {}
+  const kept = statusReads.get(folder);
+  if (kept?.key === key) return { operations: kept.operations, invalidFiles: [] };
+  const read = readSyncOperations(folder);
+  if (read.invalidFiles.length) statusReads.delete(folder);
+  else statusReads.set(folder, { key, operations: read.operations.length });
+  return { operations: read.operations.length, invalidFiles: read.invalidFiles };
 }
 
 export interface SyncEntityValues {

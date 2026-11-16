@@ -120,14 +120,15 @@ describe("idle motion attribute", () => {
 
   it("pauses the theme colors ring with the rainbow, changing only its colors", () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
-    const composer = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components/Composer.tsx"), "utf8");
-    expect(composer).toContain('data-orbit-rainbow={theme ? "theme" : ""}');
+    const ring = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components/RainbowRing.tsx"), "utf8");
+    expect(ring).toContain('data-orbit-rainbow={theme ? "theme" : ""}');
     const start = css.indexOf('[data-orbit-rainbow="theme"] > span {');
     expect(start).toBeGreaterThan(-1);
     const theme = css.slice(start, css.indexOf("}", start));
     expect(theme).toContain("var(--color-accent)");
     expect(theme).not.toContain("animation");
-    expect(css).toContain("html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span {");
+    expect(css).toContain("html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,");
+    expect(css).toContain('html[data-orbit-idle] [role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] > span {');
   });
 
   it("keeps every indicator ring paused while blurred and visible", () => {

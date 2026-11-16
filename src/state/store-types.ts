@@ -4,9 +4,11 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
+import type { LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
+import type { SkinId } from "@/lib/skins";
 import type { BotUpdatePatch } from "./bot-patch-queue";
 import type { AcceptedSends } from "@/lib/send-accept";
 import type { StreamBuffers, StreamRamp } from "@/lib/turn-stage";
@@ -21,6 +23,8 @@ export interface OptionCardData {
   requestId?: string;
   /** A bot's non-blocking ask_user question; see lib/open-question. */
   askUser?: true;
+  /** an ask_user card that waits until answered; older ones closed when typed past */
+  staysOpen?: true;
   /** permission asks: the tool being requested (drives the approval box) */
   tool?: string;
   /** why auto mode stopped to ask anyway */
@@ -97,6 +101,7 @@ export interface Message {
   steered?: boolean;
   /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
+  roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   call?: import("../../shared/live-call").CallTag;
@@ -123,7 +128,7 @@ export interface Message {
   /** rooms: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: MausColor };
   /** Team rooms: the room log entry this line mirrors, its author and files. */
-  author?: { kind: "host" | "person" | "bot"; id: string; name: string };
+  author?: { kind: "host" | "person" | "bot"; id: string; name: string; owner?: string };
   roomEntryId?: string;
   roomFiles?: Array<{ id: string; name: string; type: string; bytes: number; deleted?: boolean }>;
   /** emoji reactions; by = "user" or a member botId. */
@@ -137,6 +142,8 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
+  answersCard?: string;
 }
 
 export type GroupDefaultResponder =
@@ -148,7 +155,7 @@ export type GroupDefaultResponder =
 export interface Group {
   picture?: string | null;
   /** A team room's pinned line; `by` is "host" or "person:<id>". */
-  notice?: { entryId: string; by: string; at: number } | null;
+  notice?: { entryId: string; by: string; at: number; text?: string } | null;
   id: string;
   threadId: string;
   name: string;
@@ -182,12 +189,24 @@ export interface Group {
   taskState?: TaskResumePacket;
   /** True while a member turn or queued room operation is in flight. */
   working?: boolean;
+  waitingBotIds?: string[];
+  /** A team room's live bot handoff: bot lines since a person spoke. */
+  botChain?: number;
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[] } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
+}
+
+/** A teammate's own bot in a team room; it runs on its owner's PC. */
+export interface TeamBot {
+  id: string;
+  name: string;
+  color: string;
+  owner: string;
+  mascotStyle?: string;
 }
 
 /** A person's first join to a shared group, once per seat. */
@@ -357,7 +376,8 @@ export type TerminalAttentionMap = Record<string, TerminalAttention>;
 /** GET /api/config - configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
-  gemini?: { configured: boolean };
+  gemini?: { configured: boolean; introSeen?: boolean };
+  liveCall?: { voice: LiveVoice };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
@@ -381,7 +401,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "gemini" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
+  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
 >;
 
 /** How an engine gets installed - declared by its driver, mirrors
@@ -416,7 +436,7 @@ export interface InstanceInfo {
   pickerModels?: InstanceInfo["models"];
   displayName: string;
   snapshot: {
-    state: "available" | "unavailable";
+    state: "available" | "unavailable" | "checking";
     reason?: string;
     authenticated?: boolean;
     authChecked?: boolean;
@@ -479,6 +499,8 @@ export interface AppState {
   groups: Group[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  /** The last launch's profile, shown until `config` answers. */
+  cachedProfile?: ConfigStatus["profile"];
   /** selected chat - a bot id OR a group id */
   selectedId: string;
   /** a bot workspace covers the conversation surface */
@@ -486,6 +508,8 @@ export interface AppState {
   routines: Routine[];
   routineRuns: RoutineRun[];
   createBotOpen: boolean;
+  /** Bumps when a tapped notification asks for its chat, so whatever is open over the chat closes. */
+  revealed: number;
   composerFocusBotId: string | null;
   settingsOpen: boolean;
   /** Bumps when the chat avatar asks bot details to open the avatar picker. */
@@ -500,6 +524,8 @@ export interface AppState {
   appSettingsOpen: boolean;
   appSettingsSection: AppSettingsSection;
   appSettingsPage: boolean;
+  /** Themes scrolls to the first of these tiles, then forgets them on the next move in Settings. */
+  appSettingsSkins: SkinId[] | null;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
   /** a search hit to scroll to once its thread is on screen; nonce lets the
@@ -565,6 +591,7 @@ export type Action =
       groups: Group[];
       botsUnreadable?: boolean;
       computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
+      queued?: AppState["pendingQueued"];
       sidebarOrder: SidebarOrder;
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
@@ -592,6 +619,8 @@ export type Action =
       sendId?: string;
       replyToId?: string;
       threadId?: string;
+      /** The question card this line answers: its asker replies, not the room's default. */
+      cardId?: string;
       onError?: () => void;
     }
   | {
@@ -606,7 +635,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string }
+  | { type: "select"; id: string; reveal?: boolean }
   | {
       type: "send";
       botId: string;
@@ -624,7 +653,7 @@ export type Action =
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }
   | { type: "sendSettled"; threadId: string; sendId: string; queued?: boolean }
-  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string }
+  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string; held?: true }
   | { type: "editMessage"; botId: string; messageId: string; text: string; expectedSelection?: ModelSelection; onSettled?: (error?: unknown) => void }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
@@ -695,7 +724,7 @@ export type Action =
   | { type: "focusMessage"; threadId: string; messageId: string; query?: string }
   | { type: "focusMessageConsumed"; nonce: number }
   | { type: "mascotMotionDone"; nonce: number }
-  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
+  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection; skins?: SkinId[] }
   | {
       type: "updateBot";
       botId: string;

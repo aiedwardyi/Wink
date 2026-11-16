@@ -27,10 +27,11 @@ afterEach(async () => {
 });
 
 const render = (onFiles: Parameters<typeof useFileDrop>[0], disabled = false) => act(async () => root.render(createElement(Drop, { onFiles, disabled })));
-async function drag(type: string, files: File[] = []) {
-  const event = new Event(type, { cancelable: true });
+async function drag(type: string, files: File[] = [], target: EventTarget = window) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files } });
-  await act(async () => { window.dispatchEvent(event); });
+  await act(async () => { target.dispatchEvent(event); });
+  return event;
 }
 
 describe("useFileDrop", () => {
@@ -82,5 +83,40 @@ describe("useFileDrop", () => {
     await drag("drop");
     await act(async () => root.render(null));
     expect(isActive()).toBe(false);
+  });
+
+  it("ignores a drag that starts inside the page but still blocks its navigation", async () => {
+    const onFiles = vi.fn();
+    await render(onFiles);
+    const image = host.appendChild(document.createElement("img"));
+    await drag("dragstart", [], image);
+    await drag("dragenter");
+    await drag("dragover");
+    expect(host.textContent).toBe("idle");
+    const drop = await drag("drop", [new File(["png"], "chat.png")]);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(onFiles).not.toHaveBeenCalled();
+    await drag("dragend", [], image);
+    const file = new File(["notes"], "notes.txt");
+    await drag("dragenter");
+    expect(host.textContent).toBe("dragging");
+    await drag("drop", [file]);
+    expect(onFiles.mock.calls[0][0]).toEqual([file]);
+  });
+
+  it("lets outside drags through after an inside drag ends off the page or is cancelled", async () => {
+    const onFiles = vi.fn();
+    await render(onFiles);
+    const image = host.appendChild(document.createElement("img"));
+    await drag("dragstart", [], image);
+    image.remove();
+    await drag("dragenter");
+    expect(host.textContent).toBe("dragging");
+    await drag("dragleave");
+    const avatar = host.appendChild(document.createElement("img"));
+    avatar.addEventListener("dragstart", (event) => event.preventDefault());
+    await drag("dragstart", [], avatar);
+    await drag("dragenter");
+    expect(host.textContent).toBe("dragging");
   });
 });

@@ -3,6 +3,7 @@ import { Monitor, MousePointerClick, Play, RefreshCw } from "lucide-react";
 import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData, type VerifyChecker, type VerifyCounts, type VerifyErrorCode, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import { VERIFY_ROLE, VERIFY_TAG, verifyProblem } from "@/lib/verify-copy";
+import { useCheckThread } from "@/lib/show-pane";
 import { lazyView } from "@/lib/stale-build";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyShowing, useVerifyWatch, verifyCardAction, verifyCardIn } from "@/lib/verify-watch";
@@ -187,6 +188,7 @@ function VerifyPageCard({ card, threadId, messageId, fixerRunning = false }: { c
 export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Message[]; threadId: string }) {
   const { locale } = useI18n();
   const open = useVerifyWatch();
+  const checking = useCheckThread();
   const card = LIVE_VERIFY_V0 ? verifyCardIn(messages) : undefined;
   if (!card || (!card.live && !card.replay?.length)) return null;
   const label = copy[locale].watchCheck;
@@ -194,7 +196,7 @@ export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Mes
     <button
       type="button"
       data-verify-watch-icon
-      aria-pressed={open?.threadId === threadId}
+      aria-pressed={open?.threadId === threadId && checking === threadId}
       aria-label={label}
       title={label}
       onClick={() => toggleVerifyWatch({ threadId, owner: card.owner, live: verifyCardAction(card, false) === "live" })}

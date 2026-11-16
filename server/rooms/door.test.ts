@@ -15,16 +15,17 @@ import { requestCredentials, roomDoorPath } from "../phone-auth.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { apiRequestAuthorized } from "../remote-access.ts";
 import { Store } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
+import { askById, closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import * as roomDoor from "./door.ts";
-import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
+import { broadcastDoorDeleted, broadcastDoorEntry, ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
 import { deleteRoomFile } from "./files.ts";
 import { hostedRoomView } from "./guards.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites, shortRoomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
+import { hostedSend } from "./send.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 const ORIGIN = `https://${HOST}`;
@@ -176,7 +177,7 @@ function peopleRoom(name = "Team"): HostedGroup {
 }
 
 function code(group: HostedGroup, name: string): { code: string; inviteId: string; secret: string } {
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward"]);
   return { code: `wkr1:${HOST}:${invite.id}.${secret}`, inviteId: invite.id, secret };
 }
 
@@ -330,7 +331,7 @@ describe("door routes", () => {
     expect((await post("/room/v1/join", { code: code(botRoom, "Mina").code })).status).toBe(200);
     expect(roomPeople(botRoom.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
     const loose = createRoom("Loose");
-    const { invite, secret } = createInvite(loose.id, "Joon", "chat", ["Edward"]);
+    const { invite, secret } = createInvite(loose.id, "Joon", ["Edward"]);
     expect(await post("/room/v1/join", { code: `wkr1:${HOST}:${invite.id}.${secret}` })).toMatchObject({ status: 404, body: { error: "no-invite" } });
     expect(roomInvites(loose.id).map((row) => row.id)).toEqual([invite.id]);
   });
@@ -623,7 +624,7 @@ describe("snapshot and stream", () => {
     expect(res.body.entries[0]).toEqual({ seq: 6, id: expect.any(String), at: expect.any(Number), author: { kind: "host", id: "host", name: "Edward" }, text: "line 6" });
     expect(res.body.state).toEqual({
       version: expect.any(Number), roomName: "Team", instructions: "Be kind", host: "Edward",
-      me: { id: personId, name: "Mina" }, people: [{ id: personId, name: "Mina" }], bots: [], myAsks: [],
+      me: { id: personId, name: "Mina" }, people: [{ id: personId, name: "Mina" }], bots: [], teamBots: [], myAsks: [],
     });
     for (let i = 1; i < 30; i += 1) expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).status).toBe(200);
     expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).body).toEqual({ error: "rate-limited" });
@@ -746,6 +747,27 @@ describe("stream internals", () => {
     goLive(stream, 2);
     expect(res.written.map((chunk) => JSON.parse(chunk.slice(6)).kind + (JSON.parse(chunk.slice(6)).entry?.seq ?? ""))).toEqual(["entry2", "state", "entry3"]);
     res.destroy();
+  });
+
+  it("sends a host file delete live as a deleted frame a 1.0.256 teammate reads, not a reset", () => {
+    const res = new FakeRes();
+    const stream = openDoorStream("r", "p", res as unknown as ServerResponse);
+    goLive(stream, 0);
+    broadcastDoorDeleted("r", ["f".repeat(24)], 3);
+    const frames = res.written.map((chunk) => JSON.parse(chunk.slice(6)));
+    expect(frames).toEqual([{ kind: "deleted", ids: ["f".repeat(24)], count: 3 }]);
+    const older = z.object({ kind: z.literal("deleted"), ids: z.array(z.string().regex(/^[A-Za-z0-9_-]{24}$/)).max(5_000) });
+    expect(older.safeParse(frames[0]).success).toBe(true);
+    res.destroy();
+  });
+
+  it("cuts a reader whose stalled catch-up holds over 1 MB of live frames", () => {
+    const res = new FakeRes();
+    openDoorStream("r", "p", res as unknown as ServerResponse);
+    const entry = (seq: number) => ({ seq, id: `e${seq}`, at: 1, author: { kind: "host" as const, id: "host", name: "E" }, text: "x".repeat(20_000), files: [] });
+    for (let seq = 1; seq <= 60 && !res.destroyed; seq++) broadcastDoorEntry("r", entry(seq) as never);
+    expect(res.destroyed).toBe(true);
+    expect(res.written).toEqual([]);
   });
 
   it("destroys a removed person's stream socket once the ended flush deadline passes", () => {
@@ -932,8 +954,29 @@ describe("files", () => {
     await deleteRoomFile(roomId, up.body.file.id);
     const stream = await openStream(roomId, mina.key, 0);
     const frames = await stream.until((all) => all.some((frame) => frame.kind === "deleted"));
-    expect(frames.find((frame) => frame.kind === "deleted")).toEqual({ kind: "deleted", ids: [up.body.file.id] });
+    expect(frames.find((frame) => frame.kind === "deleted")).toEqual({ kind: "deleted", ids: [up.body.file.id], count: 1 });
     await shut(stream);
+  });
+
+  it("send a returning teammate only the deletions past the count it holds", async () => {
+    const group = peopleRoom();
+    const roomId = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const first = await upload(roomId, mina.key, "old notes");
+    const second = await upload(roomId, mina.key, "new notes");
+    await deleteRoomFile(roomId, first.body.file.id);
+    await deleteRoomFile(roomId, second.body.file.id);
+    const deletedAfter = async (seen: number) => {
+      const stream = await openStream(roomId, mina.key, `999&deleted=${seen}`);
+      const frames = await stream.until((all) => all.some((frame) => frame.kind === "reset"));
+      await shut(stream);
+      return frames.find((frame) => frame.kind === "deleted");
+    };
+    expect(await deletedAfter(1)).toEqual({ kind: "deleted", ids: [second.body.file.id], count: 2 });
+    expect(await deletedAfter(2)).toBeUndefined();
+    expect(await deletedAfter(9)).toEqual({ kind: "deleted", ids: [second.body.file.id, first.body.file.id], count: 2 });
+    const older = z.object({ kind: z.literal("deleted"), ids: z.array(z.string()).max(5_000) });
+    expect(older.parse({ kind: "deleted", ids: ["a"], count: 2 })).toEqual({ kind: "deleted", ids: ["a"] });
   });
 
   it("ride on a send to every reader; someone else's file, an empty line and a reused sendId are refused", async () => {
@@ -990,6 +1033,19 @@ describe("remove, leave and revoke", () => {
     expect(recentRoomEntries(group.hosted.roomId, 5)).toEqual([]);
     agent.destroy();
     other.close();
+  });
+
+  it.each(["remove", "leave"])("%s stops that person's running request", async (how) => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
+    const group = store.createGroup("Team", [wink], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;
+    const mina = await joined(group, "Mina");
+    const { ask } = hostedSend(group, { kind: "person", id: mina.personId }, "@Wink fix the build");
+    expect(startAsk(ask!.id)).toBe(true);
+    if (how === "remove") expect(removeRoomPerson(group.hosted.roomId, mina.personId)).toBe(true);
+    else expect((await post(`/room/v1/rooms/${group.hosted.roomId}/leave`, {}, { key: mina.key })).status).toBe(200);
+    expect(deps.stopTurn).toHaveBeenCalledWith(expect.objectContaining({ id: ask!.id, state: "stopping" }), expect.any(Function));
+    await vi.waitFor(() => expect(askById(ask!.id)!.state).toBe("cancelled"));
+    expect(recentRoomEntries(group.hosted.roomId, 5).at(-1)).toMatchObject({ author: { kind: "bot", id: wink }, text: "Cancelled." });
   });
 
   it("revoke ends the person's streams and their key", async () => {
@@ -1072,6 +1128,19 @@ describe("own name", () => {
       host = "에드워드";
       roomDoor.hostNameChanged();
       await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.host === host));
+    } finally {
+      stream.close();
+    }
+  });
+
+  it("pushes a member bot's new face to live viewers", async () => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink", mascotStyle: "icon-21" })!;
+    const group = store.createGroup("Crew", [wink.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const mina = await joined(group, "Mina");
+    const stream = await openStream(group.hosted.roomId, mina.key, 0);
+    try {
+      store.patchBot(wink.id, { mascotStyle: "icon-11" });
+      await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.bots.some((bot) => bot.mascotStyle === "icon-11")));
     } finally {
       stream.close();
     }
@@ -1222,7 +1291,7 @@ describe("notice", () => {
     try {
       expect(await pin(group, mina.key, first.id)).toMatchObject({ status: 200, body: { notice: { entryId: first.id, by: `person:${mina.personId}` } } });
       await stream.until((frames) => noticeOf(frames)?.entryId === first.id);
-      expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: daniel.key })).body.state.notice).toMatchObject({ entryId: first.id, by: `person:${mina.personId}`, at: expect.any(Number) });
+      expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: daniel.key })).body.state.notice).toMatchObject({ entryId: first.id, by: `person:${mina.personId}`, at: expect.any(Number), text: first.text });
       expect((await pin(group, daniel.key, second.id)).status).toBe(200);
       expect(store.groups.find((candidate) => candidate.id === group.id)?.notice).toMatchObject({ entryId: second.id, by: `person:${daniel.personId}` });
       expect((await pin(group, mina.key, null)).status).toBe(403);
@@ -1235,5 +1304,14 @@ describe("notice", () => {
     } finally {
       await shut(stream);
     }
+  });
+
+  it("sends a long pinned line's text as a 300-character preview", async () => {
+    const group = peopleRoom();
+    const long = line(group, "가".repeat(20_000));
+    const mina = await joined(group, "Mina Park");
+    expect((await pin(group, mina.key, long.id)).status).toBe(200);
+    const text = (await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: mina.key })).body.state.notice.text as string;
+    expect(text).toBe(`${"가".repeat(300)}…`);
   });
 });

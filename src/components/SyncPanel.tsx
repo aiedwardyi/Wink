@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
+import { googleSignInError } from "@/lib/google-signin-error";
 
 type SyncStatus = {
   configured: boolean;
@@ -119,10 +120,11 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
     const attempt = ++attempts.current;
     setSigningIn(true);
     setNotice("");
-    const result = await account.signIn().catch((cause: unknown) => ({ ok: false as const, error: message(cause) }));
+    const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
     if (attempt !== attempts.current) return;
     setSigningIn(false);
-    if (!result.ok) setNotice(result.error);
+    const failure = result.ok ? null : googleSignInError(result.error);
+    if (failure) setNotice(t(failure));
     await refresh();
   };
 
