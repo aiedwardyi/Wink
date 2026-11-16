@@ -30,6 +30,11 @@ export function slimStaticText(text: string, driverKind: string): string {
   return text.replace(" To create a new image, call generate_image.", "");
 }
 
+/** Claude's ToolSearch lists these by name only and loads a schema when the model selects it. */
+export function deferOptional<T extends CatalogTool>(tools: readonly T[]): T[] {
+  return tools.map((tool) => (OPTIONAL.has(tool.name) ? { ...tool, _meta: { "anthropic/alwaysLoad": false } } : tool));
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
