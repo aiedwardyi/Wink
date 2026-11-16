@@ -438,7 +438,7 @@ export function hasQueuedSendBefore(botId: string, order: number): boolean {
 }
 
 /** Take post-claim steers for preparation; a steering engine's turn also takes older
- * ones, which only waited out its busy bot. After-turn and sync-held sends stay queued. */
+ * ones, which only waited out its busy bot. An older after-turn or sync-held send keeps every send queued. */
 export function takeQueuedSteers(
   botId: string,
   threadId: string,
@@ -450,7 +450,8 @@ export function takeQueuedSteers(
   if (!entry || entry.botId !== botId) return [];
   const steerItems = entry.items.filter((item): item is SteerItem => !isRoomItem(item));
   if (!steerItems.length) return [];
-  if (steerItems.some((item) => item.seq <= since && !isSendCancelled(item.sendId) && (!steering || item.after || item.syncUntil !== undefined))) return [];
+  const waitsAhead = (item: SteerItem) => !steering || item.after || item.syncUntil !== undefined;
+  if (steerItems.some((item) => item.seq <= since && !isSendCancelled(item.sendId) && waitsAhead(item))) return [];
   const held = entry.items.filter((item) => isRoomItem(item) || promoting.has(item.messageId) || (item.after && !isSendCancelled(item.sendId)));
   if (held.length) queues.set(key, { botId, threadId, items: held });
   else queues.delete(key);

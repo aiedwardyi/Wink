@@ -629,10 +629,10 @@ describe("steer-queue module", () => {
     expect(_queuedCount(bot.threadId)).toBe(0);
   });
 
-  it("a steering engine's turn leaves sends behind a held one waiting", () => {
+  it.each([{ after: true }, { syncUntil: Date.now() + 60_000 }])("a steering engine's turn leaves sends behind a held one waiting: %o", (hold) => {
     const bot = fakeBot("bot-fold-held", "thread-fold-held", false);
     const store = fakeStore([bot]);
-    queueSteeredMessage(bot.id, bot.threadId, "after this turn", { after: true });
+    queueSteeredMessage(bot.id, bot.threadId, "held", hold);
     queueSteeredMessage(bot.id, bot.threadId, "plain");
     expect(foldPeerQueuedSends(store as never, bot.id, bot.threadId, queueMark(), true)).toEqual([]);
     expect(_queuedCount(bot.threadId)).toBe(2);
