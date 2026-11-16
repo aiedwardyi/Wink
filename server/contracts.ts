@@ -343,6 +343,8 @@ export interface ProviderAdapter {
     askApproval?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
+  /** What this turn may do, from the same values the driver sets its flags with; the prompt states it. */
+  access(turn: import("./drivers/turn-access.ts").AccessTurn): import("./drivers/turn-access.ts").TurnAccess;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
   /** End this running turn as a clean finish, through the driver's own
    * interrupt. Absent = the turn runs on to its natural end. */

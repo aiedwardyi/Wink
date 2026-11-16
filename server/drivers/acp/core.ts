@@ -132,6 +132,7 @@ const COMPUTER_PROXY_PATH = SPAWNED_PROXIES.computer;
 import { appendNative, finishNative } from "../native.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
+import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
 
 export interface AcpConfig {
   cli: string;
@@ -1518,6 +1519,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             askApproval: !config.fullAuto,
           },
           sendTurn,
+          // fullAuto selects "allow" on every session/request_permission; the rest reach Wink
+          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
           steer: support.grokInterjections
             ? async (threadId, text, consumed) => {
               const result: SteerResult = await (active.get(threadId)?.steer(text) ?? { taken: false });

@@ -72,6 +72,7 @@ import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
+import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 
@@ -280,6 +281,14 @@ const AUTO_SETTINGS = JSON.stringify({
   permissions: { ask: ["Bash", "PowerShell"] },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
+
+/** The grants of the launch flags in sendTurn; server/turn-access.test.ts checks them against the real argv. */
+export function claudeAccess(permissionMode: ClaudeConfig["permissionMode"], turn: AccessTurn): TurnAccess {
+  if (turn.readOnly) return { edits: "off", commands: "off" };
+  if (permissionMode === "bypassPermissions") return FREE_ACCESS;
+  if (turn.approval === "ask") return { edits: "ask", commands: "ask" };
+  return { edits: "free", commands: turn.approval === "auto" ? "auto" : "ask" };
+}
 
 const DENY_TIMEOUT_NOTE =
   "Wink: nobody answered this permission request in time. Skip this action and finish what you can without it.";
@@ -2265,6 +2274,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           rateLimits: true,
         },
         sendTurn,
+        access: (turn) => claudeAccess(config.permissionMode, turn),
         steer,
         applyEffort: async (threadId, effort) => {
           const s = sessions.get(threadId);
