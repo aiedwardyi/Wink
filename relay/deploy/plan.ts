@@ -38,6 +38,8 @@ export interface DeployOptions {
   google?: { desktopClientId: string; webClientId: string; signinOrigin: string };
   /** Written into wink-relay.config.json. Needs the Google flags. */
   teamOwnerEmail?: string;
+  /** Written into wink-relay.config.json as stats.readKeySha256. */
+  statsReadKeySha256?: string;
 }
 
 export interface AddressState {
@@ -139,6 +141,9 @@ export function validate(opts: DeployOptions): void {
     if (!/^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/.test(opts.teamOwnerEmail)) {
       throw new PlanError("invalid --team-owner-email");
     }
+  }
+  if (opts.statsReadKeySha256 !== undefined && !/^[a-f0-9]{64}$/.test(opts.statsReadKeySha256)) {
+    throw new PlanError("invalid --stats-read-key-sha256");
   }
 }
 

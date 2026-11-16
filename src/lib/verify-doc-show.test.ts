@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { VerifyDocKind } from "../../shared/verify-doc";
-import { DOC_SHOW_MAX_MS, DOC_SHOW_MIN_MS, VerifyDocShow } from "./verify-doc-show";
+import { DOC_SHOW_MIN_MS, VerifyDocShow } from "./verify-doc-show";
 import type { VerifyReplayMark } from "./verify-replay";
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => i % 6 === 5 ? "" : `Line ${i + 1} of the worker card, long enough to read along.`);
@@ -20,14 +20,43 @@ function play(show: VerifyDocShow, seen: (step: ReturnType<VerifyDocShow["advanc
   return show.clock;
 }
 
-it("plays a 22-line, one-chunk replay for 6 to 8 s whatever the check took", () => {
+it("plays a 22-line, one-chunk replay in about 4 s whatever the check took", () => {
   for (const took of [0, 2_000, 60_000]) {
     const show = new VerifyDocShow(false);
     show.plan(short(took), took, false);
     const length = play(show);
-    expect(length).toBeGreaterThanOrEqual(DOC_SHOW_MIN_MS);
-    expect(length).toBeLessThanOrEqual(DOC_SHOW_MAX_MS + 20);
+    expect(length).toBeGreaterThanOrEqual(3_800);
+    expect(length).toBeLessThanOrEqual(4_300);
   }
+});
+
+it("plays a 150-line, four-chunk replay in about 5 s", () => {
+  const show = new VerifyDocShow(false);
+  show.plan([text(150), band(4, 1, 40, "start"), band(5, 41, 80, "start"), band(6, 81, 120, "start"), band(9_000, 1, 40, "done"), band(9_001, 121, 150, "start"), band(11_000, 41, 80, "done"), band(12_500, 81, 120, "done"), band(16_000, 121, 150, "done")], 19_000, false);
+  const length = play(show);
+  expect(length).toBeGreaterThanOrEqual(4_800);
+  expect(length).toBeLessThanOrEqual(5_300);
+});
+
+it("glides each cursor quickly and rests only on a quote it marked", () => {
+  const show = new VerifyDocShow(false), last = new Map<string, { end: number; quote: boolean }>();
+  let reading = 0, quote = 0;
+  show.plan(short(2_000, hit(1_990, "spelling", 5, "card"), hit(1_990, "grammar", 16)), 2_000, false);
+  play(show, step => {
+    for (const c of step.moved) {
+      const was = last.get(c.id);
+      if (c.duration) {
+        expect(c.duration).toBeGreaterThanOrEqual(220);
+        expect(c.duration).toBeLessThanOrEqual(320);
+      }
+      if (was?.quote) quote = Math.max(quote, show.clock - was.end);
+      else if (was) reading = Math.max(reading, show.clock - was.end);
+      last.set(c.id, { end: c.duration ? show.clock + c.duration : Infinity, quote: c.quote !== undefined });
+    }
+  });
+  expect(reading).toBeLessThanOrEqual(40);
+  expect(quote).toBeGreaterThan(0);
+  expect(quote).toBeLessThanOrEqual(200);
 });
 
 it("keeps every cursor on a line of a chunk being checked, one per checker, each on its own spot", () => {
@@ -61,7 +90,7 @@ it("lands a finding when its checker's cursor reaches the quote, before the chun
       landed.push(`${kind} ${Math.round(show.clock / 1000)}`);
     }
   });
-  expect(landed).toEqual(["numbering 2", "spelling 2", "grammar 5"]);
+  expect(landed).toEqual(["numbering 1", "spelling 1", "grammar 3"]);
 });
 
 it("keeps the names cursor alone for the comparison, only when the check really ran one", () => {

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { openLiveEvents, type LiveEventsPlatform } from "@/lib/live-events";
 import { api } from "@/state/store";
 import type { UpdaterState } from "@/types/ogb";
+import { trackUpdater } from "./usage-stats";
 
 export type { UpdaterState };
 
@@ -66,7 +67,7 @@ export function watchRemoteUpdater(
 export function useUpdaterState(remote = false): UpdaterState | null {
   const [state, setState] = useState<UpdaterState | null>(null);
   useEffect(() => {
-    if (window.ogb?.updater) return window.ogb.updater.onState(setState);
+    if (window.ogb?.updater) return window.ogb.updater.onState((next) => { trackUpdater(next?.status, next?.version); setState(next); });
     if (remote) return watchRemoteUpdater(setState);
   }, [remote]);
   return window.ogb?.updater || remote ? state : null;

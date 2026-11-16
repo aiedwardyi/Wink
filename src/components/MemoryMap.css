@@ -57,10 +57,10 @@
 .mm-sleep-stats { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
 .mm-sleep-stats b { margin-left: 4px; color: var(--color-ink); font-weight: 600; }
 .mm-undo { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line); }
-.mm-undo:hover { background: var(--color-raised-hover); }
+@media (hover: hover) { .mm-undo:hover { background: var(--color-raised-hover); } }
 .mm-failed { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 4px 10px; font-size: 13px; line-height: 18px; color: var(--color-danger); }
 .mm-retry, .mm-action { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line, var(--color-hairline)); white-space: nowrap; }
-.mm-retry:hover, .mm-action:hover { background: var(--color-raised-hover); }
+@media (hover: hover) { .mm-retry:hover, .mm-action:hover { background: var(--color-raised-hover); } }
 
 .mm-grid { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 18px; margin-top: 16px; perspective: 1400px; }
 .mm-slot { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -72,7 +72,7 @@
   background: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 40%), var(--mm-card); border: 1px solid var(--mm-line);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 10px 30px rgb(0 0 0 / 0.25); transition: border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard); }
 .mm-panel > span { display: block; }
-button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); }
+@media (hover: hover) { button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); } }
 .mm-panel-top { display: flex !important; align-items: center; justify-content: space-between; }
 .mm-icon { width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid !important; place-items: center; color: rgb(var(--mm-blue));
   background: rgb(var(--mm-blue) / calc(0.1 * var(--mem-glow))); border: 1px solid rgb(var(--mm-blue) / calc(0.22 * var(--mem-glow))); }
@@ -86,6 +86,9 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
   display: -webkit-box !important; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .mm-newest em { font-style: normal; margin-right: 6px; opacity: 0.7; }
 .mm-count { display: flex !important; align-items: baseline; gap: 6px; margin-top: 12px; white-space: nowrap; }
+/* the frame is up before the first read lands; the numbers fade into their space */
+.mm-count, .mm-newest { transition: opacity var(--motion-moderate) var(--ease-standard); }
+.mm[data-filling] :is(.mm-count, .mm-newest) { opacity: 0; transition: none; }
 .mm-count b { font-size: 34px; line-height: 36px; font-weight: 300; letter-spacing: -0.02em;
   background: linear-gradient(90deg, rgb(var(--mm-cyan)), rgb(var(--mm-indigo))); -webkit-background-clip: text; background-clip: text; color: transparent; }
 [data-kind="knowledge"] .mm-count b { background-image: linear-gradient(90deg, rgb(var(--mm-indigo)), rgb(var(--mm-violet))); }
@@ -136,6 +139,22 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-learned li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: baseline; gap: 10px; padding: 7px 0; border-top: 1px solid var(--mm-line); line-height: 18px; }
 .mm-learned li:first-child { border-top: 0; }
 .mm-learned li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--mm-violet)); box-shadow: 0 0 8px rgb(var(--mm-violet) / var(--mem-glow)); transform: translateY(-1px); }
+.mm-asks .mm-sec-head svg { color: var(--color-ink-secondary); }
+.mm-asks-box { padding: 2px 12px; }
+.mm-asks-box > .mm-empty { margin: 0; padding: 8px 0; }
+.mm-asks-list { list-style: none; margin: 0; padding: 0; }
+.mm-asks-list li { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 7px 0; border-top: 1px solid var(--mm-line); }
+.mm-asks-list li:first-child { border-top: 0; }
+.mm-asks-rest li:first-child { border-top: 1px solid var(--mm-line); }
+.mm-asks-text { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; word-break: keep-all; }
+.mm-asks-tag { flex: none; max-width: 50%; padding: 1px 8px; border: 1px solid var(--color-hairline); border-radius: 999px; font-size: 11.5px; line-height: 16px; color: var(--color-ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-asks-list li[data-status="waiting-for-user"] .mm-asks-tag { border-color: transparent; background: var(--color-control); color: var(--color-ink); font-weight: 600; }
+.mm-asks-closed .mm-asks-text { color: var(--color-ink-secondary); }
+.mm-asks-done-toggle, .mm-asks-more { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 36px; padding: 8px 0; border-top: 1px solid var(--mm-line); font-size: 12.5px; color: var(--color-ink-secondary); text-align: left; }
+.mm-asks-done-toggle svg { transition: rotate var(--motion-moderate) var(--ease-standard); }
+.mm-asks-done-toggle[aria-expanded="true"] svg { rotate: 90deg; }
+@media (hover: hover) { :is(.mm-asks-done-toggle, .mm-asks-more):hover { color: var(--color-ink); } }
+.mm[data-stacked] :is(.mm-asks-done-toggle, .mm-asks-more) { min-height: 44px; }
 
 .mm-sheet { position: relative; z-index: 5; grid-row: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; border-radius: 16px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--color-card) 88%, rgb(var(--mm-indigo))), var(--color-card));
@@ -160,8 +179,11 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-sheet-head .mm-count { margin: 0; }
 .mm-sheet-head .mm-count b { font-size: 26px; line-height: 28px; }
 .mm-close { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px; color: var(--color-ink-secondary); background: var(--color-control); border: 1px solid var(--mm-line); }
-.mm-close:hover { color: var(--color-ink); }
+@media (hover: hover) { .mm-close:hover { color: var(--color-ink); } }
 .mm-sheet-body { flex: 1; min-height: 0; overflow-y: auto; }
+@media not all and (pointer: coarse) {
+  .mm-live::-webkit-scrollbar-track, .mm-sheet-body::-webkit-scrollbar-track { margin-block: 16px; }
+}
 .mm-sheet-body .mm-list { columns: 2; column-gap: 28px; padding: 6px 18px 12px; }
 .mm-list { list-style: none; margin: 0; padding: 0; }
 .mm-list li { break-inside: avoid; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--mm-line); font-size: 13px; line-height: 18px; }
@@ -179,9 +201,13 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-specks { position: absolute; z-index: 7; inset: 0; pointer-events: none; opacity: 0; }
 .mm-specks i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; box-shadow: 0 0 6px rgb(255 255 255 / 0.9); }
 
+/* an outgoing fold must not hold the page's scroll range open */
+.mm-wrap:has(> .mm[data-stacked] .mm-fold[data-leaving]) { overflow: clip; }
 .mm[data-stacked] .mm-ray, .mm[data-stacked] .mm-newest { display: none !important; }
 .mm[data-stacked] .mm-glow, .mm[data-stacked]::after { height: 620px; }
+.mm[data-stacked]::after { display: none; }
 .mm[data-stacked] .mm-grid { display: flex; flex-direction: column; gap: 12px; perspective: none; }
+.mm[data-stacked] .mm-slot { position: relative; }
 .mm[data-stacked] .mm-live { order: -1; }
 .mm[data-stacked] .mm-slot > .mm-panel, .mm[data-stacked] .mm-bottom .mm-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 0 12px; padding: 14px; }
 .mm[data-stacked] .mm-panel-top, .mm[data-stacked] .mm-panel .mm-label { display: contents !important; }
@@ -194,18 +220,14 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm[data-stacked] .mm-count b { font-size: 24px; line-height: 26px; }
 .mm[data-stacked] .mm-count span { font-size: 12px; }
 .mm[data-stacked] .mm-panel[aria-expanded="true"] { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); box-shadow: 0 0 40px rgb(99 102 241 / calc(0.3 * var(--mem-glow))); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.mm[data-stacked] [data-fold="opening"] { animation: mm-fold-open var(--motion-large) var(--ease-entrance); }
-.mm[data-stacked] [data-fold="opening"] .mm-list li:nth-child(-n+14), .mm[data-stacked] [data-fold="opening"] .mm-topics li:nth-child(-n+14) > .mm-topic { animation: mm-arrive var(--motion-moderate) var(--ease-entrance) 60ms backwards; }
+.mm[data-stacked] .mm-fold[data-leaving] { position: absolute; z-index: 2; top: 100%; left: 0; right: 0; pointer-events: none; }
 .mm[data-stacked] .mm-fold .mm-list:not(.mm-topics) li:nth-child(n+15) { content-visibility: auto; contain-intrinsic-block-size: auto 52px; }
-@keyframes mm-fold-open { from { opacity: 0; transform: translateY(-10px); } }
-.mm-sweep { position: absolute; z-index: 1; pointer-events: none; top: 0; left: 0; width: 65%; height: min(420px, 100%); opacity: 0;
-  background: radial-gradient(closest-side, rgb(var(--mm-violet) / calc(0.5 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.22 * var(--mem-glow))) 55%, transparent); }
 .mm-fold-edit { margin: 6px 0 2px auto; height: 44px; display: flex; }
 .mm[data-stacked] .mm-topic { min-height: 44px; }
 .mm-fold { position: relative; overflow: hidden; margin-top: -1px; padding: 4px 14px 10px; border: 1px solid rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); border-top-color: var(--mm-line); border-radius: 0 0 14px 14px; background: var(--mm-card); }
 
 /* light skins: a pearl badge, and a mist that pales toward the middle instead of deepening */
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"]) .mm {
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="snow"], [data-skin="paper-tape"], [data-skin="dim-sand"]) .mm {
   --mm-grain: 0.6;
   --mm-live-ink: 70 82 210;
   --mm-badge: radial-gradient(circle at 50% 35%, #ffffff, #eef0fc 72%);
@@ -216,19 +238,27 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
   --mm-swell: rgb(var(--mm-indigo) / 0.14);
   --mm-live-glow: 0 0 36px rgb(var(--mm-indigo) / 0.1), 0 0 90px rgb(var(--mm-pale) / 0.35);
 }
+[data-skin="dim-sand"] .mm { --mm-live-ink: 52 62 172; }
 
 .mm[data-still] .mm-glow, .mm[data-still] .mm-glow::before, .mm[data-still] .mm-brain::after, .mm[data-still] .mm-live-dot, .mm[data-still] .mm-steps i[data-now] { animation: none; }
 .mm[data-still] .mm-orbit { animation: none; opacity: 0.5; }
 .mm[data-still] .mm-glow::after { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .mm-glow, .mm-glow::before, .mm-brain::after, .mm-live-dot, .mm-steps i[data-now] { animation: none; }
+  .mm-asks-done-toggle svg { transition: none; }
   .mm-orbit { animation: none; opacity: 0.5; }
 }
+/* the loops rest while the window is idle or hidden, and under an open sheet */
+:is(html[data-orbit-idle] .mm, .mm[data-open]) :is(.mm-glow, .mm-orbit, .mm-live-dot, .mm-steps i[data-now], .mm-smooth-breath),
+:is(html[data-orbit-idle] .mm, .mm[data-open]) .mm-glow::before,
+:is(html[data-orbit-idle] .mm, .mm[data-open]) .mm-brain::after { animation-play-state: paused; }
 
 /* the smooth glow: MemoryMapGlow.ts paints these same shapes dithered per device pixel, and the CSS ones stay hidden as its source */
 .mm[data-smooth] .mm-glow, .mm[data-smooth] .mm-ray, .mm[data-smooth] .mm-brain::after, .mm[data-smooth]::after { visibility: hidden; animation: none; }
 .mm[data-smooth] .mm-brain { --mm-badge-glow: 0 0 transparent; }
-.mm[data-smooth] .mm-orbit { visibility: hidden; }
+/* the loop moves onto the canvas: a hidden element's animation has nothing to show, so Chromium keeps it off the compositor */
+.mm[data-smooth] .mm-orbit { visibility: hidden; animation-name: none; }
+.mm[data-smooth]:not([data-still]) .mm-orbit canvas { animation: inherit; animation-name: mm-ring; }
 .mm-orbit canvas { position: absolute; left: 50%; top: 50%; translate: -50% -50%; visibility: visible; image-rendering: pixelated; }
 .mm[data-smooth]:not([data-stacked]) .mm-live { --mm-live-glow: none; }
 /* each holder keeps the shadow its canvases stand in for, unseen, and reaches 48px above the map for the badge's */

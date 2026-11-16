@@ -1,11 +1,19 @@
 // One AudioContext per call: worklet capture out, 24 kHz voice in, dropped at once on barge-in.
+import { boop } from "./call-sounds";
 import { CAPTURE_WORKLET } from "./capture-worklet";
 
 const VOICE_RATE = 24_000;
+const FADE_SAMPLES = 0.3 * VOICE_RATE;
+const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
+// A phone that wants a tap leaves resume() pending, so the check gives up after this.
+const HEAL_MS = 800;
 
 export class CallAudio {
   private stream: MediaStream | null = null;
   private node: AudioWorkletNode | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
+  private reopening?: Promise<boolean>;
+  private closed = false;
   private sources = new Set<AudioBufferSourceNode>();
   private nextAt = 0;
   private startedAt = 0;
@@ -14,6 +22,8 @@ export class CallAudio {
   private readonly destination: MediaStreamAudioDestinationNode;
   private readonly output = new Audio();
   private mic: AnalyserNode | null = null;
+  private tailMs = 0;
+  private faded = 0;
   private readonly samples = new Float32Array(256);
   onIdle: () => void = () => {};
   onStart: () => void = () => {};
@@ -27,32 +37,101 @@ export class CallAudio {
   }
 
   async capture(onFrame: (pcm: ArrayBuffer) => void) {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
-    try {
-      await this.ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
+    const stream = await navigator.mediaDevices.getUserMedia(MIC);
+    // A keyless try's mic, granted late, must not stay on beside this one.
+    if (this.stream !== stream) for (const track of this.stream?.getTracks() ?? []) track.stop();
+    this.stream = stream;
+    // The mic now opens beside the call token, so a hang-up or a failed token can land first.
+    if (this.closed) return this.stopMic();
+    if (!this.node) {
+      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
+      try {
+        await this.ctx.audioWorklet.addModule(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      this.node = new AudioWorkletNode(this.ctx, "capture-16k");
+      this.mic = this.ctx.createAnalyser();
+      this.mic.fftSize = this.samples.length;
     }
-    this.node = new AudioWorkletNode(this.ctx, "capture-16k");
     this.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => onFrame(event.data);
-    const source = this.ctx.createMediaStreamSource(this.stream);
-    source.connect(this.node);
-    this.mic = this.ctx.createAnalyser();
-    this.mic.fftSize = this.samples.length;
-    source.connect(this.mic);
+    this.listen(this.stream);
     await this.ctx.resume();
-    // Open the speaker stream after capture selects Android's call audio mode.
-    this.output.srcObject = this.destination.stream;
-    await this.output.play();
+    await this.speak(this.stream);
+  }
+
+  // Takes the open mic as proof: Android gives a stream call or media volume once, as it opens, by whether a mic is open then; the side keys follow the mic.
+  private speak(_mic: MediaStream) {
+    if (this.output.srcObject !== this.destination.stream) this.output.srcObject = this.destination.stream;
+    return this.output.play();
+  }
+
+  /** False while the phone wants a tap, which can leave `start` pending. */
+  private tapped(start: Promise<unknown>): Promise<boolean> {
+    return Promise.race([start.then(() => true, () => false), new Promise<boolean>((resolve) => setTimeout(resolve, HEAL_MS, false))]);
+  }
+
+  private listen(stream: MediaStream) {
+    this.source?.disconnect();
+    this.stream = stream;
+    this.source = this.ctx.createMediaStreamSource(stream);
+    this.source.connect(this.node!);
+    this.source.connect(this.mic!);
+  }
+
+  /** Mic off with the context kept, so a later capture() opens it again. */
+  stopMic() {
+    this.source?.disconnect();
+    this.source = null;
+    for (const track of this.stream?.getTracks() ?? []) track.stop();
+    this.stream = null;
+  }
+
+  /** Back from the background: true once the mic and the voice run again, false while the phone wants a tap. */
+  async heal(): Promise<boolean> {
+    if (!this.node || this.closed) return false;
+    // With the mic open, both start before any await, so a tap's permission to play reaches them.
+    const resumed = this.tapped(this.ctx.resume());
+    const track = this.stream?.getAudioTracks()[0];
+    if (!track || track.readyState === "ended" || track.muted) this.reopening ??= this.reopen();
+    const voice = () => (this.output.paused && this.stream ? this.tapped(this.speak(this.stream)) : true);
+    const spoken = this.reopening ? this.reopening.then((mic) => mic && voice()) : voice();
+    const [running, played] = await Promise.all([resumed, spoken]);
+    return running && played && this.ctx.state === "running" && !this.closed;
+  }
+
+  private async reopen(): Promise<boolean> {
+    for (const track of this.stream?.getTracks() ?? []) track.stop();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(MIC);
+      // A hang-up while the phone granted it must not leave the mic on.
+      if (this.closed) {
+        for (const track of stream.getTracks()) track.stop();
+        return false;
+      }
+      this.listen(stream);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.reopening = undefined;
+    }
+  }
+
+  /** Call before close(): the output stays open just long enough to finish it. */
+  boop() {
+    this.tailMs = boop(this.ctx, this.destination);
   }
 
   /** Loudness 0-1 of the voice, or of whoever is louder when `mic` is on; read per frame. */
   level(mic: boolean): number {
     const voice = this.rms(this.voice);
     return Math.min(1, 4 * (mic && this.mic ? Math.max(voice, this.rms(this.mic)) : voice));
+  }
+
+  /** Raw loudness of the mic alone; 0 before capture. */
+  micLevel(): number {
+    return this.mic ? this.rms(this.mic) : 0;
   }
 
   private rms(node: AnalyserNode): number {
@@ -76,7 +155,8 @@ export class CallAudio {
     if (!pcm.length) return;
     const buffer = this.ctx.createBuffer(1, pcm.length, VOICE_RATE);
     const data = buffer.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) data[i] = pcm[i]! / 32768;
+    // Only the call's first words ease in; every later reply starts at full level.
+    for (let i = 0; i < pcm.length; i++) data[i] = (pcm[i]! / 32768) * (this.faded < FADE_SAMPLES ? this.faded++ / FADE_SAMPLES : 1);
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.voice);
@@ -112,12 +192,17 @@ export class CallAudio {
   }
 
   close() {
+    this.closed = true;
     this.flush();
-    this.output.pause();
-    this.output.srcObject = null;
-    for (const track of this.destination.stream.getTracks()) track.stop();
     this.node?.disconnect();
     for (const track of this.stream?.getTracks() ?? []) track.stop();
-    void this.ctx.close().catch(() => {});
+    const release = () => {
+      this.output.pause();
+      this.output.srcObject = null;
+      for (const track of this.destination.stream.getTracks()) track.stop();
+      void this.ctx.close().catch(() => {});
+    };
+    if (this.tailMs) setTimeout(release, this.tailMs);
+    else release();
   }
 }

@@ -9,6 +9,8 @@ import { useStoreDispatch, type Bot, type Message } from "@/state/store";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { usePresence } from "@/lib/use-presence";
+import { ReactionIcon } from "./ReactionIcon";
 
 /** The standoff between the bar and the picker. */
 const PICKER_GAP = 6;
@@ -19,13 +21,14 @@ function reactLabel(t: Translate, emoji: string, pressed: boolean) {
   return pressed ? t("chat.removeReaction", { emoji }) : t("chat.reactEmoji", { emoji });
 }
 
-export function ReactionBar({ threadId, message }: { threadId: string; message: Message }) {
+export function ReactionBar({ threadId, message, onPick }: { threadId: string; message: Message; onPick?: (emoji: string) => void }) {
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
   const [pickerOpen, setPickerOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
+  const picker = usePresence(pickerOpen);
   const mine = useMemo(
     () => new Set(
       (message.reactions ?? []).filter((reaction) => reaction.by === "user").map((reaction) => reaction.emoji),
@@ -97,7 +100,8 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
   // and taking the pane's height with it.
   useLayoutEffect(() => {
     if (!pickerOpen) {
-      setBox(null);
+      // kept through the close fade; the next open still measures hidden first
+      if (!picker.mounted) setBox(null);
       return;
     }
     const transcript = anchorRef.current?.closest("[data-orbit-transcript]");
@@ -146,7 +150,7 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
       transcript?.removeEventListener("scroll", clamp);
       observer.disconnect();
     };
-  }, [pickerOpen]);
+  }, [pickerOpen, picker.mounted]);
 
   // Portalled under document.body, the picker is no longer the trigger's tab
   // neighbour, so opening it has to carry focus across and closing it has to
@@ -159,7 +163,8 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
   }, [pickerOpen, placed]);
 
   const toggle = (emoji: string) => {
-    dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
+    if (onPick) onPick(emoji);
+    else dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
     closeAndRefocus();
   };
 
@@ -175,11 +180,13 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
       >
         {pickerOpen ? <X size={14} /> : <SmilePlus size={14} />}
       </button>
-      {pickerOpen &&
+      {picker.mounted &&
         createPortal(
           <div
             ref={pickerRef}
             data-reaction-picker
+            data-closing={picker.closing || undefined}
+            inert={picker.closing}
             // Hidden for the one commit it takes to measure the grid, so it
             // never paints in the corner on the way to its real place.
             style={{ top: box?.top ?? 0, left: box?.left ?? 0, visibility: box ? "visible" : "hidden" }}
@@ -196,11 +203,11 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
                     aria-label={reactLabel(t, emoji, pressed)}
                     aria-pressed={pressed}
                     className={cn(
-                      "flex size-7 items-center justify-center rounded-full text-[15px] leading-none transition-transform hover:scale-110 hover:bg-control",
+                      "flex size-7 items-center justify-center rounded-full text-[15px] leading-none hover:bg-control",
                       pressed && "bg-accent/15 ring-1 ring-accent/40",
                     )}
                   >
-                    {emoji}
+                    <ReactionIcon emoji={emoji} size={15} />
                   </button>
                 );
               })}
@@ -218,12 +225,17 @@ export function ReactionChips({
   members,
   corner,
   className,
+  onToggle,
+  names,
 }: {
   threadId: string;
   message: Message;
   members?: Pick<Bot, "id" | "name">[];
   corner: "left" | "right";
   className?: string;
+  /** A team room: toggles go to the room, chips always count, `names` hold people. */
+  onToggle?: (emoji: string) => void;
+  names?: ReadonlyMap<string, string>;
 }) {
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
@@ -233,7 +245,7 @@ export function ReactionChips({
   const grouped = new Map<string, string[]>();
   for (const r of reactions) grouped.set(r.emoji, [...(grouped.get(r.emoji) ?? []), r.by]);
   const nameOf = (by: string) =>
-    by === "user" ? t("chat.you") : (members?.find((b) => b.id === by)?.name ?? t("chrome.aBot"));
+    by === "user" ? t("chat.you") : (names?.get(by) ?? members?.find((b) => b.id === by)?.name ?? t("chrome.aBot"));
   return (
     <div
       data-message-reactions
@@ -247,8 +259,9 @@ export function ReactionChips({
         <button
           key={emoji}
           type="button"
-          onClick={() => dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message })}
+          onClick={() => onToggle ? onToggle(emoji) : dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message })}
           title={bys.map(nameOf).join(", ")}
+          aria-label={onToggle || bys.length > 1 ? `${emoji} ${bys.length}` : emoji}
           className={cn(
             "flex items-center gap-1 rounded-full border px-2 py-1 text-[17px] leading-none",
             bys.includes("user")
@@ -256,8 +269,8 @@ export function ReactionChips({
               : "border-hairline/40 bg-panel hover:bg-control",
           )}
         >
-          <span>{emoji}</span>
-          {bys.length > 1 && <span className="text-[11px] text-ink-secondary">{bys.length}</span>}
+          <ReactionIcon emoji={emoji} size={17} />
+          {(bys.length > 1 || onToggle) && <span className="text-[11px] text-ink-secondary">{bys.length}</span>}
         </button>
       ))}
     </div>

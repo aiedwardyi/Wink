@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { nominate } from "./quick-route.ts";
 
-// Edward's busy-time asks (ROUTER.md 1.3), redacted; the label is the probe rules' decision.
+// Busy-time asks, redacted; the label is the probe rules' decision.
 const LABELED: Array<[string, "quick" | "main"]> = [
   ["quick q with all the engines connecting, what is purpose of it?", "quick"],
   ["do u remember me telling you make eval page pretty so its impressive", "quick"],
@@ -124,7 +124,7 @@ const KO_MIXED: Array<[string, "quick" | "main"]> = [
   ["커밋 메시지 뭐라고 썼어?", "quick"],
 ];
 
-// Greetings, pings and asks aimed at the helper (Edward's 11-11 sidekick test, verbatim), then orders wrapped in them.
+// Greetings, pings and asks aimed at the helper, then orders wrapped in them.
 const CASUAL: Array<[string, "quick" | "main"]> = [
   ["sidekick test hello", "quick"],
   ["sidekick testing", "quick"],

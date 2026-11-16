@@ -313,14 +313,16 @@ describe("parseWorkerLabel", () => {
 
 describe("workerProvider", () => {
   it.each([
+    ["Meta Muse Ember", "museAgent"], ["Muse Ember", "museAgent"], ["muse-ember-1.0", "museAgent"], ["Ember", "museAgent"],
     ["Sonnet 5.5", "claudeAgent"], ["Opus 5.5", "claudeAgent"], ["Fable 5.1", "claudeAgent"],
     ["Opus5.5", "claudeAgent"], ["opus-5-5", "claudeAgent"], ["Sonnet5.5", "claudeAgent"], ["Haiku5", "claudeAgent"],
     ["GPT6.1", "codex"], ["gpt-6.1-sol", "codex"], ["Grok4.7", "grokAgent"], ["Gemini4", "geminiAgent"],
     ["GPT-6 Astra", "codex"], ["GPT-6.1 Sol", "codex"], ["Astra", "codex"], ["Sol", "codex"], ["Terra", "codex"], ["Luna", "codex"],
-    ["Muse 1.3", "museAgent"], ["Argon", "geminiAgent"], ["Flash 3.8", "geminiAgent"], ["gemini-4-argon-high", "geminiAgent"],
+    ["Muse 1.3", "museAgent"], ["Argon", "geminiAgent"], ["Flash 3.8", "geminiAgent"], ["gemini-4-argon-high", "geminiAgent"], ["Hydrogen", "geminiAgent"], ["Carbon", "geminiAgent"],
     ["Grok 4.7", "grokAgent"], ["Gemini 3.8", "geminiAgent"], ["script", "script"], ["Mystery 2", null],
     ["solid", null], ["metadata", null], ["lunar", null], ["opuslike", null], ["megagpt6", null], ["geminiature", null],
-    ["argonaut", null], ["flashy", null],
+    ["argonaut", null], ["flashy", null], ["hydrogenated", null], ["carbonara", null],
+    ["embers", null], ["remember", null],
   ])("maps %s to %s", (model, provider) => {
     expect(workerProvider(model)).toBe(provider);
   });
@@ -573,11 +575,11 @@ describe("listedRuns", () => {
       expect(bare(["eeeeeeee-1"]).map((shown) => shown.run.nick)).toEqual(["WORK", "eeeeeeee"]);
     });
 
-    it("lists every live pane up to the 16 per bot cap", () => {
-      const ids = Array.from({ length: 16 }, (_, index) => `${String(index).padStart(8, "0")}-1`);
+    it("lists every live pane up to the 128 per bot cap", () => {
+      const ids = Array.from({ length: 128 }, (_, index) => `${String(index).padStart(8, "0")}-1`);
       const listed = listedRuns([], new Set(ids));
-      expect(listed).toHaveLength(16);
-      expect(new Set(listed.map((shown) => shown.run.id)).size).toBe(16);
+      expect(listed).toHaveLength(128);
+      expect(new Set(listed.map((shown) => shown.run.id)).size).toBe(128);
     });
 
     it("lists nothing extra while liveness is unknown", () => {

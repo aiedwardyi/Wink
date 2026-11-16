@@ -1,4 +1,6 @@
+import { sidebarOrderedItems, type SidebarOrder, type SidebarStartupBot, type SidebarStartupGroup } from "./sidebar-order";
 import { SIDEBAR_INLINE_BREAKPOINT, type SidebarSide } from "./sidebar-preferences";
+import { trackSetting } from "./usage-stats";
 
 export const SWIPE_SLOP = 10;
 export const SWIPE_EDGE = 24;
@@ -51,6 +53,22 @@ export function sheetSwipeCloses(dy: number, velocity: number, height: number): 
   return swipeStep(dy, velocity, height) === -1;
 }
 
+export const BUBBLE_ARM = 56;
+export const BUBBLE_FOLLOW = 64;
+export const BUBBLE_MAX = 96;
+const BUBBLE_PAST_FOLLOW = 0.3;
+
+export type BubbleSide = "right" | "left";
+
+/** A room bubble follows the finger 1:1 to 64 px, then 0.3x, stopping at 96. Arms at 56 px; a side that isn't allowed doesn't move. */
+export function bubbleSwipe(dx: number, allowed: Record<BubbleSide, boolean>): { offset: number; armed: BubbleSide | null } {
+  const side: BubbleSide = dx < 0 ? "left" : "right";
+  if (!allowed[side]) return { offset: 0, armed: null };
+  const pull = Math.abs(dx);
+  const travel = Math.min(BUBBLE_MAX, pull <= BUBBLE_FOLLOW ? pull : BUBBLE_FOLLOW + (pull - BUBBLE_FOLLOW) * BUBBLE_PAST_FOLLOW);
+  return { offset: Math.sign(dx) * travel, armed: pull >= BUBBLE_ARM ? side : null };
+}
+
 /** Stops at both ends, no wrap. */
 export function neighborId(ids: readonly string[], currentId: string, step: SwipeStep): string | null {
   const index = ids.indexOf(currentId);
@@ -63,8 +81,15 @@ export function dragOffset(dx: number, canMove: boolean): number {
   return canMove ? dx : dx / 3;
 }
 
-export function sidebarBotIds(doc: Document = document): string[] {
-  return [...doc.querySelectorAll('[data-sidebar-row-kind="bot"]')].flatMap((row) => row.getAttribute("data-sidebar-row-id") ?? []);
+/** Swipe order: the sidebar's bots whatever search or folded sections hide; from an archived bot, the Archived list. */
+export function swipeBotIds(
+  bots: readonly SidebarStartupBot[],
+  groups: readonly SidebarStartupGroup[],
+  order: SidebarOrder,
+  currentId: string | undefined,
+): string[] {
+  if (bots.some((bot) => bot.id === currentId && bot.hidden)) return bots.filter((bot) => bot.hidden).map((bot) => bot.id);
+  return sidebarOrderedItems(bots, groups, order).flatMap((item) => (item.kind === "bot" ? [item.id] : []));
 }
 
 export function swipeBlocked(target: EventTarget | null, startX: number, win: typeof window = window): boolean {
@@ -95,6 +120,7 @@ export function vibrationEnabled(storage?: Pick<Storage, "getItem"> | null): boo
 }
 
 export function saveVibration(on: boolean, storage?: Pick<Storage, "setItem"> | null): void {
+  trackSetting("vibration", vibrationEnabled() ? "on" : "off", on ? "on" : "off", "settings", VIBRATION_KEY);
   sessionVibration = on;
   try {
     const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;

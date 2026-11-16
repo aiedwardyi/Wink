@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, Clock, Mic, Paperclip, Square, TerminalSquare, Users, X } from "lucide-react";
+import { ArrowUp, Bot as BotIcon, Clock, Mic, Paperclip, Phone, Square, TerminalSquare, User, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import {
   botDraftId,
+  claimRoomHolds,
   draftRevision,
   forgetFailedComposerSend,
   getRoomHolds,
   markDraftEdited,
   recoverFailedComposerSend,
+  restoreComposerDraft,
   rememberFailedComposerSend,
   rememberQueuedDraft,
   returnSendsToComposer,
   setRoomHolds,
+  settleRoomSend,
   takeRestoredSendId,
   updateDraftAttachment,
   useComposerDraft,
@@ -34,14 +37,17 @@ import {
   isImageFile,
   isLongPaste,
   pasteAttachment,
-  pasteImageAttachment,
   rereadEmptyImages,
+  shrinksImage,
   uploadAttachment,
+  uploadAttachmentFile,
   visibleComposerNotice,
   type Attachment,
   type ComposerThreadNotice,
   type FileAttachment,
+  type ImageAttachment,
   type PasteAttachment,
+  type UploadAttachment,
 } from "@/lib/composer-attachments";
 import {
   dropUpload,
@@ -52,10 +58,11 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -64,17 +71,22 @@ import {
   modelForNextSend,
   peelNextBusyRoomSend,
   rearmRoomFlushHold,
+  roomLineSteers,
 } from "@/lib/composer-busy";
 import { composerIsBusy } from "@/lib/send-accept";
 import { composerEnterIntent, isComposerEnterKey } from "@/lib/composer-enter";
-import { holdToSendAfter } from "@/lib/send-hold";
+import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
-import { composerNeedsTap } from "@/lib/focus-composer";
+import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
+import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
+import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
+import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
+import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
-import { pinnedQuestion } from "@/lib/open-question";
+import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -82,6 +94,7 @@ import { useCatchingUp } from "@/lib/use-catching-up";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MessageMenu, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { trackFeature } from "@/lib/usage-stats";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -95,22 +108,37 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-type MentionChoice = { id: string; name: string; bot?: Bot };
+type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean; agent?: boolean; owner?: string; label?: string };
 
-const MAX_UPLOADS_PER_MESSAGE = 5;
+export type RoomPerson = { id: string; name: string; owner?: string };
 
-const fromUpload = (attachment: Attachment) =>
-  attachment.kind === "upload" || (attachment.kind === "file" && Boolean(attachment.uploadId));
+export type RoomBotStatus = { id: string; text: string; failed?: boolean };
 
-function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAttachment {
+/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` backs the box's Stop. `chain` counts a live bot handoff. */
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number };
+
+
+const roomPicture = (id: string) => {
+  const file = roomFile(id);
+  return file && { file, picture: isRoomPicture(file) };
+};
+
+function uploadedFile(id: string, result: UploadDone, uploadId?: string, picture?: UploadAttachment["picture"]): FileAttachment | ImageAttachment {
+  if (picture === "image") return { kind: "image", id, path: result.path, name: result.name, size: result.size, mime: result.type };
   const file = fileAttachment(result.name, result.path, result.size, result.type);
   file.id = id;
   file.uploadId = uploadId;
+  if (result.preview) file.preview = result.preview;
   return file;
 }
 
 const saveUpload = (draftId: string, chipId: string) => (result: UploadDone, uploadId?: string) =>
-  updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId) : a));
+  updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId, a.picture) : a));
+
+const sendPicture = (file: File, chip: UploadAttachment) => chip.picture ? async (signal: AbortSignal): Promise<UploadDone> => {
+  const saved = await uploadAttachmentFile(file, false, signal);
+  return { path: saved.path, name: file.name || "pasted image", size: saved.bytes, type: saved.mime };
+} : undefined;
 
 interface ComposerDraftSnapshot extends ComposerSendSnapshot {
   reply: Message | null;
@@ -165,33 +193,11 @@ function queuedFromRoomHold(hold: PersistedRoomHold, draftId: string): QueuedGro
   };
 }
 
-// An absolute child sits on the frame's padding box; the inset reaches out over each skin's border.
-function RainbowRing({ theme }: { theme: boolean }) {
-  const ring = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    const el = ring.current;
-    const frame = el?.parentElement;
-    if (!el || !frame) return;
-    const fit = () => {
-      const s = getComputedStyle(frame);
-      el.style.inset = `-${s.borderTopWidth} -${s.borderRightWidth} -${s.borderBottomWidth} -${s.borderLeftWidth}`;
-    };
-    fit();
-    const appearance = new MutationObserver(fit);
-    appearance.observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin", "data-shape"] });
-    return () => appearance.disconnect();
-  }, []);
-  return (
-    <span ref={ring} aria-hidden data-orbit-rainbow={theme ? "theme" : ""}>
-      <span />
-    </span>
-  );
-}
-
 /** Renders the editable message composer and its pending attachments. */
 export function Composer({
   bot,
   group,
+  room,
   members,
   onEditLast,
   onSend,
@@ -203,9 +209,12 @@ export function Composer({
   locked = false,
   focusBlocked = false,
   call,
+  onCall,
+  callButton,
 }: {
   bot?: Bot;
   group?: Group;
+  room?: ComposerRoom;
   members?: Bot[];
   onEditLast?: () => void;
   /** Fired on the user's own send (or retry): the view re-anchors to latest. */
@@ -220,6 +229,9 @@ export function Composer({
   focusBlocked?: boolean;
   /** A live call's controls and caption, placed in the frame's grid. */
   call?: (box: { closing: boolean }) => ReactNode;
+  /** Starts a call from the empty box's Send spot; absent where calls can't work. */
+  onCall?: () => void;
+  callButton?: ReactNode;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -228,20 +240,33 @@ export function Composer({
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
-  const threadId = group?.threadId ?? bot?.threadId ?? "";
+  const threadId = group?.threadId ?? bot?.threadId ?? room?.base ?? "";
   const acceptedSends = state.acceptedSends[threadId];
   const busy = composerIsBusy(group ? Boolean(group.working) : Boolean(bot?.busy), acceptedSends);
+  const chain = group?.botChain || room?.chain;
+  // room Stop also ends a handoff no host bot is working on
+  const stoppable = busy || Boolean(room?.onStop) || Boolean(group?.botChain);
+  // a room steers into its working member's turn
+  const steerBot = group ? members?.find((member) => member.id === group.busyBotId) : bot;
   const canSteer =
-    !group && Boolean(bot) && state.instances.find((i) => i.instanceId === bot!.modelSelection.instanceId)?.capabilities?.queueing === true;
+    Boolean(steerBot) && state.instances.find((i) => i.instanceId === steerBot!.modelSelection.instanceId)?.capabilities?.queueing === true;
+  // only a line that member alone would answer joins its turn
+  const roomSteers = (message: string) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId));
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
-  const sendBlocked = locked || Boolean(approval);
   // A bot's open ask_user question pins above the composer but never locks
-  // it; a pending approval keeps its takeover and the pin waits behind it.
-  const question = pinnedQuestion(group ? group.messages : (bot?.messages ?? []), threadMessages);
+  // it; a pending approval shows first and the pin waits behind it.
+  const chatMessages = group ? group.messages : (bot?.messages ?? []);
+  const pinned = pinnedQuestion(chatMessages, threadMessages);
+  const questions = pinned ? openQuestions(chatMessages) : [];
+  // the row's arrows show an older open question until a newer one arrives
+  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
+  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
+  const questionIndex = question ? questions.indexOf(question) : -1;
+  const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
@@ -251,14 +276,15 @@ export function Composer({
     ? members?.find((member) => member.id === approval?.message.from?.botId) ??
       members?.find((member) => member.id === group.busyBotId)
     : bot;
-  const busyName = group
-    ? (members?.find((b) => b.id === group.busyBotId)?.name ?? t("chrome.aBot"))
-    : (bot?.name ?? t("chrome.aBot"));
   // Per-thread draft: switching bots unmounts this component, so both the
   // text and its attachment chips have to outlive it (see lib/drafts).
-  const draftId = group
+  const draftId = room
+    ? room.draftId
+    : group
     ? `group:${group.id}:${group.threadId}`
     : botDraftId(bot?.id ?? "", bot?.threadId ?? "");
+  const peopleRoom = Boolean(room);
+  const roomSending = useRoomSending(peopleRoom ? draftId : "");
   const [text, setText, attachments, setAttachments] = useComposerDraft(
     draftId,
     !group && bot ? `bot:${bot.id}` : undefined,
@@ -301,30 +327,32 @@ export function Composer({
   const addAttachments = useCallback(
     (next: Attachment[], uploads: { id: string; file: File }[] = [], startedAt = 0) => {
       if (startedAt > noticeAt.current) setAttachmentNotice(null);
-      let room = MAX_UPLOADS_PER_MESSAGE - attachmentsRef.current.filter(fromUpload).length;
-      const kept = next.filter((a) => a.kind !== "upload" || room-- > 0);
-      if (kept.length < next.length) showNotice(t("composer.uploadTooMany"));
-      flushSync(() => editAttachments((prev) => [...prev, ...kept]));
+      if (next.length) trackFeature("attach.add", { n: next.length });
+      flushSync(() => editAttachments((prev) => [...prev, ...next]));
       for (const upload of uploads) {
-        if (kept.some((a) => a.id === upload.id)) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id));
+        const chip = next.find((a) => a.id === upload.id);
+        if (chip?.kind === "upload") queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.shrink, sendPicture(upload.file, chip));
       }
     },
-    [draftId, editAttachments, showNotice, t],
+    [draftId, editAttachments],
   );
   const removeAttachment = useCallback(
     (id: string) => {
       const removed = attachmentsRef.current.find((a) => a.id === id);
+      if (peopleRoom) {
+        if (roomSending) return;
+        dropRoomFile(id);
       // a finished file may already be in a sent message, so only unfinished uploads are cancelled
-      if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
+      } else if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
       editAttachments((prev) => prev.filter((a) => a.id !== id));
     },
-    [editAttachments],
+    [editAttachments, peopleRoom, roomSending],
   );
   // Uploads outlive this component. A finished one becomes a plain file chip;
   // an upload chip with no job is from before a reload.
   const jobs = useSyncExternalStore(onUploadJobs, uploadJobs, uploadJobs);
   useEffect(() => {
-    for (const a of attachments) if (a.kind === "file" && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
+    for (const a of attachments) if ((a.kind === "file" || a.kind === "image") && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
     const changed = attachments.filter((a) => {
       const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
       return job && a.kind === "upload" && (job.phase === "done" || (job.uploadId && job.uploadId !== a.uploadId));
@@ -334,7 +362,7 @@ export function Composer({
       prev.map((a) => {
         const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
         if (a.kind !== "upload" || !job) return a;
-        if (job.phase === "done" && job.result) return uploadedFile(a.id, job.result, job.uploadId);
+        if (job.phase === "done" && job.result) return uploadedFile(a.id, job.result, job.uploadId, a.picture);
         return job.uploadId ? { ...a, uploadId: job.uploadId } : a;
       }),
     );
@@ -344,12 +372,13 @@ export function Composer({
     () =>
       attachments.map((a): Attachment => {
         if (a.kind !== "upload") return a;
+        if (peopleRoom) return roomFile(a.id) ? a : { ...a, state: "repick" };
         const job = jobs.get(a.id);
         if (!job) return { ...a, state: "repick" };
         const state = job.phase === "failed" ? "failed" : job.phase === "resuming" ? "resuming" : "uploading";
         return { ...a, sent: job.sent, state };
       }),
-    [attachments, jobs],
+    [attachments, jobs, peopleRoom],
   );
   const uploadErrors = attachments
     .flatMap((a) => {
@@ -366,15 +395,20 @@ export function Composer({
     const target = attachmentsRef.current.find((a) => a.id === repickTarget.current);
     repickTarget.current = null;
     if (!file || target?.kind !== "upload") return;
+    if (room) {
+      const [next] = holdRoomFiles([file], target.id);
+      editAttachments((prev) => prev.map((a) => (a.id === target.id ? next : a)));
+      return;
+    }
     // the saved session answers with its finished file or its offset
     if (file.name === target.name && file.size === target.size && file.lastModified === target.lastModified) {
-      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id));
+      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink, sendPicture(file, target));
       return;
     }
     dropUpload(target.id, target.uploadId);
-    const next = uploadAttachment(file);
+    const next = uploadAttachment(file, Boolean(target.shrink) && shrinksImage(file));
     editAttachments((prev) => prev.map((a) => (a.id === target.id ? next : a)));
-    queueUpload(next.id, file, undefined, saveUpload(draftId, next.id));
+    queueUpload(next.id, file, undefined, saveUpload(draftId, next.id), next.shrink);
   };
   // A value set from code never reaches the textarea's native undo stack, so
   // Ctrl+Z right after a long paste or "Display in chat box" restores this
@@ -463,7 +497,11 @@ export function Composer({
     if (!composerNeedsTap()) input.focus();
     requestBotPrewarm(bot.id);
     dispatch({ type: "composerFocused", botId: bot.id });
-  }, [bot, dispatch, focusBlocked, locked, approval, requestBotPrewarm, state.composerFocusBotId]);
+  }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId]);
+
+  useEffect(() => {
+    if (peopleRoom) focusComposerOnActivation({ composer: inputRef.current });
+  }, [peopleRoom]);
 
   // Reply chip alone leaves the cursor wherever it was, so a reply looks
   // picked but the user still has to click the box before typing. A failed
@@ -476,13 +514,14 @@ export function Composer({
     const input = inputRef.current;
     if (!input || input.disabled) return;
     input.focus();
-  }, [approval, focusBlocked, locked, replyTo]);
+  }, [focusBlocked, locked, replyTo]);
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
   const imageTargetsSupport = (message: string, after = false) => {
+    if (room) return "supported";
     const responders = group
-      ? roomRespondersForComposer(message, members ?? [], group)
+      ? busy && !after && steerBot && roomSteers(message) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group)
       : bot
         ? [{ modelSelection: modelForNextSend(bot, { busy, canSteer: canSteer && !after }) }]
         : [];
@@ -508,10 +547,18 @@ export function Composer({
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const pool: MentionChoice[] = group
+    const people = room?.people ?? (group?.hosted ? roomPeople(group) : []);
+    const pool: MentionChoice[] = room
+      ? [
+          ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
+          ...(room.people ?? []).map((person) => ({ id: person.id, name: person.name, person: true })),
+        ]
+      : group
       ? [
           { id: "__everyone__", name: "everyone" },
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
+          ...(group.hosted ? roomTeamBots(group) : []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
+          ...people.map((person) => ({ id: person.id, name: person.name, person: true })),
         ]
       : state.bots
           .filter((member) => member.id !== bot?.id && !member.hidden)
@@ -520,8 +567,11 @@ export function Composer({
     // "@Scout " — the full name plus a space — is a COMPLETED tag, not a
     // search: keep the picker closed so Enter sends instead of re-picking
     if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
-    return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
+    return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6).map((peer) => {
+      const owner = peer.owner && people.find((person) => person.id === peer.owner);
+      return owner ? { ...peer, label: t("teamRoom.botOwner", { name: peer.name, owner: owner.name }) } : peer;
+    });
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(pickerOpen, () => setDismissedAt(mention?.start ?? null));
 
@@ -552,11 +602,13 @@ export function Composer({
   // queue), but stay off the transcript until drain — the chips here are
   // the pending rows so they cannot become the active leaf mid-turn.
   // Persist the full FIFO (not one draft slot) so unmount cannot drop
-  // ADV-QUEUE-1..n after a mid-queue peel.
+  // the later queued lines after a mid-queue peel.
   const [queued, setQueued] = useState<QueuedGroupSend[]>(() =>
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );
   const queuedRef = useRef<QueuedGroupSend[]>(queued);
+  const holdsRoom = Boolean(group);
+  useEffect(() => (holdsRoom ? claimRoomHolds(draftId) : undefined), [holdsRoom, draftId]);
   const roomFlushLock = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -586,19 +638,44 @@ export function Composer({
       target: {
         threadId, message: { id: entry.draft.sendId, role: "user", kind: "text", text: entry.text, at: 0 },
         copyText: entry.text, user: true, pinned: false, canPin: false,
-        queued: { cancel: () => dropQueued(entry.draft.sendId) },
+        queued: {
+          cancel: () => dropQueued(entry.draft.sendId),
+          sendNow: group && roomSteers(entry.text) ? () => {
+            // the hold may have flushed while its menu was open
+            if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
+            dropQueued(entry.draft.sendId);
+            dispatch({
+              type: "sendGroup",
+              groupId: group.id,
+              text: entry.text,
+              sendId: entry.draft.sendId,
+              replyToId: entry.replyToId,
+              threadId: entry.draft.threadId,
+              onError: () => restoreDraft(entry.draft),
+            });
+          } : undefined,
+        },
       },
     });
   };
   // a chip on its own is a message: the send control has to appear for it
   const fileInput = useRef<HTMLInputElement>(null);
+  const showRoomProblem = (problem: RoomProblem | null) =>
+    setImageNotice(problem ? { threadId, text: t(problem.key, problem.vars) } : null);
   const pickFiles = async (picked: readonly File[], startedAt = performance.now()) => {
-    if (!picked.length) return;
+    if (!picked.length || room?.offline) return;
+    if (room) {
+      const kept = attachmentsRef.current.filter((a): a is UploadAttachment => a.kind === "upload");
+      const problem = filesProblem([...kept, ...picked]);
+      showRoomProblem(problem);
+      if (!problem) editAttachments((prev) => [...prev, ...holdRoomFiles(picked)]);
+      return;
+    }
     const { attachments: added, uploads, notice } = await intakeFiles(picked, {
       t,
       allowImages: engineSupportsImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
+      shrunkPath: shrunkPicture,
     });
     if (added.length) addAttachments(added, uploads, startedAt);
     // Keep file-specific failures beside the attachments. A successful
@@ -611,21 +688,45 @@ export function Composer({
     if (images.length < pasted.length) showNotice(t("composer.pasteImageFailed"));
     await pickFiles(images, startedAt);
   };
-  const idlePlaceholder = group
+  const idlePlaceholder = room
+    ? t("composer.roomLead", { name: room.name })
+    : group
     ? groupComposerHint(group, members ?? [], t)
     : t("composer.placeholder", { name: bot?.name ?? "" });
-  const busyChrome = composerBusyChrome(
-    { busy, isRoom: Boolean(group), canSteer, name: busyName, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches },
-    t,
-  );
+  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
-  const uploading = attachments.some((attachment) => attachment.kind === "upload");
+  const uploading = room
+    ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
+    : attachments.some((attachment) => attachment.kind === "upload");
+  // The text leaves the box at send like a bot chat; file chips stay as the upload's sign until the room accepts it.
+  const sendRoom = async (target: ComposerRoom) => {
+    const liveText = composerSendSourceText(inputRef.current?.value, text).trim();
+    const held = attachments;
+    const sent = held.filter((attachment) => attachment.kind === "upload");
+    const files = sent.flatMap((attachment) => roomFile(attachment.id) ?? []);
+    if (!liveText && !files.length) return;
+    const sentReply = replyTo ?? null;
+    const request = startRoomSend(draftId, (sendId) => sendToRoom(target.base, liveText, files, sendId, sentReply?.roomEntryId ?? sentReply?.id));
+    if (!request) return;
+    hapticTick();
+    onSend?.();
+    onConsumeReply?.();
+    restoreComposerDraft(draftId, { text: "", attachments: held });
+    const failed = await request;
+    showRoomProblem(failed);
+    settleRoomSend(draftId, liveText, new Set(held.map((attachment) => attachment.id)), Boolean(failed));
+    if (failed) {
+      if (sentReply) onRestoreReply?.(sentReply, target.base);
+      return;
+    }
+    for (const attachment of sent) dropRoomFile(attachment.id);
+  };
   const terminalBridge = typeof window === "undefined" ? undefined : window.ogb?.terminal;
   const canSendToTerminal = Boolean(
     bot && !group && terminalBridge?.readBot && terminalBridge?.sendBot,
   );
   const retryFailedSend = (failed: FailedComposerSend) => {
-    if (sendBlocked) return;
+    if (locked) return;
     if (failed.requestText.includes("<attached-image ")) {
       const support = imageTargetsSupport(failed.requestText, failed.after);
       if (support !== "supported") {
@@ -658,14 +759,22 @@ export function Composer({
     }
     onSend?.();
   };
-  const send = (after = false) => {
+  const send = (requestedAfter = false) => {
+    // a turn waiting on an approval takes the line after it, not mid-decision
+    const after = requestedAfter || Boolean(approval);
     const action = composerBusySendAction({
-      locked: sendBlocked,
+      locked,
       isRoom: Boolean(group),
       busy,
+      canSteer: roomSteers(composerSendSourceText(inputRef.current?.value, text)),
+      after,
       heldCount: queuedRef.current.length,
     });
-    if (action === "block" || uploading) return;
+    if (action === "block" || uploading || room?.offline) return;
+    if (room) {
+      void sendRoom(room);
+      return;
+    }
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (attachments.some((attachment) => attachment.kind === "image")) {
       const support = imageTargetsSupport(liveText, after);
@@ -676,6 +785,7 @@ export function Composer({
     }
     const t = composeMessage(liveText, attachments);
     if (!t) return;
+    markSent();
     hapticTick();
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
@@ -732,7 +842,7 @@ export function Composer({
     onSend?.();
   };
   const previewTerminalSend = async () => {
-    if (sendBlocked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
+    if (locked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (!liveText.trim()) return;
     if (attachments.length) {
@@ -758,8 +868,8 @@ export function Composer({
     }
   };
   const confirmTerminalSend = async () => {
-    if (sendBlocked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
-      if (sendBlocked || !canSendToTerminal) setTerminalSendPreview(null);
+    if (locked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
+      if (locked || !canSendToTerminal) setTerminalSendPreview(null);
       return;
     }
     setTerminalSendBusy(true);
@@ -788,7 +898,7 @@ export function Composer({
   };
   useEffect(() => {
     if (!group) return;
-    if (sendBlocked) return;
+    if (locked) return;
     if (busy) {
       roomFlushLock.current = false;
       return;
@@ -821,13 +931,13 @@ export function Composer({
         commitQueued(rearmRoomFlushHold(queuedRef.current));
       },
     });
-  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, sendBlocked]);
+  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, locked]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
   useEffect(() => {
     if (!recording) return;
-    if (sendBlocked) {
+    if (locked) {
       setRecording(false);
       return;
     }
@@ -857,10 +967,10 @@ export function Composer({
       offEnd();
       void bridge.speechStop();
     };
-  }, [recording, editText, sendBlocked]);
+  }, [recording, editText, locked]);
 
   const toggleMic = () => {
-    if (sendBlocked) return;
+    if (locked) return;
     if (!capabilities.dictation.available || !window.ogb) {
       setSpeechError(t("composer.dictationUnavailable"));
       return;
@@ -879,7 +989,7 @@ export function Composer({
         </div>
       )}
       {shownImageNotice && (
-        <div className="pointer-events-auto mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+        <div role="alert" className="pointer-events-auto mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
           <span className="min-w-0 flex-1">{shownImageNotice}</span>
           <button
             type="button"
@@ -925,19 +1035,27 @@ export function Composer({
                   i === highlight ? "bg-raised-hover" : "",
                 )}
               >
-                {peer.bot ? (
+                {peer.person ? (
+                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
+                    <User size={14} aria-hidden="true" />
+                  </span>
+                ) : peer.bot ? (
                   <BotAvatar
                     bot={peer.bot}
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
                     size={24}
                   />
+                ) : peer.agent ? (
+                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
+                    <BotIcon size={14} aria-hidden="true" />
+                  </span>
                 ) : (
                   <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? t("composer.agent") : t("composer.channel")}</span>
+                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
           </div>
@@ -946,6 +1064,21 @@ export function Composer({
             first, so a long list of them shrinks instead of pushing the send
             row (below, shrink-0) off the screen. */}
         <div className="min-h-0 shrink overflow-y-auto">
+        {group?.waitingBotIds?.map((id) => (
+          <p key={id} data-room-bot-wait role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
+            {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
+          </p>
+        ))}
+        {chain ? (
+          <p data-bot-chain role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
+            {t("teamRoom.botChain", { n: chain })}
+          </p>
+        ) : null}
+        {room?.status?.map((row) => (
+          <p key={row.id} data-my-bot-turn role="status" className={cn("mb-1.5 px-1 text-[12px]", row.failed ? "text-danger" : "text-ink-secondary")}>
+            {row.text}
+          </p>
+        ))}
         {catchingUp && (
           <p data-catching-up role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
             {t("composer.catchingUp")}
@@ -962,7 +1095,7 @@ export function Composer({
             <button
               type="button"
               onClick={() => retryFailedSend(failed)}
-              disabled={sendBlocked}
+              disabled={locked}
               className="shrink-0 rounded px-2 py-1 font-medium hover:bg-danger/10"
             >
               {t("composer.retry")}
@@ -1012,8 +1145,7 @@ export function Composer({
             </button>
           </div>
         ))}
-        {/* An approval takes over the composer: you answer it before you
-            can type again, so a waiting bot is impossible to miss. */}
+        {/* An approval sits on the composer so a waiting bot is impossible to miss. */}
         {approval && (
           <div data-pending-approval className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
             <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
@@ -1030,8 +1162,20 @@ export function Composer({
         )}
         {question && (
           <PendingQuestionPanel
+            key={question.id}
             message={question}
             askerName={questionAsker}
+            count={questions.length}
+            index={questionIndex}
+            onStep={(step) => {
+              const next = questions[questionIndex + step];
+              if (!next || !pinned) return;
+              foldQuestion(next.id);
+              setQuestionPick({ id: next.id, newest: pinned.id });
+            }}
+            typed={text}
+            attached={attachments.length}
+            movedOn={questionMovedOn}
             onPick={(choice) => {
               if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });
               else if (bot) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
@@ -1046,14 +1190,14 @@ export function Composer({
           <div className="mb-2 px-1">
             <ReplyQuote
               message={replyTo}
-              fallbackName={bot?.name}
+              fallbackName={room ? replyTo.author?.name : bot?.name}
               onClear={onClearReply}
             />
           </div>
         )}
-        <div inert={sendBlocked}>
+        <div inert={locked}>
         <ComposerAttachments
-          disabled={sendBlocked}
+          disabled={locked}
           items={shownAttachments}
           onAdd={addAttachments}
           onRemove={removeAttachment}
@@ -1066,6 +1210,9 @@ export function Composer({
           allowImages={engineSupportsImages}
           notice={attachmentNotice}
           onNotice={showNotice}
+          localFile={room ? roomPicture : undefined}
+          onDropFiles={room ? (files) => void pickFiles(files) : undefined}
+          dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
         />
         </div>
         </div>
@@ -1093,9 +1240,10 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
+          {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
-            disabled={sendBlocked}
+            disabled={locked}
             type="file"
             multiple
             className="hidden"
@@ -1107,7 +1255,7 @@ export function Composer({
           />
           <input
             ref={repickInput}
-            disabled={sendBlocked}
+            disabled={locked}
             type="file"
             className="hidden"
             onChange={(e) => {
@@ -1115,7 +1263,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!sendBlocked && (
+          {!locked && !room?.offline && (
             <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
               <button
                 type="button"
@@ -1141,7 +1289,7 @@ export function Composer({
             setDismissedAt(null);
           }}
           onPaste={(e) => {
-            const imageFiles = Array.from(e.clipboardData.files).filter(isImageFile);
+            const imageFiles = Array.from(e.clipboardData.files).filter((file) => room || isImageFile(file));
             if (imageFiles.length) {
               e.preventDefault();
               // same intake as a pick, so an oversized image takes the big-file route
@@ -1150,7 +1298,8 @@ export function Composer({
             }
             // a wall of text becomes a chip instead of burying the input
             const pasted = e.clipboardData.getData("text/plain");
-            if (!isLongPaste(pasted)) return;
+            // A pasted-text chip reaches people as raw markup.
+            if (room || !isLongPaste(pasted)) return;
             e.preventDefault();
             // Preserve native paste replacement semantics: if text was
             // selected, the attachment replaces that selection.
@@ -1227,27 +1376,27 @@ export function Composer({
             }
             if (e.key === "Escape" && recording) setRecording(false);
           }}
-          disabled={Boolean(approval) || locked}
+          disabled={locked}
           placeholder={
             locked
               ? t("composer.finishSetup")
-              : approval
-              ? t("composer.answerApproval")
               : recording
               ? t("composer.listening")
-              : question && !question.card?.options.length
+              : pinned && !pinned.card?.options.length
               ? t("ask.typeAnswer")
               : busyChrome.placeholder
           }
-          aria-label={t("composer.messageAria", { name: group ? group.name : (bot?.name ?? "") })}
-            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
+          aria-label={t("composer.messageAria", { name: group ? group.name : room ? room.name : (bot?.name ?? "") })}
+            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none max-md:text-[16px]"
           />
         <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
           {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
-          {busy && !locked && !callSlot.mounted && (
+          {stoppable && !locked && !callSlot.mounted && (
           <button
             onClick={() => {
-              if (group) stopRoom(group.id);
+              if (stopTooSoon()) return;
+              if (room?.onStop) room.onStop();
+              else if (group) stopRoom(group.id);
               else if (bot && !stopping) {
                 const botId = bot.id;
                 setStoppingBotId(botId);
@@ -1270,7 +1419,7 @@ export function Composer({
             <Square size={12} className="fill-current" />
           </button>
         )}
-        {!sendBlocked && !busy && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
+        {!locked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.stopDictation") : t("composer.startDictation")}
@@ -1285,7 +1434,7 @@ export function Composer({
             <Mic size={18} />
           </button>
         )}
-        {hasContent && !sendBlocked && (
+        {hasContent && !locked && (
           <>
           {/* Hidden while sharing is on: the bot types into its own panes. */}
           {canSendToTerminal && bot?.shareTerminalWithChat === false && !busy && (
@@ -1302,20 +1451,28 @@ export function Composer({
           )}
           <button
             {...holdToSendAfter(send)}
-            disabled={uploading}
+            disabled={uploading || room?.offline}
             aria-label={t(busyChrome.sendAriaKey)}
             title={uploading ? t("composer.uploadWaiting") : t(busyChrome.sendTitleKey)}
-            className={cn(
-              "flex size-8 shrink-0 select-none items-center justify-center rounded-full text-accent-ink [-webkit-touch-callout:none] disabled:opacity-40",
-              busyChrome.sendLooksQueued
-                ? "bg-raised text-ink-secondary hover:bg-raised-hover"
-                : "bg-accent hover:brightness-110",
-            )}
+            className="flex size-8 shrink-0 select-none items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 [-webkit-touch-callout:none] disabled:opacity-40"
           >
-            {busyChrome.sendLooksQueued ? <Clock size={15} /> : <ArrowUp size={17} />}
+            <ArrowUp size={17} />
           </button>
           </>
           )}
+          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
+            <button
+              type="button"
+              onClick={onCall}
+              onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
+              onFocus={warmCallAudio}
+              aria-label={t("composer.call", { name: bot.name })}
+              title={t("composer.call", { name: bot.name })}
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
+            >
+              <Phone size={16} />
+            </button>
+          ))}
           </div>
         </div>
         </div>

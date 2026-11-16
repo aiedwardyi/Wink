@@ -1,6 +1,7 @@
 // User messages, bot output, filenames, and transcripts never enter t().
 import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { catalogs, type MessageKey } from "./i18n-catalog";
+import { trackSetting } from "./usage-stats";
 export type { MessageKey };
 
 export const LOCALE_IDS = ["en", "ko"] as const;
@@ -103,6 +104,7 @@ export function applyLocale(id: LocaleId): void {
 
 export function persistPreference(preference: LocalePreference): LocaleId {
   const locale = resolveLocale(preference);
+  trackSetting("language", currentLocale, locale);
   try {
     getStore()?.setItem(KEY, preference);
   } catch {

@@ -8,6 +8,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { isTransientUpdateError } from "../../shared/update-error.mjs";
+import { trackUpdate } from "@/lib/usage-stats";
 
 // The one action button in the card. Disabled drops the accent fill for the
 // flat raised grey — the "I heard you" the click needs while the main process
@@ -74,7 +75,7 @@ export function UpdateBanner() {
             : friendlyError(t, s.message);
 
   return (
-    <div className="animate-panel-in fixed bottom-4 left-4 z-50 w-[300px] rounded-xl border border-hairline/40 bg-panel p-3.5 shadow-2xl shadow-black/50">
+    <div className="animate-pop-in fixed bottom-4 left-4 z-50 w-[300px] rounded-xl border border-hairline/40 bg-panel p-3.5 shadow-2xl shadow-black/50">
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
           <Sparkles size={14} />
@@ -127,6 +128,7 @@ export function UpdateBanner() {
             <button
               onClick={() => {
                 setPending("download");
+                trackUpdate("clicked", s.version);
                 void updater.download();
               }}
               disabled={pending !== null}

@@ -13,6 +13,15 @@ import type { JoinedFile } from "./joined.ts";
 
 const roomDir = (roomId: string) => join(DATA_DIR, "joined-files", roomId);
 
+export async function removeJoinedFiles(roomId: string): Promise<void> {
+  if (!/^[\w-]{1,64}$/.test(roomId)) throw new Error("bad room id");
+  await rm(roomDir(roomId), { recursive: true, force: true });
+}
+
+export async function dropJoinedFiles(roomId: string, ids: readonly string[]): Promise<void> {
+  await Promise.all(ids.map((id) => rm(join(roomDir(roomId), id), { force: true })));
+}
+
 /** The held copy, when it is all there. */
 export function cachedJoinedFile(roomId: string, file: JoinedFile): string | null {
   const path = join(roomDir(roomId), file.id);
@@ -53,7 +62,7 @@ export async function keepJoinedFile(roomId: string, file: JoinedFile, body: Inc
   }
 }
 
-const ROUTE = /^\/api\/joined\/rooms\/([\w-]{1,64})\/files(?:\/([A-Za-z0-9_-]{24})(\/preview)?)?$/;
+const ROUTE = /^\/api\/joined\/rooms\/([\w-]{1,64})\/(?:files(?:\/([A-Za-z0-9_-]{24})(\/preview)?)?|(picture))$/;
 
 function reply(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -62,24 +71,29 @@ function reply(res: ServerResponse, status: number, body: unknown): void {
 
 /** Local only, like the rest of /api/joined/. False when the path isn't a file route. */
 export async function joinedFileRoute(
-  req: IncomingMessage, res: ServerResponse, method: string, url: URL, client: Pick<GuestClient, "start" | "upload" | "file">,
+  req: IncomingMessage, res: ServerResponse, method: string, url: URL, client: Pick<GuestClient, "start" | "upload" | "file" | "picture">,
 ): Promise<boolean> {
   const route = ROUTE.exec(url.pathname);
   if (!route) return false;
   const [, roomId, fileId, preview] = route as unknown as [string, string, string | undefined, string | undefined];
-  if (method !== (fileId ? "GET" : "POST")) {
+  if (method === "DELETE" && fileId) {
+    reply(res, 403, { error: "forbidden" });
+    return true;
+  }
+  const picture = Boolean(route[4]);
+  if (method !== (fileId || picture ? "GET" : "POST")) {
     reply(res, 404, { error: "not found" });
     return true;
   }
   client.start();
-  if (!fileId) {
+  if (!fileId && !picture) {
     const result = await client.upload(roomId, req, url.searchParams.get("name") ?? "", url.searchParams.get("uploadId") ?? "", req.headers["content-length"]);
     const extra = result.uploadId ? { uploadId: result.uploadId } : {};
     reply(res, result.ok ? 200 : result.status, result.ok ? { file: result.value, ...extra } : { error: result.error, ...extra });
     return true;
   }
-  const held: GuestResult<{ file: JoinedFile; path: string }> = await client.file(roomId, fileId);
+  const held: GuestResult<{ file: JoinedFile; path: string }> = picture ? await client.picture(roomId) : await client.file(roomId, fileId!);
   if (!held.ok) reply(res, held.status, { error: held.error });
-  else if (!(await sendBlob(res, held.value.path, held.value.file, preview !== undefined))) reply(res, 404, { error: "not found" });
+  else if (!(await sendBlob(res, held.value.path, held.value.file, picture || preview !== undefined))) reply(res, 404, { error: "not found" });
   return true;
 }

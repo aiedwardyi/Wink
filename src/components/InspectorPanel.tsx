@@ -217,7 +217,7 @@ export function InspectorPanel({ bot, closing = false }: { bot: Bot; closing?: b
   }, [closing, dispatch]);
 
   return (
-    <aside ref={panelRef} data-side-panel="" data-closing={closing || undefined} inert={closing} className="animate-panel-in flex h-full w-[460px] shrink-0 flex-col border-l border-hairline/40 bg-panel data-closing:relative data-closing:z-20 data-closing:-ml-[460px]">
+    <aside ref={panelRef} data-side-panel="" data-closing={closing || undefined} inert={closing} className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in flex h-full w-[460px] shrink-0 flex-col border-l border-hairline/40 bg-panel data-closing:relative data-closing:z-20 data-closing:-ml-[460px]">
       <div className="flex items-center justify-between px-4 py-3">
         <span className="flex items-center gap-2 text-[15px] font-semibold text-ink">
           <Bug size={16} className="text-ink-secondary" /> Inspector
@@ -279,7 +279,7 @@ function Row({ row, open, onToggle }: { row: InspectorRow; open: boolean; onTogg
         row.tone === "error" && "bg-danger/10",
       )}
     >
-      <button onClick={onToggle} className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-raised/60">
+      <button onClick={onToggle} className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-raised/50">
         <span className="mt-[1px] shrink-0 text-ink-secondary"><ChevronDown size={12} className={cn("transition-transform", open && "rotate-180")} /></span>
         <span className="shrink-0 tabular-nums text-ink-secondary">{formatTime(row.at)}</span>
         <span

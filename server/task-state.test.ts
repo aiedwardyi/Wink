@@ -13,15 +13,18 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
+import * as atomic from "./atomic.ts";
 import {
   assignTaskNextAction,
   deleteTaskResumePacket,
   groundTaskArtifacts,
   readTaskResumePacket,
+  settleTaskResumePacket,
+  stageTaskResumePacket,
   TASK_STATE_MAX_BYTES,
   taskStateNotice,
   taskStateUpdateError,
@@ -29,7 +32,8 @@ import {
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
-import { recordTaskCompletion, seedTaskResumePacket } from "./task-state-fold.ts";
+import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
+import type { TaskAsk } from "./task-asks.ts";
 
 const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => ({
   v: 1,
@@ -52,6 +56,11 @@ const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => 
   turnsAtWrite: 3,
   ...overrides,
 });
+const asks: TaskAsk[] = [
+  { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348", at: 100, changedAt: 100 },
+  { id: "A2", ask: "Drop the old skin", status: "declined", at: 110, changedAt: 150 },
+  { id: "A3", ask: "Ship now or after review?", status: "open", kind: "question", choices: "Now / After review", at: 120, changedAt: 120 },
+];
 
 describe("task resume packets", () => {
   let dir: string;
@@ -61,6 +70,7 @@ describe("task resume packets", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -133,6 +143,55 @@ describe("task resume packets", () => {
     expect(saved.completed.at(-1)?.note).toBe("Milestone 34");
   });
 
+  it("keeps every ask, closed ones included, across rewrites and new instructions", () => {
+    const saved = writeTaskResumePacket(packet({ asks }), { dir });
+    expect(saved.asks).toEqual(asks);
+    const instructed = recordTaskInstruction(saved, { text: "Next task", messageId: "message-9", now: 300, turnsAtWrite: 4 });
+    writeTaskResumePacket(instructed, { dir });
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(asks);
+    expect(writeTaskResumePacket(packet(), { dir })).not.toHaveProperty("asks");
+  });
+
+  it("drops closed asks first to fit 16 KiB beside the open ones and never an open one", () => {
+    const many = Array.from({ length: 40 }, (_, index): TaskAsk => ({
+      id: `A${index + 1}`,
+      ask: `${index}:${"가".repeat(70)}`,
+      status: index % 2 ? "open" : "done",
+      ref: "r".repeat(80),
+      at: index,
+      changedAt: index,
+    }));
+    const completed = Array.from({ length: 30 }, (_, index) => ({ note: `${index}:${"x".repeat(250)}`, at: index }));
+
+    const saved = writeTaskResumePacket(packet({ asks: many, completed }), { dir });
+
+    const rest = { ...saved, asks: saved.asks?.filter((ask) => ask.status !== "open") };
+    expect(Buffer.byteLength(JSON.stringify(rest, null, 2), "utf8")).toBeLessThanOrEqual(TASK_STATE_MAX_BYTES);
+    const dropped = many.filter((ask) => !saved.asks?.some((kept) => kept.id === ask.id));
+    expect(dropped.length).toBeGreaterThan(0);
+    expect(dropped).toEqual(many.filter((ask) => ask.status === "done").slice(0, dropped.length));
+    expect(saved.completed.length).toBeGreaterThan(0);
+  });
+
+  it("saves and reads back 100 open asks past the 16 KiB budget", () => {
+    const open = Array.from({ length: 100 }, (_, index): TaskAsk => ({
+      id: `A${index + 1}`, ask: `${index}:${"가".repeat(70)}`, status: "open", ref: "r".repeat(80), at: index, changedAt: index,
+    }));
+
+    const saved = writeTaskResumePacket(packet({ asks: open }), { dir });
+
+    expect(statSync(join(dir, "thread-1.json")).size).toBeGreaterThan(TASK_STATE_MAX_BYTES);
+    expect(saved.asks).toEqual(open);
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(open);
+  });
+
+  it("keeps the highest ask id across saves after that ask is gone", () => {
+    const top: TaskAsk = { id: "A7", ask: "old", status: "done", at: 1, changedAt: 1 };
+    expect(writeTaskResumePacket(packet({ asks: [top] }), { dir }).lastAskId).toBe(7);
+    writeTaskResumePacket({ ...readTaskResumePacket("thread-1", { dir })!, asks: [] }, { dir });
+    expect(readTaskResumePacket("thread-1", { dir })?.lastAskId).toBe(7);
+  });
+
   it("replaces an old packet without leaving temporary files", () => {
     writeTaskResumePacket(packet(), { dir });
     writeTaskResumePacket(packet({ nextAction: "Publish after approval" }), { dir });
@@ -142,6 +201,78 @@ describe("task resume packets", () => {
     expect(readTaskResumePacket("thread-1", { dir })?.nextAction).toBe("");
     expect(existsSync(join(dir, "thread-1.json"))).toBe(true);
     expect(readFileSync(join(dir, "thread-1.json"), "utf8")).not.toContain("Finish the comparison table");
+  });
+
+  it("stages a send's record with no fsync and reads it back", () => {
+    const before = writeTaskResumePacket(packet(), { dir });
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+
+    const staged = stageTaskResumePacket(packet({ instructionId: "message-2", updatedAt: 300 }), { dir });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(staged);
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(before);
+  });
+
+  it("stages the same file text a direct write saves", () => {
+    const next = packet({ goal: "Use token=abcdefgh12345678 to prepare the brief", updatedAt: 300 });
+    const direct = mkdtempSync(join(tmpdir(), "orbit-task-state-"));
+    try {
+      expect(stageTaskResumePacket(next, { dir })).toEqual(writeTaskResumePacket(next, { dir: direct }));
+      expect(readFileSync(join(dir, "thread-1.json.staged"), "utf8").slice(65)).toBe(readFileSync(join(direct, "thread-1.json"), "utf8"));
+    } finally {
+      rmSync(direct, { recursive: true, force: true });
+    }
+  });
+
+  it("settles a staged record into the saved file once", () => {
+    writeTaskResumePacket(packet(), { dir });
+    const staged = stageTaskResumePacket(packet({ instructionId: "message-2", updatedAt: 300 }), { dir });
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+
+    settleTaskResumePacket("thread-1", { dir });
+    settleTaskResumePacket("thread-1", { dir });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(staged);
+    expect(existsSync(join(dir, "thread-1.json.staged"))).toBe(false);
+  });
+
+  it("settles a staged record stamped before the saved one", () => {
+    writeTaskResumePacket(packet({ updatedAt: 500 }), { dir });
+    const staged = stageTaskResumePacket(packet({ instructionId: "message-2", updatedAt: 300 }), { dir });
+
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(staged);
+    settleTaskResumePacket("thread-1", { dir });
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(staged);
+  });
+
+  it.each([
+    ["torn", (text: string) => text.slice(0, 200)],
+    ["one a later save could not remove", (text: string) => text],
+  ])("keeps the saved record when the staged one is %s", (label, leftover) => {
+    const path = join(dir, "thread-1.json.staged");
+    let saved = writeTaskResumePacket(packet(), { dir });
+    stageTaskResumePacket(packet({ nextAction: "staged", updatedAt: 900 }), { dir });
+    const text = leftover(readFileSync(path, "utf8"));
+    if (label !== "torn") saved = writeTaskResumePacket(packet({ nextAction: "written", updatedAt: 300 }), { dir });
+    writeFileSync(path, text);
+
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(saved);
+    settleTaskResumePacket("thread-1", { dir });
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(saved);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("drops a staged record on the next write and on delete", () => {
+    stageTaskResumePacket(packet({ nextAction: "staged", updatedAt: 300 }), { dir });
+    const saved = writeTaskResumePacket(packet({ nextAction: "written" }), { dir });
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(saved);
+    expect(existsSync(join(dir, "thread-1.json.staged"))).toBe(false);
+
+    stageTaskResumePacket(packet({ nextAction: "staged", updatedAt: 300 }), { dir });
+    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
+    expect(readTaskResumePacket("thread-1", { dir })).toBeNull();
   });
 
   it("treats unknown versions and malformed files as absent without deleting them", () => {
@@ -226,6 +357,34 @@ describe("task state update", () => {
     });
     expect(padded.success).toBe(true);
     if (padded.success) expect(padded.data.next_action).toBe("Verify citations");
+  });
+});
+
+describe("task state asks update", () => {
+  const parse = (body: Record<string, unknown>, clipped: string[] = []) =>
+    taskStateUpdateSchema(clipped).safeParse({ fromBotId: "bot-1", fromThreadId: "thread-1", ...body });
+
+  it("accepts asks alone, trims refs and clips long words", () => {
+    const clipped: string[] = [];
+    const parsed = parse({
+      asks: [
+        { ask: `Review ${"the picker ".repeat(10)}`, status: "waiting-for-user", ref: " PR #1348 " },
+        { id: "A2", status: "done" },
+      ],
+    }, clipped);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.asks?.[0]?.ask?.length).toBeLessThanOrEqual(80);
+    expect(parsed.data.asks?.[0]?.ref).toBe("PR #1348");
+    expect(parsed.data.asks?.[1]).toEqual({ id: "A2", status: "done" });
+    expect(clipped).toEqual(["asks.0.ask (116 > 80)"]);
+  });
+
+  it("rejects an unknown status and names asks among the allowed fields", () => {
+    const parsed = parse({ asks: [{ ask: "Fix login", status: "pending" }] });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(taskStateUpdateError(parsed.error)).toContain("allowed: goal, plan, completed_note, next_action, blockers, artifacts, asks.");
   });
 });
 
@@ -462,12 +621,44 @@ describe("task state clipping", () => {
     const schema = taskStateUpdateSchema([]);
     const ids = { fromBotId: "bot-1", fromThreadId: "thread-1" };
     expect(rejection(schema.safeParse({ ...ids, notes: "x" }))).toContain("unknown field notes");
-    expect(rejection(schema.safeParse({ ...ids, plan: [{ step: "a", status: "active" }, { step: "b", status: "active" }] }))).toContain("at most one plan step may be active");
     expect(rejection(schema.safeParse({ ...ids, goal: "   " }))).toContain("goal");
     expect(rejection(schema.safeParse({ ...ids, plan: [{ step: "", status: "pending" }] }))).toContain("plan.0.step");
     expect(rejection(schema.safeParse({ ...ids, goal: 5 }))).toContain("goal");
     expect(rejection(schema.safeParse({ ...ids, plan: "step one" }))).toContain("plan");
     expect(rejection(schema.safeParse(ids))).toContain("at least one task field is required");
-    expect(rejection(schema.safeParse({ ...ids, plan: Array.from({ length: 21 }, () => ({ step: "a", status: "pending" })) }))).toContain("limit 20");
+  });
+
+  it("trims long lists with a note instead of refusing the update", () => {
+    const clipped: string[] = [];
+    const parsed = taskStateUpdateSchema(clipped).safeParse({
+      fromBotId: "bot-1",
+      fromThreadId: "thread-1",
+      plan: Array.from({ length: 25 }, (_, index) => ({ step: `step ${index}`, status: index < 2 ? "active" : "pending" })),
+      blockers: Array.from({ length: 12 }, (_, index) => ({ kind: "input", note: `blocker ${index}` })),
+      artifacts: Array.from({ length: 22 }, (_, index) => ({ ref: `file-${index}.md`, label: `File ${index}` })),
+      asks: Array.from({ length: 30 }, (_, index) => ({ ask: `ask ${index}`, status: "open" })),
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.plan?.map((item) => item.step)).toEqual(Array.from({ length: 20 }, (_, index) => `step ${index}`));
+    expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(1);
+    expect(parsed.data.blockers?.[0]?.note).toBe("blocker 2");
+    expect(parsed.data.artifacts).toHaveLength(20);
+    expect(parsed.data.asks).toHaveLength(30);
+    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
+  });
+
+  it("keeps every plan step and leaves only the first active one active", () => {
+    const clipped: string[] = [];
+    const parsed = taskStateUpdateSchema(clipped).safeParse({
+      fromBotId: "bot-1",
+      fromThreadId: "thread-1",
+      plan: [{ step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "active" }, { step: "d", status: "active" }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.plan).toEqual([
+      { step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "pending" }, { step: "d", status: "pending" },
+    ]);
+    expect(clipped).toEqual(["plan (3 active > 1, later ones set to pending)"]);
   });
 });

@@ -135,6 +135,19 @@ describe("peer approval card lifecycle", () => {
     expect(dismissStalePeerCards(bus)).toBe(0);
   });
 
+  it("finds stale cards at boot without loading threads that have none", () => {
+    store.appendMessage(target.threadId, { role: "user", kind: "text", text: "no cards here" });
+    const orphan = store.appendMessage(from.threadId, {
+      role: "bot",
+      kind: "options",
+      card: { title: "@Asker wants to contact @Helper", subtitle: "ping", options: ["Allow", "Deny"], requestId: "boot-dead-process", tool: "ask_bot" },
+    });
+    const booted = new Store(selection);
+    expect(dismissStalePeerCards({ store: booted, broadcast: () => {} })).toBe(1);
+    expect(booted.messagesFor(from.threadId).find((message) => message.id === orphan.id)?.card?.dismissed).toBe(true);
+    expect((booted as unknown as { threads: Map<string, unknown> }).threads.has(target.threadId)).toBe(false);
+  });
+
   it("dismisses stale cards in non-active task threads", () => {
     const background = store.createTask(from.id, "Background", false)!;
     const orphan = store.appendMessage(background.threadId, {

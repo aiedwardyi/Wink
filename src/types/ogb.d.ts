@@ -112,7 +112,7 @@ declare global {
         signOut(): Promise<CompanionAccountState>;
       };
       googleAccount?: {
-        signIn(): Promise<{ ok: true; email: string } | { ok: false; error: string }>;
+        signIn(): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
         cancel(): Promise<void>;
         signOut(): Promise<{ ok: true }>;
       };
@@ -151,7 +151,7 @@ declare global {
         writeText(text: string): Promise<void>;
       };
       /** Opens System Settings on a privacy pane: mic|screen|speech|accessibility. */
-      permOpenSettings(pane: "mic" | "screen" | "speech" | "accessibility"): Promise<void>;
+      permOpenSettings(pane: "mic" | "screen" | "speech" | "accessibility" | "sound"): Promise<void>;
       /** Copies an engine install command and opens a blank terminal. False
        * when no terminal could be launched; the clipboard still has it. */
       openInstallTerminal?(command: string): Promise<boolean>;
@@ -218,6 +218,13 @@ declare global {
       /** Pops the native right-click menu (show in folder, save a copy, copy
        * path) for a local file link. Rejects like `openFile`. */
       fileMenu?(filePath: string, base?: string): Promise<void>;
+      /** Copies a local file through the native save dialog. */
+      saveFile?(filePath: string): Promise<void>;
+      /** Reveals a local file in its folder. Rejects like `openFile`. */
+      showInFolder?(filePath: string, base?: string): Promise<void>;
+      localMediaFile?(file: { path?: string; src?: string }): Promise<string | null>;
+      readMediaImage?(src: string): Promise<{ bytes: Uint8Array; type: string }>;
+      saveMediaImage?(src: string, name: string): Promise<boolean>;
       /** Opens a chat's linked file from the PC that has it, under that PC's
        * own link checks. Rejects with a readable reason. */
       openPeerFile?(host: string, threadId: string, filePath: string): Promise<void>;

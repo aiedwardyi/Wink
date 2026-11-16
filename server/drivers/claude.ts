@@ -52,7 +52,7 @@ import {
   computeBackoff,
   interruptibleDelay,
   isResumeCursorRejected,
-  RETRY_MAX_ATTEMPTS,
+  retryAttempts,
 } from "./retry.ts";
 import {
   applyClaudeInject,
@@ -270,8 +270,9 @@ type AskResolutionSource = "user" | "timeout" | "system";
 // Ask rules outrank every allow list, the user's own settings.json included,
 // so Ask for approval reaches the broker even where Write or Bash is allowed.
 // Sandbox auto-allow is switched off too, or sandboxed Bash would skip them.
+const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
 const ASK_SETTINGS = JSON.stringify({
-  permissions: { ask: ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"] },
+  permissions: { ask: WRITE_TOOLS },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
 // Auto sends commands to the broker for approval; edits run under acceptEdits.
@@ -350,7 +351,7 @@ function createPermissionBroker(opts: {
   // this handler stays fully wired to it. Without this flag those asks would
   // become new `pending` entries and `request.opened` cards for a turn the
   // driver already forgot (`active.delete(threadId)` already ran), which can
-  // never be answered — the "zombie card" in issue #211.
+  // never be answered: a "zombie card".
   let closed = false;
   try {
     unlinkSync(opts.socketPath);
@@ -656,7 +657,7 @@ function claudeToolDetail(name: string, input: unknown, output: string, isError:
 }
 
 const NATIVE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-const NATIVE_IMAGE_MAX_COUNT = 8;
+const NATIVE_IMAGE_MAX_COUNT = 20;
 const NATIVE_IMAGE_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const ATTACHED_IMAGE_TAG = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
 
@@ -684,7 +685,7 @@ function storeImage(path: string, storeDir: string): { block: ClaudeImageBlock; 
 }
 
 /** Attached store images ride along as native blocks; anything else stays the plain string.
- * Newest tags win the 8-image and 20 MiB budgets, so a replayed turn's old history can't
+ * Newest tags win the 20-image and 20 MiB budgets, so a replayed turn's old history can't
  * starve out the image the user just attached. A replayed turn also marks where history
  * ends and the user's latest message begins (`REPLY_MARKER`); tags before that marker are
  * old history re-attached as text, not something the user just sent, so only tags after it
@@ -890,7 +891,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     /** Mark the session unusable for reuse and start process teardown.
      * Does not close the permission broker — Windows named pipes drop
      * existing clients on server.close()/unlink, and a late ask on a
-     * still-open connection must still get "the turn ended" (#211). */
+     * still-open connection must still get "the turn ended". */
     const beginClose = (threadId: string, why: string): Session | undefined => {
       const s = sessions.get(threadId);
       if (!s) return undefined;
@@ -1009,6 +1010,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const trace = prepare ? undefined : restart?.turn.trace ?? turn.trace ?? startTurnTrace({ engine: "claude", threadId, turnId });
     trace?.identify({ threadId, turnId, engine: "claude" });
     const turnTimer = restart?.turn.timer ?? startTurnTimer({
+      threadId,
       engine: "claude",
       model: turn.model,
       effort: turn.effort ?? null,
@@ -1043,9 +1045,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         args.push("--settings", AUTO_SETTINGS);
       }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
-      if (config.disallowedTools?.length) {
-        args.push("--disallowedTools", config.disallowedTools.join(","));
-      }
+      const disallowed = [...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
+      if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
@@ -1106,7 +1107,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       if (turn.integrations?.terminal) {
         mcpServers.terminal = { ...turn.integrations.terminal, ...orbitOwned };
-        allowed.push("mcp__terminal__terminal_read");
+        allowed.push("mcp__terminal__terminal_read", "mcp__terminal__terminal_playbook");
       }
       // dweb network daemon (status / repo / opencode model access) via
       // server/drivers/dweb-proxy.ts — points at the configured dweb instance
@@ -1192,6 +1193,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         unprepare(live, "adopted");
+        turnTimer.setMeta({ reusedSession: true });
         turnTimer.mark("spawnOrReuse");
         trace?.span("spawn", "reused")();
         trace?.span("initialize", "reused")();
@@ -1427,6 +1429,60 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         if (session.child.exitCode === null && !session.closing) armIdle(threadId);
       };
       session.settleTurn = settle;
+      // the attempt failed but the TURN continues: keep the thread busy, emit
+      // no terminal event, and relaunch after the backoff. The `active` entry
+      // STAYS so an interrupt during the backoff reaches stop() and cancels.
+      const retryTurn = (t: NonNullable<Session["turn"]>, launch: NonNullable<NonNullable<Session["turn"]>["launch"]>, reason: string, cursor: () => string | undefined) => {
+        t.narrationNotice = undefined;
+        launch.retry.attempt++;
+        const delayMs = computeBackoff(launch.retry.attempt - 1, Math.random, reason);
+        emit({
+          ...base(threadId, t.turnId),
+          type: "turn.retrying",
+          attempt: launch.retry.attempt,
+          delayMs,
+          reason,
+          maxAttempts: retryAttempts(reason),
+        });
+        void (async () => {
+          const wait = interruptibleDelay(delayMs * retryScale, launch.abort.signal);
+          await wait.promise;
+          // an interrupt during the backoff landed here via stop(); the
+          // turn settles as interrupted and no zombie relaunch happens
+          if (launch.retry.cancelled) {
+            active.delete(threadId);
+            retryState.delete(threadId);
+            t.timer.mark("turnDone");
+            t.timer.finish();
+            emit({ ...base(threadId, t.turnId), type: "turn.completed",
+              ok: false,
+              stopReason: "interrupted",
+              cost: null,
+            });
+            return;
+          }
+          // hand the thread back before recursing — the relaunch's own
+          // guard would otherwise reject it as "already running"
+          active.delete(threadId);
+          try {
+            await sendTurn({ ...launch.request, resumeCursor: cursor() }, t.turnId);
+          } catch (e) {
+            retryState.delete(threadId);
+            emit({
+              ...base(threadId, t.turnId),
+              type: "runtime.error",
+              message: e instanceof Error ? e.message : String(e),
+            });
+            t.timer.mark("turnDone");
+            t.timer.finish();
+            emit({ ...base(threadId, t.turnId), type: "turn.completed",
+              ok: false,
+              stopReason: "exit_before_result",
+              cost: null,
+            });
+          }
+        })();
+      };
       session.restartTurn = () => {
         const t = session.turn;
         if (!t || t.settled || session.closing || !t.restartSteers) return;
@@ -1507,6 +1563,51 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
         if (session.turn?.quietEnd && !o.parent_tool_use_id && (o.type === "stream_event" || o.type === "assistant" || o.type === "user")) return;
         dispatch(o);
+      };
+
+      const resumeRejected = (t: NonNullable<Session["turn"]>, diagnostic: string) => Boolean(
+        t.launch &&
+        sessionId &&
+        t.launch.request.resumeFallback &&
+        !t.sawStreamDelta &&
+        isResumeCursorRejected(diagnostic),
+      );
+
+      const startFresh = (t: NonNullable<Session["turn"]>) => {
+        const launch = t.launch!;
+        session.broker?.pause();
+        session.broker?.close();
+        if (session.mcpConfigPath) {
+          try {
+            rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
+          } catch {}
+          session.mcpConfigPath = null;
+        }
+        sessions.delete(threadId);
+        t.narrationNotice = undefined;
+        session.turn = null;
+        active.delete(threadId);
+        retryState.delete(threadId);
+        emit({ ...base(threadId, t.turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
+        void sendTurn({
+          ...launch.request,
+          text: launch.request.resumeFallback!.text,
+          resumeCursor: undefined,
+          resumeFallback: undefined,
+        }, t.turnId).catch((error) => {
+          emit({
+            ...base(threadId, t.turnId),
+            type: "runtime.error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          t.timer.mark("turnDone");
+          t.timer.finish();
+          emit({ ...base(threadId, t.turnId), type: "turn.completed",
+            ok: false,
+            stopReason: "resume_fallback_failed",
+            cost: null,
+          });
+        });
       };
 
       const dispatch = (o: any) => {
@@ -1780,11 +1881,30 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             if (o.is_error === true) {
               const errors = Array.isArray(o.errors) ? o.errors.filter((error: unknown) => typeof error === "string") : [];
               const text = [typeof o.result === "string" ? o.result : "", ...errors].join("\n");
+              // the CLI reports a missing session here, before it exits
+              if (session.turn && resumeRejected(session.turn, text)) {
+                startFresh(session.turn);
+                killCliTree(child);
+                break;
+              }
               if (!injected.injected && isSignOut(text)) {
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
               } else if (text.trim() && session.turn && !interrupted && !session.closing
                 && !chatUsageLimit("claude", session.turn.usageFailure, session.turn.usageWindows, !injected.injected)) {
+                const t = session.turn;
+                const verdict = classifyError({ text });
+                // the CLI retries 5xx and 529 itself but not an edge page (a
+                // Cloudflare 403): resend on this live process, unless the
+                // turn already showed or did work
+                if (t.launch && !t.launch.retry.cancelled && verdict.reason === "edge_error" && !t.sawStreamDelta && !t.shown && !t.toolStarted
+                  && !t.unsentSteers && t.launch.retry.attempt < retryAttempts(verdict.reason) - 1) {
+                  clearTimeout(t.mergeGuard);
+                  session.broker?.pause();
+                  session.turn = null;
+                  retryTurn(t, t.launch, verdict.reason, () => session.sessionId ?? undefined);
+                  break;
+                }
                 // the CLI already retried; a limit gets its own row from settle
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
               }
@@ -1835,47 +1955,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           const message = `claude exited ${code} before result${session.stderr ? `: ${session.stderr.trim().slice(-300)}` : ""}`;
           t.usageFailure ??= t.usageStderr;
           const limit = chatUsageLimit("claude", t.usageFailure, t.usageWindows, !injected.injected);
-          const resumeRejected = Boolean(
-            launch &&
-            sessionId &&
-            launch.request.resumeFallback &&
-            !t.sawStreamDelta &&
-            isResumeCursorRejected(session.stderr),
-          );
-          if (launch && resumeRejected) {
-            session.broker?.pause();
-            session.broker?.close();
-            if (session.mcpConfigPath) {
-              try {
-                rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
-              } catch {}
-              session.mcpConfigPath = null;
-            }
-            sessions.delete(threadId);
-            t.narrationNotice = undefined;
-            session.turn = null;
-            active.delete(threadId);
-            retryState.delete(threadId);
-            emit({ ...base(threadId, t.turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
-            void sendTurn({
-              ...launch.request,
-              text: launch.request.resumeFallback!.text,
-              resumeCursor: undefined,
-              resumeFallback: undefined,
-            }, t.turnId).catch((error) => {
-              emit({
-                ...base(threadId, t.turnId),
-                type: "runtime.error",
-                message: error instanceof Error ? error.message : String(error),
-              });
-              t.timer.mark("turnDone");
-              t.timer.finish();
-              emit({ ...base(threadId, t.turnId), type: "turn.completed",
-                ok: false,
-                stopReason: "resume_fallback_failed",
-                cost: null,
-              });
-            });
+          if (resumeRejected(t, session.stderr)) {
+            startFresh(t);
             return;
           }
           const verdict = classifyError({ exitCode: code, stderr: message });
@@ -1886,12 +1967,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             code !== 0 &&
             verdict.transient &&
             !t.sawStreamDelta &&
-            launch.retry.attempt < RETRY_MAX_ATTEMPTS - 1
+            launch.retry.attempt < retryAttempts(verdict.reason) - 1
           ) {
-            // the CLI is gone but the TURN continues: keep the thread busy,
-            // emit no terminal event, and relaunch after the backoff. The
-            // `active` entry STAYS — it is what makes an interrupt during
-            // the backoff reach this turn's stop() and cancel the retry.
+            // the CLI is gone; drop it before the relaunch spawns another
             const failedBroker = session.broker;
             session.broker = undefined;
             failedBroker?.pause();
@@ -1903,56 +1981,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               session.mcpConfigPath = null;
             }
             sessions.delete(threadId);
-            t.narrationNotice = undefined;
             session.turn = null;
-            launch.retry.attempt++;
-            const delayMs = computeBackoff(launch.retry.attempt - 1);
-            emit({
-              ...base(threadId, t.turnId),
-              type: "turn.retrying",
-              attempt: launch.retry.attempt,
-              delayMs,
-              reason: verdict.reason,
-            });
-            void (async () => {
-              const wait = interruptibleDelay(delayMs * retryScale, launch.abort.signal);
-              await wait.promise;
-              // an interrupt during the backoff landed here via stop(); the
-              // turn settles as interrupted and no zombie relaunch happens
-              if (launch.retry.cancelled) {
-                active.delete(threadId);
-                retryState.delete(threadId);
-                t.timer.mark("turnDone");
-                t.timer.finish();
-                emit({ ...base(threadId, t.turnId), type: "turn.completed",
-                  ok: false,
-                  stopReason: "interrupted",
-                  cost: null,
-                });
-                return;
-              }
-              // hand the thread back before recursing — the relaunch's own
-              // guard would otherwise reject it as "already running"
-              active.delete(threadId);
-              try {
-                const cursor = session.sessionId ?? sessionId ?? undefined;
-                await sendTurn({ ...launch.request, resumeCursor: cursor }, t.turnId);
-              } catch (e) {
-                retryState.delete(threadId);
-                emit({
-                  ...base(threadId, t.turnId),
-                  type: "runtime.error",
-                  message: e instanceof Error ? e.message : String(e),
-                });
-                t.timer.mark("turnDone");
-                t.timer.finish();
-                emit({ ...base(threadId, t.turnId), type: "turn.completed",
-                  ok: false,
-                  stopReason: "exit_before_result",
-                  cost: null,
-                });
-              }
-            })();
+            retryTurn(t, launch, verdict.reason, () => session.sessionId ?? sessionId ?? undefined);
             return;
           }
           retryState.delete(threadId);
@@ -2224,6 +2254,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
           queueing: true,
           steerConsumed: true,
+          readOnlyTurns: true,
           pinnedSystem: true,
           localComputerMcp: config.permissionMode !== "bypassPermissions",
           askApproval: config.permissionMode !== "bypassPermissions",

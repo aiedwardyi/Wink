@@ -4,11 +4,13 @@ import { QRCodeSVG } from "qrcode.react";
 
 import { onThisPc } from "@/lib/devices-setup";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
+import { googleSignInError } from "@/lib/google-signin-error";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { DeviceRow, DevicesSection } from "./DeviceRows";
+import { DeviceRow, DevicesSection, PendingRow } from "./DeviceRows";
 import { ROW_BUTTON } from "./SettingsPrimitives";
+import { trackFeature, trackSetting } from "@/lib/usage-stats";
 
 type RelayState = "off" | "enrolling" | "certifying" | "connected" | "reconnecting" | "rejected" | "cert-error";
 type RelayProblem = "superseded" | "revoked" | "ticket-expired" | "unknown-certificate";
@@ -58,22 +60,22 @@ const cnSwitch = (on: boolean) =>
   `relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${on ? "bg-accent" : "bg-control"}`;
 const cnKnob = (on: boolean) =>
   `absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white transition-all ${on ? "left-[21px]" : "left-[3px]"}`;
-const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-control/70 disabled:cursor-not-allowed disabled:opacity-50";
+const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50";
 const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent";
 const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
 type Google = { state: string; email?: string };
-type Saved = { status: RelayStatus | null; google: Google | null };
+type Saved = { status: RelayStatus | null; google: Google | null; phones: Phone[] | null };
 const KEY = "omb-phone-relay";
 let last: Saved | null = null;
 let pending: Promise<unknown> | null = null;
 
 function saved(): Saved {
   if (last) return last;
-  last = { status: null, google: null };
+  last = { status: null, google: null, phones: null };
   try {
     const body = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (typeof body?.status?.enabled === "boolean") last = { status: body.status, google: body.google ?? null };
+    if (typeof body?.status?.enabled === "boolean") last = { status: body.status, google: body.google ?? null, phones: Array.isArray(body.phones) ? body.phones : null };
   } catch {
     /* A fresh fetch fills it in. */
   }
@@ -89,12 +91,13 @@ function keep(next: Partial<Saved>) {
   }
 }
 
-/** This PC's relay and Google state, fetched at idle so Devices paints them on its first open. */
+/** This PC's relay, Google state and signed-in phones, fetched at idle so Devices paints them on its first open. */
 export function warmRelay(): Promise<unknown> {
   if (!onThisPc()) return Promise.resolve();
   pending ??= Promise.all([
     api("/api/phone-relay/status").then((status: RelayStatus) => keep({ status }), () => {}),
     api("/api/google-account").then((google: Google) => keep({ google }), () => {}),
+    api("/api/phone/devices").then((body: { phones: Phone[] }) => keep({ phones: body.phones }), () => {}),
   ]).finally(() => { pending = null; });
   return pending;
 }
@@ -105,22 +108,23 @@ export function resetRelay(): void {
   pending = null;
 }
 
-/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. */
-export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; pcs?: ReactNode }) {
+/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. With no relay set up, the switch calls `onNoRelay`. */
+export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onNoRelay, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; onNoRelay: () => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
   const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
   const [refused, setRefused] = useState(false);
   const [google, setGoogle] = useState<Google | null>(() => saved().google);
-  const [phones, setPhones] = useState<Phone[]>([]);
+  const [phones, setPhones] = useState<Phone[] | null>(() => saved().phones);
   const [now, setNow] = useState(() => Date.now());
   const [asking, setAsking] = useState(false);
-  const [askCode, setAskCode] = useState(false);
   const [invite, setInvite] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | undefined>(undefined);
+  const [signingIn, setSigningIn] = useState(false);
+  const signInAttempt = useRef(0);
 
   const loadGoogle = useCallback(
     () => request("/api/google-account").then((body: Google) => {
@@ -158,7 +162,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
   useEffect(() => onEnabled?.(enabled), [enabled, onEnabled]);
   useEffect(() => {
     if (!enabled) return;
-    const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => setPhones(body.phones), () => {});
+    const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => {
+      keep({ phones: body.phones });
+      setPhones(body.phones);
+    }, () => {});
     load();
     const timer = window.setInterval(load, STATUS_POLL_MS);
     return () => window.clearInterval(timer);
@@ -172,7 +179,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     return () => window.clearInterval(tick);
   }, [retrying]);
 
-  // Unknown until the first answer: the row paints at once, its switch held off.
+  // Unknown until the first answer: the row paints at once, a placeholder where the switch goes, never a false Off.
   const known = status !== null || refused;
 
   const run = async (work: () => Promise<void>, failure: (cause: unknown) => string) => {
@@ -190,7 +197,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
 
   const save = (on: boolean) =>
     run(
-      async () => setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) })),
+      async () => {
+        setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) }));
+        trackSetting("phoneAccess", on ? "off" : "on", on ? "on" : "off");
+      },
       () => t("settings.phoneAccess.saveError"),
     );
   const setupError = (cause: unknown) => {
@@ -206,12 +216,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       },
       setupError,
     );
-  const setUp = (then?: () => void) =>
+  const setUp = () =>
     run(
       async () => {
         setStatus(await request("/api/phone-relay/setup", { method: "POST", body: JSON.stringify({ code: code.trim() }) }));
         setCode("");
-        then?.();
       },
       setupError,
     );
@@ -219,17 +228,28 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     run(
       async () => {
         await request(`/api/phone/devices/${encodeURIComponent(phone.id)}`, { method: "DELETE" });
-        setPhones((list) => list.filter((candidate) => candidate.id !== phone.id));
+        keep({ phones: saved().phones?.filter((candidate) => candidate.id !== phone.id) ?? null });
+        setPhones((list) => list && list.filter((candidate) => candidate.id !== phone.id));
+        trackFeature("phone.unpair");
       },
       () => t("settings.phoneAccess.removeError"),
     );
+  // A second press reopens the browser: the desktop app drops the attempt before it.
   const signIn = async () => {
-    const result = await window.ogb?.googleAccount?.signIn().catch(() => null);
-    if (result?.ok) await loadGoogle();
+    const account = window.ogb?.googleAccount;
+    if (!account) return;
+    const attempt = ++signInAttempt.current;
+    setSigningIn(true);
+    setError(null);
+    const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
+    if (attempt !== signInAttempt.current) return;
+    setSigningIn(false);
+    if (result.ok) return void (await loadGoogle());
+    const failure = googleSignInError(result.error);
+    if (failure) setError(t(failure));
   };
   const configured = status?.configured === true;
   const confirm = () => {
-    if (askCode) return void setUp(() => setAsking(false));
     setAsking(false);
     void save(true);
   };
@@ -284,11 +304,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       role="switch"
       aria-checked={enabled}
       aria-label={t("settings.devices.reach")}
-      disabled={busy || !known || (!enabled && unavailable)}
+      disabled={busy || (!enabled && unavailable)}
       onClick={() => {
         if (enabled) return void save(false);
-        // Setup can fail after the PC saves the base, so the next poll must not drop the code field.
-        setAskCode(!configured);
+        // No relay: no one sent a setup code, so go to the other ways to connect.
+        if (!configured) return void onNoRelay();
         setAsking(true);
       }}
       className={cnSwitch(enabled)}
@@ -302,8 +322,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     </button>
   ) : null;
   // Already on: keep the switch so turning it off never needs a sign-in.
-  const control = enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
-  const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t("settings.devices.reachSignIn") : google?.email;
+  const control = !known
+    ? <span data-switch-pending="" aria-hidden="true" className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-control motion-reduce:animate-none" />
+    : enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
+  const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);
   const day = (ms: number) => new Date(ms).toLocaleDateString(tag, { month: "short", day: "numeric" });
@@ -373,7 +395,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
 
       {enabled ? (
         <DevicesSection title={t("settings.devices.signedInHere")} data-signed-in="">
-          {phones.length ? phones.map((phone) => (
+          {!phones ? <PendingRow sub /> : phones.length ? phones.map((phone) => (
             <DeviceRow
               key={phone.id}
               name={phone.name}
@@ -395,27 +417,13 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}
-          confirmDisabled={busy || (askCode && !code.trim())}
+          confirmDisabled={busy}
           onConfirm={confirm}
           onCancel={() => {
             setAsking(false);
             setError(null);
           }}
-        >
-          {askCode ? (
-            <form
-              className="mt-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (code.trim()) confirm();
-              }}
-            >
-              <div className="flex">{codeField(code, setCode)}</div>
-              <p className="mt-2 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.phoneAccess.setup.help")}</p>
-              {error ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{error}</p> : null}
-            </form>
-          ) : null}
-        </ConfirmDialog>
+        />
       ) : null}
     </>
   );

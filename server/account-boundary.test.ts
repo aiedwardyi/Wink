@@ -79,6 +79,7 @@ function fixture(kind: "claudeAgent" | "codex") {
     const value = resolve(String(path)).toLowerCase();
     const prefix = resolve(home).toLowerCase();
     if (value !== prefix && !value.startsWith(`${prefix}\\`) && !value.startsWith(`${prefix}/`)) return;
+    if (value.endsWith(".wink-codex-promo.json")) return;
     if (helper && value === resolve(join(home, "models_cache.json")).toLowerCase()) allowed.push(value);
     else { forbidden.push(value); throw new Error("Forbidden account-home read/open"); }
   }

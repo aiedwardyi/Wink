@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { trackSetting } from "./usage-stats";
 
 export const TERMINAL_POPUPS_KEY = "omb-terminal-popups";
 const watchers = new Set<() => void>();
@@ -18,6 +19,7 @@ export function terminalPopupsEnabled(): boolean {
 }
 
 export function saveTerminalPopups(value: boolean): void {
+  trackSetting("terminalAlerts", on ? "on" : "off", value ? "on" : "off", "settings", TERMINAL_POPUPS_KEY);
   on = value;
   try {
     localStorage.setItem(TERMINAL_POPUPS_KEY, value ? "on" : "off");

@@ -112,11 +112,9 @@ describe("SettingsPanel lean startup switch", () => {
     document.body.append(host);
     root = createRoot(host);
     (window as any).ogb = {};
-    chrome.voiceAndStartupSettings = true;
   });
 
   afterEach(() => {
-    chrome.voiceAndStartupSettings = false;
     root.unmount();
     host.remove();
   });
@@ -207,6 +205,76 @@ describe("SettingsPanel approval pill", () => {
     await act(async () => option("Auto").click());
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(host.querySelector("[data-local-warning]")).not.toBeNull();
+  });
+});
+
+describe("SettingsPanel bot name", () => {
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  const name = () => host.querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
+  const action = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  const names = () => mockDispatch.mock.calls.flatMap(([action]) => action.type === "updateBot" && "name" in action.patch ? [action.patch.name] : []);
+  const typeName = (text: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name(), text);
+    name().dispatchEvent(new Event("input", { bubbles: true }));
+    root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, name: text } })));
+  });
+  const press = (button: HTMLButtonElement) => act(async () => {
+    if (button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }))) name().blur();
+    button.click();
+  });
+
+  beforeEach(async () => {
+    mockDispatch.mockClear();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot }))));
+  });
+
+  afterEach(() => {
+    root.unmount();
+    host.remove();
+  });
+
+  it("shows Save and Cancel only while the name is focused", async () => {
+    expect(action("Save name")).toBeNull();
+    await act(async () => name().focus());
+    expect(action("Save name")).not.toBeNull();
+    expect(action("Cancel")).not.toBeNull();
+    await act(async () => name().blur());
+    expect(action("Cancel")).toBeNull();
+  });
+
+  it.each([
+    ["Save name", ["Nova"]],
+    ["Cancel", ["Nova", "Friend"]],
+  ])("%s keeps or restores the name typed since focus", async (label, saved) => {
+    await act(async () => name().focus());
+    await typeName("Nova");
+    await press(action(label)!);
+    expect(names()).toEqual(saved);
+    expect(document.activeElement).not.toBe(name());
+    expect(action("Cancel")).toBeNull();
+  });
+
+  it.each([
+    ["Enter", ["Nova"]],
+    ["Escape", ["Nova", "Friend"]],
+  ])("%s keeps or restores the name, and Escape leaves the panel open", async (key, saved) => {
+    await act(async () => name().focus());
+    await typeName("Nova");
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    await act(async () => name().dispatchEvent(event));
+    expect(names()).toEqual(saved);
+    expect(event.defaultPrevented).toBe(key === "Escape");
+    expect(document.activeElement).not.toBe(name());
+  });
+
+  it("ignores Enter while a Korean syllable is composing", async () => {
+    await act(async () => name().focus());
+    await act(async () => name().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true })));
+    expect(document.activeElement).toBe(name());
   });
 });
 
@@ -316,7 +384,7 @@ describe("SettingsPanel memory and order", () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
     });
     const switches = Array.from(host.querySelectorAll('[role="switch"]'));
-    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Agentic Mode", "Bot Notifications", "Terminal Access", "Auto Notes"]);
+    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Agentic Mode", "Bot Notifications", "Terminal Access", "Load Skills & Plugins", "Auto Notes"]);
     for (const each of switches) expect(each.className).toContain("h-6 w-11");
   });
 });
@@ -909,6 +977,8 @@ describe("SettingsPanel memory autosave", () => {
     };
     const width = vi.spyOn(owner("clientWidth"), "clientWidth", "get").mockReturnValue(320);
     const height = vi.spyOn(owner("scrollHeight"), "scrollHeight", "get").mockReturnValue(900);
+    // a browser's observer reports each box once on observe
+    vi.stubGlobal("ResizeObserver", class { constructor(private run: () => void) {} observe() { this.run(); } disconnect() {} });
     try {
       await render("bot-1");
       expect(box().style.height).toBe("900px");
@@ -1313,6 +1383,29 @@ describe("SettingsPanel memory autosave", () => {
     expect(box().value).toBe("important synced notes");
     expect(host.querySelector(".mm-failed")).toBeNull();
     expect(readMemoryFile("bot-offline").text).toBe("important synced notes");
+  });
+
+  it("opens no editor until the first read lands", async () => {
+    const serve = vi.mocked(fetch).getMockImplementation()!;
+    const reads: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) =>
+      String(url).endsWith("/bot-slow/memory") && !init?.method ? new Promise<Response>((resolve) => reads.push(() => resolve(serve(url, init)))) : serve(url, init));
+    const measured = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? 1200 : 0; });
+    const edit = () => host.querySelector<HTMLButtonElement>(".mm-sheet button.mm-action")!;
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, id: "bot-slow", threadId: "t-bot-slow" } })));
+    });
+    await act(async () => tab(host, "Memory").click());
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="long"]')!.click());
+    await act(async () => edit().click());
+    expect(host.querySelector('textarea[aria-label="Memory"]')).toBeNull();
+    await act(async () => reads.forEach((reply) => reply()));
+    await wait(0);
+    await act(async () => edit().click());
+    expect(box().readOnly).toBe(false);
+    expect(box().value).toBe("notes for bot-slow");
+    measured.mockRestore();
   });
 
   it("treats a 409 without the latest memory as a failed write", async () => {

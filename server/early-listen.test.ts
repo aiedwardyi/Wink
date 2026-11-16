@@ -96,6 +96,15 @@ describe("startEarlyListen", () => {
     expect(missing.headers.get("cache-control")).toBe("no-store");
   });
 
+  it("serves the pdf worker module as JavaScript", async () => {
+    const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
+    mkdirSync(join(dir, "assets"));
+    writeFileSync(join(dir, "assets", "pdf.worker.min-AAAA1111.mjs"), "export {};");
+    const { early, base } = await listen();
+    early.staticDir = dir;
+    expect((await fetch(`${base}/assets/pdf.worker.min-AAAA1111.mjs?v=1`)).headers.get("content-type")).toBe("text/javascript");
+  });
+
   it("revalidates index.html with an ETag and sees a new build at once", async () => {
     const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
     writeFileSync(join(dir, "index.html"), "<html><body>build one</body></html>");
@@ -160,6 +169,11 @@ describe("startEarlyListen", () => {
     const { early } = await listen();
     expect(early.server.keepAliveTimeout).toBeGreaterThan(90_000);
     expect(early.server.headersTimeout).toBeGreaterThan(early.server.keepAliveTimeout);
+  });
+
+  it("lets room uploads outlast requestTimeout", async () => {
+    const { early } = await listen();
+    expect(early.server.listenerCount("clientError")).toBe(1);
   });
 
   it("reports a taken port as already in use", async () => {

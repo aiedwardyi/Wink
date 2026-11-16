@@ -55,17 +55,16 @@ async function fixture(kind = "codex", usage = createUsageRefresh()) {
   const rateLimits: RateLimitsMap = new Map([[account.id, { observedAt: new Date().toISOString(), windows: [] }], ["codex", { observedAt: new Date().toISOString(), windows: [] }]]);
   const availability = new Map([[account.id, true], ["codex", true]]);
   const invalidate = vi.spyOn(usage, "invalidate");
-  const holds = vi.fn();
   const waits = vi.fn();
   const request = vi.fn<typeof fetch>(async () => Response.json({ count: 0, unknown: 0, generations: {} }));
   vi.stubGlobal("fetch", request);
   const controller = runtime!.createAccountRuntime({
     accounts, registry, providers, store, reload: () => providers.reload(configs()), rateLimits, saveRateLimits: () => {}, usage, availability,
-    invalidateHolds: holds, invalidateWaits: waits, botActive: () => false,
+    invalidateWaits: waits, botActive: () => false,
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: () => false,
   });
   controllers.push(controller);
-  return { account, accounts, registry, providers, store, bot, logout, rateLimits, availability, invalidate, holds, waits, request, controller, statuses, usage };
+  return { account, accounts, registry, providers, store, bot, logout, rateLimits, availability, invalidate, waits, request, controller, statuses, usage };
 }
 
 describe("account removal references", () => {
@@ -92,7 +91,6 @@ describe("account removal references", () => {
     expect(f.registry.accountBlocked(f.account.id)).toBe(true);
     expect(f.providers.started("worker", f.account.id)).toBeNull();
     expect(f.invalidate).not.toHaveBeenCalled();
-    expect(f.holds).not.toHaveBeenCalled();
     expect(f.waits).not.toHaveBeenCalled();
   });
 
@@ -244,7 +242,6 @@ describe("account removal references", () => {
     expect([...f.rateLimits.keys()]).toEqual(["codex"]);
     expect([...f.availability.keys()]).toEqual(["codex"]);
     expect(f.invalidate).toHaveBeenCalledExactlyOnceWith(f.account.id);
-    expect(f.holds).toHaveBeenCalledExactlyOnceWith(f.account.id);
     expect(f.waits).toHaveBeenCalledExactlyOnceWith(f.account.id);
   });
 

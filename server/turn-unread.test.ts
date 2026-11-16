@@ -42,7 +42,7 @@ function rig(target: "bot" | "group") {
   const tracker = parsed.statements.find((node) => ts.isVariableStatement(node)
     && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "unreadTurns"));
   const botUnread = find(completed, (node) => ts.isIfStatement(node)
-    && node.thenStatement.getText(parsed) === 'store.patchBot(bot.id, { unread: true });')!;
+    && node.thenStatement.getText(parsed) === 'store.patchBot(bot.id, { unread: true }, { soon: true });')!;
   const groupUnread = find(completed, (node) => ts.isExpressionStatement(node)
     && node.getText(parsed).startsWith("store.patchGroup(group.id, { busyBotId: null,"))!;
   const decision = find(completed, (node) => ts.isVariableStatement(node)
@@ -60,12 +60,13 @@ function rig(target: "bot" | "group") {
   const roomFallback = find(roomTurn, (node) => ts.isIfStatement(node)
     && node.expression.getText(parsed) === "store.group(group.id)?.busyBotId === bot.id")!;
   const deps: Record<string, unknown> = {
-    runtimeErrorTool, accounts: new Map(),
+    runtimeErrorTool, accounts: new Map(), refreshCodexPromo: () => {}, usageBoard: { touch() {} },
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },
     turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(),
     threadId: "thread-1", stopScreenPoller: () => {}, activeVpsThreads: new Map(), groupSpeakers: new Map(),
+    roomLanes: { thread: () => undefined }, lane: false,
     pushMessage: (message: Omit<Message, "id" | "at">) => messages.push({ id: `message-${messages.length}`, at: 1, ...message }),
   };
   if (tracker) deps.unreadTurns = compile(`${tracker.getText(parsed)}\nreturn unreadTurns;`, deps);

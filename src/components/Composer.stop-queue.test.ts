@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pasteAttachment } from "@/lib/composer-attachments";
 import { getDraftAttachments, getRoomHolds, setDraftAttachments } from "@/lib/drafts";
+import { STOP_AFTER_SEND_MS } from "@/lib/send-hold";
 import { StoreProvider, useStore, type Bot, type Group } from "@/state/store";
 
 import { Composer } from "./Composer";
@@ -93,7 +94,11 @@ async function mount(target: { bot?: Bot; group?: Group }) {
     await act(async () =>
       box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
   };
-  const stop = () => act(async () => host.querySelector<HTMLElement>('button[aria-label="Stop this turn"]')!.click());
+  const stop = async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + STOP_AFTER_SEND_MS);
+    await act(async () => host.querySelector<HTMLElement>('button[aria-label="Stop this turn"]')!.click());
+    now.mockRestore();
+  };
   const frame = (data: Record<string, unknown>) =>
     act(async () => FakeEventSource.last!.onmessage!({ data: JSON.stringify(data), lastEventId: "" }));
   return { box, host, posts, type, send, stop, frame, store: () => store };

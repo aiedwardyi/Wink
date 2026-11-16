@@ -79,7 +79,8 @@ export function createThreadMigration(options: SyncOptions, engine: ReturnType<t
       engine.recover(scope, [{ kind: "head", value: head(scope, JSON.parse(String(row.head))),
         legacy: { sourceHash: syncContentHash({ device: options.deviceId, thread: scope.threadId }), source: "main" } }]);
     }
-    const heads = db.prepare(`SELECT f.thread, t.bot, f.json FROM sync_v2_frontier f JOIN sync_v2_threads t ON t.thread = f.thread
+    // CROSS JOIN keeps threads outer so the frontier is read by its key, not scanned whole under the write lock.
+    const heads = db.prepare(`SELECT f.thread, t.bot, f.json FROM sync_v2_threads t CROSS JOIN sync_v2_frontier f ON f.thread = t.thread
       WHERE f.kind = 'head' AND f.writer = (SELECT writer FROM sync_v2_identity)
         AND json_extract(f.json, '$.legacy') IS NOT NULL AND json_extract(f.json, '$.legacy.source') IS NULL`).all();
     for (const row of heads) {

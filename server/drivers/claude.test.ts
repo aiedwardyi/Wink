@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { composeMessage, fileAttachment } from "../../src/lib/composer-attachments.ts";
 import { saveImage } from "../attachments.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, saveConfig, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
@@ -189,8 +190,8 @@ describe("claudeUserContent", () => {
     expect(claudeUserContent(text, store)).toBe(text);
   });
 
-  it("sends the 8 newest native images, dropping the oldest", () => {
-    const paths = Array.from({ length: 9 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
+  it("sends the 20 newest native images, dropping the oldest", () => {
+    const paths = Array.from({ length: 21 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
     const content = claudeUserContent(paths.map(tag).join("\n"), store);
     if (!Array.isArray(content)) throw new Error("expected blocks");
     expect(content.slice(1).map((b) => (b.type === "image" ? b.source.data : ""))).toEqual(
@@ -199,8 +200,8 @@ describe("claudeUserContent", () => {
   });
 
   it("counts a duplicate path once, so it does not push out another image", () => {
-    const paths = Array.from({ length: 8 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
-    const text = [...paths, paths[7]].map(tag).join("\n");
+    const paths = Array.from({ length: 20 }, (_, i) => put(store, `${i}.png`, Buffer.concat([PNG, Buffer.from([i])])));
+    const text = [...paths, paths[19]].map(tag).join("\n");
     const content = claudeUserContent(text, store);
     if (!Array.isArray(content)) throw new Error("expected blocks");
     expect(content.slice(1).map((b) => (b.type === "image" ? b.source.data : ""))).toEqual(
@@ -398,6 +399,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_TRANSIENTS;
     delete process.env.FAKE_CLAUDE_TRANSIENT_AFTER;
     delete process.env.FAKE_CLAUDE_PARTIAL_FAILS;
+    delete process.env.FAKE_CLAUDE_BLIP_TEXT;
     delete process.env.FAKE_CLAUDE_STATE;
     delete process.env.FAKE_CLAUDE_RETRY_SCALE;
     delete process.env.FAKE_CLAUDE_RATE_LIMITS;
@@ -419,6 +421,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.CLAUDE_CODE_SILENT_TURN_REMINDER;
     delete process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
     delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE;
     delete process.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT;
     delete process.env.XAI_API_KEY;
     delete process.env.COMPOSIO_API_KEY;
@@ -961,6 +964,21 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
 
+  it("keeps Code Mode off headless turns and helpers", async () => {
+    await create();
+    const dump = join(scratch, "code-mode.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const seen = () => JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE;
+
+    await instance.adapter.sendTurn({ threadId: "t-code-mode", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(seen()).toBeUndefined();
+    for (const opts of [{}, { lean: true, ephemeral: true }]) {
+      await instance.generateText?.("summarize", opts);
+      expect(seen()).toBeUndefined();
+    }
+  });
+
   it.each(["claude-sonnet-5-5", "unsloth::local-model"])("defaults MCP tool idle timeout for %s", async (model) => {
     await create();
     const dump = join(scratch, "mcp-idle.json");
@@ -1050,6 +1068,26 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       { type: "text", text },
       { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } },
     ]);
+  });
+
+  it("sends a big picture's smaller copy as a native block and its original as a path", async () => {
+    await create();
+    const dump = join(scratch, "dump-big-picture.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
+    const original = fileAttachment("image (3).png", "C:\\Users\\me\\Downloads\\Wink\\image (3).png", 13958958, "image/png");
+    original.preview = saveImage(png, "image/png").path;
+    const text = composeMessage("look", [original]);
+
+    await instance.adapter.sendTurn({ threadId: "t-big-picture", text });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.prompt.message.content).toEqual([
+      { type: "text", text },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } },
+    ]);
+    expect(text).toContain('<attached-file path="C:\\Users\\me\\Downloads\\Wink\\image (3).png"');
   });
 
   it("hands the turn child no credential it was not granted, known or not", async () => {
@@ -1193,6 +1231,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const allowed: string[] = seen.argv[seen.argv.indexOf("--allowedTools") + 1].split(",");
     expect(allowed).toContain("mcp__terminal__terminal_read");
+    expect(allowed).toContain("mcp__terminal__terminal_playbook");
     expect(allowed).not.toContain("mcp__terminal");
     expect(seen.mcpConfig.mcpServers.terminal.alwaysLoad).toBe(true);
     expect(allowed).not.toContain("mcp__terminal__terminal_send");
@@ -1212,6 +1251,20 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv[seen.argv.indexOf("--tools") + 1]).toBe("Read,WebFetch");
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1]).toBe("Bash(git *),Edit");
+  });
+
+  it("runs a read-only turn without file edits or shell", async () => {
+    await create("edit", {}, { disallowedTools: ["Bash(git *)"] });
+    const dump = join(scratch, "read-only-dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "go", cwd: scratch, approval: "auto", readOnly: true });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(existsSync(join(scratch, "made.txt"))).toBe(false);
+    expect(existsSync(join(scratch, "ran.txt"))).toBe(false);
+    expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
   });
 
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
@@ -1362,6 +1415,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     ["session not found", "resume-fails"],
     ["invalid session across lines", "resume-fails-multiline"],
     ["unknown conversation", "resume-fails-unknown"],
+    ["no conversation found, as the real CLI reports it", "resume-fails-real"],
   ])("starts fresh with portable context for %s", async (diagnostic, mode) => {
     await create(mode);
     const dump = join(scratch, "resume-fallback.json");
@@ -1403,6 +1457,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.interruptTurn("t-int");
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
+  });
+
+  it("interrupt ends a turn stuck on a tool that never returns and frees its thread", async () => {
+    await create("tool-hang");
+    await instance.adapter.sendTurn({ threadId: "t-tool-hang", text: "go" });
+    await recorder.until((e) => e.type === "item.started" && e.itemType === "tool");
+
+    await instance.adapter.interruptTurn("t-tool-hang");
+    expect(instance.adapter.hasSession("t-tool-hang")).toBe(false);
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: false });
   });
 
   it("releases the thread on interrupt so the next sendTurn is not rejected", async () => {
@@ -2950,6 +3014,66 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(replies).toHaveLength(1);
   }, 20_000);
 
+  it("retries a Cloudflare blip on the live process, then answers once", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "2";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-blip", text: "go" });
+
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ turnId, ok: true });
+    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => [e.attempt, e.reason, e.maxAttempts])).toEqual([[1, "edge_error", 8], [2, "edge_error", 8]]);
+    expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(1);
+    expect(recorder.events.filter((e) => e.type === "session.started").every((e) => e.turnId === turnId)).toBe(true);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+    expect(recorder.events.filter((e) => e.type === "turn.completed")).toHaveLength(1);
+    expect(recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toHaveLength(1);
+  }, 20_000);
+
+  it("shows one error card after the last blip retry fails", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "99";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip-cap");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blip-cap", text: "go" });
+
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => e.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(recorder.events.filter((e) => e.type === "runtime.error").map((e) => e.message)).toEqual(["Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"]);
+    expect(recorder.events.filter((e) => e.type === "turn.completed")).toEqual([expect.objectContaining({ ok: false })]);
+  }, 20_000);
+
+  it("a Stop during a blip backoff ends the turn at once", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip-stop");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "60";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blip-stop", text: "go" });
+
+    await recorder.until((e) => e.type === "turn.retrying");
+    await instance.adapter.interruptTurn("t-blip-stop");
+    expect(await recorder.until((e) => e.type === "turn.completed", 2_000)).toMatchObject({ ok: false, stopReason: "interrupted" });
+    expect(recorder.events.filter((e) => e.type === "turn.retrying")).toHaveLength(1);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+  }, 20_000);
+
+  it("never retries a real sign-in failure result", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "1";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Forbidden";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip-auth");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blip-auth", text: "go" });
+
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.some((e) => e.type === "turn.retrying")).toBe(false);
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(1);
+  }, 20_000);
+
   it("stops retrying at the attempt cap and settles the turn as failed", async () => {
     process.env.FAKE_CLAUDE_TRANSIENTS = "9";
     process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-cap");
@@ -2959,12 +3083,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
     await recorder.until((e) => e.type === "turn.completed" && e.ok === false);
     const retries = recorder.events.filter((e) => e.type === "turn.retrying");
-    expect(retries.map((e) => e.attempt)).toEqual([1, 2]);
+    expect(retries.map((e) => e.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(true);
   }, 20_000);
 
   it("gives a later turn on the same thread a fresh retry budget", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
+    process.env.FAKE_CLAUDE_TRANSIENTS = "16";
     process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-fresh-budget");
     process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     await create();
@@ -2974,7 +3098,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await instance.adapter.sendTurn({ threadId: "t-fresh-budget", text: "two" });
     await recorder.until((e) => e.type === "turn.completed" && e.eventId !== firstDone.eventId);
 
-    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => e.attempt)).toEqual([1, 2, 1, 2]);
+    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => e.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]);
   }, 20_000);
 
   it("retries the turn a retained process is running, not the one that spawned it", async () => {

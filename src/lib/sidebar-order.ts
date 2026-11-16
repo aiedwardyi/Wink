@@ -5,6 +5,33 @@ import { userSectionId } from "./sidebar-layout";
 export type SidebarItemKind = "bot" | "group";
 export type SidebarItemOrder = Record<string, string[]>;
 
+export type JoinedRoomLayout = Record<string, { section?: string; pinned?: boolean }>;
+const ROOM_LAYOUT_KEY = "openmausbot.sidebarRooms.v1";
+export const ROOM_LAYOUT_EVENT = "orbit-sidebar-rooms";
+
+export function loadJoinedRoomLayout(): JoinedRoomLayout {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(ROOM_LAYOUT_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).flatMap(([id, entry]) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const { section, pinned } = entry as { section?: unknown; pinned?: unknown };
+      return [[id, { ...(typeof section === "string" ? { section } : {}), ...(typeof pinned === "boolean" ? { pinned } : {}) }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function saveJoinedRoomLayout(layout: JoinedRoomLayout): void {
+  try {
+    localStorage.setItem(ROOM_LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    // The current window can still keep the move when storage is full.
+  }
+  window.dispatchEvent(new CustomEvent(ROOM_LAYOUT_EVENT, { detail: layout }));
+}
+
 export type SidebarOrder = {
   sectionOrder: string[];
   itemOrder: SidebarItemOrder;
@@ -181,16 +208,17 @@ export type SidebarStartupGroup = {
   pinned?: boolean;
 };
 
-/** The id the sidebar renders first: chief tier, then pinned tier, then the
- * first regular item in section order. Mirrors Sidebar.tsx's render order. */
-export function preferredStartupSelectionId(
+/** Every listed chat in the order the sidebar renders it, before search or folded sections:
+ * chief tier, then pinned tier, then each section's regular items. Mirrors Sidebar.tsx. */
+export function sidebarOrderedItems(
   bots: readonly SidebarStartupBot[],
   groups: readonly SidebarStartupGroup[],
   order: SidebarOrder,
-): string {
+): { kind: SidebarItemKind; id: string }[] {
   const items = [
     ...listedGroups(groups).map((group) => ({
       key: sidebarItemKey("group", group.id),
+      kind: "group" as const,
       id: group.id,
       sectionId: sectionIdFor(group.section),
       priority: sidebarPriorityFor(group),
@@ -199,6 +227,7 @@ export function preferredStartupSelectionId(
       .filter((bot) => !bot.hidden)
       .map((bot) => ({
         key: sidebarItemKey("bot", bot.id),
+        kind: "bot" as const,
         id: bot.id,
         sectionId: sectionIdFor(bot.section),
         priority: sidebarPriorityFor(bot),
@@ -211,16 +240,23 @@ export function preferredStartupSelectionId(
   const normalized = normalizeSidebarOrder(order, sections, itemsBySection);
   const priorityByKey = Object.fromEntries(items.map((item) => [item.key, item.priority]));
   const partition = partitionSidebarItemKeys(normalized.sectionOrder, normalized.itemOrder, priorityByKey);
-  const orderedKeys = [
+  return [
     ...partition.chief,
     ...partition.pinned,
     ...normalized.sectionOrder.flatMap((id) => partition.regular[id] ?? []),
-  ];
-  for (const key of orderedKeys) {
-    const id = itemByKey.get(key)?.id;
-    if (id) return id;
-  }
-  return bots[0]?.id ?? "";
+  ].flatMap((key) => {
+    const item = itemByKey.get(key);
+    return item ? [{ kind: item.kind, id: item.id }] : [];
+  });
+}
+
+/** The id the sidebar renders first. */
+export function preferredStartupSelectionId(
+  bots: readonly SidebarStartupBot[],
+  groups: readonly SidebarStartupGroup[],
+  order: SidebarOrder,
+): string {
+  return sidebarOrderedItems(bots, groups, order)[0]?.id ?? bots[0]?.id ?? "";
 }
 
 export function sameSidebarOrder(a: SidebarOrder, b: SidebarOrder): boolean {

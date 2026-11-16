@@ -6,7 +6,7 @@ export function json(res: ServerResponse, status: number, body: unknown) {
   sendJson(res, status, JSON.stringify(body));
 }
 
-export function readBody(req: IncomingMessage): Promise<any> {
+export function readBody(req: IncomingMessage, maxBytes = 1_000_000): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = "";
     let bytes = 0;
@@ -20,7 +20,7 @@ export function readBody(req: IncomingMessage): Promise<any> {
     req.on("data", (c) => {
       if (done) return;
       bytes += typeof c === "string" ? Buffer.byteLength(c) : c.length;
-      if (bytes > 1_000_000) {
+      if (bytes > maxBytes) {
         // Keep draining the socket, but stop retaining attacker-controlled
         // bytes. Destroying the request here prevents the caller from
         // receiving the useful 413 response.

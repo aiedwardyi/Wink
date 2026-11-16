@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
@@ -12,6 +12,7 @@ import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 import { SegmentedRow } from "./Segmented";
+import { RainbowRing } from "./RainbowRing";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
 import { TeamSection, type TeamView } from "./TeamSection";
@@ -23,6 +24,7 @@ import { GeometryPicker } from "./GeometryPicker";
 import { TerminalAppearanceRow } from "./TerminalAppearanceRow";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { LanguagePicker } from "./LanguagePicker";
+import { CallVoicePicker } from "./CallVoicePicker";
 import { useI18n } from "@/lib/i18n";
 import { isTransientUpdateError } from "../../shared/update-error.mjs";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
@@ -33,7 +35,7 @@ import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-bo
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
-import { showTerminalAlerts, showTerminalColors, showUsageStats } from "@/lib/friends-chrome";
+import { showTerminalAlerts, showTerminalColors } from "@/lib/friends-chrome";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
@@ -43,6 +45,8 @@ import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
 import { Fold } from "./Fold";
 import { ActivityCard } from "./ActivityCard";
+import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
+import { trackSetting } from "@/lib/usage-stats";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -72,6 +76,9 @@ const SECTION_KEY = {
   "models-index": "settings.section.modelsIndex",
   sync: "settings.section.sync",
 } as const;
+
+// a 26 px X; the touch area grows to 44 px without moving the header
+const CLOSE_X = "relative rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:after:absolute pointer-coarse:after:-inset-[9px]";
 
 function sectionNavVisible(
   section: (typeof SECTIONS)[number],
@@ -159,6 +166,7 @@ function ToolCallsRow() {
         method: "PATCH",
         body: JSON.stringify({ features: { showToolCalls: !enabled } }),
       });
+      trackSetting("toolCalls", enabled ? "on" : "off", enabled ? "off" : "on");
       dispatch({ type: "configStatus", config });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("settings.toolCalls.saveError"));
@@ -223,6 +231,7 @@ function DetailedRepliesRow() {
         method: "PATCH",
         body: JSON.stringify({ features: { detailedReplies: !enabled } }),
       });
+      trackSetting("longerReplies", enabled ? "on" : "off", enabled ? "off" : "on");
       dispatch({ type: "configStatus", config });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("settings.detailedReplies.saveError"));
@@ -327,6 +336,7 @@ function RainbowBoxRow() {
         value={box}
         options={(["off", "rainbow", "theme"] as const).map((id) => ({ id, label: t(`settings.rainbowBox.${id}`) }))}
         onChange={saveRainbowBox}
+        ring={box !== "off" && <RainbowRing theme={box === "theme"} />}
       />
     </Card>
   );
@@ -527,7 +537,7 @@ export function SettingsModal({
         // hands the excess to the content pane, which is the only thing that scrolls.
         className={cn(
           "animate-pop-in flex max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col",
-          "h-[560px]",
+          phone && section === "account" ? "h-auto" : "h-[560px]",
         )}
       >
         {phone && (
@@ -535,7 +545,7 @@ export function SettingsModal({
           <nav data-settings-list aria-hidden={page || undefined} inert={page} className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center justify-between px-5 py-3">
               <span id={!page ? "app-settings-title" : undefined} className="text-[17px] font-semibold text-ink">{t("settings.title")}</span>
-              <button onClick={() => dispatch({ type: "toggleAppSettings", open: false })} aria-label={!page ? t("settings.close") : undefined} className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink">
+              <button onClick={() => dispatch({ type: "toggleAppSettings", open: false })} aria-label={!page ? t("settings.close") : undefined} className={CLOSE_X}>
                 <X size={18} />
               </button>
             </div>
@@ -597,7 +607,7 @@ export function SettingsModal({
               <button
                 onClick={() => dispatch({ type: "toggleAppSettings", open: false })}
                 aria-label={t("settings.close")}
-                className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+                className={CLOSE_X}
               >
                 <X size={18} />
               </button>
@@ -627,11 +637,13 @@ export function SettingsModal({
             {section === "general" && (
               <>
                 <LanguagePicker />
+                <CallVoicePicker />
                 {!window.ogb && <Card><PhoneNotificationSettings /></Card>}
                 <VibrationRow />
                 <UpdatesRow />
+                <RoomFilesFolderRow />
                 <ErrorReportsRow />
-                {showUsageStats() && <AnalyticsRow />}
+                {!window.ogb && <AnalyticsRow />}
                 <button
                   type="button"
                   aria-expanded={preferencesOpen}
@@ -687,7 +699,7 @@ export function SettingsModal({
               </>
             )}
             {section === "models-index" && <ModelIndexSection />}
-            {section === "shortcuts" && <KeyboardShortcuts />}
+            {section === "shortcuts" && <KeyboardShortcuts pickerStyle={modelDialEnabled(state.config)} />}
           </div>
         </div>
         )}

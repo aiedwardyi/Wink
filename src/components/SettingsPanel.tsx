@@ -1,4 +1,4 @@
-import { ChevronRight, FolderOpen, Settings, X } from "lucide-react";
+import { FolderOpen, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
@@ -36,8 +36,10 @@ import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
+import { RenameActions } from "./RenameActions";
 import { useMemoryClean } from "@/lib/memory-clean";
 import { memoryTargetLine } from "@/lib/memory-recent";
+import { botAsks } from "@/lib/asks";
 import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
@@ -46,9 +48,10 @@ import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
 import { SaveStatus } from "./SaveStatus";
-import { STACK_BELOW } from "./MemoryMapStage";
+import { STACK_BELOW, useStage } from "./MemoryMapStage";
 // the map's CSS comes with Bot details, so a Memory tab open never waits on a stylesheet
 import "./MemoryMap.css";
+import { trackFeatureOnce } from "@/lib/usage-stats";
 
 // One Bot Details is up at a time. A bot switch mounts the next panel (keyed by
 // bot) while the last is still up, and must not replay the slide-in.
@@ -242,6 +245,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
 const MemoryMap = lazyView(() => import("./MemoryMap").then((m) => ({ default: m.MemoryMap })));
 // a wide window fetches it with Bot details, so its map paints with the tab instead of after a suspend
 let loadedMap: typeof import("./MemoryMap").MemoryMap | null = null;
+const MEMORY_READ_MS = 10_000;
 
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
@@ -255,6 +259,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const autoNotes = memoryNotesEnabled(state.config, bot);
   const [botId] = useState(bot.id);
   const [loading, setLoading] = useState(true);
+  const [mapReady, setMapReady] = useState(Boolean(loadedMap));
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [text, setText] = useState("");
@@ -297,7 +302,8 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   };
   const editFile = (next: boolean) => {
     openFile(next);
-    if (next) startEdit(true);
+    // the file can open while memory loads, but an edit typed then would save over it
+    if (next && !loading) startEdit(true);
     if (next && !wide) setToFile((count) => count + 1);
   };
   // waits for the fold: until it has grown the page may be too short to bring the file up
@@ -314,25 +320,34 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     focusFile.current = false;
   }, [editing]);
   const MapView = loadedMap ?? MemoryMap;
-  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
+  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
-  const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
-    api(`/api/bots/${botId}/memory`);
+  const read = (signal?: AbortSignal): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
+    api(`/api/bots/${botId}/memory`, signal && { signal }).then((result) => {
+      // a body cut off by the timeout, or a proxy's page, parses as {}
+      if (typeof result?.text !== "string" || !Array.isArray(result.topics)) throw new Error("no memory in the reply");
+      return result;
+    });
+  const landed = useRef(false);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await read();
+      // a phone's map waits on this read, and a socket that died while the phone slept never answers
+      const result = await read(AbortSignal.timeout(MEMORY_READ_MS));
+      // a refresh that landed first is as new, and an edit may have saved since
+      if (landed.current) return;
       setTruncated(result.truncated);
       setTopics(result.topics);
       const draft = openMemory(botId, result);
       setText(draft?.text ?? result.text);
       setLoadFailed(false);
+      landed.current = true;
       if (draft?.conflict) setConflict(result);
       else if (draft) setStatus("saving");
     } catch {
-      setLoadFailed(true);
+      if (!landed.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -360,7 +375,9 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     // a save that started after this read went out is newer than it
     if (!result || memoryDraft(botId) !== null || memorySaves(botId) !== saves) return;
     openMemory(botId, result);
+    landed.current = true;
     setText(result.text);
+    setLoading(false);
     setLoadFailed(false);
     setTruncated(result.truncated);
     setTopics(result.topics);
@@ -368,6 +385,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
 
   const edit = (next: string) => {
     setText(next);
+    trackFeatureOnce("memory.edit");
     editMemory(botId, next);
     if (conflict) return;
     setStatus("saving");
@@ -390,7 +408,11 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   useEffect(() => {
     void load();
     // a phone keeps the lazy render, so its first tab frame stays light, but never waits on the network
-    void import("./MemoryMap").then((m) => { if (window.innerWidth >= STACK_BELOW) loadedMap = m.MemoryMap; }).catch(() => {});
+    void import("./MemoryMap").then((m) => {
+      if (window.innerWidth >= STACK_BELOW) { loadedMap = m.MemoryMap; setMapReady(true); }
+      if (window.requestIdleCallback) window.requestIdleCallback(m.warmGlow, { timeout: 2000 });
+      else m.warmGlow();
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -456,7 +478,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
         value={text}
         placeholder={t("bot.memoryPlaceholder")}
         aria-label={t("bot.memory")}
-        readOnly={loadFailed}
+        readOnly={loading || loadFailed}
         onChange={(e) => edit(e.target.value)}
         onFocus={() => void refresh()}
         onBlur={() => void flushMemory(botId)}
@@ -474,10 +496,11 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const edits = !loading && !loadFailed && !conflict ? startEdit : undefined;
 
   return (
-    <div ref={card} className="relative flex flex-col gap-3">
-      {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (!loading || loadFailed) && (
+    <div ref={card} className="mm-wrap relative flex flex-col gap-3">
+      {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
+      {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={edits && <MemoryEditButton editing={editing} onEdit={edits} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={loading} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={edits && <MemoryEditButton editing={editing} onEdit={edits} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -514,6 +537,8 @@ export function SettingsPanel({
   const panelRef = useRef<HTMLElement>(null);
   const phone = useIsPhone();
   const [slideIn] = useState(() => panelsUp === 0);
+  // the shell answers the click; the rows come one commit later
+  const rows = useStage(1, !slideIn);
   useEffect(() => {
     panelsUp += 1;
     return () => {
@@ -544,6 +569,8 @@ export function SettingsPanel({
   };
   const paging = useDetailsTabs(pagesRef, phone, closing, memoryTab, showTab);
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
+  const [nameBefore, setNameBefore] = useState<{ id: string; name: string } | null>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
   const patch = (
     p: Partial<
       Pick<
@@ -568,6 +595,11 @@ export function SettingsPanel({
       >
     > & { acknowledgeLocalAuto?: boolean },
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
+  // the name saves as you type, so cancel writes the focus-time name back
+  const restoreName = () => {
+    if (nameBefore?.id === bot.id && nameBefore.name !== bot.name) patch({ name: nameBefore.name });
+    nameInput.current?.blur();
+  };
   const activeState = stateForBot(bot);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
@@ -577,11 +609,11 @@ export function SettingsPanel({
     bot.shareTerminalWithChat === true || (bot.shareTerminalWithChat !== false && (desktopTerminal || serverHasTerminal));
   const shareTerminalDisabled = !terminalShared && !desktopTerminal && !serverHasTerminal;
   useEffect(() => {
-    if (avatarRequest === 0 || avatarRequest === seenAvatarRequest.current) return;
+    if (!rows || avatarRequest === 0 || avatarRequest === seenAvatarRequest.current) return;
     seenAvatarRequest.current = avatarRequest;
     setAvatarOpen(true);
     avatarSectionRef.current?.scrollIntoView({ block: "nearest" });
-  }, [avatarRequest]);
+  }, [avatarRequest, rows]);
 
   const closeSettings = () => {
     restoreFocusOnClose.current = true;
@@ -631,25 +663,17 @@ export function SettingsPanel({
     {/* Below md the sidebar is already a drawer, so docking here would leave a
         ~200px chat column at the window floor. Take the content area instead,
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
-    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "animate-panel-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel [&_:is(button:not(:disabled),summary)]:cursor-pointer md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
+    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel [&_:is(button:not(:disabled),summary)]:cursor-pointer md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <button
-          onClick={closeSettings}
-          aria-label={t("bot.collapseDetails")}
-          title={t("bot.collapseDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
-        >
-          <ChevronRight size={18} />
-        </button>
+      <div className="flex h-16 items-center justify-between pl-4 pr-1.5 max-md:pr-0">
         <span className="text-[15px] font-semibold text-ink">{t("bot.details")}</span>
         <button
           onClick={closeSettings}
           aria-label={t("bot.closeDetails")}
           title={t("bot.closeDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+          className="flex size-7 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink max-md:size-11"
         >
-          <X size={18} />
+          <X size={15} />
         </button>
       </div>
 
@@ -673,121 +697,139 @@ export function SettingsPanel({
       </div>
 
       <div ref={pagesRef} className={cn("relative min-h-0 flex-1 overflow-hidden", paging && "pointer-events-none")}>
-        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
-          <KeepGoingCard bot={bot} />
-          <div className={DETAILS_BOX}>
-            <div ref={avatarSectionRef} className={DETAILS_ROW}>
-              <div className="flex items-center gap-3">
-                <BotAvatar
-                  bot={bot}
-                  state={activeState}
-                  size={48}
-                  motion={mascotMotion?.kind ?? "none"}
-                  motionKey={mascotMotion?.nonce ?? 0}
-                />
-                <div className="min-w-0 flex-1 text-[14px] font-medium text-ink">{t("bot.avatar")}</div>
-                <button
-                  type="button"
-                  aria-expanded={avatarOpen}
-                  onClick={() => setAvatarOpen((open) => !open)}
-                  className={cn(ROW_BUTTON, "text-ink")}
-                >
-                  {avatarOpen ? t("bot.avatarDone") : t("bot.avatarCustomize")}
-                </button>
+        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
+          {rows > 0 && (
+            <>
+              <KeepGoingCard bot={bot} />
+              <div className={DETAILS_BOX}>
+                <div ref={avatarSectionRef} className={DETAILS_ROW}>
+                  <div className="flex items-center gap-3">
+                    <BotAvatar
+                      bot={bot}
+                      state={activeState}
+                      size={48}
+                      motion={mascotMotion?.kind ?? "none"}
+                      motionKey={mascotMotion?.nonce ?? 0}
+                    />
+                    <div className="min-w-0 flex-1 text-[14px] font-medium text-ink">{t("bot.avatar")}</div>
+                    <button
+                      type="button"
+                      aria-expanded={avatarOpen}
+                      onClick={() => setAvatarOpen((open) => !open)}
+                      className={cn(ROW_BUTTON, "text-ink")}
+                    >
+                      {avatarOpen ? t("bot.avatarDone") : t("bot.avatarCustomize")}
+                    </button>
+                  </div>
+                  <Fold open={avatarOpen}>
+                    <div className="mt-3">
+                      <BotProfileAvatarCard
+                        bot={bot}
+                        activeState={activeState}
+                        mascotMotion={mascotMotion}
+                        onPatch={patch}
+                      />
+                    </div>
+                  </Fold>
+                </div>
+                <Field label={t("bot.name")}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={nameInput}
+                      aria-label={t("bot.name")}
+                      className={DETAILS_INPUT}
+                      maxLength={BOT_PROFILE_LIMITS.name}
+                      value={bot.name}
+                      onChange={(e) => patch({ name: e.target.value })}
+                      onFocus={() => setNameBefore({ id: bot.id, name: bot.name })}
+                      onBlur={() => setNameBefore(null)}
+                      onKeyDown={(event) => {
+                        if (event.nativeEvent.isComposing) return;
+                        if (event.key === "Enter") event.currentTarget.blur();
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          restoreName();
+                        }
+                      }}
+                    />
+                    {nameBefore?.id === bot.id && <RenameActions onSave={() => nameInput.current?.blur()} onCancel={restoreName} />}
+                  </div>
+                </Field>
+                <Field label={t("bot.title")}>
+                  <input
+                    className={DETAILS_INPUT}
+                    maxLength={BOT_PROFILE_LIMITS.title}
+                    placeholder={t("bot.titlePlaceholder")}
+                    value={bot.title}
+                    onChange={(e) => patch({ title: e.target.value })}
+                  />
+                </Field>
+                <Field label={t("bot.description")} hint={t("bot.descriptionHelp")} status={<SaveStatus id={bot.id} />}>
+                  <FitTextarea
+                    watchMetrics
+                    aria-label={t("bot.description")}
+                    className={cn(DETAILS_INPUT, "min-h-[96px]")}
+                    placeholder={t("bot.descriptionPlaceholder")}
+                    value={bot.description}
+                    onChange={(e) => patch({ description: e.target.value })}
+                  />
+                </Field>
               </div>
-              <Fold open={avatarOpen}>
-                <div className="mt-3">
-                  <BotProfileAvatarCard
-                    bot={bot}
-                    activeState={activeState}
-                    mascotMotion={mascotMotion}
-                    onPatch={patch}
+
+              <WorkingFolder bot={bot} />
+
+              <div className={DETAILS_BOX}>
+                <div className={DETAILS_ROW}>
+                  <SegmentedRow<"auto" | "ask">
+                    label={t("bot.approval")}
+                    value={bot.autoApprove ? "auto" : "ask"}
+                    options={[
+                      { id: "auto", label: t("bot.approvalAuto") },
+                      { id: "ask", label: t("bot.approvalAsk") },
+                    ]}
+                    onChange={(id) => {
+                      const auto = id === "auto";
+                      if (Boolean(bot.autoApprove) === auto) return;
+                      if (auto && bot.computer === "local") setLocalAutoWarning("auto");
+                      else patch({ autoApprove: auto });
+                    }}
                   />
                 </div>
-              </Fold>
-            </div>
-            <Field label={t("bot.name")}>
-              <input
-                className={DETAILS_INPUT}
-                maxLength={BOT_PROFILE_LIMITS.name}
-                value={bot.name}
-                onChange={(e) => patch({ name: e.target.value })}
-              />
-            </Field>
-            <Field label={t("bot.title")}>
-              <input
-                className={DETAILS_INPUT}
-                maxLength={BOT_PROFILE_LIMITS.title}
-                placeholder={t("bot.titlePlaceholder")}
-                value={bot.title}
-                onChange={(e) => patch({ title: e.target.value })}
-              />
-            </Field>
-            <Field label={t("bot.description")} hint={t("bot.descriptionHelp")} status={<SaveStatus botId={bot.id} />}>
-              <FitTextarea
-                watchMetrics
-                aria-label={t("bot.description")}
-                className={cn(DETAILS_INPUT, "min-h-[96px]")}
-                maxLength={BOT_PROFILE_LIMITS.description}
-                placeholder={t("bot.descriptionPlaceholder")}
-                value={bot.description}
-                onChange={(e) => patch({ description: e.target.value })}
-              />
-            </Field>
-          </div>
+                <SwitchRow
+                  label={t("bot.notifications")}
+                  aria={t("bot.notificationsAria")}
+                  on={bot.notifications}
+                  onToggle={() => {
+                    const enabled = !bot.notifications;
+                    if (enabled && !window.ogb?.showNotification) void requestNotificationPermission();
+                    patch({ notifications: enabled });
+                  }}
+                />
+                {(!shareTerminalDisabled || showDisabledShareTerminal()) && (
+                  <SwitchRow
+                    label={t("bot.shareTerminal")}
+                    hint={t("bot.shareTerminalHelp")}
+                    on={terminalShared}
+                    disabled={shareTerminalDisabled}
+                    className="disabled:cursor-not-allowed disabled:opacity-40"
+                    onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
+                  />
+                )}
+                {engine?.driverKind === "claudeAgent" && (
+                  <SwitchRow
+                    label={t("bot.leanStartup")}
+                    on={bot.leanStartup !== true}
+                    onToggle={() => patch({ leanStartup: !(bot.leanStartup === true) })}
+                  />
+                )}
+              </div>
 
-          <WorkingFolder bot={bot} />
-
-          <div className={DETAILS_BOX}>
-            <div className={DETAILS_ROW}>
-              <SegmentedRow<"auto" | "ask">
-                label={t("bot.approval")}
-                value={bot.autoApprove ? "auto" : "ask"}
-                options={[
-                  { id: "auto", label: t("bot.approvalAuto") },
-                  { id: "ask", label: t("bot.approvalAsk") },
-                ]}
-                onChange={(id) => {
-                  const auto = id === "auto";
-                  if (Boolean(bot.autoApprove) === auto) return;
-                  if (auto && bot.computer === "local") setLocalAutoWarning("auto");
-                  else patch({ autoApprove: auto });
-                }}
-              />
-            </div>
-            <SwitchRow
-              label={t("bot.notifications")}
-              aria={t("bot.notificationsAria")}
-              on={bot.notifications}
-              onToggle={() => {
-                const enabled = !bot.notifications;
-                if (enabled && !window.ogb?.showNotification) void requestNotificationPermission();
-                patch({ notifications: enabled });
-              }}
-            />
-            {(!shareTerminalDisabled || showDisabledShareTerminal()) && (
-              <SwitchRow
-                label={t("bot.shareTerminal")}
-                hint={t("bot.shareTerminalHelp")}
-                on={terminalShared}
-                disabled={shareTerminalDisabled}
-                className="disabled:cursor-not-allowed disabled:opacity-40"
-                onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
-              />
-            )}
-            {showBotVoiceAndStartupSettings() && engine?.driverKind === "claudeAgent" && (
-              <SwitchRow
-                label={t("bot.leanStartup")}
-                on={bot.leanStartup !== true}
-                onToggle={() => patch({ leanStartup: !(bot.leanStartup === true) })}
-              />
-            )}
-          </div>
-
-          {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
+              {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
+            </>
+          )}
         </div>
-        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
-          <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />
+        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
+          {rows > 0 && <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />}
         </div>
       </div>
     </aside>

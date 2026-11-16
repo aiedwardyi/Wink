@@ -43,6 +43,14 @@ export const configSchema = z.strictObject({
     .optional(),
   /** Needs `google`. Absent: no session recording and /v1/team answers 404. */
   teamOwnerEmail: z.email().max(320).optional(),
+  /** Absent: /v1/stats answers 404. readKeySha256 is the hex SHA-256 of the key for GET /v1/stats/day/<date>. */
+  stats: z
+    .strictObject({
+      keepDays: z.int().min(1).max(3650).default(90),
+      maxDayBytes: z.int().min(1).default(200 * 1024 * 1024),
+      readKeySha256: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
   limits: limitsSchema,
 });
 

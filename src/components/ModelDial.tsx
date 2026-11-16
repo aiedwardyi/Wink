@@ -10,7 +10,8 @@ import { PHONE_QUERY, hapticTick, reducedMotion } from "@/lib/phone-swipe";
 import { useDialTouch } from "@/lib/use-dial-touch";
 import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
-import { needsCli, needsSignIn } from "./EngineSetup";
+import { engineChecking, needsCli, needsSignIn } from "./EngineSetup";
+import { altKeyLabel } from "./PickerStyleStrip";
 import "./ModelDial.css";
 
 const DIAL_QUERY = "(pointer: fine)";
@@ -169,7 +170,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const level = efforts.findIndex((option) => option.model ? option.model === draft.model : option.effort === draft.effort);
   const effort = efforts[level];
   const max = effort?.label === "max";
-  const locked = (row: PickerRow) => needsCli(row.instance) || needsSignIn(row.instance);
+  const locked = (row: PickerRow) => !engineChecking(row.instance) && (needsCli(row.instance) || needsSignIn(row.instance));
   const labLocked = rows[lab] ? locked(rows[lab]!) : false;
   const pickable = canCommit(draft);
   const accent = modelFamilyAccent(item?.instance.driverKind);
@@ -558,7 +559,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
                   data-model-row={model.instance.instanceId}
                   data-model-cell={model.cell.options[0]!.id}
                   aria-pressed={j === index}
-                  style={{ "--k": k, "--ak": ak, "--o": fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
+                  aria-hidden={(ak > 1 && fade !== undefined) || undefined}
+                  style={{ "--k": k, "--ak": ak, "--o": ak === 1 ? `var(--dial-near-fade, ${fade})` : fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
                   onClick={() => (j === index ? commit() : go(j))}
                 >
                   <ProviderMark driverKind={model.instance.driverKind} size={18} className="dial-mark" />
@@ -619,6 +621,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
             <span><kbd>←</kbd><kbd>→</kbd>{t("model.modelAxis")}</span>
             <span><kbd>Enter</kbd>{t("settings.profile.save")}</span>
             <span><kbd>Esc</kbd>{t("createBot.cancel")}</span>
+            <span><kbd>{altKeyLabel()}</kbd><kbd>T</kbd>{t("model.style")}</span>
           </span>
           <span>{item?.label.toUpperCase()} · <b>{names[index]?.name.toUpperCase()}</b> · {String(index + 1).padStart(2, "0")}/{String(count).padStart(2, "0")}</span>
         </footer>

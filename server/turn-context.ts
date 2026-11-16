@@ -1,5 +1,44 @@
 import { redactSecretsInText } from "./redact.ts";
+import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
+
+export interface ReplayMessage {
+  role: "user" | "assistant";
+  text: string;
+  engine?: string;
+  speaker?: { botId: string; name: string };
+}
+
+// Voice-call provenance is not a chat engine switch.
+const REPLAY_ENGINE_NAMES = new Map([
+  ["claudeAgent", "Claude"],
+  ["codex", "Codex"],
+  ["antigravityAgent", "Gemini"],
+  ["grokAgent", "Grok"],
+  ["museAgent", "Muse"],
+]);
+
+export function replayEngineTag(engine?: string, driverKind?: string, model?: string): string {
+  const name = engine && REPLAY_ENGINE_NAMES.get(engine);
+  // Box selects its engine by model; its driver kind only names the runner.
+  const currentEngine = driverKind === "boxAgent" ? (model?.startsWith("gpt") ? "codex" : "claudeAgent") : driverKind;
+  return name && currentEngine && engine !== currentEngine ? ` (on ${name})` : "";
+}
+
+export function replayMessageText(message: ReplayMessage, driverKind: string, botId?: string, model?: string): string {
+  if (message.role !== "assistant" || (botId && message.speaker?.botId !== botId)) return message.text;
+  const tag = replayEngineTag(message.engine, driverKind, model);
+  if (!tag) return message.text;
+  const speaker = message.speaker?.name;
+  const prefix = speaker ? `${speaker}: ` : "";
+  return speaker && message.text.startsWith(prefix)
+    ? `${speaker}${tag}: ${message.text.slice(prefix.length)}`
+    : `${tag.trimStart()} ${message.text}`;
+}
+
+function replayLine(message: ReplayMessage, driverKind?: string, model?: string): string {
+  return `${message.role === "user" ? "User" : `Assistant${replayEngineTag(message.engine, driverKind, model)}`}: ${message.text}`;
+}
 
 // Building the text a driver actually receives. Three situations force an
 // inline replay of the active branch: a rewind (the visible branch
@@ -14,7 +53,9 @@ export interface TurnContextInput {
   /** the user's new message */
   text: string;
   /** settled text turns on the active branch, oldest first, capped upstream */
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  transcript: ReplayMessage[];
+  driverKind?: string;
+  model?: string;
   /** the visible branch changed (edit / version switch) */
   rewound: boolean;
   /** this driver instance has no session cursor for this thread */
@@ -44,6 +85,8 @@ export interface TurnContextInput {
   recovering?: boolean;
   /** the request this turn must answer; the transcript excludes it on a plain send */
   currentRequestText?: string;
+  /** the asks list for a turn the record does not ride */
+  asksText?: string;
 }
 
 export interface TaskRecordContext {
@@ -54,6 +97,7 @@ export interface TaskRecordContext {
   artifacts?: Array<{ ref: string; label: string }>;
   blockers: Array<{ note: string }>;
   nextAction: string;
+  asks?: TaskAsk[];
 }
 
 /** Does this engine need the thread replayed to it? True when a DIFFERENT
@@ -389,6 +433,19 @@ function systemLines(text: string): string[] {
     .filter((line) => line.trim());
 }
 
+function retainedLinesReordered(before: string[], after: string[]): boolean {
+  const oldLines = new Set(before);
+  const newLines = new Set(after);
+  const retainedBefore = before.filter((line) => newLines.has(line));
+  const retainedAfter = after.filter((line) => oldLines.has(line));
+  return retainedBefore.length !== retainedAfter.length
+    || retainedBefore.some((line, index) => line !== retainedAfter[index]);
+}
+
+export function systemLinesReordered(delivered: string, system: string): boolean {
+  return retainedLinesReordered(systemLines(delivered), systemLines(system));
+}
+
 /** Lines of `from` that `other` does not also hold, in `from`'s order. */
 function linesOnlyIn(from: string[], other: string[]): string[] {
   const left = new Map<string, number>();
@@ -412,8 +469,9 @@ export function withSystemChanges(
   if (delivered === undefined || delivered === system) return text;
   const before = systemLines(delivered);
   const after = systemLines(system);
-  const removed = linesOnlyIn(before, after);
-  const added = linesOnlyIn(after, before);
+  const reordered = retainedLinesReordered(before, after);
+  const removed = reordered ? before : linesOnlyIn(before, after);
+  const added = reordered ? after : linesOnlyIn(after, before);
   if (!removed.length && !added.length) return text;
   if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
   // Untagged, Haiku kept the stale system prompt in about half of real-CLI
@@ -472,6 +530,10 @@ export interface TaskRecordBlockOptions {
   latestUserText?: string;
   /** A request no completion settled; it takes the recovery shape too. */
   unsettledRequest?: string;
+  /** Clock stale asks are judged by. */
+  now?: number;
+  /** A status-style turn lists every open ask, not the oldest few. */
+  allAsks?: boolean;
 }
 
 function compactValue(value: string, maxCharacters: number): string {
@@ -525,6 +587,16 @@ export function taskRecordBlock(
   maxCharacters = 6_000,
   options?: TaskRecordBlockOptions,
 ): string {
+  const fields = taskRecordFields(record, maxCharacters, options);
+  const asks = asksBlock(record.asks, options?.now ?? Date.now(), options?.allAsks);
+  return asks ? `${fields}\n${asks}` : fields;
+}
+
+function taskRecordFields(
+  record: TaskRecordContext,
+  maxCharacters: number,
+  options?: TaskRecordBlockOptions,
+): string {
   const unsettled = (options?.unsettledRequest ?? "").trim();
   if (options?.recovering || unsettled) {
     const current = (options?.latestUserText ?? "").trim();
@@ -559,7 +631,9 @@ const RESUME_FALLBACK_PREAMBLE =
 
 export function buildResumeFallback(input: {
   text: string;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  transcript: ReplayMessage[];
+  driverKind?: string;
+  model?: string;
   taskRecord?: TaskRecordContext;
   taskRecordText?: string;
 }): string {
@@ -569,7 +643,7 @@ export function buildResumeFallback(input: {
     record ? "" : null,
     RESUME_FALLBACK_PREAMBLE,
     "",
-    ...input.transcript.map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.text}`),
+    ...input.transcript.map((message) => replayLine(message, input.driverKind, input.model)),
     "",
     REPLY_MARKER,
     "",
@@ -587,7 +661,7 @@ export function buildTurnContext(input: TurnContextInput): {
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
-  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText } = input;
+  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText, asksText = "" } = input;
   const resume = !rewound && !fresh && !recycled;
   const replay = !resume && !replaysNatively && transcript.length > 0;
   // The caller already sized its block for the model window and knows this
@@ -605,7 +679,7 @@ export function buildTurnContext(input: TurnContextInput): {
   );
   const record = durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
     ? durableRecord
-    : "";
+    : asksText;
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
   return {
@@ -614,7 +688,7 @@ export function buildTurnContext(input: TurnContextInput): {
       record ? "" : null,
       replayPreamble(input),
       "",
-      ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
+      ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
       "",
       REPLY_MARKER,
       "",

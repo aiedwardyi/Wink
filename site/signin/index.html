@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google" content="notranslate" />
-    <meta name="theme-color" content="#f7f5fb" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#eeebf7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#121316" media="(prefers-color-scheme: dark)" />
     <meta name="referrer" content="strict-origin" />
     <!-- GIS injects button styles; inline scripts stay blocked. -->
@@ -19,13 +19,13 @@
     <main>
       <div class="panel">
         <img class="logo" src="/app-icon.svg" alt="Wink" width="48" height="48" />
-        <h1>Sign in</h1>
-        <p class="quiet">Reach Wink on your PC from this phone.</p>
+        <h1 id="title">Sign in</h1>
+        <p id="subtitle" class="quiet">Reach Wink on your PC from this browser.</p>
         <p id="status" class="status" role="status" aria-live="polite"></p>
         <div id="list" class="list" hidden></div>
         <div id="google"></div>
         <div class="links">
-          <a id="pick" class="privacy" href="/?pick=1">Choose another PC</a>
+          <a id="pick" class="privacy" href="/?pick=1" hidden>Choose another PC</a>
           <a class="privacy" href="/privacy">Privacy</a>
         </div>
       </div>

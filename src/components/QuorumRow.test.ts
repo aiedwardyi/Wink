@@ -98,6 +98,7 @@ describe("quorum row", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     host.remove();
+    vi.restoreAllMocks();
     applyLocale("en");
     localStorage.clear();
     vi.unstubAllGlobals();
@@ -195,7 +196,7 @@ describe("quorum row", () => {
   it("opens one tip line per bar, with the provider split on spend and none on sign-ups", async () => {
     await mount();
     await tap(bars(0)[6]!);
-    const tip = () => host.querySelector("section > p.whitespace-pre-line")?.textContent;
+    const tip = () => document.querySelector("[data-bar-tip]")?.textContent;
     expect(tip()).toBe("Sat, Oct 17 · $0.52\nClaude $0.20 · GPT $0.08 · Gemini $0.12 · Perplexity $0.10 · Search $0.02\nEstimated from token usage");
     await tap(bars(1)[6]!);
     expect(tip()).toBe("Sat, Oct 17 · 5 visitors");
@@ -203,6 +204,31 @@ describe("quorum row", () => {
     expect(tip()).toBe("Sun, Oct 11 · 4 visitors");
     expect(bars(1)[6]!.getAttribute("aria-label")).toBe("Sat, Oct 17 · 5 visitors");
     expect(host.querySelector("section")?.contains(numbers()[2]!.parentElement!.querySelector("button"))).toBe(false);
+  });
+
+  it("floats the tip without touching the row", async () => {
+    await mount();
+    const before = host.innerHTML;
+    await tap(bars(0)[6]!);
+    expect(document.querySelector("[data-bar-tip]")?.textContent).toContain("Sat, Oct 17 · $0.52");
+    expect(host.innerHTML).toBe(before);
+  });
+
+  it.each([[1280, 800], [392, 844], [360, 640]])("keeps a tip inside the window at %i wide", async (width, height) => {
+    Object.assign(window, { innerWidth: width, innerHeight: height });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.hasAttribute("data-bar-tip")) return new DOMRect(0, 0, 200, 52);
+      return this.tagName === "BUTTON" ? new DOMRect(width - 30, height - 24, 4, 24) : new DOMRect(0, 0, 0, 0);
+    });
+    await mount();
+    await tap(bars(1)[6]!);
+    const tip = document.querySelector<HTMLElement>("[data-bar-tip]")!;
+    const top = parseFloat(tip.style.top);
+    const left = parseFloat(tip.style.left);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(top + 52).toBeLessThanOrEqual(height - 24);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(left + 200).toBeLessThanOrEqual(width - 8);
   });
 
   it("gives way to one line for each state, keeping the title", async () => {
@@ -298,9 +324,9 @@ describe("quorum row", () => {
     expect(host.textContent).toBe("쿼럼$2.33지출 · 한도 80%21방문4가입");
     expect(host.textContent).not.toMatch(/오늘|최근|7일|전체/);
     await tap(bars(1)[6]!);
-    expect(host.querySelector("section > p.whitespace-pre-line")?.textContent).toBe("토, 10월 17일 · 방문자 5명");
+    expect(document.querySelector("[data-bar-tip]")?.textContent).toBe("토, 10월 17일 · 방문자 5명");
     await tap(bars(0)[6]!);
-    expect(host.querySelector("section > p.whitespace-pre-line")?.textContent).toContain("Claude $0.20 · GPT $0.08 · Gemini $0.12 · Perplexity $0.10 · 검색 $0.02");
+    expect(document.querySelector("[data-bar-tip]")?.textContent).toContain("Claude $0.20 · GPT $0.08 · Gemini $0.12 · Perplexity $0.10 · 검색 $0.02");
     const strings = Object.entries(ko).filter(([key]) => key.startsWith("quorum."));
     expect(strings).toHaveLength(18);
     for (const [, phrase] of strings) expect(phrase).not.toMatch(/^[\x20-\x7e]*$/u);

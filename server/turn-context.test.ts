@@ -9,6 +9,7 @@ import {
   NATIVE_PROMPT_BUDGET_CAP,
   nativePromptBudget,
   nativeSessionTokenBudget,
+  replayMessageText,
   PRE_COMPACT_SESSION_TOOL_ROUND_LIMIT,
   PRE_COMPACT_TOOL_ROUND_LIMIT,
   resumeSessionUnseeded,
@@ -406,6 +407,64 @@ describe("buildTurnContext", () => {
       expect(text).toContain(label);
     }
     expect(text).not.toContain(secret);
+  });
+});
+
+describe("asks in the task record", () => {
+  const now = new Date(2026, 10, 12, 9, 0).getTime();
+  const old = now - 7 * 60 * 60 * 1000;
+  const record = {
+    goal: "Ship the release",
+    plan: [],
+    completed: [],
+    blockers: [],
+    nextAction: "Run smoke tests",
+    asks: [
+      { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user" as const, ref: "PR #1348", at: old, changedAt: old },
+      { id: "A2", ask: "Drop the old skin", status: "declined" as const, at: old, changedAt: old },
+      { id: "A3", ask: "Fix the login redirect", status: "building" as const, at: now - 1_000, changedAt: now - 1_000 },
+    ],
+  };
+  const lines = "- A1 waiting-for-user stale 11-12: Review the model picker PR (PR #1348)\n- A3 building 11-12: Fix the login redirect";
+  const stale = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it.]\n${lines}`;
+  const listed = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it. Build any summary or status from this list.]\n${lines}`;
+  const plain = { text: "thanks", transcript, rewound: false, fresh: false, replaysNatively: false };
+
+  it.each([
+    ["a compaction", { recycled: true, recycleReason: "compaction" as const }],
+    ["a new session", { fresh: true }],
+  ])("carries open asks across %s with the stale one flagged", (_, boundary) => {
+    const out = buildTurnContext({ ...plain, ...boundary, taskRecordText: taskRecordBlock(record, 6_000, { now }) });
+    expect(out.turnText).toContain(`Blockers: 0 total; none\n${stale}`);
+    expect(out.turnText).not.toContain("Drop the old skin");
+  });
+
+  it("keeps the asks in the record after a stop", () => {
+    const text = taskRecordBlock(record, 6_000, { now, recovering: true, latestUserText: "continue" });
+    expect(text).toContain("The previous turn was interrupted");
+    expect(text).toContain(stale);
+  });
+
+  it("puts the stale nudge on a resumed turn that carries no record", () => {
+    const out = buildTurnContext({ ...plain, taskRecordText: taskRecordBlock(record, 6_000, { now }), asksText: stale });
+    expect(out).toEqual({ turnText: `${stale}\n\nthanks`, resume: true });
+  });
+
+  it("lists every open ask once when the record rides a status turn", () => {
+    const out = buildTurnContext({
+      ...plain,
+      text: "status?",
+      fresh: true,
+      taskRecordText: taskRecordBlock(record, 6_000, { now, allAsks: true }),
+      asksText: listed,
+    });
+    expect(out.turnText).toContain(listed);
+    expect(out.turnText.split("[Wink asks list")).toHaveLength(2);
+  });
+
+  it("adds nothing for a record whose asks are all closed", () => {
+    const bare = { goal: record.goal, plan: [], completed: [], blockers: [], nextAction: record.nextAction };
+    expect(taskRecordBlock({ ...bare, asks: [record.asks[1]!] }, 6_000, { now })).toBe(taskRecordBlock(bare));
   });
 });
 
@@ -1076,6 +1135,15 @@ describe("withSystemChanges", () => {
     );
   });
 
+  it("preserves project context when budgets move and the status changes", () => {
+    const delivered = "## Project A\nBudget: 500 dollars.\n## Project B\nBudget: 740 dollars.\nStatus: draft.";
+    const system = "## Project A\nBudget: 740 dollars.\n## Project B\nBudget: 500 dollars.\nStatus: final.";
+    const update = [...reminder("[Removed:]", ...delivered.split("\n"), "[Added:]", ...system.split("\n")), "", "hi"].join("\n");
+    expect(withSystemChanges("hi", delivered, system)).toBe(update);
+    expect(withSystemChanges("hi", delivered, system, 0)).toBeNull();
+    expect(withSystemChanges("hi", delivered, system, Infinity)).toBe(update);
+  });
+
   it("sends nothing when the system text did not change", () => {
     const system = withMemory("- City: Seoul");
     expect(withSystemChanges("hi", system, system)).toBe("hi");
@@ -1111,5 +1179,76 @@ describe("withTaskRecord", () => {
     expect(withTaskRecord("hi", "Goal: ship")).toBe("Goal: ship\n\nhi");
     expect(withTaskRecord("Goal: ship\n\nhi", "Goal: ship")).toBe("Goal: ship\n\nhi");
     expect(withTaskRecord("hi", "")).toBe("hi");
+  });
+});
+
+describe("replay engine provenance", () => {
+  const replay = [
+    { role: "user" as const, text: "Make a dog image" },
+    { role: "assistant" as const, text: "Generated a dog image", engine: "antigravityAgent" },
+    { role: "assistant" as const, text: "Current reply", engine: "museAgent" },
+    { role: "assistant" as const, text: "Legacy reply" },
+  ];
+
+  it.each(["fresh", "rewound", "recycled"] as const)("names the earlier engine on a %s replay", (boundary) => {
+    const out = buildTurnContext({ text: "Who made it?", transcript: replay, rewound: false, fresh: false, replaysNatively: false, driverKind: "museAgent", [boundary]: true });
+    expect(out.turnText).toContain("Assistant (on Gemini): Generated a dog image");
+    expect(out.turnText).toContain("Assistant: Current reply");
+    expect(out.turnText).toContain("Assistant: Legacy reply");
+  });
+
+  it("names the earlier engine when resuming fails", () => {
+    const text = buildResumeFallback({ text: "Who made it?", transcript: replay, driverKind: "museAgent" });
+    expect(text).toContain("Assistant (on Gemini): Generated a dog image");
+    expect(text).toContain("Assistant: Current reply");
+    expect(text).toContain("Assistant: Legacy reply");
+  });
+
+  it("keeps a single-engine replay byte-identical", () => {
+    const same = replay.map((message) => ({ ...message, engine: "museAgent" }));
+    const plain = same.map(({ role, text }) => ({ role, text }));
+    const input = { text: "Continue", rewound: false, fresh: true, replaysNatively: false, driverKind: "museAgent" };
+    expect(buildTurnContext({ ...input, transcript: same })).toEqual(buildTurnContext({ ...input, transcript: plain }));
+    expect(buildResumeFallback({ ...input, transcript: same })).toBe(buildResumeFallback({ ...input, transcript: plain }));
+    expect(buildTurnContext({ ...input, fresh: false, transcript: replay })).toEqual({ turnText: "Continue", resume: true });
+  });
+
+  it.each(["claudeAgent", "codex", "antigravityAgent", "grokAgent", "museAgent", "boxAgent"])("leaves call lines untagged for %s", (driverKind) => {
+    const messages = [
+      { role: "user" as const, text: "What did we discuss?" },
+      { role: "assistant" as const, text: "Spoken answer", engine: "geminiAgent" },
+    ];
+    const plain = messages.map(({ role, text }) => ({ role, text }));
+    const input = { text: "Continue", driverKind, rewound: false, fresh: true, replaysNatively: false };
+    expect(buildTurnContext({ ...input, transcript: messages })).toEqual(buildTurnContext({ ...input, transcript: plain }));
+    expect(buildResumeFallback({ ...input, transcript: messages })).toBe(buildResumeFallback({ ...input, transcript: plain }));
+    expect(replayMessageText(messages[1]!, driverKind)).toBe("Spoken answer");
+  });
+
+  it.each(["boxAgent", "localModel"])("never prints the unknown engine id %s", (engine) => {
+    const message = { role: "assistant" as const, text: "Earlier answer", engine };
+    const input = { text: "Continue", transcript: [message], driverKind: "museAgent", rewound: false, fresh: true, replaysNatively: false };
+    expect(buildTurnContext(input).turnText).toContain("Assistant: Earlier answer");
+    expect(buildResumeFallback(input)).toContain("Assistant: Earlier answer");
+    expect(replayMessageText(message, "museAgent")).toBe(message.text);
+  });
+
+  it.each([
+    ["claudeAgent", "Claude"],
+    ["codex", "Codex"],
+    ["antigravityAgent", "Gemini"],
+    ["grokAgent", "Grok"],
+    ["museAgent", "Muse"],
+  ])("tags %s history for inline and native replay", (engine, label) => {
+    const driverKind = engine === "museAgent" ? "codex" : "museAgent";
+    const message = { role: "assistant" as const, text: "Generated a dog image", engine };
+    const expected = `Assistant (on ${label}): Generated a dog image`;
+    const input = { text: "Who made it?", transcript: [message], rewound: false, fresh: true, replaysNatively: false, driverKind };
+    expect(buildTurnContext(input).turnText).toContain(expected);
+    expect(buildResumeFallback(input)).toContain(expected);
+    expect(replayMessageText(message, driverKind)).toBe(`(on ${label}) Generated a dog image`);
+    expect(replayMessageText(message, engine)).toBe(message.text);
+    expect(replayMessageText({ ...message, engine: undefined }, driverKind)).toBe(message.text);
+    expect(replayMessageText({ ...message, role: "user" }, driverKind)).toBe(message.text);
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
@@ -22,7 +22,7 @@ import { listedGroups, preferredStartupSelectionId } from "@/lib/sidebar-order";
 import { DRAWER_BUTTON_LEFT, DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
-import { ChatView } from "@/components/ChatView";
+import { ChatView, warmCallViews } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
@@ -30,12 +30,14 @@ import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
+import { CallHostSlot, warmCallSlots } from "@/components/CallSlots";
 import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
-import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { closePane, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
+import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -45,8 +47,10 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushSupported, webPushTarget } from "@/lib/web-push";
-import { closeReadAlerts } from "@/lib/read-alerts";
+import { answerOnThread } from "@/lib/live-call/active";
+import { webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
+import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
+import { isPhone, swipeBotIds } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -56,16 +60,18 @@ import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
+import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
+const RoomDetailsPanel = lazyView(() => import("@/components/RoomDetailsPanel").then((m) => ({ default: m.RoomDetailsPanel })));
 const PluginsPanel = lazyView(() => import("@/components/PluginsPanel").then((m) => ({ default: m.PluginsPanel })));
 const InspectorPanel = lazyView(() => import("@/components/InspectorPanel").then((m) => ({ default: m.InspectorPanel })));
 const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((m) => ({ default: m.SettingsModal })));
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
-const VerifyWatchPanel = lazyView(() => import("@/components/VerifyWatch").then((m) => ({ default: m.VerifyWatchPanel })));
+const ShowPane = lazyView(() => import("@/components/ShowPane").then((m) => ({ default: m.ShowPane })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
 
@@ -102,6 +108,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     latestState.current = state;
   }, [state]);
   const joinedRooms = useJoinedRooms();
+  const latestJoined = useRef(joinedRooms);
+  useLayoutEffect(() => {
+    latestJoined.current = joinedRooms;
+  }, [joinedRooms]);
   const unreadCount = unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention);
   const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms));
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
@@ -114,11 +124,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // cancelling them with md:, which would still emit a translate value and
   // turn the aside into a containing block for its fixed descendants (see
   // Sidebar.tsx's className comment).
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerWanted, setDrawerOpen] = useState(false);
   // The button is md:hidden: at desktop width its animation never runs, so an
   // ungated glow would sit flagged until a later resize replays it. Gating on
   // visibility consumes the arrival instead.
   const phoneMenuVisible = useIsPhone();
+  // rotating to the wide layout hides the drawer, so it must not keep a Back entry or a scrim there
+  const drawerOpen = phoneMenuVisible && drawerWanted;
   const menuArrival = useArrivalGlow(
     [...state.bots.filter((bot) => !bot.hidden), ...listedGroups(state.groups)]
       .filter((chat) => chat.id !== state.selectedId)
@@ -151,7 +163,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
-  const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
+  const openTerminal = useCallback(() => {
+    if (!botId) return;
+    trackScreen("terminal");
+    trackFeature("terminal.open");
+    setTerminalViews((views) => ({ ...views, [botId]: true }));
+  }, [botId]);
   const openTerminalPane = useCallback((sessionId: string) => {
     openTerminal();
     if (botId) setPaneFocus({ sessionId, botId });
@@ -246,20 +263,32 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.pluginsOpen ||
     state.createBotOpen;
   const watch = useVerifyWatch();
+  const show = useShowItem();
+  const media = useMediaThread();
+  const checking = useCheckThread();
+  const mapping = useMapThread();
   const watchChat = group ?? bot;
-  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
-    ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner, watch.messageId)
+  const room = group && isTeamRoom(group) ? group : undefined;
+  const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
+  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId
+    ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
     : undefined;
-  const watchShown = usePresence(watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : null);
+  const showing = show && watchChat && show.threadId === watchChat.threadId ? show : undefined;
+  const mediaOn = Boolean(watchChat && media === watchChat.threadId);
+  const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
+  const paneWatch = watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : undefined;
+  const mapOn = Boolean(watchChat && mapping === watchChat.threadId);
+  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, botId: bot?.id, card: LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, source } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
-  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
+  const slotPanels: SlotPanel[] = [...(watch || show || media || mapping ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const closeSlot = (panel: SlotPanel) => panel === "show" ? closePane() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
-  useEffect(() => closeVerifyWatch(), [state.selectedId]);
-  const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
+  useEffect(() => { closePane(); }, [state.selectedId]);
+  useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && !watch && slotPanels.every((panel) => panel === "show"));
+  const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || state.settingsOpen && Boolean(bot || group || joinedId) || bot && state.inspectorOpen);
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
-      <VerifyWatchPanel {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
+      <ShowPane {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
     </LazyView>
   );
 
@@ -278,12 +307,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         });
         return;
       }
+      if (e.altKey && !mod && e.code === "KeyT" && document.querySelector("[data-model-picker-content]")) return;
       if (e.altKey && !mod && e.shiftKey && e.code === "KeyT") {
         if (e.repeat || e.isComposing) return;
         e.preventDefault();
         const current = (document.documentElement.dataset.skin as SkinId) || readSkin();
         const next = nextSkin(current);
-        applySkin(next);
+        applySkin(next, "hotkey");
         setThemeToast(SKINS.find((skin) => skin.id === next)?.name ?? next);
         return;
       }
@@ -380,7 +410,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload]);
+    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload, CreateBotSheet.preload, ShowPane.preload, warmCallSlots, warmCallViews, RoomDetailsPanel.preload]);
   }, [state.hydrated]);
 
   useEffect(() => {
@@ -436,6 +466,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
 
   // A tapped push notification: its /?bot=&thread= url on a cold open, or a worker message when already open.
   const pushOpenTarget = useRef(webPushTarget(window.location.search));
+  const pushOpenCall = useRef(webPushCall(window.location.search));
   const hydratedBots = state.bots.length > 0;
   useEffect(() => {
     const target = pushOpenTarget.current;
@@ -443,7 +474,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
+    answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
   }, [dispatch, hydratedBots]);
+  useEffect(() => void answerOnThread(state.bots), [state.bots]);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
@@ -458,13 +491,14 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
+      answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
-  const readChats = [...state.bots, ...state.groups].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
+  const readChats = [...state.bots, ...state.groups, ...joinedReadState(joinedRooms)].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
   useEffect(() => {
-    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups, ...joinedReadState(latestJoined.current)]).catch(() => {});
   }, [readChats]);
   // Reads on other devices show up here: no silent push, since Chrome bills each one and then shows its own alert.
   useEffect(() => {
@@ -473,7 +507,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       if (document.visibilityState !== "visible") return;
       void closeReadAlerts(async () => {
         const { bots, groups } = await api("/api/bots?messages=0");
-        return [...bots, ...groups];
+        return [...bots, ...groups, ...joinedReadState(latestJoined.current)];
       }).catch(() => {});
     };
     sweep();
@@ -500,7 +534,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     let cancelled = false;
     const wake = () => {
       if (cancelled) return;
-      void import("@/components/PluginsPanel")
+      void PluginsPanel.preload()
+        .then(() => import("@/components/PluginsPanel"))
         .then((m) => m.preloadConnectedApps())
         .catch(() => {});
     };
@@ -517,7 +552,18 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // asked for, and leaving the list up would hide it.
   useEffect(() => {
     setDrawerOpen(false);
-  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
+  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen, state.revealed]);
+
+  // A tapped notification shows its chat: the palette, model picker and message menu cover it everywhere,
+  // and on a phone the pane and Bot Details are sheets over it too.
+  useEffect(() => {
+    if (!state.revealed) return;
+    for (const cover of ["orbit:close-palette", "orbit:close-model-picker", "orbit:close-message-menu"]) window.dispatchEvent(new Event(cover));
+    if (!isPhone()) return;
+    closePane();
+    dispatch({ type: "toggleSettings", open: false });
+    dispatch({ type: "toggleInspector", open: false });
+  }, [state.revealed, dispatch]);
 
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
@@ -536,10 +582,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.appSettingsOpen ||
     state.pluginsOpen ||
     createBotSheetOpen ||
-    Boolean(bot && (state.settingsOpen || state.inspectorOpen));
+    state.settingsOpen && Boolean(bot || group || joinedId) ||
+    Boolean(bot && state.inspectorOpen);
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
-  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
+  const swipeOrder = () => swipeBotIds(state.bots, state.groups, loadSidebarOrder(), bot?.id);
+  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef, swipeOrder);
   const closeDrawer = () => {
     setDrawerOpen(false);
     menuButtonRef.current?.focus();
@@ -628,6 +676,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
     add(Boolean(sidebarOverlay), `sidebar:${sidebarOverlay}`, () => window.dispatchEvent(new Event("orbit:close-sidebar-overlay")));
     add(state.settingsOpen, "settings", () => dispatch({ type: "toggleSettings", open: false }));
+    add(slotPanels.includes("show"), "pane", closePane);
     add(state.inspectorOpen, "inspector", () => dispatch({ type: "toggleInspector", open: false }));
     add(state.appSettingsOpen, "app-settings", () => dispatch({ type: "toggleAppSettings", open: false }));
     add(state.pluginsOpen, "plugins", () => dispatch({ type: "togglePlugins", open: false }));
@@ -672,13 +721,14 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       ) : null}
       {/* the one tip layer for every title in the app */}
       <GlobalTooltip />
+      <CallHostSlot />
       {/* fixed-position popup, bottom-left — outside the layout flow */}
       <UpdateBanner />
       {themeToast && (
         <div
           role="status"
           aria-live="polite"
-          className="pointer-events-none fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-hairline/50 bg-card px-3.5 py-1.5 text-[13px] text-ink shadow-xl"
+          className="pointer-events-none fixed bottom-4 left-1/2 z-[110] -translate-x-1/2 rounded-full border border-hairline/50 bg-card px-3.5 py-1.5 text-[13px] text-ink shadow-xl"
         >
           {themeToast}
         </div>
@@ -720,7 +770,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onTerminalAttention={openTerminalAttention}
         folded={slotShown}
         onUnfold={() => slotPanels.forEach(closeSlot)}
-        rigidView={Boolean(bot && terminalViews[bot.id] !== undefined)}
       />
       {noEngines ? (
         <LazyView fallback={<BootFallback />}>
@@ -732,17 +781,20 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
       ) : joinedId ? (
-        <JoinedRoomView key={joinedId} roomId={joinedId} />
+        <JoinedRoomView key={joinedId} roomId={joinedId} hidden={nativeViewOverlayOpen} />
       ) : group && isTeamRoom(group) ? (
-        <TeamRoomView key={group.id} group={group} />
+        <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
+          <TeamRoomView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
+          {watchPanel(nativeViewOverlayOpen)}
+        </div>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-            <GroupView key={group.id} group={group} />
+            <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
             {watchPanel(nativeViewOverlayOpen)}
           </div>
         ) : (
-          <GroupView key={group.id} group={group} />
+          <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
         )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">
@@ -786,6 +838,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         {(closing) => bot && (
           <LazyView overlay>
             <SettingsPanel key={bot.id} bot={bot} closing={closing} />
+          </LazyView>
+        )}
+      </Presence>
+      <Presence open={Boolean(state.settingsOpen && !bot && (group || joinedId))}>
+        {(closing) => (
+          <LazyView overlay>
+            <RoomDetailsPanel key={group?.id ?? joinedId} group={group} joinedId={joinedId ?? undefined} closing={closing} />
           </LazyView>
         )}
       </Presence>
@@ -855,7 +914,7 @@ export default function App() {
       <StoreProvider>
         <Shell onboardingOpen={onboardingOpen} />
         {onboardingOpen && (
-          <LazyView overlay fallback={<div className="orbit-inset-aware fixed inset-0 z-50 bg-app" />}>
+          <LazyView overlay fallback={window.ogb ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null}>
             <Onboarding
               onDone={() => {
                 setOnboardingDone();

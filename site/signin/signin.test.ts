@@ -76,9 +76,12 @@ function installGoogle(gisError?: string): void {
           if (gisError) throw new Error(gisError);
           inits.push(options);
         },
-        renderButton(_slot: HTMLElement, options: { theme: string; text: string; shape: string }): void {
+        renderButton(slot: HTMLElement, options: { theme: string; text: string; shape: string }): void {
           renders += 1;
           buttons.push(options);
+          const frame = document.createElement("iframe");
+          frame.style.height = "0px";
+          slot.append(frame);
         },
         prompt(listener: (moment: GisMoment) => void): void {
           prompts.push(listener);
@@ -137,8 +140,17 @@ function hiddenMoment(): GisMoment {
 
 const pair = (label: string, suffix: string) => `https://${label}.${BASE}/pair${suffix}`;
 
+function paintGoogle(): void {
+  const frame = document.querySelector<HTMLIFrameElement>("#google iframe")!;
+  Object.defineProperty(frame, "offsetHeight", { value: 44 });
+  frame.style.height = "44px";
+}
+
+const googleReady = () => document.getElementById("google")!.classList.contains("ready");
+
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
   document.body.innerHTML = "";
@@ -162,7 +174,7 @@ describe("phone sign-in page", () => {
   it.each([["light", "outline"], ["dark", "filled_black"]])("renders Google's button for %s mode", (scheme, theme) => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: scheme === "dark" && query === "(prefers-color-scheme: dark)" }));
     open("/signin", []);
-    expect(buttons).toEqual([expect.objectContaining({ theme, text: "signin_with", shape: "rectangular" })]);
+    expect(buttons).toEqual([expect.objectContaining({ theme, text: "signin_with", shape: "pill" })]);
     expect(inits).toHaveLength(1);
     expect(prompts).toHaveLength(0);
   });
@@ -216,8 +228,98 @@ describe("phone sign-in page", () => {
   });
 
   it("links to the privacy policy", () => {
-    expect(HTML).toContain("Reach Wink on your PC from this phone.");
+    expect(HTML).toContain("Reach Wink on your PC from this browser.");
     expect(HTML).toContain('<a class="privacy" href="/privacy">Privacy</a>');
+  });
+
+  it.each([
+    ["Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148", "this phone"],
+    ["Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36", "this phone"],
+    ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36", "this browser"],
+    ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15", "this browser"],
+    ["Mozilla/5.0 (Linux; Android 15; SM-X910) AppleWebKit/537.36 Chrome/130.0 Safari/537.36", "this browser"],
+  ])("words the subtitle for the device (%s)", (agent, device) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(agent);
+    open("/signin", []);
+    expect(document.getElementById("subtitle")?.textContent).toBe(`Reach Wink on your PC from ${device}.`);
+  });
+
+  it.each(["/signin", "/?pick=1"])("keeps Google's button hidden until its frame draws, then fades it in once (%s)", async (url) => {
+    open(url, []);
+    const slot = document.getElementById("google")!;
+    expect(slot.querySelector("iframe")).not.toBeNull();
+    expect(googleReady()).toBe(false);
+    paintGoogle();
+    await vi.waitFor(() => expect(googleReady()).toBe(true));
+    expect(renders).toBe(1);
+    expect(CSS).toMatch(/#google \{[^}]*min-height: 40px;[^}]*opacity: 0;[^}]*transition: opacity 150ms;/);
+    expect(CSS).toMatch(/#google\.ready \{\s*opacity: 1;/);
+  });
+
+  it("shows Google's button after a short wait when its frame never draws", async () => {
+    vi.useFakeTimers();
+    open("/signin", []);
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(googleReady()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(googleReady()).toBe(true);
+  });
+
+  it("presses PC buttons in and shows which PC is opening", async () => {
+    expect(CSS).toMatch(/\.list button \{[^}]*cursor: pointer;[^}]*transition: filter 150ms, transform 150ms;/);
+    expect(CSS).toMatch(/\.list button:hover:not\(:disabled\) \{/);
+    expect(CSS).toMatch(/\.list button:active:not\(:disabled\) \{\s*transform: scale\(0\.99\);/);
+    expect(CSS).toMatch(/\.list button:focus-visible \{\s*outline: 2px solid var\(--accent\);/);
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    const [ada, zed] = [...document.querySelectorAll<HTMLButtonElement>("#list button")];
+    ada!.click();
+    expect(ada!.textContent).toBe("Opening Ada…");
+    expect(ada!.querySelector(".spinner")).not.toBeNull();
+    expect(ada!.getAttribute("aria-busy")).toBe("true");
+    expect([ada!.disabled, zed!.disabled]).toEqual([true, true]);
+    expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+  });
+
+  it("rings only the last-used PC, with no glow animation under reduced motion", async () => {
+    expect(CSS).toMatch(/\.list button \{[^}]*border-radius: 999px;/);
+    expect(CSS).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^}]*animation: none;/);
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }, { label: "cccccccccccccccc", name: "Mid" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(3));
+    const rows = [...document.querySelectorAll("#list button")].map((button) => [button.textContent, button.classList.contains("last")]);
+    expect(rows).toEqual([["Ada", false], ["Mid", false], ["Zed", true]]);
+  });
+
+  it.each([[LABEL_B, true], ["", false], ["short", false]])("rings Google's button only for a remembered PC (%s)", (label, ringed) => {
+    if (label) localStorage.setItem(LAST_PC, label);
+    open("/?pick=1", []);
+    expect(document.getElementById("google")!.classList.contains("last")).toBe(ringed);
+  });
+
+  it("opens only the first PC clicked", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    const [ada, zed] = [...document.querySelectorAll<HTMLButtonElement>("#list button")];
+    ada!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    ada!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    zed!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+    expect(localStorage.getItem(LAST_PC)).toBe(LABEL_A);
+    expect(zed!.textContent).toBe("Zed");
+  });
+
+  it("frees the PC list when Back restores the page", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button")!.click();
+    dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>("#list button")];
+    expect(buttons.map((button) => [button.textContent, button.disabled])).toEqual([["Ada", false], ["Zed", false]]);
   });
 
   it("sends a cold start with one PC straight to that PC", async () => {
@@ -282,7 +384,34 @@ describe("phone sign-in page", () => {
     inits[0]!.callback({ credential: DIR_TOKEN });
     await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
     expect(location.href).not.toContain("/pair");
-    expect(document.querySelector<HTMLAnchorElement>("#pick")?.getAttribute("href")).toBe("/?pick=1");
+    expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it("titles the PC list Choose a PC with no sign-in wording", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(document.querySelector("h1")?.textContent).toBe("Choose a PC");
+    expect(document.querySelector("main")?.textContent).not.toMatch(/sign in/i);
+    expect(document.querySelectorAll("main a:not([hidden])")).toHaveLength(1);
+  });
+
+  it.each(["/signin", "/?pick=1"])("offers no link back to itself while signed out (%s)", (url) => {
+    open(url, [{ label: LABEL_A, name: "Ada" }]);
+    expect(document.querySelector("h1")?.textContent).toBe("Sign in");
+    expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it.each([LABEL_A, "short"])("offers Choose another PC from a PC link that fails (%s)", async (label) => {
+    open(`/signin?pc=${label}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    if (label === LABEL_A) {
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      inits[0]!.callback({ credential: PC_TOKEN });
+    }
+    await vi.waitFor(() => expect(document.getElementById("status")?.className).toBe("status error"));
+    const pick = document.querySelector<HTMLAnchorElement>("#pick")!;
+    expect(pick.hidden).toBe(false);
+    expect(pick.getAttribute("href")).toBe("/?pick=1");
   });
 
   it.each([1, 2])("always lists %s PCs with pick=1 despite a remembered PC", async (count) => {

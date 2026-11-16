@@ -1,6 +1,10 @@
 import memoryClip from "@/assets/whats-new/1.0.246-memory.webp";
 import memoryLightClip from "@/assets/whats-new/1.0.246-memory-light.webp";
 import verifyClip from "@/assets/whats-new/1.0.246-verify.webp";
+import hydrogenClip from "@/assets/whats-new/1.0.263-hydrogen.webp";
+import hydrogenLightClip from "@/assets/whats-new/1.0.263-hydrogen-light.webp";
+import mapClip from "@/assets/whats-new/1.0.263-map.webp";
+import mapLightClip from "@/assets/whats-new/1.0.263-map-light.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 
@@ -37,6 +41,26 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
           en: "Starts on its own when a bot builds a page. Press Watch to see the cursors live.",
           ko: "봇이 페이지를 만들면 저절로 시작돼요. 보기를 누르면 커서가 실시간으로 보여요.",
         },
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.263": {
+    title: { en: "New in Wink 1.0.263", ko: "Wink 1.0.263 새 기능" },
+    tiles: [
+      {
+        clip: mapClip,
+        lightClip: mapLightClip,
+        title: { en: "Watch every worker on the Map", ko: "Map에서 모든 작업자 보기" },
+        line: { en: "Your project as a family tree, live.", ko: "프로젝트를 가계도처럼 실시간으로." },
+        show: { en: "Open the side pane's Map tab while workers run.", ko: "작업자가 일할 때 사이드 패널의 Map 탭을 열어 보세요." },
+      },
+      {
+        clip: hydrogenClip,
+        lightClip: hydrogenLightClip,
+        title: { en: "Gemini 4 Carbon + Hydrogen are here", ko: "Gemini 4 Carbon + Hydrogen 추가" },
+        line: { en: "Google's fast Gemini for everyday work.", ko: "일상 작업에 빠른 Google Gemini." },
+        show: { en: "Press Alt+M and pick Gemini 4 Carbon or Hydrogen.", ko: "Alt+M을 누르고 Gemini 4 Carbon 또는 Hydrogen을 고르세요." },
       },
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },

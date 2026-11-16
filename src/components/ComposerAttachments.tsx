@@ -2,7 +2,7 @@
 // file drop that creates them. A long paste collapses into a card of its
 // first lines instead of flooding the composer; a file dropped anywhere
 // on the window attaches by path.
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ClipboardPaste, File as FileIcon, Image as ImageIcon, MessageSquareText, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -11,15 +11,16 @@ import {
   attachmentImageUrl,
   intakeFiles,
   formatSize,
-  pasteImageAttachment,
   pasteSummary,
   type Attachment,
   type PasteAttachment,
   type UploadAttachment,
 } from "@/lib/composer-attachments";
+import { shrunkPicture } from "@/lib/shrink-image";
 import { usePresence } from "@/lib/use-presence";
 import { AttachmentPreviewDialog, previewImage, type PreviewImage } from "./AttachmentPreview";
 import { FileDropOverlay } from "./FileDropOverlay";
+import { trackScreen } from "@/lib/usage-stats";
 
 /** Electron 32 removed File.path; only the preload can name a file. */
 export function pathForFile(file: File): string {
@@ -38,6 +39,9 @@ export function ComposerAttachments({
   onCancelUpload = onRemove,
   onRetryUpload,
   onRepickUpload,
+  localFile,
+  onDropFiles,
+  dropLabel,
 }: {
   disabled?: boolean;
   items: Attachment[];
@@ -50,27 +54,32 @@ export function ComposerAttachments({
   onCancelUpload?: (id: string) => void;
   onRetryUpload?: (id: string) => void;
   onRepickUpload?: (id: string) => void;
+  /** An upload chip whose bytes are still on this PC, sent later in one go. */
+  localFile?: (id: string) => { file: File; picture: boolean } | undefined;
+  onDropFiles?: (files: File[]) => void;
+  dropLabel?: string;
 }) {
   const { t } = useI18n();
   const [preview, setPreview] = useState<PreviewImage | null>(null);
   const previewPresence = usePresence(preview);
   const dragging = useFileDrop(useCallback(async (files: File[], isActive: () => boolean) => {
+    if (onDropFiles) return onDropFiles(files);
     const startedAt = performance.now();
     const { attachments, uploads, notice: message } = await intakeFiles(files, {
       t,
       allowImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
+      shrunkPath: shrunkPicture,
     });
     if (!isActive()) return;
     if (attachments.length) onAdd(attachments, uploads, startedAt);
     // A concurrent intake's notice must survive this drop.
     if (message) onNotice(message);
-  }, [onAdd, allowImages, onNotice, t]), disabled);
+  }, [onAdd, allowImages, onNotice, onDropFiles, t]), disabled);
 
   return (
     <>
-      {dragging && <FileDropOverlay label={"Drop to attach \u2014 the bot gets the file path"} />}
+      {dragging && <FileDropOverlay label={dropLabel ?? "Drop to attach \u2014 the bot gets the file path"} />}
 
       {notice && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
@@ -87,8 +96,15 @@ export function ComposerAttachments({
 
       {items.length > 0 && (
         <div className="mb-2 flex gap-2 overflow-x-auto pr-1.5 pt-1.5">
-          {items.map((a) =>
-            a.kind === "paste" ? (
+          {items.map((a) => {
+            const local = a.kind === "upload" ? localFile?.(a.id) : undefined;
+            return a.kind === "upload" && local?.picture ? (
+              <LocalPictureChip key={a.id} name={a.name} size={a.size} blob={local.file} onRemove={() => onRemove(a.id)} onPreview={setPreview} />
+            ) : a.kind === "upload" && local ? (
+              <Chip key={a.id} kind="FILE" title={a.name} onRemove={() => onRemove(a.id)}>
+                <FileBody name={a.name} size={a.size} />
+              </Chip>
+            ) : a.kind === "paste" ? (
               <Chip
                 key={a.id}
                 kind="PASTED"
@@ -105,7 +121,7 @@ export function ComposerAttachments({
                 <button
                   type="button"
                   onClick={() => onDisplayInChatBox(a)}
-                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text transition-colors hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
                   aria-label="Display pasted text in chat box"
                   title="Display in chat box"
                 >
@@ -117,7 +133,7 @@ export function ComposerAttachments({
               <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)}>
                 <button
                   type="button"
-                  onClick={() => setPreview(previewImage(a.path))}
+                  onClick={() => { trackScreen("attachment-preview"); setPreview(previewImage(a.path)); }}
                   className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                   aria-label={`Preview ${a.name}`}
                 >
@@ -142,22 +158,46 @@ export function ComposerAttachments({
               </Chip>
             ) : (
               <Chip key={a.id} kind="FILE" title={a.path} onRemove={() => onRemove(a.id)}>
-                <div className="flex h-[76px] items-center gap-2">
-                  <FileIcon size={16} className="shrink-0 text-ink-secondary" />
-                  <div className="min-w-0">
-                    <div className="truncate text-[12px] text-ink">{a.name}</div>
-                    <div className="text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>
-                  </div>
-                </div>
+                <FileBody name={a.name} size={a.size} />
               </Chip>
-            ),
-          )}
+            );
+          })}
         </div>
       )}
       {previewPresence.value && (
         <AttachmentPreviewDialog image={previewPresence.value} closing={previewPresence.closing} onClose={() => setPreview(null)} />
       )}
     </>
+  );
+}
+
+function FileBody({ name, size }: { name: string; size: number }) {
+  return (
+    <div className="flex h-[76px] items-center gap-2">
+      <FileIcon size={16} className="shrink-0 text-ink-secondary" />
+      <div className="min-w-0">
+        <div className="truncate text-[12px] text-ink">{name}</div>
+        <div className="text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>
+      </div>
+    </div>
+  );
+}
+
+function LocalPictureChip({ name, size, blob, onRemove, onPreview }: { name: string; size: number; blob: File; onRemove: () => void; onPreview: (image: PreviewImage) => void }) {
+  const url = useMemo(() => URL.createObjectURL(blob), [blob]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  return (
+    <Chip kind="IMAGE" title={name} onRemove={onRemove}>
+      <button
+        type="button"
+        onClick={() => onPreview({ src: url, name })}
+        className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        aria-label={`Preview ${name}`}
+      >
+        <img src={url} alt={name} className="max-h-[76px] max-w-full object-contain" />
+      </button>
+      <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>
+    </Chip>
   );
 }
 
@@ -221,7 +261,7 @@ function Chip({
       title={title}
       className={cn(
         "group relative w-[172px] shrink-0 rounded-xl border border-hairline/40 bg-raised px-2.5 py-2",
-        "transition-colors hover:border-hairline",
+        "hover:border-hairline",
       )}
     >
       {children}

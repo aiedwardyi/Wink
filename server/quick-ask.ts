@@ -8,6 +8,7 @@ import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
+import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
@@ -48,7 +49,9 @@ export function routesQuick(gate: QuickGate): boolean {
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  if (scanQuestion(gate.messages) || gate.messages.some(isOpenRequest)) return false;
+  // typing answers the pinned card
+  if (scanQuestion(gate.messages)) return false;
+  if (gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
 
@@ -131,6 +134,20 @@ export function requeueDroppedAsk(store: AskStore, botId: string, threadId: stri
   drain();
 }
 
+/** The same for a call's order or ask: its row stays and the queue drains into it. */
+export function requeueDroppedCall(store: AskStore, botId: string, threadId: string, row: Message, drain: () => void): void {
+  if (stopped.has(row.id) || !store.activePath(threadId).some((message) => message.id === row.id && message.steered)) return;
+  try {
+    const queued = queueSteeredMessage(botId, threadId, row.text ?? "", { sendId: row.sendId, call: row.call });
+    if (queued.skipped) return;
+    store.patchMessage(threadId, row.id, { steered: undefined, queueId: queued.id, queued: true });
+  } catch (error) {
+    console.warn(`[queue] dropped call send could not requeue: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  drain();
+}
+
 // Asks whose job is running, so a restart finds the ones left in another task without reading every thread.
 const running = new Map<string, { botId: string; threadId: string }>();
 let saving = false;
@@ -182,17 +199,19 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
         stopped.add(row.id);
         // a stopped ask reads as handed off, so it is neither pending nor recovered
         store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
-      } else if (turn && row.steered && row.quick?.state === "handoff") stopped.add(row.id);
+      } else if (turn && row.steered && (row.quick?.state === "handoff" || row.call?.order || row.call?.ask)) stopped.add(row.id);
     }
   }
 }
 
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
   // the open chats plus the threads of asks still running at shutdown; no other thread is read
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   for (const [threadId, id] of threads) {
+    // Loading every open chat here held the server for ~30 s on a big messages.db.
+    if (!store.hasUnansweredQuickAsk(threadId)) continue;
     const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
     for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
   }
@@ -205,7 +224,8 @@ async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: str
   deps.usage?.start(botId, threadId, usageId);
   try {
     const messages = deps.store.activePath(threadId).filter((message) => message.id !== ask.id);
-    const notes = quickAnswersSinceLastUserTurn(messages, new Set()).join("\n\n");
+    const calls = ask.call ? callLinesSinceLastUserTurn(messages, new Set()) : [];
+    const notes = [...quickAnswersSinceLastUserTurn(messages, new Set()), ...calls].join("\n\n");
     result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes });
   } catch {}
   deps.usage?.settle(usageId);
@@ -245,7 +265,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {

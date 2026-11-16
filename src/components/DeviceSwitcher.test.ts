@@ -72,6 +72,21 @@ const click = (target: Element) => target.dispatchEvent(new MouseEvent("click", 
 const key = (target: Element, name: string) => target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
 
 describe("DeviceSwitcher", () => {
+  it.each([false, true])("saves this PC with the rename check (phone %s)", async (phone) => {
+    if (phone) setPhone(true); else setDesktop();
+    const { host } = await renderView([device("home", { current: true }), device("work")], vi.fn(), DeviceSwitcher, phone);
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    await act(async () => click(document.querySelector("button[aria-label='Rename this PC']")!));
+    const input = document.querySelector("input")!;
+    input.value = " Home studio ";
+    const save = document.querySelector('button[aria-label="Save"]');
+    expect(save).not.toBeNull();
+    expect(save!.querySelector("svg.lucide-check")).not.toBeNull();
+    await act(async () => click(save!));
+    expect(store.api).toHaveBeenCalledWith("/api/devices/name", { method: "PUT", body: JSON.stringify({ name: "Home studio" }) });
+    expect(document.querySelector("input")).toBeNull();
+  });
+
   it.each([false, true])("keeps newer PC status when overlapping polls finish out of order (phone %s)", async (phone) => {
     vi.useFakeTimers();
     try {
@@ -154,10 +169,13 @@ describe("DeviceSwitcher", () => {
     expect(host.textContent).toBe("");
   });
 
-  it("is hidden off a phone", async () => {
+  it("jumps in place from a desktop browser", async () => {
     setPhone(false);
-    const { host } = await renderView([device("home", { current: true }), device("work")]);
-    expect(host.textContent).toBe("");
+    const { host, navigate } = await renderView([device("home", { current: true }), device("work")]);
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    expect(host.querySelector("ul")?.className).toContain("absolute");
+    await act(async () => click(document.querySelector("[data-device-id=work]")!));
+    expect(navigate).toHaveBeenCalledWith("https://work.tail1234.ts.net/");
   });
 
   it("leaves the sidebar to the phone header", async () => {
@@ -190,7 +208,7 @@ describe("DeviceSwitcher", () => {
     expect(navigate).toHaveBeenCalledWith("https://work.tail1234.ts.net/");
   });
 
-  it.each([["desktop", false], ["phone", true]])("opens an offline PC from the %s list", async (_label, phone) => {
+  it.each([["desktop", false], ["phone", true]])("marks an offline PC in the %s list", async (_label, phone) => {
     setPhone(phone);
     const open = phone ? vi.fn() : setDesktop();
     const { host, navigate } = await renderView(
@@ -211,12 +229,43 @@ describe("DeviceSwitcher", () => {
     expect(current.textContent).not.toContain("Offline");
     await act(async () => click(offline));
     if (phone) {
-      expect(navigate).toHaveBeenCalledWith("https://laptop.tail1234.ts.net/");
+      expect(navigate).not.toHaveBeenCalled();
       expect(open).not.toHaveBeenCalled();
     } else {
       expect(open).toHaveBeenCalledWith("laptop.tail1234.ts.net", "laptop");
       expect(navigate).not.toHaveBeenCalled();
       expect(host.querySelector("ul:not([inert])")).toBeNull();
+    }
+  });
+
+  it.each([["phone", true], ["desktop browser", false]])("says an offline PC is offline instead of leaving from a %s", async (_label, phone) => {
+    setPhone(phone);
+    const { host, navigate } = await renderView(
+      [device("home", { current: true }), device("work", { name: "Work", offline: true })],
+      vi.fn(),
+      DeviceSwitcher,
+      phone,
+    );
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    await act(async () => click(document.querySelector("[data-device-id=work]")!));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-device-note]")?.textContent).toBe("Work is offline.");
+    await act(async () => click(document.querySelector("[data-device-id=home]")!));
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    expect(document.querySelector("[data-device-note]")).toBeNull();
+  });
+
+  it("claims no PC as this one in another PC's desktop app window", async () => {
+    setPhone(false);
+    const agent = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Windows NT 10.0) Chrome/138.0.0.0 Electron/38.0.0 Safari/537.36");
+    try {
+      const { host, navigate } = await renderView([device("home", { current: true }), device("work")]);
+      await act(async () => click(host.querySelector("button[aria-expanded]")!));
+      expect(document.querySelector("[data-device-id=home]")!.textContent).not.toContain("This PC");
+      await act(async () => click(document.querySelector("[data-device-id=work]")!));
+      expect(navigate).toHaveBeenCalledWith("https://work.tail1234.ts.net/");
+    } finally {
+      agent.mockRestore();
     }
   });
 

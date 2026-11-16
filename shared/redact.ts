@@ -74,6 +74,11 @@ const PEM_END = /-----END [A-Z ]*PRIVATE KEY-----/;
  * ("password: leave blank…") has spaces and does not match. */
 const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)(?:[_-]?key)?s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=!@#$%^*?-]{8,})\3/gi;
+/** Room memory only: chat says "the code is ready", "my pin is on the fridge" and "#3B82F6". */
+const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
+/** 4+ chars with a digit or symbol; plain words ("stored", "opensesame") stay prose. */
+const PROSE_VALUE = /^(?=.{4}).*[\d!@#$%^*?~+=]/;
+const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
 
 const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;
@@ -484,6 +489,14 @@ export function redactSecretsInText(text: string): string {
     isCodeValue(quote, value, all, at + m.length) ? m : `${key}${sep}${quote}${mask(value)}${quote}`);
   out = out.replace(CONFIG_KEY_FIELD, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${mask(value)}${quote}`);
   return out;
+}
+
+/** Private room memory: the shared masks plus prose credentials and invite codes. */
+export function redactRoomMemory(text: string): string {
+  // wkr1: is a public URI prefix; its wki_ credential is masked separately.
+  const prose = text.replace(PROSE_SECRET, (m: string, lead: string, quote: string, value: string, at: number, all: string) =>
+    !PROSE_VALUE.test(value) || (value === "wkr1" && all[at + m.length] === ":") || isCodeValue(quote, value, all, at + m.length) ? m : `${lead}${quote}${mask(value)}${quote}`);
+  return redactSecretsInText(prose).replace(ROOM_CODE, (value: string) => /[2-9]/.test(value) && /[A-Z]/.test(value) ? mask(value) : value);
 }
 
 /** Deep copy with credential VALUES replaced. Handles the two shapes that

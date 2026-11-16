@@ -74,6 +74,7 @@ describe("packaging identity", () => {
       "scripts/verify-linux-package.mjs",
       "scripts/run-linux-package-smoke.mjs",
       ".github/workflows/package-linux.yml",
+      ".github/workflows/package-mac.yml",
     ]) {
       assert.doesNotMatch(read(file), /\/opt\/Orbit|Orbit\.app|release\/Orbit/, file);
     }

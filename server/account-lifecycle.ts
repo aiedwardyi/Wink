@@ -2,6 +2,8 @@ import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { AccountError, AccountService, type AccountRecord } from "./accounts.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
+import { baseAccount } from "./worker-resume.ts";
+import { clearCodexPromo, codexPromoBlocked } from "../electron/codex-promo.mjs";
 
 type Hooks = {
   reload(): Promise<void>;
@@ -22,6 +24,7 @@ export class AccountLifecycle {
   private queue: Promise<unknown> = Promise.resolve();
   private jobs = new Map<string, object>();
   private pending = new Map<string, Promise<void>>();
+  private restoring?: Map<string, Promise<void>>;
   private mutations = 0;
   private drainTimer?: ReturnType<typeof setTimeout>;
   private retries = new Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>();
@@ -49,24 +52,32 @@ export class AccountLifecycle {
       : this.accounts.get(id)?.state === "ready" ? { state: "complete" as const } : undefined);
   }
 
+  // undefined until restore can answer per account: before it starts, or while a drain may still move routing.
+  restoredFor(of: string): Promise<void> | undefined {
+    if (!this.restoring || !this.bots) return undefined;
+    return this.restoring.get(this.bots.routedAccount(of) ?? "") ?? Promise.resolve();
+  }
+
   async restore() {
     for (const [id, drain] of Object.entries(this.accounts.drains)) {
       if (drain.phase === "logout") await this.accounts.drain(id, drain.destinationId, "failed");
     }
-    for (const account of [...this.accounts.snapshot]) {
-      if (this.accounts.drains[account.id]) continue;
-      if (account.state === "pending") await this.discard(account.id);
-      else if (account.state === "ready") {
-        this.registry.blockAccount(account.id, true);
-        const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true }).catch(() => undefined);
-        await this.observe(account.id, snapshot ?? { state: "unavailable" }).catch(() => {
-          console.error("Account restoration is waiting for recovery");
-        });
-      }
-    }
+    const accounts = this.accounts.snapshot.filter((account) => !this.accounts.drains[account.id]);
+    for (const account of accounts) if (account.state === "pending") await this.discard(account.id);
+    const ready = new Map(accounts.filter((account) => account.state === "ready").map((account) => [account.id, this.restoreAccount(account.id)]));
+    if (!Object.values(this.accounts.drains).some((drain) => drain.phase !== "failed")) this.restoring = ready;
+    await Promise.all(ready.values());
     await this.resumeDrains().catch(() => {
       console.error("Account drain recovery failed");
       this.scheduleDrains();
+    });
+  }
+
+  private async restoreAccount(id: string) {
+    this.registry.blockAccount(id, true);
+    const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
+    await this.observe(id, snapshot ?? { state: "unavailable" }).catch(() => {
+      console.error("Account restoration is waiting for recovery");
     });
   }
 
@@ -120,7 +131,8 @@ export class AccountLifecycle {
       if (!account) {
         if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
         const blocked = this.registry.accountBlocked(id);
-        const guarded = blocked || this.accounts.snapshot.length > 0 || destinations.length > 0;
+        const home = this.promoHome(id);
+        const guarded = blocked || (home && codexPromoBlocked(home)) || this.accounts.snapshot.length > 0 || destinations.length > 0;
         if (guarded) {
           this.registry.blockAccount(id, true);
           try {
@@ -139,6 +151,7 @@ export class AccountLifecycle {
           const finished = this.registry.logins.wait(id).then(async () => {
             const snapshot = await this.registry.get(id)?.snapshot({ refresh: true });
             if (snapshot?.authenticated !== true) return;
+            if (home && this.registry.logins.state(id) === "complete") clearCodexPromo(home);
             this.registry.blockAccount(id, false);
             this.hooks.changed?.();
           }).catch(() => { console.error("Account sign-in snapshot could not be refreshed"); })
@@ -420,12 +433,18 @@ export class AccountLifecycle {
       return;
     }
     this.clearRetry(account.id);
+    if (force && snapshot.authenticated === true && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
     if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
     const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
     if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
     if (next.generation !== account.generation || snapshot.authenticated !== true) await this.hooks.reload();
     this.registry.blockAccount(account.id, snapshot.authenticated !== true);
     this.hooks.changed?.(snapshot.authenticated === true ? account.id : undefined);
+  }
+
+  private promoHome(id: string) {
+    const live = this.registry.get(id);
+    return live?.driverKind === "codex" ? this.accounts.get(id)?.home ?? baseAccount(id, "codex", live.loginConfig?.().env ?? process.env).home : undefined;
   }
 
   private async discard(id: string) {

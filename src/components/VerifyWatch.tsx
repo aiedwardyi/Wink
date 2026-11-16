@@ -7,9 +7,8 @@ import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
-import { chooseVerifyTab, closeVerifyWatch, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
+import { chooseVerifyTab, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
 import { BANNER_MS, CURSOR_ARROW, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
-import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import "./VerifyWatch.css";
 
 const copy = {
@@ -41,6 +40,8 @@ interface FrameProps {
   hidden: boolean;
   closing?: boolean;
   inline?: boolean;
+  /** inside the Show pane, whose header holds Maximize and Close */
+  hosted?: { maximized: boolean };
   onClose(): void;
 }
 
@@ -48,7 +49,7 @@ const TAG_FONT = `10px "Cascadia Mono", ui-monospace, monospace`;
 // measureText resolves the font on first use (several ms); the tag font is monospace.
 const TAG_CHAR = 6.1;
 
-export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, onClose }: FrameProps) {
+export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
   const phone = useIsPhone();
@@ -56,7 +57,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const gate = verifyLiveGate(!closing, hidden, visibility);
   const [show, setShow] = useState(() => new VerifyWatchShow(live, verifyChosenTab(card.runId)));
   const [maximized, setMaximized] = useState(false);
-  const expanded = maximized && !inline && !phone;
+  const expanded = (hosted ? hosted.maximized : maximized) && !inline && !phone;
   const [, setVersion] = useState(0);
   const [, setDecoded] = useState(0);
   const [rerunning, setRerunning] = useState(false);
@@ -146,7 +147,9 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     return () => document.removeEventListener("click", onClick, true);
   }, [inline]);
 
+  const ownKeys = !hosted;
   useEffect(() => {
+    if (!ownKeys) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
@@ -154,7 +157,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expanded]);
+  }, [expanded, ownKeys]);
 
   useEffect(() => () => bitmap.current?.image.close(), []);
   useLayoutEffect(() => { draw(); }, [expanded, show]);
@@ -281,8 +284,8 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
           ))}
         </div>
         <span className="verify-watch-grow" />
-        {!inline && !phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={expanded ? c.restore : c.maximize} title={expanded ? c.restore : c.maximize}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
-        <button type="button" className="verify-watch-icon" onClick={() => close.current()} aria-label={c.close} title={c.close}><X size={15} /></button>
+        {!hosted && !inline && !phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={expanded ? c.restore : c.maximize} title={expanded ? c.restore : c.maximize}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
+        {!hosted && <button type="button" className="verify-watch-icon" onClick={() => close.current()} aria-label={c.close} title={c.close}><X size={15} /></button>}
       </div>
       <div className="verify-watch-address">
         <button type="button" className="verify-watch-icon" onClick={rerun} disabled={rerunning || card.status === "running" || card.status === "preparing"} aria-label={c.rerun} title={c.rerun}><RefreshCw size={14} className={rerunning ? "animate-spin" : undefined} /></button>
@@ -335,15 +338,4 @@ function handles(ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
     ctx.fillRect(hx - s / 2, hy - s / 2, s, s);
     ctx.strokeRect(hx - s / 2, hy - s / 2, s, s);
   }
-}
-
-/** Docked right inside the chat column; the chat stays usable beside it. */
-export function VerifyWatchPanel({ card, threadId, live, hidden, closing = false }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean }) {
-  return (
-    <aside className="verify-watch animate-panel-in" data-verify-watch data-side-panel="" data-closing={closing || undefined} inert={closing || undefined}>
-      {card.doc
-        ? <VerifyDocWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} closing={closing} onClose={closeVerifyWatch} />
-        : <VerifyWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} closing={closing} onClose={closeVerifyWatch} />}
-    </aside>
-  );
 }

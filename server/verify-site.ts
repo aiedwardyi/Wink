@@ -182,7 +182,7 @@ export async function resolveVerifySite(entryText: string, roots: string[], sign
   }
 }
 
-/** The frozen bridge grant (V0.md "Bridge auth rule"). */
+/** The frozen bridge grant (bridge auth rule). */
 export function verifyGrant(token: string, run: VerifyBridgeRun): string {
   const payload = Buffer.from(JSON.stringify([VERIFY_GRANT_PREFIX, run.botId, run.runId, run.root, run.entry, run.revision, run.expiresAt])).toString("base64url");
   return `${payload}.${createHmac("sha256", token).update(payload).digest("base64url")}`;
@@ -530,8 +530,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
   async function handleStream(req: IncomingMessage, res: ServerResponse, runId: string, replay: boolean, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
     res.setHeader("cache-control", "no-store"); res.setHeader("x-content-type-options", "nosniff");
     if (!enabled()) return json(res, 404, { error: "not found" });
-    if (deps.resolveCommsCaller(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
-    if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req)) return json(res, 401, { error: "unauthorized" });
+    if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req) && !deps.resolveCommsCaller(req.headers.authorization)) return json(res, 401, { error: "unauthorized" });
     const run = runs.get(runId) ?? deps.docRun?.(runId), threadId = run?.threadId ?? await replayThread(runId);
     if (!threadId || !store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not-here" });
     if (!replay && run?.recording && !run.card.endedAt) {

@@ -1,20 +1,24 @@
-// A bot's ask_user question stays open until the person replies in that chat
-// (typing anything, or tapping a choice) or dismisses it. Nothing extra is
-// stored: the state is derived from the transcript, so the sidebar glow, the
-// pin over the composer and the inline record can never disagree.
+// A bot's ask_user question stays open until the person answers it (a tapped
+// choice, or typing to a pinned question without choices) or dismisses it.
+// Nothing extra is stored: the state is derived from the transcript, so the
+// sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
-import { isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion } from "../../shared/open-question";
+import { isShownMessage } from "./shown-message";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, lineSettles, typedReply, type AskState } from "../../shared/open-question";
 
+export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
 
 export interface NeedsYou {
-  /** The chat's open ask_user card, if any. */
+  /** The chat's newest open ask_user card, if any. */
   question: Message | null;
+  /** Every ask_user card still waiting, oldest first. */
+  questions: readonly Message[];
   /** An approval or engine question card is still open. */
   request: boolean;
 }
 
-const NONE: NeedsYou = { question: null, request: false };
+const NONE: NeedsYou = { question: null, questions: [], request: false };
 const cache = new WeakMap<readonly Message[], NeedsYou>();
 
 /** What in this chat is waiting on the person, memoized per message array. */
@@ -22,15 +26,26 @@ export function needsYou(messages: readonly Message[]): NeedsYou {
   if (!messages.length) return NONE;
   const cached = cache.get(messages);
   if (cached) return cached;
-  const question = scanQuestion(messages);
+  const questions = [...askStates(messages)].flatMap(([card, status]) => (status.state === "waiting" ? [card] : []));
+  const question = questions.at(-1) ?? null;
   const request = messages.some(isOpenRequest);
-  const result = question || request ? { question, request } : NONE;
+  const result = question || request ? { question, questions, request } : NONE;
   cache.set(messages, result);
   return result;
 }
 
 export function openQuestion(messages: readonly Message[]): Message | null {
   return needsYou(messages).question;
+}
+
+export function openQuestions(messages: readonly Message[]): readonly Message[] {
+  return needsYou(messages).questions;
+}
+
+/** The open question a typed `text` settles at once, what with, and whether the line alone settles it once it lands. */
+export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string; byLine: boolean } | null {
+  const question = openQuestion(messages);
+  return question ? { question, answered: typedReply(question, text), byLine: lineSettles(messages, question, text) } : null;
 }
 
 /** An open permission ask: it takes the composer over, so it hides the pin. */
@@ -44,34 +59,38 @@ export function pinnedQuestion(messages: readonly Message[], visible: readonly M
   return visible.some(isOpenApproval) ? null : openQuestion(messages);
 }
 
+/** The chat moved on from `question`: the person sent a message after it (a queued line landing by itself is not one), or its asker replied. */
+export function chatMovedOn(messages: readonly Message[], question: Message): boolean {
+  const at = messages.indexOf(question);
+  const asker = question.from?.botId;
+  return at >= 0 && messages.slice(at + 1).some((message) =>
+    message.role === "bot"
+      ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
+      : isSentByPerson(message) && !message.queueId);
+}
+
 /** True when a sidebar row for this chat should glow. */
 export function chatNeedsYou(messages: readonly Message[]): boolean {
   const state = needsYou(messages);
   return Boolean(state.question) || state.request;
 }
 
-export type AskUserStatus =
-  | { state: "waiting" }
-  | { state: "answered"; reply: string }
-  | { state: "dismissed" }
-  | { state: "superseded" };
+export type AskUserStatus = Exclude<AskState, { state: "answered" }> | { state: "answered"; reply: string };
 
-function firstLine(text: string): string {
-  return text.trim().split(/\r?\n/, 1)[0] ?? "";
-}
+const statuses = new WeakMap<readonly Message[], Map<string, AskState>>();
 
 /** How a marked card reads in the transcript. */
 export function askUserStatus(messages: readonly Message[], message: Message): AskUserStatus {
-  const card = message.card;
-  if (card?.answered) return { state: "answered", reply: firstLine(card.answered) };
-  if (card?.dismissed) return { state: "dismissed" };
-  const index = messages.findIndex((entry) => entry.id === message.id);
-  for (let i = index < 0 ? messages.length : index + 1; i < messages.length; i++) {
-    const later = messages[i];
-    if (isSentByPerson(later)) return { state: "answered", reply: firstLine(later.text ?? "") };
-    if (isAskUserCard(later)) return { state: "superseded" };
-  }
-  return { state: "waiting" };
+  let states = statuses.get(messages);
+  if (!states) statuses.set(messages, (states = new Map([...askStates(messages)].map(([card, state]) => [card.id, state]))));
+  const status = states.get(message.id) ?? askStates([message]).get(message)!;
+  return status.state === "answered" ? { state: "answered", reply: status.reply } : status;
+}
+
+/** False only for an ask_user card that already settled, so a stale tap cannot answer it again. */
+export function canAnswerCard(messages: readonly Message[], messageId: string): boolean {
+  const message = messages.find((candidate) => candidate.id === messageId);
+  return !message || !isAskUserCard(message) || askUserStatus(messages, message).state === "waiting";
 }
 
 /** For the control hiding the rows (drawer button, collapsed sidebar or

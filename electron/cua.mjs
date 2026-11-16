@@ -2,8 +2,8 @@
 //
 // Two modes, per cua-driver's EMBEDDING.md:
 //  - "embedded" (packaged app): spawn our own private daemon via
-//    EmbeddedCuaDriverHost so TCC grants attribute to OpenMausBot and the
-//    driver inherits them. One prompt, named OpenMausBot, out of the box.
+//    EmbeddedCuaDriverHost so TCC grants attribute to Wink and the
+//    driver inherits them. One prompt, named Wink, out of the box.
 //  - "standalone" (dev): attach to an already-installed CuaDriver.app daemon
 //    (its own TCC identity, typically already granted on a dev machine).
 //
@@ -263,6 +263,7 @@ export function cuaPermissionsStatus() {
   const out = spawnSync(binary, ["permissions", "status", "--json"], {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
     env: { ...process.env, ...CUA_ENV },
   });
   try {

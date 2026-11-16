@@ -14,6 +14,7 @@ import type { AppSettingsSection } from "@/state/store";
 const mock = vi.hoisted(() => ({
   section: "general" as AppSettingsSection,
   updaterState: null as unknown,
+  dial: false,
 }));
 
 // keep the real useManualCheck: SettingsModal imports it from here too, and
@@ -49,7 +50,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           rooms: { turnTimeoutMinutes: 5 },
           localVm: { mode: "shared", maxInstances: 1 },
           profile: { name: "", email: "" },
-          features: { showToolCalls: false },
+          features: { showToolCalls: false, modelDial: mock.dial },
         },
       },
       dispatch: () => undefined,
@@ -66,12 +67,6 @@ vi.mock("./DesktopCapabilities", () => ({
     },
     ready: true,
   }),
-}));
-
-vi.mock("./CompanionSection", () => ({
-  CompanionSection: () => {
-    throw new Error("companion must stay parked");
-  },
 }));
 
 vi.mock("./EnginesSettings", () => ({
@@ -166,10 +161,10 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("themes");
     expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
-    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Moss", "Wink Day", "Notebook"]) {
+    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Neon Grid", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
     }
-    expect(html).toContain(`More themes (${SKINS.length - 9})`);
+    expect(html).toContain(`More themes (${SKINS.length - 16})`);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('data-skin="catppuccin-frappe"');
     expect(html).not.toContain('data-skin="servo-gray"');
@@ -232,10 +227,16 @@ describe("SettingsModal friends chrome", () => {
     Object.defineProperty(window, "ogb", { value: { errorReportConsent: vi.fn(), setErrorReportConsent: vi.fn() }, configurable: true, writable: true });
     const html = markup("general");
     expect(html).toContain('aria-label="Crash reports and stats"');
-    expect(html).toContain("Anonymous. No chats or files.");
+    expect(html).toContain("Anonymous speed, crash and feature stats. Never chats, files or names.");
     expect(html).not.toContain("Send Anonymous Usage Stats");
     expect((html.match(/role="switch"/g) ?? [])).toHaveLength(1);
     Object.defineProperty(window, "ogb", { value: undefined, configurable: true, writable: true });
+  });
+
+  it("shows the same one switch without the desktop shell, on a phone or in a browser", () => {
+    const html = markup("general");
+    expect((html.match(/aria-label="Crash reports and stats"/g) ?? [])).toHaveLength(1);
+    expect(html).toContain("Anonymous speed, crash and feature stats. Never chats, files or names.");
   });
 
   it("groups Advanced preferences in one card without repeated titles", () => {
@@ -263,6 +264,28 @@ describe("SettingsModal friends chrome", () => {
     expect(checked()).toContain("Off");
     const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
     expect(source).toContain("onChange={saveRainbowBox}");
+  });
+
+  it("leaves the model picker look to the theme, with no row for it", () => {
+    expect(markup("themes")).not.toContain('aria-label="Model Picker"');
+    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).not.toContain("picker-look");
+    expect(Object.keys(catalogs.en).filter((key) => key.startsWith("settings.pickerLook."))).toEqual([]);
+  });
+
+  it("leaves the model picker style to the picker, even where the dial can show", () => {
+    try {
+      mock.dial = true;
+      window.matchMedia = ((media: string) => ({ media, matches: true })) as typeof window.matchMedia;
+      const html = markup("themes");
+      expect(html).toContain('aria-label="Chat Box"');
+      expect(html).not.toContain("Model Picker Style");
+      expect(html).not.toMatch(/>Chart</);
+    } finally {
+      mock.dial = false;
+      Reflect.deleteProperty(window, "matchMedia");
+    }
+    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).not.toContain("saveModelPickerView");
+    expect([catalogs.ko["settings.pickerStyle.title"], catalogs.ko["settings.pickerStyle.dial"], catalogs.ko["settings.pickerStyle.list"], catalogs.ko["settings.pickerStyle.chart"]]).toEqual(["모델 선택 방식", "다이얼", "목록", "차트"]);
   });
 
   it("does not reveal Local VM, channel turns, experimental, or diagnostics when Advanced would have been open", () => {
@@ -379,14 +402,14 @@ describe("SettingsModal friends chrome", () => {
 
   it("splits featured skins into Dark then Light groups", () => {
     const html = markup("themes");
-    const dark = html.indexOf(">Dark<");
-    const light = html.indexOf(">Light<");
+    const dark = html.lastIndexOf(">Dark<");
+    const light = html.lastIndexOf(">Light<");
     expect(dark).toBeGreaterThan(-1);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "moss"]);
-    expect(ids(html.slice(light))).toEqual(["wink-day", "notebook"]);
-    expect(ids(html)).toHaveLength(9);
+    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "neon-grid"]);
+    expect(ids(html.slice(light))).toEqual(["dim-sand", "lagoon", "snow", "wink-day", "notebook"]);
+    expect(ids(html)).toHaveLength(16);
   });
 
 

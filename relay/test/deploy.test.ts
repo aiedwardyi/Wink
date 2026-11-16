@@ -505,6 +505,22 @@ describe("google deploy flags", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps --stats-read-key-sha256 through update", async () => {
+    const hash = "0a".repeat(32);
+    const parsed = parseOptions(argv("update", ["--stats-read-key-sha256", hash]));
+    expect(() => validate(parsed.opts)).not.toThrow();
+    expect(() => validate(parseOptions(argv("update", ["--stats-read-key-sha256", "a-read-key"])).opts)).toThrow(/invalid --stats-read-key-sha256/);
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    try {
+      await realLocal("/r", dir).writeConfig(parseOptions(argv("update")).opts);
+      expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"))).not.toHaveProperty("stats");
+      await realLocal("/r", dir).writeConfig(parsed.opts);
+      expect(JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8")).stats).toEqual({ readKeySha256: hash });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 /** In-memory gcloud and DNS. Records every call; never reaches a provider. */

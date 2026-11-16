@@ -2,13 +2,17 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { DATA_DIR } from "./config.ts";
+import { closeMessageDb, messageDatabase } from "./message-db.ts";
 import type { Message } from "./store.ts";
 import type { MigrationArgs } from "./testing/thread-sync-v2-migration-pc.ts";
-import type { MigrationCrash, MigrationProgress } from "./thread-sync-v2-migration.ts";
+import { createSyncEngine } from "./thread-sync-v2-engine.ts";
+import { createThreadMigration, type MigrationCrash, type MigrationProgress } from "./thread-sync-v2-migration.ts";
 import type { SyncApplyResult, SyncFlushResult, SyncState, SyncVersion } from "./thread-sync-v2.ts";
 
 const roots: string[] = [];
@@ -183,5 +187,29 @@ describe("legacy migration", { timeout: 60_000 }, () => {
     expect(state.rows.map((item) => item.id).sort()).toEqual(["local", "remote"]);
     expect(state.variants.filter((item) => item.kind === "row")).toHaveLength(2);
     expect(hashes(folder)).toEqual(before);
+  });
+});
+
+describe("migration start-up", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeMessageDb();
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("finds legacy heads without scanning every synced row under the write lock", () => {
+    const options = { folder: temp(), dataDir: DATA_DIR, deviceId: "pc" };
+    const engine = createSyncEngine(options);
+    const prepare = DatabaseSync.prototype.prepare;
+    const prepared: string[] = [];
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+      prepared.push(sql);
+      return prepare.call(this, sql);
+    });
+    createThreadMigration(options, engine);
+    vi.restoreAllMocks();
+    const plans = prepared.filter((sql) => /^\s*SELECT/i.test(sql))
+      .flatMap((sql) => messageDatabase().prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail)));
+    expect(plans.filter((detail) => /^SCAN (f|sync_v2_frontier)\b/.test(detail))).toEqual([]);
   });
 });

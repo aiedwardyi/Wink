@@ -63,6 +63,41 @@ async function mount(members: Bot[], groups: Group[], view: ReturnType<typeof cr
   return host;
 }
 
+describe("plain user links", () => {
+  it.each(["chat", "group"])("links common domains and URLs in a %s user's bubble", async (kind) => {
+    const text = "**plain** starzum.com www.x.io x.co.kr https://example.com file.ts README.md deploy.sh notes.ai v1.0.259 e.g. person@example.com";
+    const current = bot([{ id: "user-link", at: Date.now(), role: "user", kind: "text", text }]);
+    const group = { id: "links", threadId: "links-thread", name: "Links", memberIds: [current.id], messages: current.messages, setupCompletedAt: Date.now(), defaultResponder: { kind: "mentions" } } as Group;
+    const host = await mount([current], kind === "group" ? [group] : [], kind === "group"
+      ? createElement(GroupView, { group }) : createElement(ChatView, { bot: current }));
+    const row = host.querySelector('[data-mid="user-link"]')!;
+    expect(row.textContent).toContain("**plain**");
+    expect(row.querySelector('a[href="https://starzum.com"]')?.textContent).toBe("starzum.com");
+    expect([...row.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", "https://www.x.io", "https://x.co.kr", "https://example.com",
+    ]);
+  });
+});
+
+describe("a row sent from a call", () => {
+  it.each([["user", "order"], ["user", "ask"], ["bot", "ask"]] as const)("leads a %s %s row's text with a phone and keeps the footer of any other row", async (role, tag) => {
+    const id = "c-0123456789ab";
+    const current = bot([
+      { id: "plain", at: 1, role, kind: "text", text: "Fix the login bug." },
+      { id: "voice", at: 2, role: "bot", kind: "text", text: "Sending it.", call: { id, voice: true } },
+      { id: "sent", at: 3, role, kind: "text", text: "Fix the login bug.", call: { id, [tag]: true } },
+    ]);
+    const host = await mount([current], [], createElement(ChatView, { bot: current }));
+    const time = (mid: string) => host.querySelector(`[data-mid="${mid}"] button.tabular-nums`)!;
+    const content = host.querySelector('[data-mid="sent"] [data-orbit-message-content]')!.innerHTML;
+    expect(content).toContain("lucide-phone");
+    expect(content.indexOf("lucide-phone")).toBeLessThan(content.indexOf("Fix the login bug."));
+    expect(host.querySelectorAll('[data-mid="sent"] svg.lucide-phone')).toHaveLength(1);
+    expect(host.querySelector('[data-mid="plain"] svg.lucide-phone')).toBeNull();
+    expect(time("sent").parentElement!.className).toBe(time("plain").parentElement!.className);
+  });
+});
+
 describe("a question that is only choices", () => {
   it("draws no empty bubble above the chips in a chat", async () => {
     const current = bot([question("q1", "Which one?\n- Red\n- Blue")]);
@@ -70,7 +105,7 @@ describe("a question that is only choices", () => {
     expect(host.querySelector('[data-mid="q1"] [data-orbit-message-content]')).toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Copy message"]')).not.toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Reply to message"]')).not.toBeNull();
-    expect(host.querySelector('[data-mid="q1"] [data-message-reactions]')?.textContent).toContain("👍");
+    expect(host.querySelector('[data-mid="q1"] [data-message-reactions] [data-emoji="👍"]')).not.toBeNull();
     expect(host.textContent).toContain("Red");
     expect(host.textContent).toContain("Blue");
   });
@@ -92,7 +127,7 @@ describe("a question that is only choices", () => {
     expect(host.querySelector('[data-mid="q1"]')).not.toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-orbit-message-content]')).toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Reply to message"]')).not.toBeNull();
-    expect(host.querySelector('[data-mid="q1"] [data-message-reactions]')?.textContent).toContain("👍");
+    expect(host.querySelector('[data-mid="q1"] [data-message-reactions] [data-emoji="👍"]')).not.toBeNull();
     expect(host.textContent).toContain("Red");
     expect(host.textContent).toContain("Blue");
   });

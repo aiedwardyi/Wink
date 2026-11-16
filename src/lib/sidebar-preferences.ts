@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 
 import { UNASSIGNED_SECTION_ID, type SidebarOrder } from "./sidebar-order";
+import { trackSetting } from "./usage-stats";
 
 export type SidebarDensity = "comfortable" | "compact" | "icons";
 export type SidebarSide = "left" | "right";
@@ -181,6 +182,7 @@ export function saveSidebarSide(
   side: SidebarSide,
   storage?: Pick<Storage, "setItem"> | null,
 ): void {
+  trackSetting("sidebarSide", loadSidebarSide(), side, "settings", SIDEBAR_SIDE_KEY);
   try {
     const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;
     target?.setItem(SIDEBAR_SIDE_KEY, side);

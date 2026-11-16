@@ -9,6 +9,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const sidebar = readFileSync(join(here, "Sidebar.tsx"), "utf8");
 
 describe("bot list menu", () => {
+  it("gives every plus-menu action the shared hover and focus surface", () => {
+    const start = sidebar.indexOf('dispatch({ type: "newBot" })');
+    const menu = sidebar.slice(start, sidebar.indexOf("</Presence>", start));
+    expect(menu.match(/MENU_ITEM_HOVER/g)).toHaveLength(5);
+  });
+
   it("says Make a copy and uses complete section labels", () => {
     expect(en["chrome.duplicate"]).toBe("Make a copy");
     expect(ko["chrome.duplicate"]).toBe("사본 만들기");

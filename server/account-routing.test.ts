@@ -79,7 +79,7 @@ async function fixture(empty = false, of = "claude") {
   vi.stubGlobal("fetch", panes);
   const deps = { accounts, registry, providers, store, reload: () => providers.reload(configs()), changed: vi.fn(),
     rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(),
-    invalidateHolds: vi.fn(), invalidateWaits: vi.fn(), botActive: (id: string) => active.has(id) || store.bot(id)?.busy === true,
+    invalidateWaits: vi.fn(), botActive: (id: string) => active.has(id) || store.bot(id)?.busy === true,
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: vi.fn(() => false) };
   const controller = createAccountRuntime(deps);
   controllers.push(controller);
@@ -94,15 +94,18 @@ async function fixture(empty = false, of = "claude") {
   const useDefault = (id: string) => request("POST", `/api/accounts/${id}/default`);
   const resolve = () => controller.bots?.resolve(bot) ?? bot.modelSelection;
   const notes = () => noteGenerator(registry.instances(), controller.bots?.noteAccount());
-  const patchModel = async (selection: ModelSelection) => {
-    const routes = createBotRoutes({ cfg: {}, store, registry, accountBots: controller.bots, wireBot: (record: BotRecord) => record,
-      checkedModelSelection: (raw: unknown) => {
-        try { return { ok: true, selection: controller.bots?.checkSelection(raw as ModelSelection) ?? raw as ModelSelection }; }
-        catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
-      },
-    } as unknown as Parameters<typeof createBotRoutes>[0]);
+  let startup: Promise<unknown> | undefined;
+  const routes = createBotRoutes({ cfg: {}, store, registry, accountBots: controller.bots, wireBot: (record: BotRecord) => record,
+    checkedModelSelection: (raw: unknown) => {
+      try { return { ok: true, selection: controller.bots?.checkSelection(raw as ModelSelection) ?? raw as ModelSelection }; }
+      catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
+    },
+    restoreWait: (of?: string) => (of === undefined ? undefined : controller.restoredFor(of)) ?? startup,
+  } as unknown as Parameters<typeof createBotRoutes>[0]);
+  const patchModel = async (selection: ModelSelection, wait?: Promise<unknown>, extra: Record<string, unknown> = {}) => {
+    startup = wait;
     let status = 0;
-    const req = Object.assign(Readable.from([JSON.stringify({ modelSelection: selection })]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
+    const req = Object.assign(Readable.from([JSON.stringify({ modelSelection: selection, ...extra })]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
     const res = { writeHead: (code: number) => { status = code; }, end: () => {} } as unknown as ServerResponse;
     await routes.patch(req, res, ["", bot.id] as RegExpMatchArray);
     return status;
@@ -207,6 +210,62 @@ describe("engine default account routing", () => {
     await controller.restore();
     expect(controller.bots?.resolve(f.bot).instanceId).toBe(f.added[2].id);
     expect(f.bot.pendingModelSelection).toBeUndefined();
+  });
+
+  it("verifies saved accounts side by side at startup", async () => {
+    const f = await fixture();
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    for (const account of f.added) {
+      const instance = f.registry.get(account.id)!;
+      const snapshot = instance.snapshot.bind(instance);
+      vi.spyOn(instance, "snapshot").mockImplementation(async (options) => { started.push(account.id); await gate; return snapshot(options); });
+    }
+    const restoring = f.controller.restore();
+    await vi.waitFor(() => expect(started.sort()).toEqual(f.added.map((account) => account.id).sort()));
+    release();
+    await restoring;
+    expect(f.added.map((account) => f.registry.accountBlocked(account.id))).toEqual([false, false, false]);
+  });
+
+  it("lets a model switch through while another account restores and holds one to the restoring account", async () => {
+    const f = await fixture();
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    const instance = f.registry.get(f.added[0].id)!;
+    const snapshot = instance.snapshot.bind(instance);
+    let verify!: () => void;
+    const verified = new Promise<void>((resolve) => { verify = resolve; });
+    vi.spyOn(instance, "snapshot").mockImplementation(async (options) => { await verified; return snapshot(options); });
+    const restoring = f.controller.restore();
+    expect(f.registry.accountBlocked(f.added[0].id)).toBe(true);
+    expect(await f.patchModel({ instanceId: "codex", model: "codex-1" }, restoring)).toBe(200);
+    const statuses: string[] = [];
+    const toAccount = f.patchModel({ instanceId: "claude", model: "claudeAgent-1" }, restoring).then((status) => statuses.push(`switch ${status}`));
+    const rename = f.patchModel({ instanceId: "codex", model: "codex-1" }, restoring, { name: "Renamed" }).then((status) => statuses.push(`rename ${status}`));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(statuses).toEqual([]);
+    verify();
+    await Promise.all([toAccount, rename, restoring]);
+    expect(statuses).toEqual(["switch 200", "rename 200"]);
+    expect(f.bot.name).toBe("Renamed");
+  });
+
+  it("keeps the latest model pick when an earlier one waits for a restoring account", async () => {
+    const f = await fixture();
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    const instance = f.registry.get(f.added[0].id)!;
+    const snapshot = instance.snapshot.bind(instance);
+    let verify!: () => void;
+    const verified = new Promise<void>((resolve) => { verify = resolve; });
+    vi.spyOn(instance, "snapshot").mockImplementation(async (options) => { await verified; return snapshot(options); });
+    const restoring = f.controller.restore();
+    const first = f.patchModel({ instanceId: "claude", model: "claudeAgent-1" }, restoring);
+    const latest = f.patchModel({ instanceId: "codex", model: "codex-1" }, restoring);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    verify();
+    expect(await Promise.all([first, latest, restoring.then(() => 0)])).toEqual([200, 200, 0]);
+    expect(f.bot.modelSelection.instanceId).toBe("codex");
   });
 
   it.each(["stopped", "missing"])("asks for a choice for a %s default account", async (reason) => {
@@ -414,7 +473,6 @@ describe("account removal drain", () => {
     expect(commit).toHaveBeenCalledOnce();
     expect(invalidate).not.toHaveBeenCalled();
     expect(clear).not.toHaveBeenCalled();
-    expect(f.deps.invalidateHolds).not.toHaveBeenCalled();
     expect(f.deps.changed).toHaveBeenCalled();
     expect(f.deps.changed.mock.calls.every((call) => call[0] === undefined)).toBe(true);
     expect(f.bot.resumeCursors[main.id]).toBe("cursor-1");

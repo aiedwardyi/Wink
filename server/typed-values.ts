@@ -103,7 +103,7 @@ function sentences(text: string): string[] {
     const noise = MACHINE_LINE.test(line) || CODE_LINE.test(line);
     for (const sentence of line.replace(LIST_MARK, "").split(/(?<=[.!?。])\s+/).map((part) => part.trim()).filter(Boolean)) {
       if (!held && !noise) kept.push(sentence);
-      held = credential(sentence) && (!valuesIn(sentence).length || DANGLING.test(sentence));
+      held = credential(sentence) && ((!valuesIn(sentence).length && !/«redacted \d+ chars»/.test(sentence)) || DANGLING.test(sentence));
     }
   }
   return kept;

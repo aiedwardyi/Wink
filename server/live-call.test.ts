@@ -5,9 +5,12 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CALL_ID, LIVE_MODEL, LIVE_URL } from "../shared/live-call.ts";
-import { capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag } from "./live-call.ts";
+import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
+import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, VOICE_SAID } from "../shared/live-call.ts";
+import type { AppConfig } from "./config.ts";
+import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
+import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { workspaceDir } from "./workspace.ts";
 
@@ -15,14 +18,15 @@ const KEY = "AIzaTEST-not-a-real-key-0123456789";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function harness(opts: { key?: string; reply?: () => Response } = {}) {
+function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "live-call-")); dirs.push(dir);
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({ name: "Juno" }, { seedMessages: false });
   store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "fix the login page" });
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
-  const routes = createLiveCallRoutes({ cfg: { gemini: { apiKey: "key" in opts ? opts.key : KEY } }, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
+  const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
+  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -31,29 +35,71 @@ function harness(opts: { key?: string; reply?: () => Response } = {}) {
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
-  return { dir, store, bot, fetch, post, sent };
+  return { dir, cfg, store, bot, fetch, post, sent };
 }
 
 describe("call token", () => {
-  it.each(["en", "ko", "unknown", undefined])("hints input transcription with the call language: %s", async (locale) => {
+  it.each(["en", "ko", "unknown", undefined])("hints input transcription with both languages, app first, on Auto: %s", async (locale) => {
     const h = harness();
     await h.post("token", { locale });
-    expect(h.sent().bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: [locale === "ko" ? "ko" : "en"] });
+    expect(h.sent().bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: locale === "ko" ? ["ko", "en"] : ["en", "ko"] });
   });
 
   it("keeps transcription language with the brief on reconnect", async () => {
     const h = harness();
     const first = await h.post("token", { locale: "ko" });
     await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
-    expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
-    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Speak Korean");
+    expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
+  });
+
+  it("sends the saved voice and follows the app language over an old saved call language", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam", language: "en" } as AppConfig["liveCall"] });
+    const { data } = await h.post("token", { locale: "ko" });
+    expect(data.voice).toBe("Alnilam");
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
+    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak only Korean, whatever language they use, never one word of another; match their politeness.");
+    expect(setup.systemInstruction.parts[0].text).not.toContain("Switch only when");
+    expect(setup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
+  });
+
+  it("defaults to Aoede and Auto: English or Korean as spoken, else the app language", async () => {
+    const h = harness();
+    await h.post("token", { locale: "ko" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Aoede");
+    const brief = setup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Speak only Korean, whatever language they use, never one word of another; match their politeness.");
+    expect(brief).not.toContain("Switch only when");
+  });
+
+  it("gives Adele a British accent in English, and no one else", async () => {
+    const h = harness({ liveCall: { voice: "Erinome" } });
+    await h.post("token");
+    h.cfg.liveCall = { voice: "Aoede" };
+    await h.post("token");
+    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief(0)).toContain("When you speak English, use a natural British accent.");
+    expect(brief(1)).not.toContain("British");
+  });
+
+  it("a voice picked mid-call waits for the next call", async () => {
+    const h = harness();
+    const first = await h.post("token");
+    h.cfg.liveCall = { voice: "Alnilam" };
+    await h.post("token", { callId: first.data.callId, resume: true });
+    await h.post("token");
+    const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
+    expect([voice(1), voice(2)]).toEqual(["Aoede", "Alnilam"]);
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
     expect(status).toBe(200);
-    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number) });
+    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede" });
     expect(raw).not.toContain(KEY);
     const [url, init] = h.fetch.mock.calls[0]!;
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");
@@ -63,7 +109,7 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
@@ -72,7 +118,7 @@ describe("call token", () => {
     const brief = body.bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("You are Juno");
     expect(brief).toContain("fix the login page");
-    expect(brief).toMatch(/NOW: idle/);
+    expect(brief).toContain("STATUS:\nJuno is idle.\nLocal time ");
   });
 
   it("keeps the brief for a resumed callId", async () => {
@@ -91,14 +137,28 @@ describe("call token", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("say it in 1-3 sentences.");
     expect(brief).not.toContain("details in chat");
-    expect(brief).toContain("Never point the person to the chat or tell them to check it for details, in any language.");
+    expect(brief).toContain("never point the person to the chat or tell them to check it for details, in any language.");
+    expect(brief).toContain("No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat");
+    expect(brief).toContain("Busy in STATUS never stops new work: offer it and call propose_work, it queues.");
   });
 
-  it("brief greets in the app language", async () => {
+  it("brief opens softly in the app language, no name or intro", async () => {
     const h = harness();
     await h.post("token", { locale: "ko" });
+    await h.post("token", { locale: "en" });
+    expect(h.sent(0).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
+    const brief = h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
+    expect(brief).not.toMatch(/Greet/);
+  });
+
+  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele or 아델"]] as const)("brief knows its shown name, the voice-change line and how quiet works (%s)", async (voice, shown) => {
+    const h = harness({ liveCall: { voice } });
+    await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Greet in Korean.");
+    expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
+    expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
+    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; your name wakes you.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -108,9 +168,58 @@ describe("call token", () => {
     const brief = setup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Never mention a bot, a helper, the chat or sending.");
     expect(brief).toContain("\"Want me to open your Desktop folder?\"");
-    expect(brief).toContain("A vague order gets one short question first");
+    expect(brief).toContain("Unsure which they mean: ask them one short question");
     expect(brief).not.toMatch(/ask whether to send|Juno has/);
     expect(setup.tools[0].functionDeclarations[0].description).not.toMatch(/bot/i);
+  });
+
+  it("brief talks like a person on the phone, not a script", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Talk like a friend on the phone");
+    expect(brief).toContain("never open with Understood, Got it, Certainly, I will or an apology");
+    expect(brief).toContain("never repeat their request back or yourself");
+    expect(brief).toContain("with contractions, never formal");
+    expect(brief).toContain("Speak as I, never we or our.");
+    expect(brief).toContain("open with a cue like \"Quick update:\"");
+    expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
+  });
+
+  it("brief answers the question asked first; role and notes never decline it", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Teacher", description: "your Wink project teacher. Protect Wink's direction. Avoid feature sprawl." }, { seedMessages: false });
+    mkdirSync(workspaceDir(bot.id), { recursive: true });
+    writeFileSync(join(workspaceDir(bot.id), "MEMORY.md"), "- NO PRIVACY PICKS: he ruled no permission/privacy steps for now; never offer that pick.");
+    await h.post("token", {}, bot.id);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const notesAt = brief.indexOf("YOUR NOTES:\n");
+    expect(brief.slice(notesAt)).toContain("NO PRIVACY PICKS");
+    expect(brief.indexOf("Avoid feature sprawl.")).toBeLessThan(notesAt);
+    const answer = brief.indexOf("ANSWER: Answer what they asked, directly, first.");
+    expect(answer).toBeGreaterThan(-1);
+    expect(answer).toBeLessThan(notesAt);
+    expect(brief).toContain("Ideas, general knowledge, is it possible, how would it work: answer from what you know.");
+    expect(brief).toContain("WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic");
+    expect(brief).toContain("Told you're not answering or repeating: answer it now, never restate your last line.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+  });
+
+  it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("anything they want you to use, change or remember is work too");
+    expect(brief).toContain("Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn.");
+    expect(brief).toContain("A clear instruction gets a short confirm");
+    expect(brief).toContain("Unsure which they mean: ask them one short question");
+    expect(brief).not.toContain("A vague order gets one short question first");
+  });
+
+  it("order is the user's request to the voice, never its offer", () => {
+    const order = LIVE_TOOLS[0]!.parameters.properties.order!.description;
+    expect(order).toContain("as they would say it to you");
+    expect(order).toContain("never your offer or reply");
   });
 
   it("brief routes PC actions to the bot", async () => {
@@ -123,15 +232,35 @@ describe("call token", () => {
     expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
   });
 
-  it("brief pins the app language", async () => {
+  it("brief speaks only the app language, and any other language is a mis-hear", async () => {
     const h = harness();
-    await h.post("token", { locale: "ko" });
     await h.post("token");
-    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief(0)).toContain("Speak Korean");
-    expect(brief(0)).toContain("ask again in Korean");
-    expect(brief(1)).toContain("Speak English");
-    expect(brief(0)).not.toContain("the user's language");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Speak only English, whatever language they use, never one word of another.");
+    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again.");
+    expect(brief).not.toContain("answer in that language");
+    expect(brief).not.toContain("Switch only when the person clearly asks");
+  });
+
+  it("brief never names the app Orbit", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Teacher", description: "your project teacher for Orbit. Vault: C:\Orbit-docs\notes" }, { seedMessages: false });
+    h.store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "is OpenMaus or MausBot in the Orbit build?" });
+    await h.post("token", {}, bot.id);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("your project teacher for Wink");
+    expect(brief).not.toMatch(/Orbit|OpenMaus|MausBot/);
+  });
+
+  it("only the capitalized old name is replaced", () => {
+    expect(plainNames("Neptune's orbit, in Orbit", "Teacher")).toBe("Neptune's orbit, in Wink");
+  });
+
+  it("a bot named Orbit keeps its name", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Orbit" }, { seedMessages: false });
+    await h.post("token", {}, bot.id);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("You are Orbit.");
   });
 
   it("409s without a key and puts one Gemini key card in the chat", async () => {
@@ -145,6 +274,12 @@ describe("call token", () => {
     expect(cards[0]!.secret).toMatchObject({ target: "geminiApiKey", helpUrl: "https://aistudio.google.com/apikey" });
     expect(isCallKeyCard(cards[0]!.secret!)).toBe(true);
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it("passes Google's quota 429 through", async () => {
+    const h = harness({ reply: () => Response.json({ error: { message: "You exceeded your current quota", status: "RESOURCE_EXHAUSTED" } }, { status: 429 }) });
+    const { status } = await h.post("token");
+    expect(status).toBe(429);
   });
 
   it("502s with Google's message", async () => {
@@ -177,6 +312,12 @@ describe("brief caps", () => {
     expect(tail).not.toContain("line 0 ");
   });
 
+  it("T3 one reply longer than the budget is clipped, not dropped", () => {
+    const tail = chatTail([{ role: "user", text: "what did you do" }, { role: "assistant", text: `Fixed the login bug. ${"word ".repeat(4_000)}` }], "Ed");
+    expect(tail.startsWith("You: Fixed the login bug. word")).toBe(true);
+    expect(estimateContextTokens([{ text: tail }])).toBeLessThanOrEqual(CHAT_TAIL_TOKENS + 10);
+  });
+
   it("puts capped MEMORY.md in the brief", async () => {
     const h = harness();
     mkdirSync(workspaceDir(h.bot.id), { recursive: true });
@@ -189,6 +330,106 @@ describe("brief caps", () => {
   });
 });
 
+describe("brief STATUS", () => {
+  afterEach(() => { _resetSteerQueue(); });
+  const statusOf = (brief: string) => brief.split("STATUS:\n")[1]!.split("\nLocal time ")[0]!;
+
+  it("replaces NOW with busy state, waiting sends and worker reports; the open card waits for the call to read it", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "note", text: "[pane aaaaaaaa] [BUILD | opus | high] from Juno (b1): FAIL BUILD branch=x sha=1 dirty=0\nstack trace" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Your bot has a question", subtitle: "Restart at 8:15 PM instead?", options: ["Yes, 8:15 PM", "Still 1 AM"], askUser: true } });
+    h.store.setActivity(h.bot.id, "working");
+    queueSteeredMessage(h.bot.id, h.bot.threadId, "then deploy", {});
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).not.toContain("NOW:");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+    expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
+    expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
+    expect(statusOf(brief)).toBe([
+      "Juno is busy, working on: fix the login page.",
+      "Sends waiting to run after this.",
+      "Workers, newest first: BUILD reported FAILED.",
+    ].join("\n"));
+    expect(statusOf(brief)).not.toContain("stack trace");
+    expect(statusOf(brief)).not.toContain("Open question");
+  });
+
+  it("stays under 1.6 KB in Korean", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "평가 루프를 다시 시작해 주세요. ".repeat(60) });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "질문", subtitle: "새벽 1시에 재시작할까요? ".repeat(60), options: Array.from({ length: 40 }, (_, i) => `선택지 ${"가".repeat(60)} ${i}`), askUser: true } });
+    h.store.setActivity(h.bot.id, "working");
+    await h.post("token", { locale: "ko" });
+    const status = statusOf(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string);
+    expect(Buffer.byteLength(status, "utf8")).toBeLessThanOrEqual(STATUS_MAX_BYTES);
+    expect(status).not.toContain("�");
+  });
+});
+
+describe("brief model line", () => {
+  it("names the chip's model even when the chat says another", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "what model r u" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "My setup says I'm Claude Haiku 5.5." });
+    const bot = { ...h.bot, busy: true, modelSelection: { instanceId: "claude", model: "claude-haiku-5-5" }, pendingModelSelection: { instanceId: "codex", model: "gpt-6.1-sol" } };
+    const catalog = { claude: [{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" }], codex: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] } as Record<string, { id: string; label: string }[]>;
+    const brief = await buildBrief(bot, h.store.activePath(bot.threadId), "User", 0, "en", undefined, (id) => ({ models: { options: catalog[id] ?? [] } }));
+    const [chat, status] = brief.split("STATUS:");
+    expect(chat).toContain("I'm Claude Haiku 5.5");
+    expect(status).toContain("GPT-6.1 Sol");
+    expect(status).not.toContain("Haiku");
+    expect(brief).toContain("Never mention Gemini, a helper or a voice model.");
+  });
+});
+
+describe("T2 the voice's own words are never facts", () => {
+  it("the next call's brief marks them unverified, and only them", async () => {
+    const h = harness();
+    const call = { id: "c-0123456789ab" };
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Did the deploy go out?", call });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, we confirmed it.", engine: "geminiAgent", call: { ...call, voice: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "and the tests?" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "All 40 pass." });
+    const brief = await buildBrief(h.bot, h.store.activePath(h.bot.threadId), "Ed", 0);
+    const chat = brief.split("RECENT CHAT:\n")[1]!.split("\n\nSTATUS:")[0]!;
+    expect(chat).toContain(`You: ${VOICE_SAID} Yes, we confirmed it.`);
+    expect(chat).toContain("Ed: Did the deploy go out?");
+    expect(chat).toContain("You: All 40 pass.");
+    expect(brief).toContain("A RECENT CHAT line marked unverified was only said on a call: never proof.");
+  });
+
+  it("the bot's next turn reads them as the voice's, not its own", () => {
+    const call = { id: "c-0123456789ab" };
+    const rows = [
+      { id: "l1", role: "user", kind: "text", text: "Did the deploy go out?", call, at: 1 },
+      { id: "l2", role: "bot", kind: "text", text: "Yes, we confirmed it.", call: { ...call, voice: true }, at: 1 },
+    ] as Parameters<typeof callLinesSinceLastUserTurn>[0];
+    const [block] = callLinesSinceLastUserTurn(rows, new Set());
+    expect(block).toContain("Voice: Yes, we confirmed it.");
+    expect(block).toContain("unverified and never proof");
+    expect(block).not.toContain("Treat them as part of this chat");
+    expect(block).not.toContain("You: ");
+  });
+});
+
+describe("call context on sends", () => {
+  it("a call turn reads the lines said before it, skipping its own row and a line written after it", () => {
+    const call = { id: "c-0123456789ab" };
+    const at = 1;
+    const rows = [
+      { id: "t", role: "user", kind: "text", text: "typed before the call", at },
+      { id: "l1", role: "user", kind: "text", text: "Can you check the build?", call, at },
+      { id: "l2", role: "bot", kind: "text", text: "Want me to check it?", call: { ...call, voice: true }, at },
+      { id: "o", role: "user", kind: "text", text: "Check the build.", call: { ...call, order: true }, at },
+      { id: "l3", role: "user", kind: "text", text: "Yes.", call, at },
+    ] as Parameters<typeof callLinesSinceLastUserTurn>[0];
+    const [block] = callLinesSinceLastUserTurn(rows, new Set(["o"]));
+    expect(block!.split("\n").slice(1)).toEqual(["Person: Can you check the build?", "Voice: Want me to check it?", "Person: Yes."]);
+    expect(block).not.toContain("typed before the call");
+  });
+});
+
 describe("call lines and end", () => {
   it("appends user and voice rows tagged with the call", async () => {
     const h = harness();
@@ -197,9 +438,9 @@ describe("call lines and end", () => {
     expect(status).toBe(200);
     expect(data.ids).toHaveLength(2);
     const rows = h.store.activePath(h.bot.threadId).slice(-2);
-    expect(rows.map(({ role, kind, text, call }) => ({ role, kind, text, call }))).toEqual([
-      { role: "user", kind: "text", text: "로그인 페이지 고쳐줘", call: { id: callId } },
-      { role: "bot", kind: "text", text: "로그인 페이지를 고칠까요?", call: { id: callId, voice: true } },
+    expect(rows.map(({ role, kind, text, call, engine }) => ({ role, kind, text, call, engine }))).toEqual([
+      { role: "user", kind: "text", text: "로그인 페이지 고쳐줘", call: { id: callId }, engine: undefined },
+      { role: "bot", kind: "text", text: "로그인 페이지를 고칠까요?", call: { id: callId, voice: true }, engine: "geminiAgent" },
     ]);
   });
 
@@ -211,8 +452,10 @@ describe("call lines and end", () => {
     const h = harness();
     const stats = { device: "phone", ms: 61_000, turns: 4, userLines: 4, voiceLines: 4, hangulShare: 0.5, ttfaMs: { p50: 1_100, p90: 1_900 }, interrupted: 1, orders: { proposed: 1, confirmed: 1, declined: 0, expired: 0 }, doneGuard: 0, hidden: { spans: 0, ms: 0 }, reconnects: 0, closeCodes: [1000], usage: { total: 900 } };
     expect((await h.post("end", { callId: "c-0123456789ab", stats })).data).toEqual({ ok: true });
+    const full = { ...stats, asks: { sent: 2, retried: 0, answered: 1, ms: { p50: 9_000, p90: 9_000 } }, guard: { nudges: 1, failLines: 0, promise: 1, cant: 0, unsure: 0 }, ackMs: { p50: 1_200, p90: 2_400 } };
+    expect((await h.post("end", { callId: "c-0123456789ab", stats: full })).data).toEqual({ ok: true });
     const lines = readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }]);
+    expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
   });
 });
 

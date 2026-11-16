@@ -2,9 +2,9 @@ import { VERIFY_DOC_KINDS, type VerifyDocKind } from "../../shared/verify-doc";
 import type { VerifyReplayMark } from "./verify-replay";
 import { CURSOR_MS, CURSOR_REST_MS } from "./verify-watch-show";
 
-export const DOC_SHOW_MIN_MS = 6_000;
-export const DOC_SHOW_MAX_MS = 8_000;
-const LINE_MS = 40;
+export const DOC_SHOW_MIN_MS = 3_600;
+export const DOC_SHOW_MAX_MS = 5_000;
+const LINE_MS = 20;
 // Run ms: a chunk opened this early was open when the numbering rules ran, and a longer wait after the last chunk is the names comparison.
 const EARLY_MS = 250;
 const COMPARE_MS = 250;
@@ -180,7 +180,7 @@ export class VerifyDocShow {
   private open(from: number, to: number, at: number, early: boolean, until?: number) {
     const kinds: VerifyDocKind[] = early ? [...READERS, "numbering"] : READERS, step = CURSOR_MS / kinds.length, rows = this.rows(from, to);
     // A replay reads the chunk once, top to bottom, in the time it has; live keeps reading it over until the done mark.
-    const reads = until === undefined ? 0 : Math.floor(Math.max(0, until - at - CURSOR_REST_MS) / CURSOR_MS) + 2;
+    const reads = until === undefined ? 0 : Math.floor(Math.max(0, until - at - CURSOR_REST_MS) / GLIDE_MS) + 2;
     const rounds = until === undefined ? Math.min(8, Math.max(2, Math.ceil(rows.length / READERS.length))) : Math.ceil(reads / 2);
     const band: Band = { from, to, at, rows, rounds, hold: 0, lanes: kinds.map((kind, i) => ({ kind, i, turn: 0, next: at + CURSOR_REST_MS + i * step, queue: [] })) };
     this.bands.push(band);
@@ -220,7 +220,8 @@ export class VerifyDocShow {
       this.point(band, lane, { line: f.line, along: 0, quote: f.quote, duration: glide });
       lane.landing = { at: at + glide, mark: hit };
     } else this.read(band, lane, glide);
-    lane.next = at + glide + (quick ? QUICK_MS / 2 : CURSOR_REST_MS);
+    // Reading runs straight on; it rests only on a quote it marked.
+    lane.next = at + glide + (quick ? QUICK_MS / 2 : hit ? CURSOR_REST_MS : 0);
   }
 
   private read(band: Band, lane: Lane, duration: number) {

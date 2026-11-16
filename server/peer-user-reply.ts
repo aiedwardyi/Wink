@@ -111,7 +111,7 @@ export function persistPeerUserReply(
   for (const user of splitText(event.text).users) {
     const input = turn.inputs.get(user.id);
     if (!input || input.answered || !user.text) continue;
-    const message = store.appendMessage(event.threadId, { role: "bot", kind: "text", text: user.text });
+    const message = store.appendMessage(event.threadId, { role: "bot", kind: "text", text: user.text, engine: event.provider });
     input.answered = true;
     lastReply?.set(event.threadId, { text: user.text, messageId: message.id });
   }

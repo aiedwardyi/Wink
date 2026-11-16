@@ -1,0 +1,87 @@
+/* one row per worker: the same seven stops in the same places, joined by one straight line; --flow-ease and 480ms are SWING (lib/motion-character.ts) */
+.map-flow-rows { --flow-merged: light-dark(#7a45d3, #b48cff); --flow-open: var(--map-green); --flow-ink: var(--color-ink-secondary); --flow-off: color-mix(in srgb, var(--color-ink-secondary) 38%, transparent); --flow-ease: cubic-bezier(.25,.1,.25,1);
+  position: relative; flex-shrink: 0; padding: 5px 12px 6px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
+.map-flow-list { display: grid; grid-template-columns: 8px minmax(40px, 76px) minmax(min-content, 1fr) auto; column-gap: 8px; row-gap: 2px; max-height: 158px; overflow: hidden auto; scrollbar-width: thin; }
+.map-flow-row { position: relative; display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 36px; color: inherit; text-decoration: none; -webkit-touch-callout: none; }
+.map-flow-row > i { width: 8px; height: 8px; background: var(--flow-line); }
+.map-flow-row > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px var(--font-sans, sans-serif); letter-spacing: .02em; }
+.map-flow-end { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.map-flow-end > small { font: 10.5px var(--font-mono, monospace); color: var(--color-ink-secondary); }
+.map-flow-end > small[data-tone="bad"] { color: var(--color-danger); }
+.map-flow-end > small[data-tone="run"] { color: var(--color-warning); }
+.map-flow-end > small[data-tone="merged"] { color: var(--flow-merged); }
+/* the same 6px the PR number keeps on its right, so the mark never sits on the list's scrollbar */
+.map-flow-clash { padding-right: 6px; font: 10.5px var(--font-mono, monospace); font-style: normal; color: var(--color-warning); }
+
+/* each stop is a word over a square on the line; the line through a stop is two halves, so it runs square to square */
+@property --flow-fill { syntax: "<color>"; inherits: true; initial-value: transparent; }
+.map-flow-stops { --flow-fill: var(--flow-off); display: flex; align-items: flex-start; min-width: 0; height: 36px; padding-top: 5px; transition: --flow-fill 480ms var(--flow-ease); }
+.map-flow-stops[data-fill="ink"] { --flow-fill: var(--flow-ink); }
+.map-flow-stops[data-fill="open"] { --flow-fill: var(--flow-open); }
+.map-flow-stops[data-fill="merged"] { --flow-fill: var(--flow-merged); }
+.map-flow-stops > i, .map-flow-stops > a:not(.map-flow-box)::before, .map-flow-stops > a:not(.map-flow-box)::after {
+  height: 2px; background: linear-gradient(var(--flow-fill), var(--flow-fill)) 0 0 / 0 100% no-repeat, linear-gradient(var(--flow-off), var(--flow-off)) 0 50% / 100% 1px no-repeat; transition: background-size 480ms var(--flow-ease); }
+.map-flow-stops > i { flex: 1 1 0; min-width: 4px; margin-top: 18px; }
+.map-flow-stops > i[data-on], .map-flow-stops > a:not(.map-flow-box)[data-line]::before, .map-flow-stops > a:not(.map-flow-box)[data-line="through"]::after { background-size: 100% 100%, 100% 1px; }
+/* the line up to the PR stays white-gray; from the PR on it takes the status color */
+.map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"]), .map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"]) + i, .map-flow-stops > [data-k="pr"]::before { --flow-fill: var(--flow-ink); }
+.map-flow-stops > a:not(.map-flow-box) { position: relative; isolation: isolate; flex: none; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.map-flow-stops > a:not(.map-flow-box)::before, .map-flow-stops > a:not(.map-flow-box)::after { content: ""; position: absolute; z-index: -1; top: 18px; left: 0; right: 50%; }
+.map-flow-stops > a:not(.map-flow-box)::after { left: 50%; right: 0; }
+.map-flow-stops > a:first-child::before, .map-flow-stops > a:last-child::after { content: none; }
+.map-flow-stops small { font: 10px/12px var(--font-sans, sans-serif); color: var(--color-ink-secondary); white-space: nowrap; }
+/* every stop word takes the same room (Merged and Closed too), so the squares sit evenly; the line next to the checks box gets the half slot a square would add */
+.map-flow-stops small { min-width: 3.6em; text-align: center; }
+.map-flow-stops > .map-flow-box + i, .map-flow-stops > i:has(+ .map-flow-box) { flex-basis: 14px; }
+.map-flow-stops > a > i { width: 8px; height: 8px; border-radius: 2px; background: var(--flow-off); transition: background 480ms var(--flow-ease), box-shadow 480ms var(--flow-ease); }
+.map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"])[data-state] > i { background: var(--flow-ink); }
+.map-flow-stops > :is([data-k="pr"], [data-k="review"])[data-state="on"] > i { background: var(--flow-open); }
+.map-flow-stops > [data-k="review"][data-state="half"] > i { background: linear-gradient(90deg, var(--flow-open) 50%, var(--color-panel) 50%); box-shadow: inset 0 0 0 1.5px var(--flow-open); }
+.map-flow-stops > [data-k="review"][data-state="bad"] > i { background: var(--color-danger); }
+.map-flow-stops > [data-k="merge"] > i { width: 10px; height: 10px; margin: -1px 0; border-radius: 50%; background: var(--color-panel); box-shadow: inset 0 0 0 1.5px var(--flow-off); }
+.map-flow-stops > [data-k="merge"][data-state="merged"] > i { background: var(--flow-merged); box-shadow: inset 0 0 0 1.5px var(--flow-merged); }
+.map-flow-stops > [data-k="merge"][data-state="closed"] > i { box-shadow: inset 0 0 0 1.5px var(--color-danger); }
+
+/* checks: one labeled box, a square per check */
+.map-flow-box { flex: none; display: flex; flex-direction: column; gap: 3px; box-sizing: border-box; width: 104px; margin-top: -3px; padding: 3px 6px 4px; border: 1px solid var(--color-hairline); border-radius: 5px; background: var(--color-panel); }
+.map-flow-box > b { display: flex; justify-content: space-between; gap: 6px; overflow: hidden; font: 10px/12px var(--font-sans, sans-serif); color: var(--color-ink-secondary); white-space: nowrap; }
+.map-flow-box > b > span { overflow: hidden; text-overflow: ellipsis; }
+.map-flow-box[data-state="run"] > b > span { color: var(--color-warning); }
+.map-flow-box[data-state="bad"] > b > span { color: var(--color-danger); }
+.map-flow-box[data-state="ok"] > b > span { color: var(--flow-open); }
+.map-flow-box > span { display: flex; gap: 2px; height: 6px; overflow: hidden; }
+.map-flow-box i { flex: 0 1 6px; min-width: 2px; height: 6px; border-radius: 1px; background: var(--color-warning); transition: background-color 480ms var(--flow-ease); }
+.map-flow-box i[data-state="pass"] { background: var(--flow-open); }
+.map-flow-box i[data-state="fail"] { background: var(--color-danger); }
+
+.map-flow-tip { position: absolute; z-index: 6; max-width: min(320px, 100%); padding: 6px 9px; border: 1px solid var(--color-hairline); border-radius: var(--radius-lg, 6px); background: var(--color-raised); box-shadow: 0 8px 24px rgb(0 0 0 / .22); pointer-events: none; animation: map-rise 200ms cubic-bezier(.2,.7,.2,1) both; }
+.map-flow-tip p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/17px var(--font-sans, sans-serif); color: var(--color-ink); }
+.map-flow-tip p + p { color: var(--color-ink-secondary); }
+@media (hover: hover) { .map-flow-stops > a[href]:hover > :is(small, b) { color: var(--color-ink); } }
+/* the row gives way from its far end: first the right side keeps only the PR number and the conflict count */
+@container map-pane (max-width: 690px) {
+  .map-flow-end > small[data-short], .map-flow-clash { font-size: 0; }
+  .map-flow-end > small[data-short]::after, .map-flow-clash::after { content: attr(data-short); font-size: 10.5px; }
+}
+/* narrow panes: the checks word takes the status color */
+@container map-pane (max-width: 560px) {
+  .map-flow-rows { padding-left: 10px; padding-right: 10px; }
+  .map-flow-list { grid-template-columns: 8px minmax(36px, 64px) minmax(min-content, 1fr) auto; column-gap: 6px; }
+  .map-flow-stops small, .map-flow-box > b { font-size: 9.5px; }
+  .map-flow-stops > i { min-width: 2px; }
+  .map-flow-stops small { min-width: 0; }
+  .map-flow-stops > [data-k="merge"] > small { min-width: 3.6em; }
+  .map-flow-stops > .map-flow-box + i, .map-flow-stops > i:has(+ .map-flow-box) { flex-basis: 0; }
+  .map-flow-box { width: auto; padding: 3px 5px 4px; }
+  .map-flow-box > span { width: 0; min-width: 100%; gap: 1px; }
+  .map-flow-box > b > span { display: none; }
+  .map-flow-box[data-state="run"] > b { color: var(--color-warning); }
+  .map-flow-box[data-state="bad"] > b { color: var(--color-danger); }
+  .map-flow-box[data-state="ok"] > b { color: var(--flow-open); }
+  .map-flow-end { gap: 5px; }
+}
+/* a worker with no PR keeps its own words until the narrow row has no room for them */
+@container map-pane (max-width: 440px) { .map-flow-end > small:not([data-short]) { font-size: 0; } }
+@container map-pane (max-width: 380px) { .map-flow-list { grid-template-columns: 8px minmax(36px, 52px) minmax(min-content, 1fr) auto; } }
+@container map-pane (max-width: 372px) { .map-flow-clash { display: none; } }
+@media (prefers-reduced-motion: reduce) { .map-flow-stops, .map-flow-stops > i, .map-flow-stops > a::before, .map-flow-stops > a::after, .map-flow-stops > a > i, .map-flow-box i, .map-flow-tip { transition: none; animation: none; } }

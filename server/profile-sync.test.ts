@@ -1,8 +1,9 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applySyncOperations,
@@ -13,6 +14,7 @@ import {
   dropSyncedBot,
   emptyProfileSyncState,
   importedSyncAvatarCrop,
+  loadOrCreateSyncWorkspace,
   loadProfileSyncSettings,
   localIdForSyncId,
   markImported,
@@ -33,10 +35,13 @@ import {
   syncAvatarMatches,
   syncOperationFileName,
   syncOperationsSignature,
+  syncOperationsStatus,
   writeSyncAvatarAsset,
   writeSyncOperation,
   type ProfileSyncOperation,
 } from "./profile-sync.ts";
+
+vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
 
 const roots: string[] = [];
 
@@ -213,6 +218,33 @@ describe("profile sync operations", () => {
     expect(JSON.parse(readFileSync(join(root, "profile-sync.json"), "utf8"))).toEqual(settings);
   });
 
+  it("never carries usage stats: not the switch, the install id, the queue or the session marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-stats-"));
+    const folder = mkdtempSync(join(tmpdir(), "orbit-profile-sync-stats-folder-"));
+    roots.push(root, folder);
+    const stats = { "analytics.json": "{\"enabled\":true}", "stats-id": "0123456789abcdef0123456789abcdef", "stats-queue.ndjson": "{\"e\":\"screen\"}\n", "stats-active": "{\"start\":1}" };
+    for (const [name, text] of Object.entries(stats)) writeFileSync(join(root, name), text);
+    const settings = saveProfileSyncSettings(root, loadProfileSyncSettings(root));
+    for (const field of ["statsId", "analytics", "stats"]) {
+      expect(() => saveProfileSyncSettings(root, { ...settings, [field]: stats["stats-id"] } as typeof settings), field).toThrow();
+    }
+    loadOrCreateSyncWorkspace(folder, "workspace-1");
+    writeSyncOperation(folder, operation());
+    writeSyncAvatarAsset(folder, Buffer.from([1, 2, 3]), "png");
+    const shared = readdirSync(folder, { recursive: true }).map(String);
+    expect(shared.length).toBeGreaterThan(2);
+    for (const name of shared) {
+      expect(name).not.toMatch(/stats|analytics/);
+      const path = join(folder, name);
+      if (statSync(path).isFile()) expect(readFileSync(path, "latin1")).not.toContain(stats["stats-id"]);
+    }
+    expect(readFileSync(join(root, "profile-sync.json"), "utf8")).not.toMatch(/stats|analytics/);
+    for (const [name, text] of Object.entries(stats)) expect(readFileSync(join(root, name), "utf8")).toBe(text);
+    for (const file of ["profile-sync.ts", "google-sync.ts", "device-sync.ts", "memory-sync.ts", "picture-sync.ts", "thread-sync.ts", "thread-sync-v2.ts", "thread-sync-v2-store.ts", "sync-roots.ts"]) {
+      expect(readFileSync(new URL(file, import.meta.url), "utf8"), file).not.toMatch(/stats-id|stats-queue|stats-active|analytics\.json|usage-stats/);
+    }
+  });
+
   it("keeps a delete tombstone from being undone by delayed offline edits", () => {
     const state = applySyncOperations(emptyProfileSyncState(), [
       operation({ operationId: "create", changes: { name: "Old" } }),
@@ -261,6 +293,38 @@ describe("profile sync operations", () => {
     const read = readSyncOperations(root);
     expect(read.invalidFiles).toEqual([]);
     expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots["bot-1"]?.memoryNotes).toBe(false);
+  });
+
+  it("answers status like a full read and rereads only when the change folder moves", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
+    roots.push(root);
+    const full = () => {
+      const read = readSyncOperations(root);
+      return { operations: read.operations.length, invalidFiles: read.invalidFiles };
+    };
+    const reads = vi.spyOn(fs, "readFileSync");
+    try {
+      expect(syncOperationsStatus(root)).toEqual(full());
+      const first = writeSyncOperation(root, operation());
+      expect(syncOperationsStatus(root)).toEqual(full());
+      reads.mockClear();
+      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(reads).not.toHaveBeenCalled();
+      const second = operation({ operationId: "op-2", sequence: 2 });
+      const arrived = join(root, "changes", syncOperationFileName(second));
+      writeFileSync(arrived, "{");
+      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(syncOperationsStatus(root).invalidFiles).toEqual([syncOperationFileName(second)]);
+      writeFileSync(arrived, serializeSyncOperation(second));
+      expect(syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
+      writeSyncOperation(root, { ...operation(), changes: { name: "Renamed" } });
+      expect(syncOperationsStatus(root)).toEqual(full());
+      unlinkSync(first);
+      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it("reports invalid auto notes records and ignores unfinished writes", () => {

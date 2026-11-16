@@ -33,9 +33,9 @@ afterEach(() => {
   }
 });
 
-// The value CSS defines for one custom property inside one skin's block.
+// The value CSS defines for one custom property inside one skin's block, alone or first in a shared list.
 function cssToken(skin, name) {
-  const block = css.match(new RegExp(`\\[data-skin="${skin}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  const block = (css.match(new RegExp(`\\[data-skin="${skin}"\\]\\s*\\{([^}]*)\\}`)) ?? css.match(new RegExp(`\\[data-skin="${skin}"\\](?:,\\s*\\[data-skin="[a-z-]+"\\])+\\s*\\{([^}]*)\\}`)))?.[1] ?? "";
   return block.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-fA-F]+)`))?.[1]?.toLowerCase() ?? null;
 }
 
@@ -43,7 +43,7 @@ describe("skin overlay chrome", () => {
   it("covers exactly the skins the renderer ships", () => {
     // SKIN_IDS is the source of truth (src/lib/skins.ts); a skin added there
     // without a chrome entry here would leave that skin's caption buttons on
-    // the previous colour — the issue #454 failure, but for a new skin.
+    // the previous colour: the black caption block again, but for a new skin.
     const registered = [...skinIds.matchAll(/"([a-z-]+)"/g)]
       .map(([, id]) => id)
       .filter((id) => css.includes(`[data-skin="${id}"]`));
@@ -166,7 +166,7 @@ describe("skin overlay chrome", () => {
     expect(SKIN_CHROME["wink-cyber"]).toEqual({ color: "#0b0f1c", symbolColor: "#a8b0d0" });
     expect(SKIN_CHROME["wink-violet"]).toEqual({ color: "#0b0f1c", symbolColor: "#a8b0d0" });
     expect(SKIN_CHROME["wink-black"]).toEqual({ color: "#000000", symbolColor: "#a4abc6" });
-    expect(SKIN_CHROME["wink-day"]).toEqual({ color: "#f7f5fb", symbolColor: "#545b7c" });
+    expect(SKIN_CHROME["wink-day"]).toEqual({ color: "#eeebf7", symbolColor: "#545b7c" });
     for (const id of ["wink", "wink-cyber", "wink-violet", "wink-black", "wink-day"]) {
       expect(extractOmbSkin(Buffer.from(`xxomb-skin\u0000\u0001${id}\u0000yy`))).toBe(id);
     }
@@ -223,6 +223,7 @@ describe("skin overlay chrome", () => {
     expect(skinThemeSource("onyx")).toBe("dark");
     expect(skinThemeSource("dracula")).toBe("dark");
     expect(skinThemeSource("cobalt")).toBe("dark");
+    expect(skinThemeSource("neon-grid")).toBe("dark");
     expect(skinThemeSource("gruvbox")).toBe("dark");
     expect(skinThemeSource("precision")).toBe("dark");
     expect(skinThemeSource("community")).toBe("dark");
@@ -305,5 +306,12 @@ describe("skin overlay chrome", () => {
   it("resolves catppuccin-mocha to catppuccin-frappe chrome and dark theme", () => {
     expect(skinChrome("catppuccin-mocha")).toEqual(SKIN_CHROME["catppuccin-frappe"]);
     expect(skinThemeSource("catppuccin-mocha")).toBe("dark");
+  });
+
+  it("migrates a stored Moss preference to Merlot", () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "skin-preference.json"), JSON.stringify({ skin: "moss" }), "utf8");
+    expect(readPersistedSkin(dir)).toBe("merlot");
+    expect(skinChrome("moss")).toEqual(SKIN_CHROME.merlot);
   });
 });

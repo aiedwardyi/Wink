@@ -3,12 +3,12 @@
 // folds into canonical events, interrupts and crashes settle cleanly.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 import { ensureDirs } from "../../config.ts";
 import type { PrepareTurn, ProviderInstance, SendTurnInput } from "../../contracts.ts";
@@ -16,6 +16,7 @@ import { toWslPath } from "../../env-path.ts";
 import * as procs from "../../procs.ts";
 import { createTempDirs, removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
+import { fakeMuseInstall, museUpdate } from "../../testing/fake-muse-install.ts";
 import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { MspMuseAgentDriver } from "./muse.ts";
 import { createMspDriver, mspMcpServers, translateMspServerForWsl } from "./runtime.ts";
@@ -87,6 +88,15 @@ describe("MSP turns (fake host)", () => {
     expect(servers!.phone).toEqual({ transport: "stdio", command: "phone-cmd", args: ["phone.js"], env: { T: "phone" } });
   });
 
+  it("folds the ask-driven agents tools behind the catalog unless the switch says 0", () => {
+    const agents = { command: "agents-cmd", args: ["agents.js"], env: { T: "agents" } };
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+    expect(mspMcpServers({ agents }, { wsl: false })!.agents.env).toEqual({ T: "agents", OMB_WINK_TOOL_CATALOG: "1" });
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "0");
+    expect(mspMcpServers({ agents }, { wsl: false })!.agents.env).toEqual({ T: "agents" });
+    vi.unstubAllEnvs();
+  });
+
   it("mounts a cloud box computer through the computer proxy", () => {
     const servers = mspMcpServers(
       { computer: { kind: "box", boxId: "box-1", token: "box-token" } },
@@ -116,10 +126,92 @@ describe("MSP turns (fake host)", () => {
     delete process.env.FAKE_MSP_USAGE_CHANGED;
     delete process.env.FAKE_MSP_ITEMS;
     delete process.env.FAKE_MSP_GATE_FILE;
+    delete process.env.FAKE_MSP_VERSION;
     delete process.env.META_API_KEY;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
+  });
+
+  it.each([
+    ["Muse Code 1.4.15 (1.4.15-R8339.1)", ["serve", "--trust-workspace", "-c", "run.reminder_roster.agents=[]"]],
+    ["Muse Code 1.4.14 (1.4.14-R7309.1)", ["serve"]],
+  ])("serves %s with %j", async (version, argv) => {
+    const dump = join(scratch, "muse-serve-args.json");
+    process.env.FAKE_MSP_DUMP = dump;
+    process.env.FAKE_MSP_VERSION = version;
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-serve-args", text: "hi" });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).toEqual(argv);
+  });
+
+  describe("system text", () => {
+    const sent = (dump: string) => JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))[0].text;
+    const turn = async (text: string, system: string, resumeCursor?: string) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-system", text, system, resumeCursor });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+
+    it("goes out once per session and again when it changes", async () => {
+      const dump = join(scratch, "muse-system-once.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create();
+      await turn("one", "RULES");
+      expect(sent(dump)).toBe("RULES\n\none");
+      await turn("two", "RULES", "fake-msp-session");
+      expect(sent(dump)).toBe("two");
+      await turn("three", "RULES v2", "fake-msp-session");
+      expect(sent(dump)).toBe("RULES v2\n\nthree");
+      await turn("four", "RULES v2", "fake-msp-session");
+      expect(sent(dump)).toBe("four");
+    });
+
+    it("goes out again after the host compacts the session", async () => {
+      const dump = join(scratch, "muse-system-compacted.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      process.env.FAKE_MSP_ITEMS = JSON.stringify([
+        { method: "item/started", params: { item: { itemId: "compact-1", kind: "compaction", status: "inProgress" } } },
+        { method: "item/completed", params: { item: { itemId: "compact-1", kind: "compaction", status: "completed" } } },
+      ]);
+      await create();
+      await turn("one", "RULES");
+      await turn("two", "RULES", "fake-msp-session");
+      expect(sent(dump)).toBe("RULES\n\ntwo");
+    });
+
+    it("goes out again after a turn that failed", async () => {
+      const dump = join(scratch, "muse-system-failed.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create("fail-after-text");
+      expect(await turn("one", "RULES")).toMatchObject({ ok: false });
+      await turn("two", "RULES", "fake-msp-session");
+      expect(sent(dump)).toBe("RULES\n\ntwo");
+    });
+
+    it("goes out again after a turn that was stopped", async () => {
+      const dump = join(scratch, "muse-system-stopped.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create("hang");
+      for (const [text, resumeCursor] of [["one", undefined], ["two", "fake-msp-session"]] as const) {
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-system", text, system: "RULES", resumeCursor });
+        await vi.waitFor(() => expect(sent(dump)).toBe(`RULES\n\n${text}`));
+        await instance.adapter.interruptTurn("t-system");
+        expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).toMatchObject({ stopReason: "cancelled" });
+      }
+    });
+
+    it("goes out on the fresh session a rejected resume falls back to", async () => {
+      const dump = join(scratch, "muse-system-fallback.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      const rpcDump = join(scratch, "muse-system-fallback-rpc.json");
+      process.env.FAKE_MSP_RPC_DUMP = rpcDump;
+      await create("resume-fails");
+      await turn("one", "RULES");
+      await turn("two", "RULES", "gone-session");
+      expect(JSON.parse(readFileSync(rpcDump, "utf8"))).toContain("session/resume");
+      expect(sent(dump)).toBe("RULES\n\ntwo");
+    });
   });
 
   it("starts a session with the requested model and folds text", async () => {
@@ -824,8 +916,9 @@ describe("MSP prewarm (fake host)", () => {
   let scratch: string;
   let rpcDump: string;
 
-  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true) => {
+  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true, warmPool?: WarmPool) => {
     const Driver = createMspDriver({
+      warmPool,
       driverKind: "museAgent",
       displayName: "MSP Prewarm",
       models: { default: "muse-spark-1.3", options: [] },
@@ -887,6 +980,17 @@ describe("MSP prewarm (fake host)", () => {
     expect(methods).toContain("turn/start");
   });
 
+  it("runs the handshake host at low priority until a turn adopts it", async () => {
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const priority = vi.spyOn(procs, "setCliPriority");
+    await create();
+    await instance.prepare!();
+    const child = spawn.mock.results[0].value;
+    expect(priority.mock.calls).toEqual([[child, "low"]]);
+    expect(await runTurn("t-prewarm")).toMatchObject({ ok: true });
+    expect(priority.mock.calls).toEqual([[child, "low"], [child, "normal"]]);
+  });
+
   it("drops a Stop during the warm handshake without starting the turn", async () => {
     process.env.FAKE_MSP_INIT_DELAY_MS = "30000";
     const spawn = vi.spyOn(procs, "spawnCli");
@@ -941,12 +1045,30 @@ describe("MSP prewarm (fake host)", () => {
     await create();
     await instance.prepare!();
     const child = spawn.mock.results[0].value as ReturnType<typeof procs.spawnCli>;
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+    expect(child.exitCode).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
     vi.useRealTimers();
     await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
 
     expect(await runTurn("t-expired")).toMatchObject({ ok: true });
     expect(serveSpawns(spawn)).toBe(2);
+  });
+
+  it("a small PC holds a click-warmed host 60 s, then a Claude prepared session is admitted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const small = createWarmPool({ totalmem: () => 4 * 1024 ** 3, freemem: () => 3 * 1024 ** 3, cpus: () => 4 });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    await create(() => true, small);
+    await instance.prepare!();
+    const child = spawn.mock.results[0].value as ReturnType<typeof procs.spawnCli>;
+    const claude = () => small.reserve({ engine: "claudeAgent", instanceId: "claude", threadId: "t" }, "fp", { generation: 0, incarnation: "c", identity: "i" }, "speculative");
+    expect(claude()).toBe("denied");
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.useRealTimers();
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(claude()).not.toBe("denied");
+    await small.closeAll("test", { final: true });
   });
 
   it("keeps at most one idle prewarmed host", async () => {
@@ -966,6 +1088,104 @@ describe("MSP prewarm (fake host)", () => {
     expect(versionProbes()).toHaveLength(1);
     await instance.prepare!();
     expect(versionProbes()).toHaveLength(1);
+  });
+});
+
+describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)", () => {
+  let instance: ProviderInstance | undefined;
+  let dir: string;
+  let install: { cli: string; exe: string };
+  let mapped: Set<string>;
+  let spawn: MockInstance<typeof procs.spawnCli>;
+  const realSpawn = procs.spawnCli;
+  const serveCalls = () => spawn.mock.calls.filter((call) => call[1].includes("serve"));
+  const start = async () => (instance ??= await MspMuseAgentDriver.create({
+    instanceId: "muse-direct",
+    displayName: "Muse",
+    environment: {},
+    enabled: true,
+    config: { cli: install.cli, fullAuto: true, workspace: dir },
+  }));
+  const runTurn = async (threadId: string) => {
+    const instance = await start();
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId, text: "hi" });
+      return await recorder.until((e) => e.type === "turn.completed");
+    } finally {
+      recorder.stop();
+    }
+  };
+
+  beforeEach(() => {
+    ensureDirs();
+    process.env.META_API_KEY = "meta-key";
+    dir = temps.make(join(tmpdir(), "omb-muse-install-"));
+    install = fakeMuseInstall(dir, FAKE_CLI);
+    // A mapped placeholder exe runs the fake host; an unmapped one fails to start.
+    mapped = new Set([install.exe]);
+    spawn = vi.spyOn(procs, "spawnCli").mockImplementation((cli, args, opts) => realSpawn(mapped.has(cli) ? FAKE_CLI : cli, args, opts));
+  });
+
+  afterEach(async () => {
+    delete process.env.META_API_KEY;
+    await instance?.dispose();
+    instance = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it("starts the engine exe itself with the env the launcher sets", async () => {
+    const exec = vi.spyOn(procs, "execCli");
+    expect(await runTurn("t-direct")).toMatchObject({ ok: true });
+    const [[command, , opts]] = serveCalls();
+    expect(command).toBe(install.exe);
+    expect(opts.env).toMatchObject({
+      MUSE_RELEASE_INFO: readFileSync(join(dir, ".muse-release-info.json"), "utf8"),
+      PSExecutionPolicyPreference: "Bypass",
+    });
+    // The version probe still runs the launcher, and with it Muse's update check.
+    expect(exec.mock.calls.some(([cli, args]) => cli === install.cli && args.includes("--version"))).toBe(true);
+  });
+
+  it("lowers a direct-started handshake host and leaves the launcher at Normal", async () => {
+    // The host inherits the runner's class, which can itself be below Normal.
+    const runner = os.getPriority();
+    os.setPriority(os.constants.priority.PRIORITY_NORMAL);
+    const hostPriority = async () => {
+      await (await start()).prepare!();
+      const index = spawn.mock.calls.findLastIndex((call) => call[1].includes("serve"));
+      return os.getPriority(spawn.mock.results[index].value.pid);
+    };
+    try {
+      expect(await hostPriority()).toBe(os.constants.priority.PRIORITY_BELOW_NORMAL);
+      await instance!.dispose();
+      instance = undefined;
+      mapped.clear();
+      expect(await hostPriority()).toBe(os.constants.priority.PRIORITY_NORMAL);
+      expect(serveCalls().map(([command]) => command)).toEqual([install.exe, install.exe, install.cli]);
+    } finally {
+      os.setPriority(runner);
+    }
+  });
+
+  it("follows an update that renames the exe", async () => {
+    expect(await runTurn("t-before")).toMatchObject({ ok: true });
+    const next = museUpdate(dir, "1.4.19-R2.1");
+    mapped.add(next);
+    rmSync(install.exe);
+    expect(await runTurn("t-after")).toMatchObject({ ok: true });
+    expect(serveCalls().map(([command]) => command)).toEqual([install.exe, next]);
+  });
+
+  it.each<[string, () => void]>([
+    ["the version file is missing", () => rmSync(join(dir, ".muse-version"))],
+    ["the exe it names is gone", () => rmSync(install.exe)],
+    ["Muse's update check is due", () => writeFileSync(join(dir, ".muse-update-checked-at"), "0\n")],
+    ["the exe fails to start", () => mapped.clear()],
+  ])("falls back to the launcher when %s", async (_, breakInstall) => {
+    breakInstall();
+    expect(await runTurn("t-fallback")).toMatchObject({ ok: true });
+    expect(serveCalls().at(-1)![0]).toBe(install.cli);
   });
 });
 
@@ -1135,6 +1355,51 @@ describe("MSP warm host (recorded transport)", () => {
     expect(methods(peers[0]).filter((m) => m === "initialize")).toHaveLength(1);
     expect(methods(peers[0])).not.toContain("session/resume");
     expect(peers[0].requests.filter((m) => m.method === "turn/start").map((m) => m.params.reasoningEffort)).toEqual(["medium", "low"]);
+  });
+  it("room turns without a cursor start a fresh session on a new host", async () => {
+    await start();
+    await completed(await send({ threadId: "recorded-room", text: "Room transcript: first message." }));
+    await completed(await send({ threadId: "recorded-room", text: "Room transcript: first message, then second message." }));
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.exitCode).not.toBeNull();
+    for (const peer of peers) {
+      expect(methods(peer).filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods(peer).filter((method) => method === "session/start")).toHaveLength(1);
+      expect(methods(peer)).not.toContain("session/resume");
+    }
+  });
+  it("keeps a queued accepted turn alive until its recorded completion", async () => {
+    gate = (method, reply, _peer, nth) => {
+      if (method === "turn/start" && nth === 2 && reply.result?.status === "accepted") {
+        reply.result.disposition = "queued";
+        reply.result.startedNewTurn = false;
+      }
+    };
+    await start();
+    const first = await send();
+    await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((method) => method === "turn/start")).toHaveLength(2);
+  });
+  it("reports this turn's tokens once and ignores a replay from the previous turn", async () => {
+    let previous: Message | undefined;
+    gate = (method, reply, peer, nth) => {
+      if (method !== "turn/start" || reply.method !== "session/tokenUsage") return;
+      if (nth === 1) previous = structuredClone(reply);
+      else {
+        peers[peer].write(previous!);
+        peers[peer].write(structuredClone(reply));
+      }
+    };
+    await start();
+    const first = await send();
+    const firstDone = await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    const secondDone = await completed(second);
+    expect(firstDone).toMatchObject({ usage: { input: 33301, output: 16, cachedInput: 0 } });
+    expect(secondDone).toMatchObject({ usage: { input: 28925, output: 23, cachedInput: 0 } });
   });
   const kept = () => pool.stats().idle;
   const exited = (peer: { child: { exitCode: number | null } }) => peer.child.exitCode !== null;
@@ -1489,6 +1754,68 @@ describe("MSP warm host (recorded transport)", () => {
     expect(Date.now() - closedAt).toBeLessThan(2_000);
     await completed(await send({ resumeCursor: cursorOf(first) }));
     expect(peers).toHaveLength(2);
+  });
+
+  describe("free RAM under the warm floor", () => {
+    let now: number;
+    let free: number;
+    let sweep: () => void;
+    const minutes = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 60_000;
+        sweep();
+      }
+    };
+    beforeEach(() => {
+      now = 0;
+      // This PC: 32 GB with 3.9 GB free, under the 4.8 GB (15%) floor.
+      free = 3.9 * 1024 ** 3;
+      sweep = () => {};
+      pool = createWarmPool({
+        totalmem: () => 32 * 1024 ** 3, freemem: () => free, cpus: () => 16, now: () => now,
+        timers: { setInterval: (fn) => { sweep = fn; return 1; }, clearInterval: () => {} },
+      });
+    });
+
+    it("keeps the host and session for the next turn on the thread", async () => {
+      await start();
+      const first = await send();
+      await completed(first);
+      minutes(1);
+      const second = await send({ resumeCursor: cursorOf(first) });
+      await completed(second);
+      expect(peers).toHaveLength(1);
+      expect(exited(peers[0])).toBe(false);
+      expect(methods(peers[0]).filter((m) => m === "session/start" || m === "session/resume")).toEqual(["session/start"]);
+      expect(stagesOf(second)).toEqual(["prompt-sent", "finishing"]);
+      expect(kept()).toBe(1);
+    });
+
+    it("still closes the kept host after the idle TTL", async () => {
+      await start();
+      await completed(await send());
+      minutes(9);
+      expect(kept()).toBe(1);
+      minutes(1);
+      expect(kept()).toBe(0);
+      await expect.poll(() => exited(peers[0])).toBe(true);
+    });
+
+    it("drops the kept host when free RAM falls under 1.5 GB", async () => {
+      await start();
+      await completed(await send());
+      free = 1024 ** 3;
+      minutes(1);
+      expect(kept()).toBe(0);
+    });
+
+    it("keeps at most two idle Muse hosts", async () => {
+      await start();
+      for (const threadId of ["t1", "t2", "t3"]) await completed(await send({ threadId }));
+      expect(peers).toHaveLength(3);
+      expect(kept()).toBe(2);
+      expect(exited(peers[2])).toBe(true);
+    });
   });
   it("cachedCapture returns the probe's label hash and the registry incarnation", async () => {
     await start();

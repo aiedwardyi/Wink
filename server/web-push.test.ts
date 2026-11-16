@@ -160,6 +160,15 @@ describe("subscription store", () => {
     expect(init.body).toBeInstanceOf(Uint8Array);
   });
 
+  it("skips a device that turned this room's alerts off", async () => {
+    addPushSubscription(dir, { ...sub("quiet"), off: ["group-1"] });
+    addPushSubscription(dir, sub("loud"));
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
+    await sendWebPushToDevices(dir, { ...payload, chat: "group-1" }, "https://pc.tail.ts.net", undefined, fetchImpl);
+    await sendWebPushToDevices(dir, { ...payload, chat: "group-2" }, "https://pc.tail.ts.net", undefined, fetchImpl);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://push.example/loud", "https://push.example/quiet", "https://push.example/loud"]);
+  });
+
   it("sends a test to one device only", async () => {
     addPushSubscription(dir, sub("a"));
     addPushSubscription(dir, sub("b"));
@@ -223,6 +232,14 @@ describe("pushPayload", () => {
 
   it("names a room alert by its room", () => {
     expect(pushPayload(pingForNotification(buildNotification("done", bot, "thread-g", "hi")!, 60_000)!, { botId: "bot-1", threadId: "thread-g" }, "group-1").chat).toBe("group-1");
+  });
+
+  it("tags each room on its own and opens a joined room by its id", () => {
+    const ping = { title: "Launch", message: "Mina: hi", icon: "" };
+    const host = pushPayload(ping, { botId: "group-1", threadId: "thread-g" }, "group-1");
+    const joined = pushPayload(ping, { botId: "joined:r1", threadId: "joined:r1" }, "joined:r1");
+    expect(host).toMatchObject({ tag: "openmausbot:group-1", url: "/?bot=group-1&thread=thread-g", chat: "group-1" });
+    expect(joined).toMatchObject({ tag: "openmausbot:joined:r1", url: "/?room=r1", chat: "joined:r1" });
   });
 
   it("wires the icon into the mailbox ping and the test push", () => {

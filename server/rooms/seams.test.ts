@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
 import { closeRoomsDb } from "./db.ts";
-import { hostedRoomView, isHostedThread } from "./guards.ts";
+import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./guards.ts";
 
 const SERVER = join(import.meta.dirname, "..");
 const parse = (file: string) => {
@@ -82,7 +82,7 @@ describe("team rooms on the phone", () => {
     const deps = (relay: boolean) => ({
       relay, store, json, traceOpenBots: () => {}, pageSize: () => undefined, OPEN_CHAT_HEADER: "x-open-chat", offscreenLimit: () => 0,
       publicBotRecord: (bot: unknown) => bot, messagePage: () => ({}), publicGroupState: (group: GroupRecord) => group,
-      computerControl: { snapshot: () => ({ held: false }) }, STREAM_ID: "s", lastSeq: 0,
+      computerControl: { snapshot: () => ({ held: false }) }, waitingSends: () => ({}), STREAM_ID: "s", lastSeq: 0,
     });
     const run = (relay: boolean) => routeBlock('path === "/api/bots"', deps(relay))({ headers: {} }, {}, "/api/bots", "GET", new URL("http://x/api/bots"));
     expect((await run(true)).body.groups.map((g: GroupRecord) => g.id)).toEqual([hosted.id, plain.id]);
@@ -112,7 +112,7 @@ describe("hosted thread seams", () => {
   it("serves no linked file or folder from a hosted thread", async () => {
     const serveLinkedFile = vi.fn();
     const serveLinkedFolder = vi.fn();
-    const invoke = routeBlock(": serveLinkedFile)(", { store, json, serveLinkedFile, serveLinkedFolder, credentials: {} });
+    const invoke = routeBlock(": serveLinkedFile)(", { store, json, serveLinkedFile, serveLinkedFolder, credentials: {}, linkedFilesClosed });
     for (const kind of ["file", "folder"]) {
       const path = `/api/threads/${hosted.threadId}/linked-${kind}`;
       expect(await invoke({}, {}, path, "GET", new URL(`http://x${path}`), ["", hosted.threadId, kind])).toEqual({ status: 404, body: { error: "no such conversation" } });
@@ -121,17 +121,17 @@ describe("hosted thread seams", () => {
     expect(serveLinkedFolder).not.toHaveBeenCalled();
   });
 
-  it("never starts a card continuation in a hosted room", () => {
+  it("continues a card in a shared group like any group", () => {
     const groupTaskResumes = new Map();
     const beginGroupTurnOperation = vi.fn(() => 1);
     const start = load("startGroupCardContinuation", {
       store, groupTaskResumes, beginGroupTurnOperation, groupQueues: new Map(), drainQueuedSends: () => {}, finishGroupTurnOperation: () => {},
     });
     start(hosted.id, hosted.threadId, "bot", "resume");
-    expect(groupTaskResumes.size).toBe(0);
-    expect(beginGroupTurnOperation).not.toHaveBeenCalled();
-    start(plain.id, plain.threadId, "bot", "resume");
     expect(groupTaskResumes.size).toBe(1);
+    expect(beginGroupTurnOperation).toHaveBeenCalled();
+    start(plain.id, plain.threadId, "bot", "resume");
+    expect(groupTaskResumes.size).toBe(2);
   });
 
   it("refuses task resume in a hosted room", async () => {
@@ -151,7 +151,7 @@ describe("hosted thread seams", () => {
 
   it("reports a restored room's missing data on the group", () => {
     const state = load("publicGroupState", {
-      store, groupClears: () => ({}), groupIsWorking: () => false, wireGroupTask: (task: unknown) => task, hostedRoomView,
+      store, groupClears: () => ({}), groupIsWorking: () => false, queuedRoomBotIds: () => [], wireGroupTask: (task: unknown) => task, hostedRoomView, liveBotChain: () => 0,
     });
     expect(state(hosted).room).toEqual({ missing: true });
     expect("room" in state(plain)).toBe(false);

@@ -258,7 +258,7 @@ describe("message menu in 1:1 chats", () => {
 
     const menu = messageMenu();
     expect(menu).not.toBeNull();
-    expect(menuReactions().map((b) => b.textContent)).toEqual([...QUICK_REACTIONS]);
+    expect(menuReactions().map((b) => b.querySelector("[data-emoji]")?.getAttribute("data-emoji"))).toEqual([...QUICK_REACTIONS]);
     expect(menu?.querySelector("[data-menu-expand]")).not.toBeNull();
     expect(menu?.querySelector("[data-menu-reply]")?.textContent).toBe("Reply");
     expect(menu?.querySelector("[data-menu-copy]")?.textContent).toBe("Copy");
@@ -279,7 +279,7 @@ describe("message menu in 1:1 chats", () => {
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
     await act(async () => { document.querySelector("[data-menu-expand]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
 
-    expect(menuReactions().map((b) => b.textContent)).toEqual([...EXTENDED_REACTIONS]);
+    expect(menuReactions().map((b) => b.querySelector("[data-emoji]")?.getAttribute("data-emoji"))).toEqual([...EXTENDED_REACTIONS]);
     expect(messageMenu()?.querySelector("[data-menu-reply]")).not.toBeNull();
     expect(messageMenu()?.querySelector("[data-menu-copy]")).not.toBeNull();
     await act(async () => { document.querySelector("[data-menu-collapse]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
@@ -416,6 +416,18 @@ describe("message menu in 1:1 chats", () => {
     await rightClick(link);
     expect(messageMenu()).toBeNull();
     expect(selectionMenu()).toBeNull();
+  });
+
+  it("leaves a file card to its own menu", async () => {
+    window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
+    try {
+      const host = await mountChat(bot([botMsg("b1", "here\n[clip.mp4](C:/clips/clip.mp4)")]));
+      await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
+      expect(document.querySelector("[data-file-menu]")).not.toBeNull();
+      expect(messageMenu()).toBeNull();
+    } finally {
+      window.ogb = undefined;
+    }
   });
 
   it("leaves the edit box to the native menu", async () => {
@@ -581,6 +593,18 @@ describe("message menu in rooms", () => {
     expect(menu?.querySelector("[data-menu-copy]")?.textContent).toBe("Copy");
   });
 
+  it("leaves a file card to its own menu", async () => {
+    window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
+    try {
+      const host = await mountRoom(members, room([roomBot("b1", "here\n[clip.mp4](C:/clips/clip.mp4)")]));
+      await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
+      expect(document.querySelector("[data-file-menu]")).not.toBeNull();
+      expect(messageMenu()).toBeNull();
+    } finally {
+      window.ogb = undefined;
+    }
+  });
+
   it("pins a room message above Reply", async () => {
     const messages: Message[] = [
       userMsg("u1", "hi all"),
@@ -699,7 +723,7 @@ describe("message menu on touch", () => {
 
     const menu = document.querySelector<HTMLElement>("[data-message-menu]")!;
     expect(menu).not.toBeNull();
-    expect(menuReactions().map((b) => b.textContent)).toEqual([...QUICK_REACTIONS]);
+    expect(menuReactions().map((b) => b.querySelector("[data-emoji]")?.getAttribute("data-emoji"))).toEqual([...QUICK_REACTIONS]);
     expect(menu.querySelector("[data-menu-expand]")).not.toBeNull();
     expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Pin message", "Reply", "Copy", "Select text"]);
     expect(menu.lastElementChild?.hasAttribute("data-menu-select")).toBe(true);

@@ -5,6 +5,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { sendStaticFile } from "./compression.ts";
+import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { startupTiming } from "./startup-timing.ts";
 
@@ -16,12 +17,15 @@ export const SERVER_TIMEOUTS = { keepAliveTimeout: 95_000, headersTimeout: 100_0
 export const EARLY_MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
+  ".mjs": "text/javascript",
   ".css": "text/css",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".webp": "image/webp",
   ".ico": "image/x-icon",
   ".json": "application/json",
   ".woff2": "font/woff2",
+  ".mp3": "audio/mpeg",
 };
 
 export type HarnessHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
@@ -159,6 +163,7 @@ export function startEarlyListen(options: { port?: number; staticDir?: string | 
     req.once("close", onClose);
     queued.push({ req, res });
   });
+  keepRoomUploads(early.server);
 
   (globalThis as EarlyListenSlot)[EARLY_LISTEN_SLOT] = early;
   early.server.on("error", (error: NodeJS.ErrnoException) => {

@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import { api, useStore, type Bot } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { pickerInstances } from "@/lib/cross-model-picker";
+import { createTeamRoom } from "@/lib/team-rooms";
 import { BotPickerList } from "./BotPickerList";
+import { AccountPicker } from "./UsageAccounts";
 import {
-  WIZARD_BOT_NAME_LIMIT,
   groupCreatePayload,
   newBotPayload,
   resolveWizardModel,
@@ -16,6 +17,7 @@ import {
   wizardModelOptions,
   type EnginePick,
 } from "@/lib/group-wizard";
+import { trackFeature } from "@/lib/usage-stats";
 
 export interface NewRow {
   key: number;
@@ -96,20 +98,32 @@ export function GroupWizard({
     }
   };
 
+  const saving = rows.some((row) => row.saving);
   const createGroup = () => {
     const memberIds = [...picked];
-    if (memberIds.length < 1 || creating) return;
+    if (creating || saving) return;
     setCreating(true);
     setCreateError(null);
     const title = name.trim() || t("groupWizard.namePrefill");
+    const failed = () => {
+      setCreating(false);
+      setCreateError(t("groupWizard.createFailed"));
+    };
+    // No bots: a people group, hosted from the start.
+    if (!memberIds.length) {
+      createTeamRoom(title).then(({ group }) => {
+        trackFeature("room.create", { n: 0 });
+        dispatch({ type: "groupPatched", group });
+        dispatch({ type: "select", id: group.id });
+        onClose();
+      }, failed);
+      return;
+    }
     dispatch({
       type: "createGroup",
       ...groupCreatePayload(title, memberIds),
       onSuccess: () => onClose(),
-      onError: () => {
-        setCreating(false);
-        setCreateError(t("groupWizard.createFailed"));
-      },
+      onError: failed,
     });
   };
 
@@ -117,7 +131,7 @@ export function GroupWizard({
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -130,7 +144,7 @@ export function GroupWizard({
         aria-modal={!closing || undefined}
         aria-labelledby="group-wizard-title"
         tabIndex={-1}
-        className="animate-pop-in flex max-h-full w-full max-w-[380px] flex-col rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
+        className="animate-pop-in flex max-h-full w-full max-w-[380px] flex-col rounded-[24px] border border-hairline/50 bg-panel p-4 shadow-2xl shadow-black/50 outline-none"
       >
         <div id="group-wizard-title" className="mb-3 text-[15px] font-semibold text-ink">{t("groupWizard.title")}</div>
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -141,7 +155,11 @@ export function GroupWizard({
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") createGroup();
+              // An IME confirm-Enter is not a submit, and a phone's Go before any pick moves on to the bots.
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+              if (picked.size) return createGroup();
+              const fields = [...e.currentTarget.parentElement!.querySelectorAll<HTMLElement>("input, button")];
+              fields[fields.indexOf(e.currentTarget) + 1]?.focus();
             }}
             placeholder={t("groupWizard.nameTitle")}
             aria-label={t("groupWizard.nameTitle")}
@@ -174,12 +192,12 @@ export function GroupWizard({
         </div>
 
         <div className="mt-3 flex shrink-0 justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70">
+          <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/50">
             {t("groupWizard.cancel")}
           </button>
           <button
             onClick={createGroup}
-            disabled={picked.size < 1 || creating}
+            disabled={creating || saving}
             className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
           >
             {t("groupWizard.create")}
@@ -237,7 +255,6 @@ export function NewBotRow({
         id={`group-wizard-name-${row.key}`}
         autoFocus
         value={row.name}
-        maxLength={WIZARD_BOT_NAME_LIMIT}
         onChange={(e) => {
           setNameInvalid(false);
           onPatch({ name: e.target.value });
@@ -257,27 +274,17 @@ export function NewBotRow({
 
       {pick ? (
         <div className="mt-1.5">
-          <select
-            aria-label={t("model.switchEngine")}
-            value={pick.instance.instanceId}
-            onChange={(e) => onPatch({ instanceId: e.target.value, model: null })}
-            className="w-full rounded-lg bg-raised/70 px-2 py-1.5 text-[13px] text-ink"
-          >
-            {engineOptions.map((i) => (
-              <option key={i.instanceId} value={i.instanceId}>{i.displayName}</option>
-            ))}
-          </select>
+          <AccountPicker field label={t("model.switchEngine")}
+            viewedId={pick.instance.instanceId}
+            select={(value) => onPatch({ instanceId: value, model: null })}
+            triggerClassName="bg-raised/70"
+            accounts={engineOptions.map((instance) => ({ id: instance.instanceId, name: instance.displayName }))} />
           <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-ink-secondary">
-            <select
-              aria-label={t("groupWizard.modelChange")}
-              value={model ?? ""}
-              onChange={(e) => onPatch({ model: e.target.value, instanceId: pick.instance.instanceId })}
-              className="min-w-0 flex-1 rounded-lg bg-raised/70 px-2 py-1.5 text-[13px] text-ink"
-            >
-              {wizardModelOptions(pick.instance).map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </select>
+            <AccountPicker field label={t("groupWizard.modelChange")}
+              viewedId={model ?? ""}
+              select={(value) => onPatch({ model: value, instanceId: pick.instance.instanceId })}
+              className="flex-1" triggerClassName="bg-raised/70"
+              accounts={wizardModelOptions(pick.instance).map((option) => ({ id: option.id, name: option.label }))} />
             <button
               onClick={submit}
               disabled={row.saving}

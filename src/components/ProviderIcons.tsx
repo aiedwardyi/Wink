@@ -56,22 +56,34 @@ export function claudeViewBox(size: number, ratio: number): [number, number, num
   return [snap(9.5), snap(5), v, v];
 }
 
+type Place = (x: number, y: number, w: number, h: number) => { x: number; y: number; width: number; height: number };
+
+/** Fractional zoom: fit the bot to the box in device px. Edges round by distance from the center, so left and right match. */
+export function claudeFit(size: number, ratio: number): Place {
+  const px = size * ratio;
+  const scale = Math.max(1, px / 17);
+  const at = (edge: number, mid: number) => Math.round(px / 2) + Math.sign(edge - mid) * Math.round(Math.abs(edge - mid) * scale);
+  return (x, y, w, h) => ({ x: at(x, 9.5), y: at(y, 5), width: at(x + w, 9.5) - at(x, 9.5), height: at(y + h, 5) - at(y, 5) });
+}
+
 export function ClaudeMark({ size = 16, className }: IconProps) {
   const ratio = useDevicePixelRatio();
+  const fit = Number.isInteger(ratio) ? null : claudeFit(size, ratio);
+  const place: Place = fit ?? ((x, y, width, height) => ({ x, y, width, height }));
   return (
     <svg
       width={size}
       height={size}
-      viewBox={claudeViewBox(size, ratio).join(" ")}
+      viewBox={fit ? `0 0 ${size * ratio} ${size * ratio}` : claudeViewBox(size, ratio).join(" ")}
       {...CRISP}
       className={cn("shrink-0 overflow-visible fill-[#d97757]", className)}
       aria-hidden
     >
       {CLAUDE_BOT.map(([x, row, w]) => (
-        <rect key={`${x},${row}`} x={x} y={row * 2} width={w} height={2} />
+        <rect key={`${x},${row}`} {...place(x, row * 2, w, 2)} />
       ))}
-      <rect {...EYE} x={5} y={2} width={1} height={2} />
-      <rect {...EYE} x={13} y={2} width={1} height={2} />
+      <rect {...EYE} {...place(5, 2, 1, 2)} />
+      <rect {...EYE} {...place(13, 2, 1, 2)} />
     </svg>
   );
 }

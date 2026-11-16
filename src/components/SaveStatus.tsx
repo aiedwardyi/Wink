@@ -5,11 +5,11 @@ import { useI18n } from "@/lib/i18n";
 import { usePresence } from "@/lib/use-presence";
 import { descriptionSaveStatus, watchDescriptionSaveStatus } from "@/state/description-save-status";
 
-export function SaveStatus({ botId }: { botId: string }) {
+export function SaveStatus({ id }: { id: string }) {
   const { t } = useI18n();
   const value = useSyncExternalStore(
-    useCallback((changed) => watchDescriptionSaveStatus(botId, changed), [botId]),
-    () => descriptionSaveStatus(botId),
+    useCallback((changed) => watchDescriptionSaveStatus(id, changed), [id]),
+    () => descriptionSaveStatus(id),
     () => null,
   );
   const [expired, setExpired] = useState<number | null>(null);

@@ -8,9 +8,11 @@ import * as context from "./context-compaction.ts";
 import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
+import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { Store } from "./store.ts";
+import { asksNudge } from "./task-asks.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
 
@@ -66,14 +68,14 @@ function summarizedChat() {
     expect(ready.compaction).toBeUndefined();
     const prepared = landed ? { ...ready, compaction: store.activePath(threadId).find((row) => row.id === summary.id)!.compaction } : ready;
     const turn = prepareTurn({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys,
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge,
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, prepared,
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
-      taskRecord: undefined, durableTaskRecordText: RECORD,
+      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0,
     });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "ok" });
     return turn;
@@ -116,7 +118,7 @@ it("carries a call's spoken lines into a resumed session's next turn once", asyn
   store.appendMessage(threadId, { role: "bot", kind: "text", text: "Good evening. What do you need?", call: { ...call, voice: true } });
   store.appendMessage(threadId, { role: "user", kind: "text", text: "Is the password reset email fixed?", call });
   const { turnText } = await send("what did we just say?");
-  expect(turnText).toContain("You: Good evening. What do you need?\nPerson: Is the password reset email fixed?");
+  expect(turnText).toContain("Voice: Good evening. What do you need?\nPerson: Is the password reset email fixed?");
   expect(turnText.endsWith("Current message:\n\nwhat did we just say?")).toBe(true);
   expect(await send("and the fish?")).toEqual({ turnText: "and the fish?", resume: true });
 });

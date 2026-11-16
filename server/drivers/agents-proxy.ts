@@ -26,6 +26,7 @@
 //   propose_routine_action(...)           → show a confirmation card for a routine change
 //   update_task_state(...)                → save goal, progress, blockers, and next action
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
+//   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -52,7 +53,7 @@ const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 // Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
-const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines"]);
+const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
@@ -214,8 +215,20 @@ const ROUTINE_FIELDS_SCHEMA = {
   },
 } as const;
 
+const SEARCH_MY_CHATS_TOOL = {
+  name: "search_my_chats",
+  description: "Search your own 1:1 chats with the person who runs you, for something they told you there: a plan, a name, a decision. Results are private: share only what this room's task needs. Search with a distinctive word, like a project or product name.",
+  inputSchema: {
+    type: "object",
+    properties: { query: { type: "string", minLength: 1, maxLength: 200, description: "Words to find, like a project name." } },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
+  ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   {
     name: "list_bots",
@@ -235,8 +248,7 @@ const TOOLS = [
         goal: { type: "string", minLength: 1, maxLength: 500, pattern: "\\S", description: "The user's durable outcome, at most 500 characters. Omit when unchanged." },
         plan: {
           type: "array",
-          maxItems: 20,
-          description: "The current concise plan, at most 20 steps. At most one step may be active.",
+          description: "The current concise plan, at most 20 steps.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -258,7 +270,6 @@ const TOOLS = [
           pause_automatic_wakes: { type: "boolean", description: "Set true only when the user asks you to stop or pause. Holds worker-report wake-ups until their next message; does not stop workers or end your current turn." },
         blockers: {
           type: "array",
-          maxItems: 10,
           description: "Current blockers, at most 10. Send an empty array when prior blockers are resolved.",
           items: {
             type: "object",
@@ -272,7 +283,6 @@ const TOOLS = [
         },
         artifacts: {
           type: "array",
-          maxItems: 20,
           description: "New files created inside this task's working folder, at most 20.",
           items: {
             type: "object",
@@ -282,6 +292,21 @@ const TOOLS = [
               label: { type: "string", minLength: 1, maxLength: 200, pattern: "\\S", description: "At most 200 characters." },
             },
             required: ["ref", "label"],
+          },
+        },
+        asks: {
+          type: "array",
+          description: "The user's asks. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              id: { type: "string", minLength: 1, maxLength: 12, pattern: "\\S", description: "Wink's id for the ask, like A3. Omit to add a new one." },
+              ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
+              status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
+              ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
+            },
+            required: ["status"],
           },
         },
       },
@@ -342,13 +367,15 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot inherits the Chief's engine, starts with connected apps and automatic approvals disabled, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
+      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Short, unique display name for the specialist." },
         role: { type: "string", description: "The specialist's job title or role." },
         instructions: { type: "string", description: "What this specialist is responsible for and how it should work." },
+        model: { type: "string", description: "Model picker id, any engine." },
+        effort: { type: "string", description: "low, medium, high, ..." },
       },
       required: ["name", "role", "instructions"],
     },
@@ -387,12 +414,13 @@ const TOOLS = [
   {
     name: "ask_user",
     description:
-      "Ask the user something you need to keep going: a decision, a preference, missing information, or sign-off before something consequential. It does not pause you: the question shows as a card at the bottom of their chat, your row in their bot list glows, and they get an alert. Their answer arrives as their next message. Keep working on anything that does not depend on it; if nothing is left, end your turn. Give choices for quick picks, including yes/no and permission questions, and leave them out for open questions. A new question replaces your earlier unanswered one, so include anything still open. Never use it for optional offers like 'want me to...?'.",
+      "Ask the user something you need to keep going: a decision, a preference, missing information, or sign-off before something consequential. It does not pause you: the question shows as a card at the bottom of their chat, your row in their bot list glows, and they get an alert. Their answer arrives as a message from them; an answer to an earlier question starts with Re: and that question. Keep working on anything that does not depend on it; if nothing is left, end your turn. Give choices for quick picks, including yes/no and permission questions, and leave them out for open questions. Earlier unanswered questions stay open on their screen, so never re-ask them; ask the exact same question again only to change it, which replaces the earlier card. Never use it for optional offers like 'want me to...?'.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        question: { type: "string", description: "One short question, 1-2 lines on a phone. Background goes in your message, not here." },
+        question: { type: "string", description: "One short question, 1-2 lines on a phone. Background goes in your message, not here. When closing, repeat the exact question." },
+        close: { type: "boolean", description: "Close your matching open question as answered in chat. Use when the user answered it in their own words; no new card or alert." },
         choices: {
           type: "array",
           items: { type: "string" },
@@ -588,6 +616,13 @@ interface TaskStateArtifact {
   label: string;
 }
 
+interface TaskStateAsk {
+  id?: string;
+  ask?: string;
+  status: string;
+  ref?: string;
+}
+
 interface TaskStateToolArgs {
   pause_automatic_wakes?: boolean;
   goal?: string;
@@ -596,6 +631,7 @@ interface TaskStateToolArgs {
   next_action?: string;
   blockers?: TaskStateBlocker[];
   artifacts?: TaskStateArtifact[];
+  asks?: TaskStateAsk[];
 }
 
 function hasBlankTaskText(args: TaskStateToolArgs): boolean {
@@ -605,6 +641,7 @@ function hasBlankTaskText(args: TaskStateToolArgs): boolean {
     ...(args.plan ?? []).map((item) => item.step),
     ...(args.blockers ?? []).map((item) => item.note),
     ...(args.artifacts ?? []).flatMap((item) => [item.ref, item.label]),
+    ...(args.asks ?? []).flatMap((item) => [item.id, item.ask]),
   ];
   if (values.some((value) => value !== undefined && !value.trim())) return true;
   // An empty next_action clears it. Whitespace-only does not.
@@ -689,7 +726,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return { text: `${heading}\n${lines.join("\n")}` };
   }
   if (name === "update_task_state") {
-    const supported = ["goal", "plan", "completed_note", "next_action", "blockers", "artifacts", "pause_automatic_wakes"] as const;
+    const supported = ["goal", "plan", "completed_note", "next_action", "blockers", "artifacts", "asks", "pause_automatic_wakes"] as const;
     const allowed = `allowed: ${supported.join(", ")}.`;
     const unknown = Object.keys(args).filter((key) => !(supported as readonly string[]).includes(key));
     if (unknown.length) {
@@ -701,7 +738,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (args.pause_automatic_wakes !== undefined && args.pause_automatic_wakes !== true) {
       return { text: "pause_automatic_wakes only accepts true; the next user message resumes wake-ups.", isError: true };
     }
-    const notArray = (["plan", "blockers", "artifacts"] as const).find((key) => args[key] !== undefined && !Array.isArray(args[key]));
+    const notArray = (["plan", "blockers", "artifacts", "asks"] as const).find((key) => args[key] !== undefined && !Array.isArray(args[key]));
     if (notArray) return { text: `update_task_state ${notArray} must be an array.`, isError: true };
     if (hasBlankTaskText(args)) {
       return { text: "update_task_state text fields cannot be blank.", isError: true };
@@ -715,6 +752,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       next_action: args.next_action,
       blockers: args.blockers,
       artifacts: args.artifacts,
+      asks: args.asks,
       pause_automatic_wakes: args.pause_automatic_wakes,
     };
     const r = await api("/api/internal/task-state", { method: "POST", body: JSON.stringify(body) });
@@ -812,6 +850,8 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         name: botName,
         role,
         instructions,
+        model: typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined,
+        effort: typeof args.effort === "string" && args.effort.trim() ? args.effort.trim() : undefined,
       }),
     });
     createdThisTurn += 1;
@@ -867,9 +907,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!question) return { text: "ask_user needs a question.", isError: true };
     if (!THREAD_ID) return { text: "Couldn't ask: no active thread.", isError: true };
     // the harness trims, dedupes and caps the choices
-    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices });
+    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }) });
     try {
-      await api("/api/internal/ask-user", { method: "POST", body });
+      const result = await api("/api/internal/ask-user", { method: "POST", body });
+      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
       return { text: `Couldn't ask: ${e instanceof Error ? e.message : String(e)}`, isError: true };
@@ -1040,6 +1081,12 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
           : "Agentic Mode is on for this task. Wink starts the next pending step when nothing is running."
         : "Agentic Mode is off. Running work is left alone.",
     };
+  }
+  if (name === SEARCH_MY_CHATS_TOOL.name) {
+    const query = String(args.query ?? "").trim();
+    if (!query) return { text: "search_my_chats needs a query.", isError: true };
+    const r = await api("/api/internal/my-chats", { method: "POST", body: JSON.stringify({ query }) });
+    return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
   return { text: `Unknown tool: ${name}`, isError: true };

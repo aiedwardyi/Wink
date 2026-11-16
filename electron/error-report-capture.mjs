@@ -40,6 +40,9 @@ export async function handleServerErrorReport(req, res, token, reports) {
       if (Object.keys(input).length === 2 && input.code === "SERVER_RUNTIME_FAILURE" && [ERROR_SITES.serverRuntime, ERROR_SITES.chatRace, ERROR_SITES.usageRefresh, ERROR_SITES.chatQueue].includes(input.site)) {
         reports.capture({ process: "server", code: input.code, site: input.site });
         status = 204;
+      } else if (Object.keys(input).length === 1 && input.consent === false) {
+        reports.setConsent(false);
+        status = 204;
       }
     } catch {}
   }

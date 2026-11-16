@@ -4,6 +4,7 @@
 import { t } from "./i18n";
 import type { Notification } from "../../server/notify.ts";
 import { botNotifyIconPath, type BotAvatarProfileInput } from "../../shared/bot-avatar.ts";
+import { roomAlertsOff } from "./room-alerts";
 
 export type NotifyFrame = Notification & { openTerminal?: boolean; terminalSessionId?: string };
 
@@ -111,12 +112,16 @@ export async function notifyIconDataUrl(path: string | undefined): Promise<strin
 }
 
 /** Show one only while the app is unfocused: an OS toast over a focused app
- * sits on the Send button and turns a send click into a chat switch. */
+ * sits on the Send button and turns a send click into a chat switch.
+ * `group` is the group a bot frame's thread belongs to, so its bell quiets bot replies too. */
 export function showNotification(
   frame: NotifyFrame,
   onOpen: (target: NotificationTarget) => void,
   visibleThreadId?: string | null,
+  group?: string,
 ) {
+  const chat = frame.kind === "room" ? frame.botId : group;
+  if (chat && roomAlertsOff().includes(chat)) return;
   const native = typeof window !== "undefined" ? window.ogb?.showNotification : undefined;
   if (typeof native === "function") {
     const payload: Parameters<typeof native>[0] = {

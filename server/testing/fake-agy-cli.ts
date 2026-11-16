@@ -12,6 +12,7 @@
 // FAKE_AGY_RESULT_RESPONSE, with it, is that turn's result.response (else "").
 // While FAKE_AGY_RESULT_ERROR_FILE exists, its text is that result.error.
 // FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
+// FAKE_AGY_STREAM=1 streams result.response as two text_delta steps first.
 // Deterministic, no network.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -156,6 +157,21 @@ if (process.env.FAKE_AGY_CHECKPOINT_FILE && existsSync(process.env.FAKE_AGY_CHEC
 if (process.env.FAKE_AGY_SYSTEM_NOTICE === "1") {
   out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 2, state: "DONE", step_type: "agent_response", text_delta: systemNotice } });
 }
+const response = resultError
+  ? (process.env.FAKE_AGY_RESULT_RESPONSE ?? "")
+  : process.env.FAKE_AGY_SYSTEM_NOTICE === "1"
+    ? systemNotice + (process.env.FAKE_AGY_AFTER_NOTICE ?? "")
+    : process.env.FAKE_AGY_NO_FINAL === "1"
+      ? ""
+      : cancelledTool
+        ? "final text after cancellation"
+        : "done from fake agy";
+if (process.env.FAKE_AGY_STREAM === "1") {
+  const half = Math.ceil(response.length / 2);
+  for (const text_delta of [response.slice(0, half), response.slice(half)].filter(Boolean)) {
+    out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta } });
+  }
+}
 const fakeUsage = process.env.FAKE_AGY_USAGE
   ? JSON.parse(process.env.FAKE_AGY_USAGE)
   : { input_tokens: 100, output_tokens: 20, thinking_tokens: 0, cache_read_tokens: 5, total_tokens: 125 };
@@ -169,15 +185,7 @@ out({
   result: {
     conversation_id: CONV,
     status: resultError ? "ERROR" : "SUCCESS",
-    response: resultError
-      ? (process.env.FAKE_AGY_RESULT_RESPONSE ?? "")
-      : process.env.FAKE_AGY_SYSTEM_NOTICE === "1"
-        ? systemNotice + (process.env.FAKE_AGY_AFTER_NOTICE ?? "")
-        : process.env.FAKE_AGY_NO_FINAL === "1"
-          ? ""
-          : cancelledTool
-            ? "final text after cancellation"
-            : "done from fake agy",
+    response,
     error: resultError,
     duration_seconds: 1,
     num_turns: 1,

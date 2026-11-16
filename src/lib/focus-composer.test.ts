@@ -318,6 +318,17 @@ describe("shouldFocusComposerOnTranscriptClick", () => {
     expect(shouldFocusComposerOnTranscriptClick(widget, plainClick(), true)).toBe(false);
   });
 
+  it("focuses on the transcript scroller itself even when it is keyboard focusable", () => {
+    const scroller = document.createElement("div");
+    scroller.tabIndex = 0;
+    const gap = document.createElement("div");
+    scroller.append(gap);
+    document.body.append(scroller);
+
+    expect(shouldFocusComposerOnTranscriptClick(scroller, plainClick(), true, scroller)).toBe(true);
+    expect(shouldFocusComposerOnTranscriptClick(gap, plainClick(), true, scroller)).toBe(true);
+  });
+
   it("ignores clicks on links", () => {
     const link = document.createElement("a");
     link.setAttribute("href", "https://example.com");

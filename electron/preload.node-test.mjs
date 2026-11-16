@@ -54,6 +54,8 @@ for (const [name, channel, args] of [
   ["openEngineInstall", "engine:install", ["engine", true]],
   ["deviceWindow.open", "device-window:open", ["host", "device"]],
   ["openPeerFile", "desktop:open-peer-file", ["host", "thread", "C:/a.docx"]],
+  ["readMediaImage", "desktop:read-media-image", ["https://images.example.test/a.png"]],
+  ["saveMediaImage", "desktop:save-media-image", ["https://images.example.test/a.png", "photo.png"]],
   ["errorReportConsent", "error-reports:get", []],
   ["setErrorReportConsent", "error-reports:set", [true]],
   ["setCredential", "credential:set", ["provider", "value"]],

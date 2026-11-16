@@ -137,7 +137,7 @@ describe("Team settings", () => {
     expect(host.querySelector("[title='Active time']")).not.toBeNull();
     const bar = host.querySelector("article button");
     await act(async () => bar!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(host.querySelector("p.whitespace-pre-line")?.textContent).toMatch(/h active\n/);
+    expect(document.querySelector("[data-bar-tip]")?.textContent).toMatch(/h active\n/);
   });
 
   it("shows today's report counts for the owner", async () => {

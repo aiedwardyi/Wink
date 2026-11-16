@@ -29,7 +29,9 @@ import {
   sendAlert,
 } from "./net-util.ts";
 import { RevocationList } from "./revocation.ts";
+import { RoomCodeStore } from "./room-codes.ts";
 import { SnagStore } from "./snags.ts";
+import { StatsStore, type StatsConfig } from "./stats.ts";
 import { ReportStore } from "./reports.ts";
 import { reportOwnerHash } from "../../shared/team-report.ts";
 import { TeamLog } from "./team.ts";
@@ -63,6 +65,8 @@ export interface RelayOptions {
   };
   /** With `google`, turns on session recording and GET /v1/team for this Google account. */
   teamOwnerEmail?: string;
+  /** Without this, /v1/stats answers 404. */
+  stats?: StatsConfig;
   limits?: Partial<RelayLimits>;
   log?: Logger;
   now?: () => number;
@@ -96,6 +100,8 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
   const team = teamOwnerEmail ? await TeamLog.open(opts.dataDir, now, log) : undefined;
   const snags = team ? await SnagStore.open(opts.dataDir, limits.snagsPerLabelPerDay, now, log) : undefined;
   const reports = teamOwnerEmail ? new ReportStore(opts.dataDir, teamOwnerEmail) : undefined;
+  const roomCodes = await RoomCodeStore.open(opts.dataDir, now, log);
+  const stats = opts.stats ? await StatsStore.open(opts.dataDir, opts.stats, now, log) : undefined;
   const hub = new Hub({ limits, log, now, team });
   const revoked = new RevocationList(opts.revokedLabelsFile, log);
   await revoked.load();
@@ -121,6 +127,7 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
     now,
     snags,
     reportOwner: reports && teamOwnerEmail ? reportOwnerHash(teamOwnerEmail) : undefined,
+    roomCodes,
   };
 
   let serving: SecureContext | null = null;
@@ -151,6 +158,8 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
     teamOwnerEmail,
     snags,
     reports,
+    roomCodes,
+    stats,
     limits,
     log,
     now,
@@ -374,7 +383,9 @@ export async function createRelay(opts: RelayOptions): Promise<Relay> {
       hub.destroySplices();
       await team?.close();
       await snags?.close();
+      await roomCodes.close();
       await reports?.close();
+      await stats?.close();
       api.closeAllConnections();
       for (const socket of sockets) socket.destroy();
       await listening;

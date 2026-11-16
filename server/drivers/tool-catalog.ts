@@ -1,15 +1,13 @@
 export type CatalogTool = { name: string; description: string; inputSchema: object };
 type Integration = { command: string; args: string[]; env: Record<string, string> };
 
-const OPTIONAL = new Set([
-  "create_bot", "create_channel", "react", "show_image", "generate_image",
-  "call_api", "request_credential", "list_routines", "propose_routine", "propose_routine_action",
-]);
+// Only tools a user asks for by name: a lookup is one more model call, and reactions, images and routines (reminders) must stay one call away.
+const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential"]);
 
 export const CATALOG_TOOLS = [
   {
     name: "find_wink_tool",
-    description: "Find Wink tools for bot/channel creation, reactions, images, APIs/credentials, or routines. Read the returned original schema and requirements before calling.",
+    description: `Find a Wink tool that is not loaded: ${[...OPTIONAL].join(", ")}. Pass its name. Read the returned original schema and requirements, then run it with call_wink_tool.`,
     inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false },
   },
   {
@@ -19,8 +17,10 @@ export const CATALOG_TOOLS = [
   },
 ] satisfies CatalogTool[];
 
-export function experimentalAgents(integration: Integration): Integration {
-  return process.env.ORBIT_WINK_TOOL_CATALOG === "1"
+/** ORBIT_WINK_TOOL_CATALOG=1 turns the catalog on for any engine, =0 off; unset follows the engine's default. */
+export function experimentalAgents(integration: Integration, byDefault = false): Integration {
+  const flag = process.env.ORBIT_WINK_TOOL_CATALOG;
+  return flag === "1" || (byDefault && flag !== "0")
     ? { ...integration, env: { ...integration.env, OMB_WINK_TOOL_CATALOG: "1" } }
     : integration;
 }

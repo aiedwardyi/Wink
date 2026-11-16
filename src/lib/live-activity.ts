@@ -30,8 +30,10 @@ function sentenceCase(value: string): string {
  *
  * Default matches Settings (Show tool calls off): stay on "Thinking".
  * Named verbs and spoken tool lines are execution chrome, not chat presence.
+ * `quiet` is the server's no-signal: the tool has been silent past the stall window.
  */
-export function liveActivityLabel(message?: Message, showToolCalls = false): string {
+export function liveActivityLabel(message?: Message, showToolCalls = false, quiet = false): string {
+  if (quiet && message?.kind === "activity" && message.tool?.ok === undefined) return t("activity.toolQuiet");
   if (
     !showToolCalls ||
     message?.kind !== "activity" ||

@@ -1,5 +1,5 @@
 import "./ProfileFields.test-dom.ts";
-import { act, createElement } from "react";
+import { act, createElement, Fragment, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -7,7 +7,8 @@ const mock = vi.hoisted(() => ({
   dispatch: vi.fn(),
   config: {
     profile: { name: "", email: "" },
-  } as { profile: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean } },
+  } as { profile: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean } } | null,
+  cachedProfile: undefined as { name: string; email: string; avatarUrl?: string } | undefined,
 }));
 
 vi.mock("@/state/store", async (importOriginal) => {
@@ -15,7 +16,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   return {
     ...actual,
     useStore: () => ({
-      state: { config: mock.config },
+      state: { config: mock.config, cachedProfile: mock.cachedProfile },
       dispatch: mock.dispatch,
     }),
   };
@@ -176,6 +177,70 @@ describe("ProfileFields photo", () => {
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
+
+  it("holds a quiet placeholder, never an empty name or a ? photo, until the profile loads", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    const { host, root, name, save } = await renderProfile();
+    expect(name.disabled).toBe(true);
+    expect(name.placeholder).toBe("");
+    expect(save.disabled).toBe(true);
+    expect(host.textContent).not.toContain("?");
+    await act(async () => root.unmount());
+    mock.config = loaded;
+  });
+
+  it("shows the last profile while the config is still on its way", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    mock.cachedProfile = { name: "Ada", email: "", avatarUrl: "/api/attachments/ada.png" };
+    const { host, root, name } = await renderProfile();
+    expect(name.value).toBe("Ada");
+    expect(name.className).not.toContain("animate-pulse");
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/ada.png");
+    await act(async () => root.unmount());
+    mock.config = loaded;
+    mock.cachedProfile = undefined;
+  });
+
+  it("clears a cached name on a blank Save", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    mock.cachedProfile = { name: "Ada", email: "" };
+    const request = vi.fn<(input: string, init?: RequestInit) => Promise<FetchResult>>(async () => ({ ok: true, json: async () => ({ profile: { name: "", email: "" } }) }));
+    vi.stubGlobal("fetch", request);
+    const { root, name, save } = await renderProfile();
+    await act(async () => fillInput(name, " "));
+    await act(async () => save.click());
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({ profile: { name: "" } });
+    await act(async () => root.unmount());
+    mock.config = loaded;
+    mock.cachedProfile = undefined;
+  });
+
+  it("never paints an empty editable name in the frame the profile arrives", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    const frames: string[] = [];
+    const host = document.body.appendChild(document.createElement("div"));
+    const Probe = () => {
+      useLayoutEffect(() => {
+        const input = host.querySelector<HTMLInputElement>("#settings-profile-name")!;
+        frames.push(`${input.disabled ? "pending" : "open"}:${input.value}`);
+      });
+      return null;
+    };
+    const root = createRoot(host);
+    const draw = () => root.render(createElement(Fragment, null, createElement(ProfileFields), createElement(Probe)));
+    await act(async () => draw());
+    mock.config = { profile: { name: "Ada", email: "" } };
+    await act(async () => draw());
+    expect(frames).not.toContain("open:");
+    expect(frames.at(-1)).toBe("open:Ada");
+    await act(async () => root.unmount());
+    host.remove();
+    mock.config = loaded;
+  });
 
   it("offers Change Photo and shows Remove Photo only when a photo is set", async () => {
     const empty = await renderProfile();

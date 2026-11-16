@@ -142,13 +142,13 @@ it.each(["seed", "event"])("closes an ended pane immediately after %s", async (s
   expect(close).toHaveBeenCalledExactlyOnceWith("worker-1");
 });
 
-it("gives all four header controls the same hover and transition classes", async () => {
+it("gives all four header controls the same hover classes", async () => {
   const { pickWorker } = await mount();
   const mainControls = [...host.querySelectorAll<HTMLButtonElement>("header button")];
   expect(mainControls).toHaveLength(3);
   await pickWorker();
-  const controls = [...host.querySelectorAll<HTMLButtonElement>("header button")];
+  const controls = [...host.querySelectorAll<HTMLButtonElement>("header button")].filter((control) => !control.closest("[data-closing]"));
   expect(controls).toHaveLength(4);
   const treatment = (control: HTMLElement) => [...control.classList].filter((value) => /^(hover:|transition-)/.test(value)).sort();
-  for (const control of [...mainControls, ...controls]) expect(treatment(control)).toEqual(["hover:bg-raised", "hover:text-ink", "transition-colors"]);
+  for (const control of [...mainControls, ...controls]) expect(treatment(control)).toEqual(["hover:bg-raised", "hover:text-ink"]);
 });

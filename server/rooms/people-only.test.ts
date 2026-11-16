@@ -12,8 +12,10 @@ import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, createAsk, hostedTurnRefused, roomAskHooks, roomAsks, runAsk, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { hostedRoomView } from "./guards.ts";
+import { closeInvitesDb } from "./invites.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
-import { hostedSend } from "./send.ts";
+import { hostedSend, hostSend } from "./send.ts";
+import { saveRoomFile } from "./files.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -68,6 +70,7 @@ function forgedAsk(group: HostedGroup, state: "held" | "queued" | "running", ent
 const close = () => {
   configureRoomAsks(null);
   closeAsksDb();
+  closeInvitesDb();
   closeRoomsDb();
 };
 
@@ -80,7 +83,6 @@ beforeEach(() => {
   deps = {
     store,
     hostName: () => "Edward",
-    driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
     dispatch: vi.fn(),
     stopTurn: vi.fn(async () => {}),
@@ -104,7 +106,7 @@ describe("people-only room create", () => {
     expect(group.memberIds).toEqual([]);
     expect(group.hosted.roomId).toBeTruthy();
     expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
-    expect(hostedRoomView(group.hosted)).toEqual({ name: "Team", people: [] });
+    expect(hostedRoomView(group.hosted)).toEqual({ name: "Team", people: [], joins: [], teamBots: [] });
   });
 
   it("refuses bots, a missing name and a room that isn't hosted", async () => {
@@ -117,10 +119,20 @@ describe("people-only room create", () => {
     expect(store.groups).toHaveLength(before);
   });
 
-  it("refuses adding a bot afterwards", async () => {
+  it("takes bots afterwards and goes back to people-only with none", async () => {
     const group = await peopleRoom();
-    expect(await call(routes().patch, { memberIds: [wink] }, [group.id])).toEqual({ status: 409, body: { error: "a people-only room has no bots" } });
-    expect(store.group(group.id)!.memberIds).toEqual([]);
+    const mina = addPerson(group.hosted.roomId, "Mina", []);
+    expect(await call(routes().patch, { memberIds: [wink] }, [group.id])).toMatchObject({ status: 200, body: { group: { memberIds: [wink] } } });
+    expect(peopleOnlyRoom(group.hosted.roomId)).toBe(false);
+    expect(hostedSend(store.group(group.id) as HostedGroup, { kind: "person", id: mina.id }, "@Wink are you there?").ask).toMatchObject({ botId: wink });
+    expect(await call(routes().patch, { memberIds: [] }, [group.id])).toMatchObject({ status: 200, body: { group: { memberIds: [] } } });
+    expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
+  });
+
+  it("lets a room nobody shares drop its last bot", async () => {
+    const created = await call(routes().create, { name: "Bots", memberIds: [wink] });
+    expect((await call(routes().patch, { memberIds: [] }, [created.body.group.id])).status).toBe(200);
+    expect(store.group(created.body.group.id)!.memberIds).toEqual([]);
   });
 
   it("never turns an existing bot room into a people-only room", async () => {
@@ -160,14 +172,48 @@ describe("people-only room create", () => {
   });
 });
 
+describe("a host's room picture", () => {
+  it("persists a room image id and clears it without changing the file", async () => {
+    const group = await peopleRoom();
+    const req = Readable.from([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])]) as IncomingMessage;
+    req.headers = {};
+    const file = await saveRoomFile(req, group.hosted.roomId, { owner: "host", name: "room.png", uploadId: "picture-upload-01" });
+    expect((await call(routes().patch, { picture: file.id }, [group.id])).body.group.picture).toBe(file.id);
+    store = new Store(() => ({ instanceId: "fake", model: "m" }));
+    expect(store.group(group.id)?.picture).toBe(file.id);
+    expect((await call(routes().patch, { picture: null }, [group.id])).body.group.picture).toBeUndefined();
+  });
+
+  it("sets a picture on a shared bot group", async () => {
+    const created = await call(routes().create, { name: "Shared", memberIds: [wink], hosted: true });
+    const group = store.group(created.body.group.id) as HostedGroup;
+    const req = Readable.from([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])]) as IncomingMessage;
+    req.headers = {};
+    const file = await saveRoomFile(req, group.hosted.roomId, { owner: "host", name: "room.png", uploadId: "picture-upload-03" });
+    expect((await call(routes().patch, { picture: file.id }, [group.id])).body.group.picture).toBe(file.id);
+  });
+
+  it("refuses missing, cross-room and non-image files", async () => {
+    const group = await peopleRoom();
+    const other = await peopleRoom();
+    const req = Readable.from([Buffer.from("a text file")]) as IncomingMessage;
+    req.headers = {};
+    const file = await saveRoomFile(req, other.hosted.roomId, { owner: "host", name: "note.txt", uploadId: "picture-upload-02" });
+    for (const [roomId, picture] of [[group.id, file.id], [other.id, file.id], [group.id, "P".repeat(24)], [group.id, "https://example.com/a.png"]]) {
+      expect((await call(routes().patch, { picture }, [roomId!])).status).toBe(400);
+    }
+    expect(group).not.toHaveProperty("picture");
+  });
+});
+
 describe("a send in a people-only room", () => {
   let group: HostedGroup;
   let mina: RoomPerson;
 
   beforeEach(async () => {
     group = await peopleRoom();
-    mina = addPerson(group.hosted.roomId, "Mina", "trusted", []);
-    addPerson(group.hosted.roomId, "민준", "ask", []);
+    mina = addPerson(group.hosted.roomId, "Mina", []);
+    addPerson(group.hosted.roomId, "민준", []);
   });
 
   it("only commits and broadcasts, with 0 model, worker or helper calls", () => {
@@ -198,7 +244,7 @@ describe("a send in a people-only room", () => {
 
   it("goes from the host's send route to the log with no runner", () => {
     const spies = { runGroupMemberTurn: vi.fn(), enqueueDrainedRoomTurn: vi.fn(), queueRoomParticipation: vi.fn(), startTurn: vi.fn(), roomSetupPending: vi.fn(() => false) };
-    const start = load("startGroupTurn", { store, hostedSend, ...spies });
+    const start = load("startGroupTurn", { store, hostSend, peopleOnlyRoom, ...spies });
     expect(start(group.id, "@Wink hi")).toMatchObject({ role: "user", text: "@Wink hi" });
     for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
     noWork();

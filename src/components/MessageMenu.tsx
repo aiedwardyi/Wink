@@ -7,10 +7,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, X } from "lucide-react";
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
-import { useStore, type Message } from "@/state/store";
+import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { ReactionIcon } from "./ReactionIcon";
 import { showSelectHandles } from "./select-handles";
 
 declare global {
@@ -101,7 +103,7 @@ export function startSelectMode(row: HTMLElement, held: { x: number; y: number }
   endSelectMode();
   // the row is unselectable until now, and caret hit-testing skips unselectable text
   row.setAttribute("data-select-mode", "");
-  const content = row.querySelector("[data-orbit-message-content]") ?? row;
+  const content = row.querySelector("[data-orbit-message-content], [data-team-room-content]") ?? row;
   const box = row.getBoundingClientRect();
   const word = wordAt(content, box.left + held.x, box.top + held.y);
   const sel = window.getSelection();
@@ -243,6 +245,8 @@ export interface MessageMenuTarget {
   user: boolean;
   pinned: boolean;
   canPin: boolean;
+  /** Pin reads as the team room's notice. */
+  notice?: boolean;
   queued?: { sendNow?: () => void; cancel: () => void };
 }
 
@@ -278,8 +282,9 @@ function useMenuPlacement(
   return box;
 }
 
-function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTMLElement, onClose: () => void): void {
+function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTMLElement, onClose: () => void, closing: boolean): void {
   useLayoutEffect(() => {
+    if (closing) return;
     const onDown = (e: Event) => {
       if (e.target instanceof Element && ref.current?.contains(e.target)) return;
       onClose();
@@ -306,7 +311,7 @@ function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTM
       window.removeEventListener("blur", onBlur);
       transcript?.removeEventListener("scroll", onScroll);
     };
-  }, [ref, opener, onClose]);
+  }, [ref, opener, onClose, closing]);
 }
 
 /** Close, then put focus back on the opener unless the action already moved it. */
@@ -318,7 +323,7 @@ function closeMenu(opener: HTMLElement, menu: HTMLElement | null, onClose: () =>
 }
 
 /** Arrow keys walk the menu's buttons; Enter clicks the focused one. */
-function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.KeyboardEvent): void {
+export function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.KeyboardEvent): void {
   const buttons = ref.current ? Array.from(ref.current.querySelectorAll("button")) : [];
   if (!buttons.length) return;
   const at = buttons.findIndex((entry) => entry === document.activeElement);
@@ -343,9 +348,9 @@ function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.Keybo
 export const MENU_CLASS =
   "animate-pop-in fixed z-40 rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60";
 const ROW_CLASS =
-  "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70";
+  `flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink ${MENU_ITEM_HOVER}`;
 const EMOJI_CLASS =
-  "flex size-8 items-center justify-center rounded-full text-[17px] leading-none transition-transform hover:scale-110 hover:bg-control";
+  "flex size-8 items-center justify-center rounded-full text-[17px] leading-none hover:bg-control";
 
 export function MessageMenu({
   x,
@@ -354,7 +359,9 @@ export function MessageMenu({
   target,
   onReply,
   onPin,
+  onReact,
   onClose,
+  closing = false,
 }: {
   x: number;
   y: number;
@@ -362,13 +369,14 @@ export function MessageMenu({
   target: MessageMenuTarget;
   onReply: (message: Message) => void;
   onPin: (message: Message) => void;
+  onReact?: (emoji: string) => void;
   onClose: () => void;
+  closing?: boolean;
 }) {
   const { t } = useI18n();
-  const { dispatch } = useStore();
-  const { threadId, message, copyText, user, pinned, canPin } = target;
+  const { message, copyText, user, pinned, canPin } = target;
   const [expanded, setExpanded] = useState(false);
-  useBackLayer(expanded, () => setExpanded(false));
+  useBackLayer(expanded && !closing, () => setExpanded(false));
   const [touch] = useState(isTouchPrimary);
   // kept against the row, since the transcript can scroll before Select text
   const [held] = useState(() => {
@@ -377,20 +385,20 @@ export function MessageMenu({
   });
   const ref = useRef<HTMLDivElement>(null);
   const box = useMenuPlacement(ref, x, y, expanded);
-  useMenuDismiss(ref, opener, onClose);
+  useMenuDismiss(ref, opener, onClose, closing);
   // App holds a Back entry while it is open, the same way as the model picker
   useEffect(() => {
-    if (!touch) return;
+    if (!touch || closing) return;
     window.dispatchEvent(new CustomEvent("orbit:message-menu", { detail: true }));
     return () => {
       window.dispatchEvent(new CustomEvent("orbit:message-menu", { detail: false }));
     };
-  }, [touch]);
+  }, [touch, closing]);
   useEffect(() => {
-    if (!touch) return;
+    if (!touch || closing) return;
     window.addEventListener("orbit:close-message-menu", onClose);
     return () => window.removeEventListener("orbit:close-message-menu", onClose);
-  }, [touch, onClose]);
+  }, [touch, onClose, closing]);
   const mine = useMemo(
     () => new Set(
       (message.reactions ?? []).filter((reaction) => reaction.by === "user").map((reaction) => reaction.emoji),
@@ -401,11 +409,11 @@ export function MessageMenu({
   // Portalled out of the transcript, the menu is no longer the row's tab
   // neighbour, so opening it carries focus across.
   useLayoutEffect(() => {
-    ref.current?.querySelector("button")?.focus();
-  }, [expanded]);
+    if (!closing) ref.current?.querySelector("button")?.focus();
+  }, [expanded, closing]);
 
   const toggle = (emoji: string) => {
-    dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
+    onReact?.(emoji);
     closeMenu(opener, ref.current, onClose);
   };
   const emojiButton = (emoji: string) => {
@@ -421,7 +429,7 @@ export function MessageMenu({
         aria-checked={pressed}
         className={cn(EMOJI_CLASS, touch && "size-10", pressed && "bg-accent/15 ring-1 ring-accent/40")}
       >
-        {emoji}
+        <ReactionIcon emoji={emoji} size={17} />
       </button>
     );
   };
@@ -432,7 +440,9 @@ export function MessageMenu({
       <div
         ref={ref}
         role="menu"
-        data-message-menu
+        data-message-menu={!closing || undefined}
+        data-closing={closing || undefined}
+        inert={closing}
         style={{ top: box.top, left: box.left }}
         onKeyDown={(e) => menuKeyDown(ref, e)}
         className={cn(MENU_CLASS, touch ? "w-[304px]" : "w-[248px]")}
@@ -468,12 +478,15 @@ export function MessageMenu({
     <div
       ref={ref}
       role="menu"
-      data-message-menu
+      // the room composer's Escape reads this marker as an open menu
+      data-message-menu={!closing || undefined}
+      data-closing={closing || undefined}
+      inert={closing}
       style={{ top: box.top, left: box.left }}
       onKeyDown={(e) => menuKeyDown(ref, e)}
       className={cn(MENU_CLASS, touch ? "w-[304px]" : "w-[248px]")}
     >
-      {!user && (
+      {!user && onReact && (
         <>
           {expanded ? (
             <div className="grid grid-cols-6 justify-items-center gap-0.5 px-2">
@@ -523,7 +536,7 @@ export function MessageMenu({
           {pinned
             ? <PinOff size={16} className="text-ink-secondary" />
             : <Pin size={16} className="text-ink-secondary" />}
-          {t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
+          {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
       {message.quick?.state !== "answer" && (
@@ -581,28 +594,32 @@ export function SelectionMenu({
   opener,
   text,
   onClose,
+  closing = false,
 }: {
   x: number;
   y: number;
   opener: HTMLElement;
   text: string;
   onClose: () => void;
+  closing?: boolean;
 }) {
   const { t } = useI18n();
-  useBackLayer(true, onClose);
+  useBackLayer(!closing, onClose);
   const ref = useRef<HTMLDivElement>(null);
   const box = useMenuPlacement(ref, x, y);
-  useMenuDismiss(ref, opener, onClose);
+  useMenuDismiss(ref, opener, onClose, closing);
 
   useLayoutEffect(() => {
-    ref.current?.querySelector("button")?.focus();
-  }, []);
+    if (!closing) ref.current?.querySelector("button")?.focus();
+  }, [closing]);
 
   return createPortal(
     <div
       ref={ref}
       role="menu"
-      data-selection-menu
+      data-selection-menu={!closing || undefined}
+      data-closing={closing || undefined}
+      inert={closing}
       style={{ top: box.top, left: box.left }}
       onKeyDown={(e) => menuKeyDown(ref, e)}
       className={cn(MENU_CLASS, "w-[220px]")}

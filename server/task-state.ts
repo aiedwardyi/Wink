@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { z } from "zod";
@@ -7,9 +8,12 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
+// open asks ride outside the 16 KiB budget; this only stops a runaway file from being read whole
+const TASK_STATE_READ_MAX_BYTES = 8 * 1024 * 1024;
 
 const LIMITS = {
   id: 160,
@@ -86,6 +90,8 @@ const taskResumePacketSchema = z.object({
   ]),
   lastEventId: idSchema.optional(),
   turnsAtWrite: z.number().int().nonnegative(),
+  asks: z.array(taskAskSchema).optional(),
+  lastAskId: z.number().int().nonnegative().optional(),
 }).strict();
 
 export type TaskResumePacket = z.output<typeof taskResumePacketSchema>;
@@ -156,14 +162,33 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
   if (instructionGoal) normalized.instructionGoal = instructionGoal;
   const instructionStep = packet.instructionStep ? clean(packet.instructionStep, LIMITS.step) : undefined;
   if (instructionStep) normalized.instructionStep = instructionStep;
+  const asks = packet.asks?.flatMap((item) => {
+    const ask = clean(item.ask, ASK_LIMITS.ask);
+    const ref = item.ref ? clean(item.ref, ASK_LIMITS.ref) : "";
+    const choices = item.choices ? clean(item.choices, ASK_LIMITS.ref) : "";
+    if (!ask) return [];
+    const at = Math.max(0, Math.trunc(item.at));
+    return [{
+      id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), ...(item.kind ? { kind: item.kind } : {}), ...(choices ? { choices } : {}),
+      at, changedAt: Math.max(0, Math.trunc(item.changedAt)),
+    }];
+  });
+  if (asks?.length) normalized.asks = asks;
+  const lastAskId = lastAskIdOf(packet);
+  if (lastAskId) normalized.lastAskId = lastAskId;
   return taskResumePacketSchema.parse(normalized);
 }
 
 function serializeBounded(packet: TaskResumePacket): string {
   const bounded = structuredClone(packet);
   const pruneOrder = ["completed", "evidence", "artifacts", "plan", "blockers"] as const;
-  let serialized = JSON.stringify(bounded, null, 2);
-  while (Buffer.byteLength(serialized, "utf8") > TASK_STATE_MAX_BYTES) {
+  const budgeted = () => Buffer.byteLength(JSON.stringify({ ...bounded, asks: bounded.asks?.filter((ask) => !isOpenAsk(ask)) }, null, 2), "utf8");
+  while (budgeted() > TASK_STATE_MAX_BYTES) {
+    const closedAsk = bounded.asks?.findIndex((ask) => !isOpenAsk(ask)) ?? -1;
+    if (closedAsk >= 0) {
+      bounded.asks?.splice(closedAsk, 1);
+      continue;
+    }
     const removable = pruneOrder.filter((candidate) => bounded[candidate].length > 1);
     const candidates = removable.length
       ? removable
@@ -175,34 +200,36 @@ function serializeBounded(packet: TaskResumePacket): string {
     )[0];
     if (!key) throw new Error("task state exceeds its storage limit");
     bounded[key].shift();
-    serialized = JSON.stringify(bounded, null, 2);
   }
-  return serialized;
+  return JSON.stringify(bounded, null, 2);
 }
 
-export function writeTaskResumePacket(
-  packet: TaskResumePacket,
-  options: TaskStateOptions = {},
-): TaskResumePacket {
+// a sha256 hex digest and its newline
+const MARK_BYTES = 65;
+const stagedPath = (path: string): string => `${path}.staged`;
+
+function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
-  const dir = options.dir ?? TASK_STATE_DIR;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = taskStatePath(normalized.threadId, dir);
   const serialized = serializeBounded(normalized);
-  writeFileAtomic(path, serialized, { mode: 0o600 });
-  return taskResumePacketSchema.parse(JSON.parse(serialized));
+  return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
 }
 
-export function readTaskResumePacket(
-  threadId: ThreadId,
-  options: TaskStateOptions = {},
-): TaskResumePacket | null {
-  const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
+function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
   try {
     const status = lstatSync(path);
-    if (!status.isFile() || status.isSymbolicLink() || status.size > TASK_STATE_MAX_BYTES) return null;
+    if (!status.isFile() || status.isSymbolicLink() || status.size > maxBytes) return null;
     const raw = readFileSync(path, "utf8");
-    if (Buffer.byteLength(raw, "utf8") > TASK_STATE_MAX_BYTES) return null;
+    return Buffer.byteLength(raw, "utf8") > maxBytes ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
+function recordOf(raw: string | null, threadId: ThreadId): TaskResumePacket | null {
+  if (raw === null) return null;
+  try {
     const parsed = taskResumePacketSchema.safeParse(JSON.parse(raw));
     return parsed.success && parsed.data.threadId === threadId ? parsed.data : null;
   } catch {
@@ -210,14 +237,77 @@ export function readTaskResumePacket(
   }
 }
 
+/** Names the saved file a record is staged over: any later save changes it, so a staged file that save could not remove reads as stale. */
+function savedMark(path: string): string {
+  return `${createHash("sha256").update(fileText(path) ?? "").digest("hex")}\n`;
+}
+
+function stagedRecord(path: string, threadId: ThreadId): { raw: string; packet: TaskResumePacket } | null {
+  const text = fileText(stagedPath(path), TASK_STATE_READ_MAX_BYTES + MARK_BYTES);
+  if (!text || text.slice(0, MARK_BYTES) !== savedMark(path)) return null;
+  const raw = text.slice(MARK_BYTES);
+  const packet = recordOf(raw, threadId);
+  return packet && { raw, packet };
+}
+
+function dropStaged(path: string): void {
+  try {
+    rmSync(stagedPath(path), { force: true });
+  } catch {
+    // a leftover no longer matches the saved file, so readers skip it
+  }
+}
+
+export function writeTaskResumePacket(
+  packet: TaskResumePacket,
+  options: TaskStateOptions = {},
+): TaskResumePacket {
+  const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeFileAtomic(path, serialized, { mode: 0o600 });
+  dropStaged(path);
+  return saved;
+}
+
+/** A send's record, on disk before its dispatch but without the fsync; settleTaskResumePacket pays that after.
+ * It goes beside the saved file, never over it, so a power cut cannot tear the record already saved. */
+export function stageTaskResumePacket(
+  packet: TaskResumePacket,
+  options: TaskStateOptions = {},
+): TaskResumePacket {
+  const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeFileSync(stagedPath(path), savedMark(path) + serialized, { mode: 0o600 });
+  return saved;
+}
+
+export function settleTaskResumePacket(
+  threadId: ThreadId,
+  options: TaskStateOptions = {},
+): void {
+  const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
+  if (!existsSync(stagedPath(path))) return;
+  const staged = stagedRecord(path, threadId);
+  if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
+  dropStaged(path);
+}
+
+export function readTaskResumePacket(
+  threadId: ThreadId,
+  options: TaskStateOptions = {},
+): TaskResumePacket | null {
+  const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
+  return stagedRecord(path, threadId)?.packet ?? recordOf(fileText(path), threadId);
+}
+
 export function deleteTaskResumePacket(
   threadId: ThreadId,
   options: TaskStateOptions = {},
 ): boolean {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  if (!existsSync(path)) return false;
+  const staged = existsSync(stagedPath(path));
+  rmSync(stagedPath(path), { force: true });
+  if (!existsSync(path)) return staged;
   const status = lstatSync(path);
-  if (!status.isFile() || status.isSymbolicLink()) return false;
+  if (!status.isFile() || status.isSymbolicLink()) return staged;
   unlinkSync(path);
   return true;
 }
@@ -229,15 +319,25 @@ export function taskStateUpdateSchema(clipped: string[]) {
     clipped.push(`${path} (${text.length} > ${max})`);
     return clipText(text, max);
   };
+  const keep = <T>(path: string, items: T[], max: number, from: "first" | "last"): T[] => {
+    if (items.length <= max) return items;
+    clipped.push(`${path} (${items.length} > ${max})`);
+    return from === "first" ? items.slice(0, max) : items.slice(-max);
+  };
   const plan = z.array(z.object({
     step: z.string().trim().min(1),
     status: z.enum(["pending", "active", "done", "skipped"]),
-  }).strict()).max(20).transform((items) =>
-    items.map((item, index) => ({ ...item, step: clip(`plan.${index}.step`, item.step, LIMITS.step) })),
-  ).refine(
-    (items) => items.filter((item) => item.status === "active").length <= 1,
-    "at most one plan step may be active",
-  );
+  }).strict()).transform((items) => {
+    const kept = keep("plan", items, LIMITS.plan, "first");
+    const active = kept.filter((item) => item.status === "active").length;
+    if (active > 1) clipped.push(`plan (${active} active > 1, later ones set to pending)`);
+    let seen = false;
+    return kept.map((item, index) => {
+      const demote = item.status === "active" && seen;
+      if (item.status === "active") seen = true;
+      return { ...item, status: demote ? "pending" as const : item.status, step: clip(`plan.${index}.step`, item.step, LIMITS.step) };
+    });
+  });
   // Empty string clears. Whitespace-only is rejected before trim.
   const nextAction = z.string().refine(
     (value) => value === "" || /\S/.test(value),
@@ -245,17 +345,29 @@ export function taskStateUpdateSchema(clipped: string[]) {
   const blockers = z.array(z.object({
     kind: z.enum(["login", "input", "engine"]),
     note: z.string().trim().min(1),
-  }).strict()).max(10).transform((items) =>
-    items.map((item, index) => ({ ...item, note: clip(`blockers.${index}.note`, item.note, LIMITS.note) })),
+  }).strict()).transform((items) =>
+    keep("blockers", items, LIMITS.blockers, "last").map((item, index) => ({ ...item, note: clip(`blockers.${index}.note`, item.note, LIMITS.note) })),
   );
   const artifacts = z.array(z.object({
     ref: z.string().trim().min(1),
     label: z.string().trim().min(1),
-  }).strict()).max(20).transform((items) =>
-    items.map((item, index) => {
+  }).strict()).transform((items) =>
+    keep("artifacts", items, LIMITS.artifacts, "last").map((item, index) => {
       if (item.ref.length > LIMITS.ref) return item;
       return { ref: item.ref, label: clip(`artifacts.${index}.label`, item.label, LIMITS.label) };
     }),
+  );
+  const asks = z.array(z.object({
+    id: z.string().trim().min(1).max(12).optional(),
+    ask: z.string().trim().min(1).optional(),
+    status: z.enum(ASK_STATUSES),
+    ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
+  }).strict()).transform((items) =>
+    items.map((item, index) => ({
+      ...item,
+      ...(item.ask === undefined ? {} : { ask: clip(`asks.${index}.ask`, item.ask, ASK_LIMITS.ask) }),
+      ...(item.ref === undefined ? {} : { ref: clip(`asks.${index}.ref`, item.ref, ASK_LIMITS.ref) }),
+    })),
   );
   return z.object({
     fromBotId: z.string().min(1).max(128),
@@ -267,9 +379,11 @@ export function taskStateUpdateSchema(clipped: string[]) {
     next_action: nextAction.optional(),
     blockers: blockers.optional(),
     artifacts: artifacts.optional(),
+    asks: asks.optional(),
   }).strict().refine(
     (body) => body.goal !== undefined || body.plan !== undefined || body.completed_note !== undefined ||
-      body.next_action !== undefined || body.blockers !== undefined || body.artifacts !== undefined || body.pause_automatic_wakes === true,
+      body.next_action !== undefined || body.blockers !== undefined || body.artifacts !== undefined ||
+      body.asks !== undefined || body.pause_automatic_wakes === true,
     "at least one task field is required",
   );
 }
@@ -285,7 +399,7 @@ export function assignTaskNextAction(packet: TaskResumePacket, nextAction: strin
   else delete packet.nextActionInstructionId;
 }
 
-const TASK_STATE_UPDATE_FIELDS = "goal, plan, completed_note, next_action, blockers, artifacts";
+const TASK_STATE_UPDATE_FIELDS = "goal, plan, completed_note, next_action, blockers, artifacts, asks";
 
 function valueAt(body: unknown, path: readonly PropertyKey[]): unknown {
   let current: unknown = body;

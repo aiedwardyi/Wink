@@ -44,3 +44,14 @@ describe("memory settings target", () => {
     expect(reducer(closed, action).settingsMemoryTarget!.nonce).toBeGreaterThan(second.settingsMemoryTarget!.nonce);
   });
 });
+
+describe("deleting the open room", () => {
+  it("closes Room details instead of opening the next bot's details", () => {
+    const group = { id: "g1", threadId: "t1", name: "Room", memberIds: [], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 0, messages: [] } as const;
+    const bot = { id: "b1", threadId: "bt1", name: "Wink", title: "", description: "", notifications: true, color: "green", unread: false, messages: [] } as const;
+    const open = { ...initialState, bots: [bot], groups: [group], selectedId: "g1", settingsOpen: true } as unknown as typeof initialState;
+    const after = reducer(open, { type: "groupDeleted", groupId: "g1" });
+    expect(after.selectedId).toBe("b1");
+    expect(after.settingsOpen).toBe(false);
+  });
+});

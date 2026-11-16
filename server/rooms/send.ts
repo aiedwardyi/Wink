@@ -1,22 +1,34 @@
 // Every message into a team room: the host's through the normal send route,
-// a person's through the door. Plain lines cost nothing; one bot, at most,
-// gets an ask.
-import { roomResponder } from "../../shared/room-routing.ts";
-import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
-import { roomEngineAllowed } from "./guards.ts";
+// a person's through the door. The host's line is only committed here: the
+// normal group turn answers it. A person's wakes one bot, at most, with an ask.
+import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
+import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
+import type { Message } from "../store.ts";
+import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
+import { broadcastDoorStop } from "./door-streams.ts";
+import { committedRoomText, recentRoomEntries, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
 import { ownRoomFiles } from "./files.ts";
-import { writeRoomEntry } from "./mirror.ts";
+import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
-import { askById, beginEnd, createAsk, engineLine, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
+import { askById, createAsk, roomAskDeps, roomAsks, runAsk, type HostedGroup } from "./asks.ts";
+import { teamBots, type TeamBot } from "./team-bots.ts";
 
 export type RoomSender = { kind: "host" } | { kind: "person"; id: string };
 
-const GRANTS: Record<RoomLevel, RoomGrant | "held"> = { trusted: "work", ask: "held", chat: "words" };
+/** Rooms whose bot lines wake no bot until a person or the host speaks again. */
+const stopped = new Set<string>();
+/** This run's start: a handoff line from before it is no longer pending. */
+const BOOT = Date.now();
+const lapses: ChainLapses = new Map();
+const alerts = new Map<string, RoomAlert>();
 
-const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
+const groupBots = (group: HostedGroup) => group.memberIds.flatMap((id) => {
+  const bot = roomAskDeps().store.bot(id);
+  return bot && !bot.hidden ? [bot] : [];
+});
 
-export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []) {
-  const { store, hostName, driverKind } = roomAskDeps();
+export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = [], local?: LocalRow) {
+  const { store, hostName } = roomAskDeps();
   const roomId = group.hosted.roomId;
   const people = roomPeople(roomId);
   const person = sender.kind === "person" ? people.find((candidate) => candidate.id === sender.id) : undefined;
@@ -25,40 +37,110 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   const quote = replyToId === undefined ? null : roomEntry(roomId, replyToId);
   if (replyToId !== undefined && !quote) throw new RoomError(404, "no such message in this room");
   const files = fileIds.length ? ownRoomFiles(roomId, person?.id ?? "host", fileIds) : [];
-  const bots = group.memberIds.flatMap((id) => {
-    const bot = store.bot(id);
-    return bot && !bot.hidden ? [bot] : [];
-  });
-  const bot = peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
-  const grant = person ? GRANTS[person.level] : "work";
-  if (person) {
-    const refusal = sendRefusal(roomId, person.id, bot ? grant : null);
-    if (refusal) throw statusError(429, refusal);
-  }
-  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
-  if (person) {
-    spend(roomId, person.id, "message");
-    store.patchGroup(group.id, { unread: true });
-  }
-  if (!bot) return { entry, message, ask: null };
+  const bots = groupBots(group);
+  // Teammates' bots answer only on their owners' PCs, so their names and lines wake none here.
+  const roomBots = teamBots(roomId);
+  const quotesRoomBot = roomBots.some((roomBot) => roomBot.id === quote?.author.id) || Boolean(quote?.author.owner);
+  const nonWaking = [hostName(), ...people.map((candidate) => candidate.name)];
+  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
+  const ended = !person && liveBotChain(group) > 0;
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
+  stopped.delete(roomId);
+  // the host's line ends a handoff; republish the group so its strip clears
+  if (ended) store.patchGroup(group.id, {});
+  if (person) markPersonLine(group, entry, person.name);
+  if (!bot || !person) return { entry, message, ask: null };
   const ask = createAsk({
     roomId,
     threadId: group.threadId,
     botId: bot.id,
-    asker: person ? { kind: "person", id: person.id } : { kind: "host", id: "host" },
+    asker: { kind: "person", id: person.id },
     entryId: entry.id,
     ...(quote ? { quoteId: quote.id } : {}),
-    ...(grant === "held" ? {} : { grant }),
-    clean: (!person || person.level === "trusted") && cleanQuote(quote, people),
+    grant: "work",
+    clean: cleanQuote(quote),
   });
-  if (!roomEngineAllowed(driverKind(bot.id))) beginEnd(ask.id, "failed", engineLine(bot.name));
-  else if (ask.state === "queued") runAsk(ask);
+  runAsk(ask);
   return { entry, message, ask: askById(ask.id) };
 }
 
-/** A quote is clean when the host, a Trusted person or a clean bot answer wrote it. */
-function cleanQuote(quote: RoomEntry | null, people: ReturnType<typeof roomPeople>): boolean {
-  if (!quote || quote.author.kind === "host") return true;
-  if (quote.author.kind === "bot") return quote.clean === true;
-  return people.some((person) => person.id === quote.author.id && person.level === "trusted");
+function markPersonLine(group: HostedGroup, entry: RoomEntry, name: string, ping = true): void {
+  const { store, alert } = roomAskDeps();
+  store.patchGroup(group.id, { unread: true });
+  const line = { chat: group.id, threadId: group.threadId, room: group.name, name, text: roomLineText(entry.text, entry.files) };
+  if (ping) alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert, undefined, alerts);
 }
+
+/** Room Stop ends a bot chain here and on every joined PC. */
+export function stopBotChain(roomId: string): void {
+  stopped.add(roomId);
+  broadcastDoorStop(roomId);
+}
+
+/** Bot lines in the room's live handoff, for the strip; 0 when none is live or Stop ended it. */
+export function liveBotChain(group: HostedGroup): number {
+  const roomId = group.hosted.roomId;
+  if (stopped.has(roomId)) return 0;
+  try {
+    const { store, hostName } = roomAskDeps();
+    const lines = recentRoomEntries(roomId, CHAIN_LINES);
+    const last = lines.at(-1);
+    const hostBots = groupBots(group);
+    const working = (botId: string) => {
+      // a teammate's bot works on its owner's PC
+      if (!hostBots.some((bot) => bot.id === botId)) return null;
+      if (group.busyBotId === botId || roomAsks(roomId, ["queued", "running"]).some((ask) => ask.botId === botId)) return true;
+      // a host bot's @ starts its hop a moment after the line; a teammate's bot's ask is made with it
+      return hostBots.some((bot) => bot.id === last?.author.id) ? null : false;
+    };
+    const turn = botChain(lines, [...hostBots, ...teamBots(roomId)], [hostName(), ...roomPeople(roomId).map((person) => person.name)], { working, since: BOOT });
+    if (turn && last) republishWhenLapsed(lapses, roomId, last.at, () => store.patchGroup(group.id, {}));
+    return turn;
+  } catch {
+    // group state goes out before room asks are configured, and for a missing room
+    return 0;
+  }
+}
+
+/** A teammate's bot answer from its owner's PC: counted as the owner's line. Its @ to a host bot asks under the owner. */
+export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot, text: string, replyToId?: string, sendId?: string): RoomEntry {
+  const roomId = group.hosted.roomId;
+  const quote = replyToId === undefined ? null : roomEntry(roomId, replyToId);
+  if (replyToId !== undefined && !quote) throw new RoomError(404, "no such message in this room");
+  const author: RoomAuthor = { kind: "bot", id: bot.id, name: bot.name, owner: owner.id };
+  const { entry } = writeRoomEntry(roomAskDeps().store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}) }, sendId);
+  const people = roomPeople(roomId);
+  const bots = groupBots(group);
+  const tagged = botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
+  // a handoff pings no one; the line that closes it does
+  markPersonLine(group, entry, bot.name, !tagged);
+  const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : tagged;
+  const asked = bots.find((candidate) => candidate.id === hit?.id);
+  if (asked) {
+    runAsk(createAsk({
+      roomId,
+      threadId: group.threadId,
+      botId: asked.id,
+      asker: { kind: "person", id: owner.id },
+      entryId: entry.id,
+      ...(quote ? { quoteId: quote.id } : {}),
+      grant: "work",
+      clean: cleanQuote(quote),
+    }));
+  }
+  return entry;
+}
+
+/** The host's local file tags as words teammates can read. */
+const roomCopy = (text: string) => text
+  .replace(/<attached-image\s[^>]*>/g, "[image]")
+  .replace(/<attached-file\s[^>]*>/g, (tag) => `[file: ${/\sname="([^"]*)"/.exec(tag)?.[1] ?? "file"}]`);
+
+/** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy. */
+export function hostSend(group: HostedGroup, text: string, replyTo?: Pick<Message, "id" | "roomEntryId">, sendId?: string) {
+  const full = !peopleOnlyRoom(group.hosted.roomId);
+  return hostedSend(group, { kind: "host" }, full ? roomCopy(text) : text, replyTo?.roomEntryId, sendId, [], { ...(full ? { text } : {}), ...(replyTo ? { replyToId: replyTo.id } : {}) });
+}
+
+/** Every member's line counts like the host's; a bot's quote is clean when its answer was. */
+const cleanQuote = (quote: RoomEntry | null) => quote?.author.kind !== "bot" || quote.clean === true;

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import type { Action, Bot, Group, InstanceInfo } from "@/state/store";
+import { MSP_MUSE_MODELS } from "../../server/drivers/msp/muse.ts";
 
 const dispatched: Action[] = [];
 const apiCalls: Array<{ path: string; init?: RequestInit }> = [];
@@ -101,6 +102,19 @@ function nameInputs(host: HTMLElement): HTMLInputElement[] {
   return [...host.querySelectorAll('input[id^="group-wizard-name-"]')] as HTMLInputElement[];
 }
 
+function menuTrigger(host: HTMLElement, label: string): HTMLButtonElement {
+  return host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+}
+
+async function menuOptions(trigger: HTMLButtonElement) {
+  await act(async () => trigger.click());
+  return [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) [role="menuitemradio"]')];
+}
+
+async function closeMenu() {
+  await act(async () => document.querySelector('[role="menu"]:not([data-closing])')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+}
+
 async function toMembers(host: HTMLElement) {
   expect(host.querySelectorAll('button[role="checkbox"]').length).toBe(bots.filter((b) => !b.hidden).length);
 }
@@ -130,6 +144,23 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
+  it("keeps the wizard open when Escape dismisses an engine menu", async () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onClose = vi.fn();
+    try {
+      await act(async () => root.render(createElement(GroupWizard, { onClose })));
+      await act(async () => button(document.body, "+ New bot").click());
+      await menuOptions(menuTrigger(document.body, "Switch engine"));
+      await closeMenu();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(document.activeElement).toBe(menuTrigger(document.body, "Switch engine"));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("opens over the screen with a card that fits a 360 px phone", async () => {
     const drawer = document.createElement("aside");
     document.body.append(drawer);
@@ -178,9 +209,10 @@ describe("GroupWizard members", () => {
     const { host, root } = await renderWizard();
     try {
       await act(async () => button(host, locale === "en" ? "+ New bot" : "+ 새 봇").click());
-      const select = host.querySelector("select")!;
-      expect([...select.options].map((option) => option.value)).toEqual(["claude", "codex"]);
-      expect(select.value).toBe("codex");
+      const trigger = host.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+      expect(trigger.textContent).toBe("Codex");
+      expect((await menuOptions(trigger)).map((option) => option.textContent)).toEqual(["Claude", "Codex"]);
+      await closeMenu();
       await act(async () => {
         const input = nameInputs(host)[0]!;
         Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "Research");
@@ -206,9 +238,33 @@ describe("GroupWizard members", () => {
         row: { key: 1, name: "Research", instanceId: copy.instanceId, model: null, saving: false, error: null },
         preferIndex: 0, instances: [copy, base], onPatch: () => undefined, onAdd,
       })));
-      expect(host.querySelector("select")!.value).toBe("codex");
+      expect(menuTrigger(host, "Switch engine").textContent).toBe("Codex");
       await act(async () => button(host, "Add bot").click());
       expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("codex");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it.each(["en", "ko"] as const)("offers the requested Ember model in %s", async (locale) => {
+    applyLocale(locale);
+    const muse = { ...engine("muse", "museAgent", "Meta Muse"), models: MSP_MUSE_MODELS };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const onAdd = vi.fn();
+    try {
+      await act(async () => root.render(createElement(NewBotRow, {
+        row: { key: 1, name: "Research", instanceId: "muse", model: "muse-ember-1.0", saving: false, error: null },
+        preferIndex: 0, instances: [muse], onPatch: () => undefined, onAdd,
+      })));
+      const modelTrigger = menuTrigger(host, locale === "en" ? "Change model" : "모델 변경");
+      expect(modelTrigger.textContent).toBe("Meta Muse Ember");
+      const ember = (await menuOptions(modelTrigger)).find((option) => option.textContent === "Meta Muse Ember");
+      expect(ember?.getAttribute("aria-checked")).toBe("true");
+      await closeMenu();
+      await act(async () => button(host, locale === "en" ? "Add bot" : "봇 추가").click());
+      expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("muse");
     } finally {
       await act(async () => root.unmount());
     }
@@ -227,7 +283,7 @@ describe("GroupWizard members", () => {
       expect(input).toBeDefined();
       expect(host.querySelector(`label[for="${input!.id}"]`)?.textContent).toBe(label);
       expect(input!.placeholder).toBe(placeholder);
-      expect(input!.maxLength).toBe(40);
+      expect(input!.hasAttribute("maxlength")).toBe(false);
       await act(async () => button(host, add).click());
       expect(host.querySelector('[role="alert"]')?.textContent).toBe(required);
       expect(apiCalls).toHaveLength(0);
@@ -277,6 +333,29 @@ describe("GroupWizard members", () => {
       await act(async () => {
         root.unmount();
       });
+    }
+  });
+
+  it("moves on to the bots on Enter in the name with no bot picked, and never on an IME confirm", async () => {
+    const fetched = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetched);
+    const { host, root } = await renderWizard();
+    try {
+      // SAFETY: the wizard always renders the labelled name input.
+      const name = host.querySelector('input[aria-label="Name your group"]') as HTMLInputElement;
+      name.focus();
+      await act(async () => { name.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+      expect(fetched).not.toHaveBeenCalled();
+      expect(dispatched).toEqual([]);
+      expect(document.activeElement).toBe(pickRow(host, "Ada"));
+      await act(async () => pickRow(host, "Ada").click());
+      await act(async () => { name.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true })); });
+      expect(dispatched).toEqual([]);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      vi.unstubAllGlobals();
     }
   });
 
@@ -351,20 +430,75 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("disables create with no members and allows a single bot", async () => {
+  it("allows a single bot", async () => {
     const { host, root } = await renderWizard();
     try {
-      await toMembers(host);
-      expect(button(host, "Create").hasAttribute("disabled")).toBe(true);
       await act(async () => {
         pickRow(host, "Ada").click();
       });
-      expect(button(host, "Create").hasAttribute("disabled")).toBe(false);
       await act(async () => {
         button(host, "Create").click();
       });
       expect(findCreate()).toMatchObject({ memberIds: ["b1"] });
     } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("holds Create while a new bot is still saving", async () => {
+    let finish: (value: { bot: { id: string; name: string } }) => void = () => undefined;
+    apiImpl = () => new Promise((resolve) => (finish = resolve));
+    const { host, root } = await renderWizard();
+    try {
+      await toMembers(host);
+      await act(async () => button(host, "+ New bot").click());
+      const [name] = nameInputs(host);
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "review my code");
+        name!.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(host, "Add bot").click());
+      expect(button(host, "Create").hasAttribute("disabled")).toBe(true);
+      await act(async () => button(host, "Create").click());
+      expect(dispatched.some((action) => action.type === "createGroup" || action.type === "groupPatched")).toBe(false);
+      await act(async () => finish({ bot: { id: "nb1", name: "review my code" } }));
+      await flush();
+      await act(async () => button(host, "Create").click());
+      expect(findCreate()).toMatchObject({ memberIds: ["nb1"] });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it.each([
+    ["en", "Create", "Name your group"],
+    ["ko", "만들기", "그룹 이름 정하기"],
+  ] as const)("creates a people group from a name alone and opens it in %s", async (locale, create, label) => {
+    applyLocale(locale);
+    const group = { id: "g9", threadId: "t9", name: "Design team", memberIds: [], hosted: { roomId: "r9" } };
+    const posts: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      posts.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ group }), { status: 201, headers: { "content-type": "application/json" } });
+    }));
+    const { host, root } = await renderWizard();
+    try {
+      expect(button(host, create).hasAttribute("disabled")).toBe(false);
+      await act(async () => {
+        const name = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "Design team");
+        name.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(host, create).click());
+      await flush();
+      expect(posts).toEqual([{ name: "Design team", hosted: true, peopleOnly: true, memberIds: [] }]);
+      expect(dispatched).toEqual([{ type: "groupPatched", group }, { type: "select", id: "g9" }]);
+    } finally {
+      vi.unstubAllGlobals();
       await act(async () => {
         root.unmount();
       });
@@ -396,10 +530,9 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "Add another").click();
       });
-      // SAFETY: the selector targets only the row model dropdowns rendered above.
-      const selects = [...host.querySelectorAll('select[aria-label="Change model"]')] as HTMLSelectElement[];
-      expect(selects).toHaveLength(1);
-      expect(selects[0]!.value).toBe("muse-1-model");
+      const models = [...host.querySelectorAll('button[aria-label="Change model"]')];
+      expect(models).toHaveLength(1);
+      expect(models[0]!.textContent).toBe("Meta Muse Model");
       const [name2] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
@@ -582,18 +715,12 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      // SAFETY: the engine dropdown is the only select labelled Switch engine.
-      const engineSelect = host.querySelector('select[aria-label="Switch engine"]') as HTMLSelectElement;
-      expect([...engineSelect.options].map((o) => o.value)).toEqual(["codex-1", "muse-1"]);
-      expect(engineSelect.value).toBe("codex-1");
-      await act(async () => {
-        const native = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!;
-        native.call(engineSelect, "muse-1");
-        engineSelect.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      // SAFETY: the selector targets only the row model dropdowns rendered above.
-      const modelSelect = host.querySelector('select[aria-label="Change model"]') as HTMLSelectElement;
-      expect(modelSelect.value).toBe("muse-1-model");
+      const engineTrigger = menuTrigger(host, "Switch engine");
+      expect(engineTrigger.textContent).toBe("Codex");
+      const options = await menuOptions(engineTrigger);
+      expect(options.map((option) => option.textContent)).toEqual(["Codex", "Meta Muse"]);
+      await act(async () => options[1]!.click());
+      expect(menuTrigger(host, "Change model").textContent).toBe("Meta Muse Model");
       const [nameInput] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
@@ -614,25 +741,23 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("offers Argon beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
+  it("offers Carbon, Argon and Hydrogen beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
     apiImpl = () => Promise.resolve({ bot: { id: `nb${++botSeq}`, name: "New bot" } });
     instances = [
       antigravity(
         "ag-1",
         "Antigravity",
         [
+          { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon Low" },
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon High" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon Low" },
+          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash High" },
           { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash Medium" },
-          { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash Low" },
-          { id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash High" },
           { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-          { id: "gemini-3.6-flash-high", label: "Gemini 3.6 Flash High" },
-          { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
           { id: "legacy-custom", label: "Legacy custom", custom: true },
         ],
-        "gemini-3.5-flash",
+        "gemini-2.5-flash",
       ),
     ];
     const { host, root } = await renderWizard();
@@ -641,17 +766,17 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      // SAFETY: the selector targets only the row model dropdowns rendered above.
-      const modelSelect = host.querySelector('select[aria-label="Change model"]') as HTMLSelectElement;
-      expect([...modelSelect.options].map((o) => o.value)).toEqual([
-        "gemini-4-argon-high",
-        "gemini-4-argon-low",
-        "gemini-3.8-flash-high",
-        "gemini-3.8-flash-medium",
+      const modelTrigger = menuTrigger(host, "Change model");
+      expect((await menuOptions(modelTrigger)).map((option) => option.textContent)).toEqual([
+        "Gemini 4 Carbon Low",
+        "Gemini 4 Argon High",
+        "Gemini 4 Argon Low",
+        "Gemini 4 Hydrogen Medium",
+        "Gemini 3.8 Flash High",
+        "Gemini 3.8 Flash Medium",
       ]);
-      // The engine default (3.5) is not offered, so the select resolves to
-      // 3.8 Flash High even though Argon is listed first.
-      expect(modelSelect.value).toBe("gemini-3.8-flash-high");
+      expect(modelTrigger.textContent).toBe("Gemini 3.8 Flash High");
+      await closeMenu();
       const [nameInput] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
@@ -684,9 +809,7 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      // SAFETY: the engine dropdown is the only select labelled Switch engine.
-      const engineSelect = host.querySelector('select[aria-label="Switch engine"]') as HTMLSelectElement;
-      expect([...engineSelect.options].map((o) => o.value)).toEqual(["codex-1", "muse-1"]);
+      expect((await menuOptions(menuTrigger(host, "Switch engine"))).map((option) => option.textContent)).toEqual(["Codex", "Meta Muse"]);
     } finally {
       await act(async () => {
         root.unmount();

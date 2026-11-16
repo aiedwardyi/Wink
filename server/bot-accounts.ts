@@ -137,7 +137,7 @@ export class BotAccounts {
     return bot.pendingModelSelection ? [bot.modelSelection, bot.pendingModelSelection] : [bot.modelSelection];
   }
 
-  private routedAccount(of: string) {
+  routedAccount(of: string) {
     const id = this.accounts.defaultFor(of) ?? of;
     const drain = this.accounts.drains[id];
     return drain && drain.phase !== "failed" ? drain.destinationId : id !== of ? id : undefined;

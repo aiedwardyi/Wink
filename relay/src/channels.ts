@@ -28,6 +28,7 @@ import type { RelayLimits } from "./limits.ts";
 import type { Logger } from "./log.ts";
 import { peerPrefix } from "./net-util.ts";
 import type { RevocationList } from "./revocation.ts";
+import type { RoomCodeStore } from "./room-codes.ts";
 import type { SnagStore } from "./snags.ts";
 
 export const POOL = Object.freeze({ min: 3, max: 8 });
@@ -44,6 +45,7 @@ export interface ChannelContext {
   /** Set only when the relay has a team owner. */
   snags?: SnagStore;
   reportOwner?: string;
+  roomCodes?: RoomCodeStore;
 }
 
 type AccountSet = { subHash: string; name: string; person: string; refreshed?: string };
@@ -197,6 +199,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
       if (ctx.snags) ready.snags = true;
       if (hub.recordsTeam) ready.active = true;
       if (ctx.reportOwner) ready.reportOwner = ctx.reportOwner;
+      if (ctx.roomCodes) ready.roomCodes = true;
       send(socket, ready);
       const waiting = hub.waitingCount(result.label);
       if (waiting > 0) link.want(waiting);
@@ -213,6 +216,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
     if (msg.type === "ping") send(socket, { type: "pong" });
     else if (msg.type === "snag") onSnag(session.label, msg);
     else if (msg.type === "active") hub.active(session);
+    else if (msg.type === "roomcode") onRoomCode(session.label, msg.id);
     else if (msg.type !== "pong") return false;
     hub.seen(session);
     return true;
@@ -230,6 +234,12 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
       send(socket, { type: "snagged", id: parsed.data.id });
     }
     log.log("snag", { label, reason });
+  };
+
+  const onRoomCode = (label: string, id: string) => {
+    const minted = ctx.roomCodes?.mint(label);
+    send(socket, minted ? { type: "roomcoded", id, ...minted } : { type: "roomcoded", id });
+    log.log("room-code", { label, reason: minted ? "minted" : "refused" });
   };
 
   socket.on("data", (chunk: Buffer) => {

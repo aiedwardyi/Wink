@@ -7,7 +7,7 @@ import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation } from "
 import { Store } from "../store.ts";
 import {
   admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, createAsk, endAsk, failInterruptedAsks, hostedTurnRefused,
-  revalidatePersonAsks, roomAsks, ROOM_LIMITS, sendRefusal, spend, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps,
+  revalidatePersonAsks, roomAsks, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps,
 } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 
@@ -40,13 +40,12 @@ beforeEach(() => {
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   botId = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   group = store.createGroup("Team", [botId], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;
-  mina = addPerson(group.hosted.roomId, "Mina", "trusted", ["Wink"]);
-  jun = addPerson(group.hosted.roomId, "Jun", "trusted", ["Wink"]);
+  mina = addPerson(group.hosted.roomId, "Mina", ["Wink"]);
+  jun = addPerson(group.hosted.roomId, "Jun", ["Wink"]);
   order = [];
   deps = {
     store,
     hostName: () => "Edward",
-    driverKind: () => "claudeAgent",
     instance: () => null,
     dispatch: vi.fn(),
     stopTurn: vi.fn(async (stopped: RoomAsk, ended?: () => Promise<unknown>) => {
@@ -112,24 +111,6 @@ describe("ask states", () => {
     expect(terminal()).toEqual(["Wink couldn't finish this."]);
   });
 
-  it("drops a level and ends work the new level no longer covers", async () => {
-    const running = ask(mina);
-    startAsk(running.id);
-    const words = ask(jun, "words");
-    const { DatabaseSync } = await import("node:sqlite");
-    const raw = new DatabaseSync(`${DATA_DIR}/rooms.db`);
-    raw.prepare("UPDATE people SET level = 'chat' WHERE id IN (?, ?)").run(mina.id, jun.id);
-    raw.close();
-    const done = revalidatePersonAsks(group.hosted.roomId, mina.id);
-    expect(askById(running.id)!.state).toBe("stopping");
-    await vi.waitFor(() => expect(deps.endSession).toHaveBeenCalled());
-    endSession();
-    await done;
-    expect(askById(running.id)!.state).toBe("cancelled");
-    await revalidatePersonAsks(group.hosted.roomId, jun.id);
-    expect(askById(words.id)!.state).toBe("queued");
-  });
-
   it("cancels a queued ask when its person is removed, and its queue item with it", async () => {
     const queued = ask(mina);
     queueRoomParticipation(botId, group.threadId, { groupId: group.id, askId: queued.id });
@@ -147,8 +128,9 @@ describe("ask states", () => {
 });
 
 describe("the central guard", () => {
-  it("refuses a hosted thread without a live ask for this room, thread and bot", async () => {
-    expect(hostedTurnRefused(group, group.threadId, botId)).toBe(true);
+  it("lets the host's own turn run on the shared thread, and an ask only for its room, thread and bot", async () => {
+    expect(hostedTurnRefused(group, group.threadId, botId)).toBe(false);
+    expect(hostedTurnRefused(group, "other-thread", botId)).toBe(true);
     expect(hostedTurnRefused(group, group.threadId, botId, "no-such-ask")).toBe(true);
     const queued = ask(mina);
     expect(hostedTurnRefused(group, group.threadId, "other-bot", queued.id)).toBe(true);
@@ -162,14 +144,6 @@ describe("the central guard", () => {
     const plain = store.createGroup("Plain", [botId]);
     expect(hostedTurnRefused(plain, plain.threadId, botId)).toBe(false);
     expect(hostedTurnRefused(undefined, "x", botId)).toBe(false);
-  });
-
-  it("ends an ask whose bot left the engines rooms run on", () => {
-    const queued = ask("host");
-    deps.driverKind = () => "grokAgent";
-    expect(hostedTurnRefused(group, group.threadId, botId, queued.id)).toBe(true);
-    expect(askById(queued.id)!.state).toBe("failed");
-    expect(terminal()).toEqual(["Wink can only answer in team rooms on Claude or Codex"]);
   });
 });
 
@@ -197,44 +171,19 @@ describe("boot", () => {
   });
 });
 
-describe("quotas and open-ask limits", () => {
-  it("survive a restart", () => {
-    for (let i = 0; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, mina.id, "ask");
-    closeAsksDb();
-    closeRoomsDb();
-    expect(sendRefusal(group.hosted.roomId, mina.id, "words")).toMatch(/in an hour/);
-    expect(sendRefusal(group.hosted.roomId, mina.id, null)).toBeNull();
-    for (let i = 0; i < ROOM_LIMITS.messagesPerPersonDay; i++) spend(group.hosted.roomId, mina.id, "message");
-    closeAsksDb();
-    expect(sendRefusal(group.hosted.roomId, mina.id, null)).toMatch(/today's limit/);
-  });
-
-  it("holds one open work ask and three held asks per person", () => {
-    ask(mina);
-    expect(sendRefusal(group.hosted.roomId, mina.id, "work")).toMatch(/last request/);
-    expect(sendRefusal(group.hosted.roomId, jun.id, "work")).toBeNull();
-    for (let i = 0; i < 3; i++) ask(jun, "held");
-    expect(sendRefusal(group.hosted.roomId, jun.id, "held")).toMatch(/3 requests/);
-  });
-
-  it("counts an Allowed ask for its asker", () => {
+describe("held asks", () => {
+  it("admits an Allowed ask once", () => {
     const held = ask(mina, "held");
     expect(admitAsk(held.id, "work")).toMatchObject({ state: "queued", grant: "work", allowed: true });
     expect(deps.dispatch).toHaveBeenCalledTimes(1);
     expect(admitAsk(held.id, "work")).toBeNull();
     expect(roomAsks(group.hosted.roomId, ["queued"])).toHaveLength(1);
-    for (let i = 1; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, mina.id, "ask");
-    expect(sendRefusal(group.hosted.roomId, mina.id, "words")).toMatch(/in an hour/);
   });
 
-  it("admits no held ask past its asker's limits", () => {
+  it("queues a teammate's second Allowed ask behind the first", () => {
     const [first, second] = [ask(mina, "held"), ask(mina, "held")];
     expect(admitAsk(first.id, "work")).toMatchObject({ state: "queued" });
-    expect(() => admitAsk(second.id, "work")).toThrow(expect.objectContaining({ status: 429, message: expect.stringMatching(/last request/) }));
-    for (let i = 0; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, jun.id, "ask");
-    const late = ask(jun, "held");
-    expect(() => admitAsk(late.id, "words")).toThrow(expect.objectContaining({ status: 429, message: expect.stringMatching(/in an hour/) }));
-    expect([askById(second.id)!.state, askById(late.id)!.state]).toEqual(["held", "held"]);
-    expect(deps.dispatch).toHaveBeenCalledTimes(1);
+    expect(admitAsk(second.id, "work")).toMatchObject({ state: "queued" });
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
   });
 });

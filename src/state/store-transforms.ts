@@ -1,6 +1,7 @@
 import type { MausMotion } from "@/lib/mascot";
 import type { NotificationTarget } from "@/lib/notify";
 import { isShownMessage } from "@/lib/shown-message";
+import { joinedRoomIdOf } from "@/lib/team-rooms";
 import type { AppState, Bot, ConfigStatus, ConfigStatusFrame, Group, Message, ModelSelection, NotificationRoutingState, OptionCardData, QueueReceiptSnapshot, TerminalAttention, TerminalAttentionMap } from "./store-types";
 
 /** What the UI shows as chosen: a mid-reply pick wins over the running model. */
@@ -55,6 +56,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
     xai: frame.xai,
     gemini: frame.gemini,
+    liveCall: frame.liveCall,
     openaiCompat: frame.openaiCompat,
     composio: frame.composio,
     box: frame.box,
@@ -142,6 +144,12 @@ function reconcileSnapshotQueues(
   return { ...state, pendingQueued, consumedQueueIds };
 }
 
+/** The config's profile, or the last launch's until the config answers; null while neither is known. */
+export function shownProfile(state: Pick<AppState, "config" | "cachedProfile">): { profile: ConfigStatus["profile"] } | null {
+  if (state.config) return { profile: state.config.profile };
+  return state.cachedProfile ? { profile: state.cachedProfile } : null;
+}
+
 /** The exact conversation currently on screen. A focused window is not
  * enough to suppress an alert when its actionable card is in another task. */
 export function visibleNotificationThread(
@@ -150,7 +158,7 @@ export function visibleNotificationThread(
   return (
     state.bots.find((candidate) => candidate.id === state.selectedId)?.threadId ??
     state.groups.find((candidate) => candidate.id === state.selectedId)?.threadId ??
-    null
+    (joinedRoomIdOf(state.selectedId) ? state.selectedId : null)
   );
 }
 

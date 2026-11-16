@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 import { api } from "@/state/store";
+import { useBarTip } from "./BarTip";
 import { dayLabel } from "./TeamSection";
 
 type Provider = "claude" | "gpt" | "gemini" | "perplexity" | "search";
@@ -175,7 +176,7 @@ export function QuorumRow() {
     const kept = readKept();
     return kept ? keptView(kept) : null;
   });
-  const [tip, setTip] = useState<string | null>(null);
+  const barTip = useBarTip();
   const offset = useRef(0);
 
   useEffect(() => {
@@ -261,11 +262,7 @@ export function QuorumRow() {
               type="button"
               className="group relative h-full min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
               aria-label={text.replaceAll("\n", ", ")}
-              onMouseEnter={() => setTip(text)}
-              onMouseLeave={() => setTip(null)}
-              onFocus={() => setTip(text)}
-              onBlur={() => setTip(null)}
-              onClick={() => setTip(text)}
+              {...barTip.props(text)}
             >
               <span
                 className={bar ? "absolute inset-x-0 bottom-0 rounded-t-[2px] bg-accent group-hover:bg-accent-text group-focus-visible:bg-accent-text" : "absolute inset-x-0 bottom-0 bg-ink-secondary/50 group-hover:bg-ink-secondary"}
@@ -311,7 +308,7 @@ export function QuorumRow() {
           {cell(String(total(series.signups)), t("quorum.signupsLabel"))}
         </div>
       </div>
-      {tip && <p className="whitespace-pre-line text-[12px] leading-snug text-ink">{tip}</p>}
+      {barTip.node}
     </section>
   );
 }

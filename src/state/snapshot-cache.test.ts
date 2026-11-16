@@ -33,6 +33,15 @@ describe("snapshot cache", () => {
     expect(message.text).toContain(KEY);
   });
 
+  it("keeps the profile for the next paint and drops a malformed one", () => {
+    const local = storage();
+    const profile = { name: "Ada", email: "", avatarUrl: "/api/attachments/ada.png" };
+    writeSnapshotCache({ bots: [], groups: [], selectedId: "", profile }, local);
+    expect(readSnapshotCache(local)?.profile).toEqual(profile);
+    local.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({ bots: [], groups: [], selectedId: "", profile: { name: 7 } }));
+    expect(readSnapshotCache(local)).toBeNull();
+  });
+
   it("drops an old unredacted cache on read", () => {
     const local = storage();
     const message: Message = { id: "m1", at: 1, role: "user", kind: "text", text: KEY };

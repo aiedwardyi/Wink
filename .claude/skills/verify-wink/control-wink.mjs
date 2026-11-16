@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -26,6 +26,9 @@ const PHRASES = ["check the build log", "summarize the last run", "what changed 
 const IMAGE = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABkCAIAAACO1KzYAAAAwUlEQVR42u3cMQ0AMAgAQbR0qgx8YKH+19ZDN8glr4BbgVg7NbgwAsACLMACLMACLMCABViABViABViAAQuwAAuwAAuwAAswYHUHrnM1OMCABViABViABViAAQuwAAuwAAuwAAMWYAEWYAEWYAEWYMBqD2z33+mKAAuwAAuwAAswYAEWYAEWYAEWYMACLMACLMACLMACDFiA5eO7nK4IsAALMGABFmABFmABFmDAAizAAizAAizAAgxYgAVYgAVYnz2gdkg5DMIO4AAAAABJRU5ErkJggg==";
 const NAV = 'aside[aria-label="Bots and navigation"]';
 const BUSY = "[data-orbit-composer-stop], [data-turn-mascot]";
+// A browser-host with no command for this long closes; every connect resets it.
+const IDLE_MS = 10 * 60_000;
+const SHELLS = new Set(["bash.exe", "sh.exe", "cmd.exe", "pwsh.exe", "powershell.exe"]);
 const SYSTEM_VARS = ["SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION", "NUMBER_OF_PROCESSORS", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432", "ALLUSERSPROFILE", "PUBLIC", "COMPUTERNAME", "USERNAME", "USERDOMAIN"];
 
 const HELP = `node control-wink.mjs <command> [args] [--page <name>] [--timeout <ms>]   scratch: ${ROOT}
@@ -248,7 +251,8 @@ async function ensureBrowser(state, engine) {
   const file = join(ROOT, `browser-${engine}.json`);
   if (state.browsers[engine] && alive(state.browsers[engine].pid) && existsSync(file)) return;
   rmSync(file, { force: true });
-  const env = scratchEnv({ WINK_VERIFY_ROOT: ROOT, PLAYWRIGHT: playwrightDir(), PLAYWRIGHT_BROWSERS_PATH: browsersPath(), WINK_SPAWN_LOG: join(state.run, "spawns.jsonl") });
+  for (const [name, page] of Object.entries(state.pages)) if (page.engine === engine) delete state.pages[name];
+  const env = scratchEnv({ WINK_VERIFY_ROOT: ROOT, WINK_OWNER_PID: String(ownerPid()), PLAYWRIGHT: playwrightDir(), PLAYWRIGHT_BROWSERS_PATH: browsersPath(), WINK_SPAWN_LOG: join(state.run, "spawns.jsonl") });
   const pid = detached([SELF, "browser-host", engine], env, join(state.run, `browser-${engine}.log`));
   state.browsers[engine] = { pid };
   saveState(state);
@@ -257,6 +261,14 @@ async function ensureBrowser(state, engine) {
     return existsSync(file);
   }, 60_000, `browser ${engine}`);
   say(`browser ${engine} pid ${pid}`);
+}
+
+// The shells around this command exit with it; the agent or terminal above them is what started the run.
+function ownerPid() {
+  const table = processTable();
+  let proc = table.get(table.get(process.pid)?.ParentProcessId);
+  while (proc && SHELLS.has(proc.Name?.toLowerCase())) proc = table.get(proc.ParentProcessId);
+  return proc?.ProcessId ?? 0;
 }
 
 async function browserHost() {
@@ -269,14 +281,33 @@ async function browserHost() {
   writeFileSync(`${file}.tmp`, JSON.stringify({ pid: process.pid, ws: server.wsEndpoint() }));
   renameSync(`${file}.tmp`, file);
   const stop = join(ROOT, "stop", `browser-${engine}`);
+  const owner = Number(process.env.WINK_OWNER_PID);
   const timer = setInterval(() => {
-    if (!existsSync(stop)) return;
+    const idle = Date.now() - (statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+    const why = existsSync(stop) ? "stop file" : owner && !alive(owner) ? `owner pid ${owner} gone` : idle > IDLE_MS ? `idle ${Math.round(idle / 60_000)} min` : null;
+    if (!why) return;
     clearInterval(timer);
+    console.log(`${new Date().toISOString()} browser-host closing: ${why}`);
+    rmSync(file, { force: true });
     server.close().finally(() => setTimeout(() => process.kill(process.pid), 2000).unref());
   }, 500);
 }
 
-const connect = (engine) => playwright()[engine].connect(readJson(join(ROOT, `browser-${engine}.json`)).ws);
+async function connect(engine) {
+  const file = join(ROOT, `browser-${engine}.json`);
+  if (!existsSync(file)) throw new Error(`browser ${engine} closed (idle ${IDLE_MS / 60_000} min, or the agent that opened it exited): run open again`);
+  const browser = await playwright()[engine].connect(readJson(file).ws);
+  const touch = () => {
+    try {
+      utimesSync(file, new Date(), new Date());
+    } catch {}
+  };
+  touch();
+  const beat = setInterval(touch, 60_000);
+  beat.unref();
+  browser.on("disconnected", () => clearInterval(beat));
+  return browser;
+}
 
 async function newContext(browser, name, kind, token, width = 390) {
   const phone = kind === "phone";
@@ -332,8 +363,8 @@ async function open() {
   if ((kind !== "desktop" && kind !== "phone") || (engine !== "chromium" && engine !== "webkit")) throw new Error("open desktop|phone [--engine chromium|webkit]");
   const state = loadState();
   const name = flags.name ?? (engine === "chromium" ? kind : `${kind}-${engine}`);
-  if (state.pages[name]) throw new Error(`page "${name}" is already open`);
   await ensureBrowser(state, engine);
+  if (state.pages[name]) throw new Error(`page "${name}" is already open`);
   const browser = await connect(engine);
   try {
     const widths = kind === "phone" && flags.phone ? String(flags.phone).split(",").map(Number) : [kind === "phone" ? 390 : undefined];
@@ -736,7 +767,7 @@ async function seedFromProfile(state) {
 }
 
 function processTable() {
-  const script = "Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; CommandLine = $_.CommandLine; Created = $(if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }) } } | ConvertTo-Json -Compress";
+  const script = "Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; CommandLine = $_.CommandLine; Created = $(if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }) } } | ConvertTo-Json -Compress";
   const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, maxBuffer: 1 << 26, stdio: ["ignore", "pipe", "ignore"] });
   return new Map(JSON.parse(out).map((proc) => [proc.ProcessId, proc]));
 }

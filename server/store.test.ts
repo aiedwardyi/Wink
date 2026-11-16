@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { postAskUser } from "./ask-user.ts";
+import * as atomic from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -21,6 +22,7 @@ import { readTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
 import { buildResumeFallback, engineIsFresh } from "./turn-context.ts";
 import { workspaceDir } from "./workspace.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
+import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -116,6 +118,25 @@ describe("Store", () => {
     expect(projected.text).toBe(text);
     expect(JSON.stringify(projected.tool)).not.toContain("ReplyCanary987654321");
     expect(message.tool.detail.output).toEqual([text]);
+  });
+
+  it.each([
+    "The code is ready.",
+    "exit code: 1 and error code: 404",
+    "the password is stored in .env",
+    "use color #3B82F6 and #E5E7EB",
+    "my pin is on the fridge",
+    "...and the code is clean now",
+  ])("saves the bot reply %s unmasked", async (text) => {
+    const { messageDatabase } = await import("./message-db.ts");
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Rando" }, { seedMessages: false });
+    const row = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "" });
+    expect(store.appendMessage(bot.threadId, { role: "bot", kind: "text", text }).text).toBe(text);
+    expect(store.patchMessage(bot.threadId, row.id, { text })?.text).toBe(text);
+    const saved = JSON.stringify(messageDatabase().prepare("SELECT json FROM messages WHERE id = ?").get(row.id));
+    expect(saved).toContain(text);
+    expect(saved).not.toContain("redacted");
   });
 
   it("tool detail safety sends SSE message rows through the HTTP projection", () => {
@@ -370,7 +391,7 @@ describe("Store", () => {
     expect(colors.every((color) => color === "white")).toBe(true);
   });
 
-  it("repairs a live lead on membership change, then reload resets to everyone", () => {
+  it("repairs a lead on membership change and keeps it across reload", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
@@ -381,7 +402,7 @@ describe("Store", () => {
     expect(group.defaultResponder).toEqual({ kind: "member", botId: second.id });
 
     const reloaded = new Store(selection);
-    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "everyone" });
+    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "member", botId: second.id });
   });
 
   it("persists a channel's context when it is created", () => {
@@ -410,7 +431,7 @@ describe("Store", () => {
     expect(channel.setupCompletedAt).toEqual(expect.any(Number));
     expect(new Store(selection).group(channel.id)).toMatchObject({
       bulletin: "Ship carefully.",
-      defaultResponder: { kind: "everyone" },
+      defaultResponder: { kind: "mentions" },
       setupCompletedAt: channel.setupCompletedAt,
     });
   });
@@ -723,6 +744,41 @@ describe("Store", () => {
     expect(new Store(selection).taskPacket(bot.threadId)).toEqual(saved);
   });
 
+  it("stages a send's task packet for every reader and settles it after dispatch", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId));
+    const changes: unknown[] = [];
+    store.onChange((change) => changes.push(change));
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+
+    const staged = store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { instructionId: "message-2", updatedAt: 200 }), { staged: true });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(changes).toContainEqual({ type: "task.packet", threadId: bot.threadId });
+    expect(store.taskPacket(bot.threadId)).toEqual(staged);
+    expect(new Store(selection).taskPacket(bot.threadId)).toEqual(staged);
+
+    store.settleTaskPacket(bot.threadId);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(join(DATA_DIR, "task-state", `${bot.threadId}.json`), "utf8"))).toEqual(staged);
+    write.mockRestore();
+  });
+
+  it("recovers the staged record when the app crashed right after the send", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId));
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { instructionId: "message-2", goal: "Ship the release notes", updatedAt: 200 }), { staged: true });
+    store.setActivity(bot.id, "working");
+
+    const recovered = new Store(selection);
+
+    const record = { flushReason: "crash", instructionId: "message-2", goal: "Ship the release notes" };
+    expect(recovered.taskPacket(bot.threadId)).toMatchObject(record);
+    expect(JSON.parse(readFileSync(join(DATA_DIR, "task-state", `${bot.threadId}.json`), "utf8"))).toMatchObject(record);
+  });
+
   it("owns a room task packet through one of its members", () => {
     const store = new Store(selection);
     const member = store.createBot();
@@ -932,6 +988,19 @@ describe("Store", () => {
     expect(recovered.taskPacket(member.threadId)?.flushReason).toBe("progress");
   });
 
+  it("names the member that was speaking on a room crash packet", () => {
+    const store = new Store(selection);
+    const first = store.createBot();
+    const speaker = store.createBot();
+    const room = store.createGroup("Two bots", [first.id, speaker.id]);
+    store.writeTaskPacket(taskPacket(first.id, room.threadId));
+    store.setActivity(speaker.id, "working", room.threadId);
+
+    const recovered = new Store(selection);
+
+    expect(recovered.taskPacket(room.threadId)).toMatchObject({ flushReason: "crash", botId: speaker.id });
+  });
+
   it("seeds a room crash packet from the last room instruction when none was saved", () => {
     const store = new Store(selection);
     const member = store.createBot();
@@ -1036,6 +1105,27 @@ describe("Store", () => {
     expect(reloaded.taskByThread(bot.id, bot.threadId)?.lastModel).toBe(to);
     expect(reloaded.bot(droid.id)?.modelSelection.model).toBe(from);
     expect(reloaded.taskByThread(droid.id, droid.threadId)?.lastModel).toBe(from);
+  });
+
+  it("moves a bot saved on a retired Gemini Flash id to 3.8 Flash at the same effort", () => {
+    const store = new Store(selection);
+    const bots = RETIRED_GEMINI_FLASH_IDS.map(([from]) => {
+      const bot = store.createBot({ modelSelection: { instanceId: "antigravity", model: from } });
+      store.markTaskDispatched(bot.id, bot.threadId, "antigravity", from);
+      return { bot, from };
+    });
+    const other = store.createBot({ modelSelection: { instanceId: "droid", model: "gemini-3.7-flash-high" } });
+
+    for (const [from, to] of RETIRED_GEMINI_FLASH_IDS) store.renameModel(["antigravity"], from, to);
+
+    const reloaded = new Store(selection);
+    expect(bots).toHaveLength(9);
+    for (const { bot, from } of bots) {
+      const effort = from.split("-").pop();
+      expect(reloaded.bot(bot.id)?.modelSelection.model).toBe(`gemini-3.8-flash-${effort}`);
+      expect(reloaded.taskByThread(bot.id, bot.threadId)?.lastModel).toBe(`gemini-3.8-flash-${effort}`);
+    }
+    expect(reloaded.bot(other.id)?.modelSelection.model).toBe("gemini-3.7-flash-high");
   });
 
   it("renameModel resets migrated Codex sessions and keeps Claude sessions", () => {
@@ -1347,6 +1437,9 @@ describe("Store", () => {
       bot: (id) => store.bot(id),
       conversation: () => ({}),
       appendMessage: (threadId, message) => store.appendMessage(threadId, message),
+      activePath: (threadId) => store.activePath(threadId),
+      patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
+      cancelHeld: () => false,
       alertThread: (_bot, threadId) => threadId,
       notifyQuestion: () => {},
       whenSettled: (_botId, _threadId, post) => post(),

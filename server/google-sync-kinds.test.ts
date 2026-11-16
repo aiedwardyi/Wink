@@ -170,7 +170,7 @@ describe("Google reader kind recovery", () => {
     const reader = profile.match(/const isSyncOperationFile = .+/)![0].match(/json\|[a-z|]+/)![0];
     const google = source("./google-sync.ts").match(/const OPERATION_FILE = .+/)![0].match(/json\|[a-z|]+/)![0];
     expect({ revision: DRIVE_READER_REVISION, classifier: createHash("sha256").update(classifier).digest("hex"), own, reader, google }).toEqual({
-      revision: 1, classifier: "2e55776b67e0841ff3f06849ca7956c03b6d6069deb1b0d763e83bc007f443e2", own: ["notes", "paths", "pin", "style"], reader: "json|notes|paths|pin|style", google: "json|notes|paths|pin|style",
+      revision: 2, classifier: "b8b6172ce68aeff03018551f0ac323b2bccfafcc9d1e4746e197ff0e2d90d8cd", own: ["notes", "paths", "pin", "style", "trash"], reader: "json|notes|paths|pin|style|trash", google: "json|notes|paths|pin|style|trash",
     });
     for (const ext of ["json", ...own]) {
       expect(drivePathRule(`changes/1-device-writer-op.${ext}`, IDS)).toBe("once");
@@ -221,6 +221,46 @@ describe("Google reader kind recovery", () => {
     expect(drive.downloads).toHaveLength(downloads + 1);
     expect(drive.uploads).toHaveLength(uploads);
     expect(readSyncOperations(join(dataDir, "google-drive")).operations).toHaveLength(1);
+  });
+
+  it("applies a trash mark skipped on the old reader once the PC updates", async () => {
+    const dataDir = await joined();
+    writeFileSync(join(dataDir, RECEIPT), JSON.stringify({ ...receipt(dataDir), readerRevision: 1 }));
+    const { path, operation } = await publish({ trashed: true });
+    expect(path).toMatch(/\.trash$/);
+    const summary = await oldMirror({ owner: OWNER, ownIds: IDS, mirrorPath: join(dataDir, "google-drive"), statePath: join(dataDir, GOOGLE_TABLE_FILE),
+      client: createDriveClient({ getAccessToken: async () => "fake-access", fetch: drive.fetch }) }).syncOnce();
+    expect(summary.skipped).toContain(path);
+    expect(existsSync(join(dataDir, "google-drive", path))).toBe(false);
+    const sync = boot(dataDir, () => true);
+    sync.resume();
+    await settle(sync);
+    window();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await sync.idle();
+    expect(starts()).toHaveLength(1);
+    expect(drive.downloads).toHaveLength(1);
+    expect(readSyncOperations(join(dataDir, "google-drive")).operations).toEqual([operation]);
+    expect(applySyncOperations(emptyProfileSyncState(), [operation]).bots["bot-1"]).toEqual({ id: "bot-1", trashed: true });
+  });
+
+  it("never lets the 1.0.213 mirror download or delete a trash mark", async () => {
+    const dataDir = await joined();
+    const { path } = await publish({ trashed: true });
+    const own = `changes/000000000002-${IDS.profileDeviceId}-${randomUUID()}.trash`;
+    write(join(dataDir, "google-drive", own), "written before a downgrade");
+    window();
+    for (let i = 0; i < 2; i++) {
+      const summary = await oldMirror({ owner: OWNER, ownIds: IDS, mirrorPath: join(dataDir, "google-drive"), statePath: join(dataDir, GOOGLE_TABLE_FILE),
+        client: createDriveClient({ getAccessToken: async () => "fake-access", fetch: drive.fetch }) }).syncOnce();
+      expect(summary.failed).toEqual([]);
+    }
+    expect(drive.downloads).toEqual([]);
+    expect(drive.uploads).toEqual([]);
+    expect(drive.calls.filter(({ method }) => method === "DELETE" || method === "PATCH")).toEqual([]);
+    expect([...drive.records.values()].filter(({ file }) => !file.trashed && decodeDrivePath(file.name) === path)).toHaveLength(1);
+    expect(existsSync(join(dataDir, "google-drive", path))).toBe(false);
+    expect(readFileSync(join(dataDir, "google-drive", own), "utf8")).toBe("written before a downgrade");
   });
 
   it("detects a downgrade cursor advance with an existing current receipt", async () => {

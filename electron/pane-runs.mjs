@@ -59,8 +59,9 @@ export function createPaneRuns(file) {
       run.recovery = claim;
       return false;
     },
-    started({ id, botId, teacher, label, cwd, spawnedAt, session }) {
+    started({ id, botId, teacher, label, cwd, baseHead, spawnedAt, session }) {
       const run = { id, botId, teacher, label: label ?? null, cwd, spawnedAt, state: "running", ...(session ? { session: { ...session } } : {}) };
+      if (baseHead) run.baseHead = baseHead;
       const stored = runs.get(id);
       if (stored?.session && session?.launchGeneration === stored.session.launchGeneration) run.session = { ...stored.session, lifecycle: "running" };
       if (stored && Object.keys(run).every((key) => stored[key] === run[key])) return;

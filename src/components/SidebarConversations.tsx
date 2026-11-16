@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Crown, Loader2, Pin, Users, X } from "lucide-react";
+import { Crown, Loader2, Pin, Trash2, Users, X } from "lucide-react";
 import { roomConversationPreview } from "@/lib/conversation-preview";
 import { api, terminalAttentionForBot, useStore, formatTime, previewMessages, shownModelSelection, type Bot, type Group, type TerminalAttention } from "@/state/store";
 import { BotAvatar } from "./Avatar";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { RoomPicture } from "./RoomPicture";
+import { hostRoomBase, isTeamRoom, roomPictureUrl } from "@/lib/team-rooms";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -19,7 +22,9 @@ import { chatNeedsYou } from "@/lib/open-question";
 import { routineRinging } from "@/lib/routine-ring";
 import { formatCollapsedUnreadBadge, unreadReplyCount } from "@/lib/unread";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { useLoadedJoinedRooms } from "@/lib/joined-rooms";
 import { sidebarWorkerStatus } from "@/lib/worker-status";
+import { turnElsewhere } from "@/lib/turn-stage";
 import { terminalAttentionCopy } from "@/lib/notify";
 
 export function compactSidebarModelLabel(label: string): string {
@@ -96,12 +101,22 @@ function GroupListItem({
   onMenu,
   drag,
   onReselect,
+  joined = false,
+  picture,
+  preview,
+  unread,
+  at,
 }: {
   group: Group;
   density: SidebarDensity;
   onMenu: (menu: { groupId: string; x: number; y: number }) => void;
   drag?: SidebarRowDrag;
   onReselect?: () => void;
+  joined?: boolean;
+  picture?: string;
+  preview?: string;
+  unread?: number;
+  at?: number;
 }) {
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
@@ -113,7 +128,8 @@ function GroupListItem({
   const last = group.messages.filter(isShownMessage).at(-1);
   const question = chatNeedsYou(group.messages);
   const asking = question || routineRinging(state.routineRuns, group.threadId, group.tasks);
-  const unreadCount = useMemo(() => unreadReplyCount(group.unread, group.readAt, group.messages), [group.unread, group.readAt, group.messages]);
+  const unreadCount = useMemo(() => unread ?? unreadReplyCount(group.unread, group.readAt, group.messages), [unread, group.unread, group.readAt, group.messages]);
+  const lastAt = at ?? last?.at;
   const iconLabel = [asking ? t(question ? "ask.rowHasQuestion" : "routine.rowRang", { name: group.name }) : group.name, unreadCount ? t("chrome.unreadReplies", { count: unreadCount }) : null].filter(Boolean).join(" · ");
   const select = () => {
     if (selected) onReselect?.();
@@ -158,6 +174,7 @@ function GroupListItem({
       data-sidebar-row
       data-sidebar-row-kind="group"
       data-sidebar-row-id={group.id}
+      data-joined-room-row={joined || undefined}
       data-sidebar-needs-you={asking || undefined}
       data-sidebar-chat-unread={group.unread || undefined}
       title={density === "icons" ? group.name : undefined}
@@ -223,7 +240,7 @@ function GroupListItem({
         aria-keyshortcuts={drag?.onMove ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
       >
         <span className="relative shrink-0">
-          <StackedMauses members={members} density={density} />
+          {joined ? <RoomPicture src={picture} size={density === "compact" ? 32 : 48} /> : group.hosted && (isTeamRoom(group) || group.picture) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
           <UnreadCountBadge count={unreadCount} selected={selected} />
         </span>
         <div className={cn("@container/rowtext min-w-0 flex-1", density === "icons" && "hidden")}>
@@ -233,15 +250,15 @@ function GroupListItem({
               {group.name}
               <span className="sr-only" aria-live="polite">{asking ? t(question ? "ask.hasQuestionSuffix" : "routine.rangSuffix") : ""}</span>
             </span>
-            {last && (
+            {lastAt !== undefined && (
               <span
                 className={cn(
                   "shrink-0 text-xs text-ink-secondary",
-                  !group.hosted && "@max-[10rem]/rowtext:hidden!",
-                  !selected && !group.hosted && "hidden group-hover:inline group-focus-within:inline",
+                  !group.hosted && !joined && "@max-[10rem]/rowtext:hidden!",
+                  !selected && !group.hosted && !joined && "hidden group-hover:inline group-focus-within:inline",
                 )}
               >
-                {formatTime(last.at, localeTag(locale))}
+                {formatTime(lastAt, localeTag(locale))}
               </span>
             )}
           </div>
@@ -252,7 +269,7 @@ function GroupListItem({
                 density === "compact" ? "text-xs leading-tight" : "text-[13px]",
               )}
             >
-              {roomConversationPreview(group, state.bots, showToolCalls)}
+              {preview ?? roomConversationPreview(group, state.bots, showToolCalls)}
             </span>
           </div>
         </div>
@@ -297,7 +314,7 @@ function BotListItem({
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
-  const avatarSize = iconOnly ? 44 : density === "compact" ? 32 : 48;
+  const avatarSize = iconOnly ? 44 : density === "compact" ? 32 : 40;
   // the visible branch, so a version switch changes the row with the chat
   const visible = previewMessages(bot);
   const last = visible.filter(isShownMessage).at(-1);
@@ -311,6 +328,11 @@ function BotListItem({
   const terminalCopy = terminalAttention ? terminalAttentionCopy(terminalAttention.reason, locale) : null;
   const paneLabels = state.terminalPanes[bot.id];
   const workerStatus = useMemo(() => sidebarWorkerStatus(visible, paneLabels ?? [], t), [visible, paneLabels, t]);
+  const joinedRooms = useLoadedJoinedRooms();
+  const elsewhere = useMemo(
+    () => turnElsewhere(bot, state.groups, state.routineRuns, joinedRooms),
+    [bot, state.groups, state.routineRuns, joinedRooms],
+  );
   const question = chatNeedsYou(bot.messages);
   const asking = question || routineRinging(state.routineRuns, bot.threadId, bot.tasks);
   const unreadCount = useMemo(() => unreadReplyCount(bot.unread, bot.readAt, visible), [bot.unread, bot.readAt, visible]);
@@ -404,7 +426,7 @@ function BotListItem({
           <span
             className={cn(
               "flex min-w-0 flex-1 items-center gap-1.5 text-ink",
-              density === "compact" ? "text-[13px] font-medium" : "text-[15px] font-semibold",
+              density === "compact" ? "text-[13px] font-medium" : "text-[14px] font-semibold",
             )}
           >
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
@@ -417,7 +439,7 @@ function BotListItem({
               className={cn("min-w-0 truncate", !bot.chiefOfStaff && "flex-1")}
               inputClassName={cn(
                 "w-full rounded bg-inset px-1 py-0.5",
-                density === "compact" ? "text-[13px] font-medium" : "text-[15px] font-semibold",
+                density === "compact" ? "text-[13px] font-medium" : "text-[14px] font-semibold",
               )}
             />
             {bot.chiefOfStaff && (
@@ -451,7 +473,9 @@ function BotListItem({
                 )}
               >
                 {expandedModelLabel && <span data-sidebar-model-label className="min-w-0 flex-1 truncate">{expandedModelLabel}</span>}
-                {bot.busy && <span className="shrink-0 truncate">{t("chrome.working")}</span>}
+                {bot.busy && (elsewhere
+                  ? <span data-sidebar-working-where className={cn("min-w-0 truncate", expandedModelLabel && "max-w-[70%]")}>{t(elsewhere.kind === "routine" ? "chrome.workingOn" : "chrome.workingIn", { name: elsewhere.name })}</span>
+                  : <span className="shrink-0 truncate">{t("chrome.working")}</span>)}
               </div>
             )}
           </div>
@@ -714,5 +738,175 @@ function ArchivedBotsPanel({
   );
 }
 
-export { ArchivedBotsPanel, BotListItem, GroupListItem };
-export type { MenuState, SidebarRowDrag };
+type TrashedBot = Pick<Bot, "id" | "name" | "color" | "mascotStyle" | "avatarUrl" | "avatarCrop"> & { daysLeft: number };
+
+function RecentlyDeletedPanel({
+  bots,
+  closing,
+  onClose,
+  onChanged,
+  onRestored,
+}: {
+  bots: TrashedBot[];
+  closing: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+  onRestored: (message: string) => void;
+}) {
+  const { t } = useI18n();
+  const { dispatch } = useStore();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [emptying, setEmptying] = useState(false);
+  const [everyPc, setEveryPc] = useState(false);
+  const [error, setError] = useState("");
+  const busy = Boolean(busyId) || emptying;
+
+  useEffect(() => {
+    let live = true;
+    // a connected folder with chat sync off does not copy Empty now to other PCs
+    void api("/api/profile-sync")
+      .then((body) => {
+        if (live) setEveryPc(body?.configured === true && body?.syncChats === true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (closing || confirming) return;
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, closing, confirming, onClose]);
+
+  const restore = async (bot: TrashedBot) => {
+    setBusyId(bot.id);
+    setError("");
+    try {
+      const response = await api(`/api/bot-trash/${bot.id}/restore`, { method: "POST" });
+      dispatch({ type: "botPatched", bot: response.bot });
+      dispatch({ type: "select", id: bot.id });
+      onRestored(t("chrome.botRestored", { name: bot.name }));
+      onChanged();
+      if (bots.length === 1) onClose();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message.includes("open in another app") ? t("chrome.restoreFolderBusy", { name: bot.name }) : message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const emptyNow = async () => {
+    setConfirming(false);
+    setEmptying(true);
+    setError("");
+    try {
+      await api("/api/bot-trash/empty", { method: "POST" });
+      onChanged();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEmptying(false);
+    }
+  };
+
+  const one = bots.length === 1;
+  const emptyBody = everyPc
+    ? (one ? "chrome.emptyTrashBodyAllPcsOne" : "chrome.emptyTrashBodyAllPcsMany")
+    : (one ? "chrome.emptyTrashBodyOne" : "chrome.emptyTrashBodyMany");
+
+  return createPortal(
+    <div
+      data-closing={closing || undefined}
+      inert={closing}
+      className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px] sm:p-6"
+      onMouseDown={(event) => event.target === event.currentTarget && !busy && !confirming && onClose()}
+    >
+      <div
+        ref={dialogRef}
+        role={closing ? undefined : "dialog"}
+        aria-modal={!closing || undefined}
+        aria-labelledby="recently-deleted-title"
+        tabIndex={-1}
+        className="animate-pop-in flex max-h-[min(680px,calc(100dvh-2rem))] w-full max-w-[760px] flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/50 outline-none"
+      >
+        <header className="flex items-start justify-between gap-4 px-6 pb-4 pt-6 sm:px-8 sm:pt-7">
+          <div className="min-w-0">
+            <h2 id="recently-deleted-title" className="flex items-center gap-2 text-[22px] font-semibold tracking-[-0.01em] text-ink">
+              <Trash2 size={20} className="shrink-0 text-ink-secondary" aria-hidden="true" />
+              {t("chrome.recentlyDeleted")}
+            </h2>
+            <p className="mt-1 text-[13px] text-ink-secondary">{t("chrome.recentlyDeletedKept")}</p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40"
+            aria-label={t("chrome.closeRecentlyDeleted")}
+          >
+            <X size={21} />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-3 sm:px-8">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="text-[12px] font-medium text-ink-secondary">{t("chrome.recentlyDeletedCount", { count: bots.length })}</span>
+            {bots.length > 0 && (
+              <button
+                onClick={() => setConfirming(true)}
+                disabled={busy}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-danger/10 px-3.5 py-2 text-[12.5px] font-medium text-danger hover:bg-danger/15 disabled:opacity-40"
+              >
+                {emptying && <Loader2 size={13} className="animate-spin" />}
+                {t("chrome.emptyNow")}
+              </button>
+            )}
+          </div>
+          <div className={cn("grid grid-cols-1 gap-x-8", bots.length >= 2 && "md:grid-cols-2")}>
+            {bots.map((bot) => (
+              <div key={bot.id} className="flex min-h-[82px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
+                <BotAvatar bot={bot} state="happy" size={42} animated={false} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-ink">{bot.name}</div>
+                  <div className="mt-0.5 whitespace-nowrap text-[12.5px] text-ink-secondary">
+                    {t(bot.daysLeft === 1 ? "chrome.trashDaysLeftOne" : "chrome.trashDaysLeftMany", { count: bot.daysLeft })}
+                  </div>
+                </div>
+                <button
+                  onClick={() => void restore(bot)}
+                  disabled={busy}
+                  className="flex min-w-[78px] shrink-0 items-center justify-center gap-1.5 rounded-full bg-raised px-3.5 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-40"
+                >
+                  {busyId === bot.id && <Loader2 size={13} className="animate-spin" />}
+                  {t("chrome.restore")}
+                </button>
+              </div>
+            ))}
+          </div>
+          {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+        </div>
+      </div>
+      {confirming && (
+        <ConfirmDialog
+          title={t("chrome.emptyTrashTitle")}
+          body={t(emptyBody, { count: bots.length })}
+          confirmLabel={t("chrome.deleteForGood")}
+          onConfirm={() => void emptyNow()}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+export { ArchivedBotsPanel, BotListItem, GroupListItem, RecentlyDeletedPanel };
+export type { MenuState, SidebarRowDrag, TrashedBot };

@@ -6,11 +6,13 @@ import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, MemoryFileLines, NotedLines, type MemoryTopic } from "./MemoryGroups";
 import { paintsGlow, smoothGlow } from "./MemoryMapGlow";
-import { AURA, fadePanel, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
+import { AURA, fadePanel, moveRows, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
+import { MemoryAsks } from "./MemoryAsks";
 import { TopicRows } from "./MemoryTopics";
-import { Fold } from "./Fold";
 import { liveHeight, STACK_BELOW, useStage } from "./MemoryMapStage";
 import "./MemoryMap.css";
+
+export { warmGlow } from "./MemoryMapGlow";
 
 export interface SleepReadout {
   sleptAt: Date;
@@ -81,12 +83,14 @@ function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTi
   );
 }
 
-export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, saveState, fileAction, editing = false, onEditing, onStack }: {
+export function MemoryMap({ bot, text, topics, target, active, loading = false, sleep = null, failed = false, onRetry, editor, saveState, fileAction, editing = false, onEditing, onStack }: {
   bot: Bot;
   text: string;
   topics: MemoryTopic[];
   target?: AppState["settingsMemoryTarget"];
   active: boolean;
+  /** the first read is out: the map shows its frame and fills in when it lands */
+  loading?: boolean;
   sleep?: SleepReadout | null;
   failed?: boolean;
   onRetry?: () => void;
@@ -105,8 +109,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const sheets = { long: useRef<HTMLElement>(null), knowledge: useRef<HTMLElement>(null), muscle: useRef<HTMLElement>(null) };
   const played = useRef<Partial<Record<Kind, Animation[]>>>({});
   const loose = useRef<Animation[]>([]);
+  const moving = useRef<Animation[]>([]);
+  const rows = useRef<Map<HTMLElement, number> | null>(null);
   const openNow = useRef<Kind | null>(null);
-  const mist = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const panels = { long: useRef<HTMLButtonElement>(null), knowledge: useRef<HTMLButtonElement>(null), muscle: useRef<HTMLButtonElement>(null) };
   // a viewport under the threshold is always stacked, so a phone never lays out the wide map first
@@ -117,8 +122,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const [mistOn, setMistOn] = useState(false);
   const [still, setStill] = useState(false);
   const [smooth, setSmooth] = useState(paintsGlow);
+  const useSmooth = smooth && !stacked;
   // labels and counts, then icons and glow, then Live; an open editor shows at once
-  const stage = useStage(2, editing);
+  const stage = useStage(loading ? 0 : 2, editing);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const before = useRef<string | null>(null);
   const quiet = useRef(false);
@@ -133,13 +139,13 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
 
   // the GPU probe makes a WebGL context, so it waits until the wide open has played; the glow's painter answers it instead while it paints
   useEffect(() => {
-    if (smooth) return;
+    if (smooth || stacked) return;
     const probe = setTimeout(() => setStill(softwareRender()), 600);
     return () => clearTimeout(probe);
-  }, [smooth]);
+  }, [smooth, stacked]);
 
-  // the painter reads the CSS glow, which the first stage adds
-  const painted = smooth && stage > 0;
+  // the painter reads the CSS glow, which the first stage adds, and waits for the last, so it paints the final sizes once
+  const painted = useSmooth && stage > 1;
   useLayoutEffect(() => {
     if (!painted || !root.current) return;
     return smoothGlow(root.current, () => setSmooth(false));
@@ -161,12 +167,14 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   }, []);
 
   const stop = () => {
-    for (const each of [...Object.values(played.current).flatMap((each) => each ?? []), ...loose.current]) {
+    for (const each of [...Object.values(played.current).flatMap((each) => each ?? []), ...loose.current, ...moving.current]) {
       each.finished.catch(() => undefined);
       each.cancel();
     }
     played.current = {};
     loose.current = [];
+    moving.current = [];
+    rows.current = null;
   };
 
   // the phone layout unmounts the sheets, so motion kept for them would play on detached nodes
@@ -202,15 +210,24 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   }, [open, stacked]);
 
   useLayoutEffect(() => {
-    if (!open || !stacked) return;
-    const slot = panels[open].current?.parentElement;
-    const fold = slot?.querySelector<HTMLElement>("[data-fold]");
-    if (!slot || !fold || !root.current) return;
-    const slots = [...root.current.querySelectorAll<HTMLElement>(".mm-slot")];
-    const after: HTMLElement[] = [];
-    for (let next = root.current.nextElementSibling; next instanceof HTMLElement; next = next.nextElementSibling) after.push(next);
-    openFold(fold, [...slots.slice(slots.indexOf(slot) + 1), ...after], mist.current, loose.current);
+    if (!stacked) return;
+    if (rows.current) {
+      for (const each of moving.current) { each.finished.catch(() => undefined); each.cancel(); }
+      moving.current = moveRows(rows.current, open !== null);
+      rows.current = null;
+    }
+    if (!open) return;
+    const running = played.current[open], fold = sheets[open].current;
+    if (running) void playOpen(running, true);
+    else if (fold) played.current[open] = openFold(fold);
   }, [open, stacked]);
+
+  const rememberRows = () => {
+    if (!stacked || !root.current) return;
+    const below = [...root.current.querySelectorAll<HTMLElement>(".mm-core, .mm-live, .mm-slot")];
+    for (let next = root.current.nextElementSibling; next instanceof HTMLElement; next = next.nextElementSibling) below.push(next);
+    rows.current = new Map(below.map((each) => [each, each.getBoundingClientRect().top]));
+  };
 
   const editingHere = editing && !stacked;
   useLayoutEffect(() => {
@@ -240,8 +257,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const close = (next: Kind | null = null) => {
     if (!open) return;
     const kind = open;
+    rememberRows();
     setOpen(next);
-    if (stacked) return;
     setLeaving((was) => [...was.filter((each) => each !== kind), kind]);
     void playOpen(played.current[kind] ?? [], false).then((done) => {
       if (!done) return;
@@ -255,9 +272,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const toggle = (kind: Kind) => {
     if (open === kind) { close(); return; }
     setLeaving((was) => was.filter((each) => each !== kind));
-    if (!played.current[kind]) setMistOn(openMist());
+    if (!played.current[kind]) setMistOn(!stacked && openMist());
     if (open) close(kind);
-    else setOpen(kind);
+    else { rememberRows(); setOpen(kind); }
   };
 
   const outside = ({ target }: { target: EventTarget }) => {
@@ -296,20 +313,17 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
         <span className="mm-newest">{foot}</span>
         <Count kind={kind} count={count} />
       </button>
-      {stacked && (
-        <Fold open={open === kind}>
-          <div className="mm-fold">
-            {mistOn && open === kind && <div ref={mist} className="mm-sweep" aria-hidden="true" />}
-            {kind === "long" && onEditing && <button type="button" className="mm-action mm-fold-edit" onClick={() => onEditing(true)}><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</button>}
-            {list}
-          </div>
-        </Fold>
+      {stacked && (open === kind || leaving.includes(kind)) && (
+        <section ref={sheets[kind]} className="mm-fold" data-leaving={kind !== open || undefined} inert={kind !== open} aria-label={name}>
+          {kind === "long" && onEditing && <button type="button" className="mm-action mm-fold-edit" onClick={() => onEditing(true)}><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</button>}
+          {list}
+        </section>
       )}
     </div>
   );
 
-  const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed ? null : t("bot.memoryNone"));
-  const count = (value: number) => (failed ? null : value);
+  const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed || loading ? null : t("bot.memoryNone"));
+  const count = (value: number) => (failed || loading ? null : value);
   const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} />;
   const topicList = <TopicRows botId={bot.id} topics={topics} />;
   const muscleList = map.muscle.length ? <FactList facts={map.muscle} day={day} fresh={fresh} /> : <div className="mm-empty">{t("bot.memoryNone")}</div>;
@@ -318,7 +332,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
-    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} data-smooth={smooth || undefined} onClick={outside}>
+    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} data-smooth={useSmooth || undefined} data-filling={loading || undefined} onClick={outside}>
       {stage > 0 && (
         <>
           <svg width="0" height="0" className="absolute" aria-hidden="true">
@@ -378,6 +392,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
                   </div>
                 ) : <div className="mm-empty">{t("bot.memoryWorkingIdle")}</div>}
               </div>
+              <MemoryAsks bot={bot} />
               <div className="mm-learned">
                 <div className="mm-sec-head"><Sparkle size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryLearned")}</span><span className="mm-sec-hint">{t("bot.memoryLearnedHint")}</span></div>
                 {failed ? null : map.learned.length

@@ -128,7 +128,7 @@ export function chiefOfStaffSystemPrompt(
             AGENTS_TOOLS_DISCIPLINE,
           ].join(" ");
 
-  // QA 13 / QA-ROOM-2: an in-room Chief used to hunt for its own tools in
+  // An in-room Chief used to hunt for its own tools in
   // public, dumping env vars and scanning ports before spawning. create_bot
   // still only files the new bot under the Chief's section; create_channel
   // is the tool that opens a room the user can talk in.

@@ -158,6 +158,7 @@ describe("ChatView no reply hint", () => {
     const render = await mount("claudeAgent");
     await runtime({ type: "content.delta", streamKind: "reasoning_text", delta: "" });
     await advance(3 * MINUTE);
+    await advance(1000);
     await frame({ kind: "message", threadId: "t1", message: preamble });
     await render(bot([user, preamble]));
     expect(host.textContent).toContain("Waiting for the model");

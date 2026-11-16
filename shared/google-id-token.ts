@@ -1,5 +1,5 @@
 // Google ID token check for the phone sign-in flow. Node crypto only.
-// GP-2 imports verifyGoogleIdToken. The relay uses it for /v1/account and /v1/pcs.
+// The relay uses it for /v1/account and /v1/pcs.
 
 import { createHash, createPublicKey, timingSafeEqual, verify } from "node:crypto";
 import { z } from "zod";

@@ -45,9 +45,9 @@ export function useCappedAccounts({ accounts, checked, t, row, loadOpen, saveOpe
       </div>
       <div className="usage-cap border-t border-hairline/70">
         <button type="button" data-accounts-cap="" aria-expanded={open} aria-controls={id} onClick={toggle}
-          className="group flex min-h-5 items-center gap-2 text-[14px] font-semibold text-ink-secondary transition-colors duration-150 hover:text-ink motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11">
+          className="group flex min-h-5 items-center gap-2 text-[14px] font-semibold text-ink-secondary hover:text-ink [@media(pointer:coarse)]:min-h-11">
           <ChevronDown size={14} strokeWidth={2} aria-hidden="true"
-            className={cn("shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none", !open && "-rotate-90")} />
+            className={cn("shrink-0 transition-transform motion-reduce:transition-none", !open && "-rotate-90")} />
           {t(open ? "usage.desk.showLess" : "usage.desk.showMore", { count: hidden })}
         </button>
       </div>

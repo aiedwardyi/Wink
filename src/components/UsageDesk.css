@@ -14,7 +14,7 @@
 }
 .usage-toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .usage-toolbar button { position: relative; min-height: 22px; padding: 0 4px; white-space: nowrap; color: var(--color-ink-secondary); font-size: 12px; border-radius: var(--radius-md); }
-.usage-toolbar button:hover { background: var(--color-raised-hover); }
+@media (hover: hover) { .usage-toolbar button:hover { background: var(--color-raised-hover); } }
 .usage-count-switch { display: flex; gap: 2px; }
 .usage-count-switch [aria-pressed="true"] { background: color-mix(in oklab, var(--color-ink) 10%, transparent); color: var(--color-ink); }
 .usage-toolbar [data-usage-refresh] { display: inline-flex; align-items: center; justify-content: center; width: 22px; }
@@ -35,8 +35,9 @@
 [data-engine-row] .usage-email { white-space: normal; }
 .usage-name-button { display: inline-flex; justify-self: start; align-items: center; gap: 5px; max-width: 100%; border-radius: 3px; font-weight: 500; }
 .usage-name-button svg { flex: none; opacity: 0; color: var(--color-ink-secondary); }
-.usage-name-button:hover svg, .usage-name-button:focus-visible svg { opacity: 1; }
-.usage-name-button:hover [data-account-name] { text-decoration: underline; text-underline-offset: 3px; }
+.usage-name-button:focus-visible svg { opacity: 1; }
+@media (hover: hover) { .usage-name-button:hover svg { opacity: 1; } }
+@media (hover: hover) { .usage-name-button:hover [data-account-name] { text-decoration: underline; text-underline-offset: 3px; } }
 /* Whole device pixels: Chromium snaps the box's origin but not its size, so a fractional size blurs the bottom edge. */
 .usage-cells { display: block; flex: none; width: round(var(--cells-w, 120px), 1px / var(--dpr, 1)); height: round(var(--cell-h, 7px), 1px / var(--dpr, 1)); fill: currentColor; }
 .usage-cells > [data-cell="off"] { fill-opacity: 0.25; }
@@ -68,8 +69,8 @@
 .usage-meter-summary .usage-reset-short { display: inline; }
 .usage-meter-summary [data-left]:empty { display: none; }
 .usage-control[data-use] { animation: none; transform: none; transition: none; -webkit-tap-highlight-color: transparent; }
-[data-usage-switched] { animation: usage-switch-highlight 600ms ease-out; }
-[data-usage-switched] [data-main-check] { animation: usage-main-in 200ms ease-out; }
+[data-usage-switched] { animation: usage-switch-highlight 600ms var(--ease-standard); }
+[data-usage-switched] [data-main-check] { animation: usage-main-in var(--motion-moderate) var(--ease-standard); }
 @keyframes usage-switch-highlight {
   from { background-color: color-mix(in oklab, var(--color-accent) 12%, transparent); }
   to { background-color: transparent; }
@@ -82,7 +83,7 @@
 [data-usage-reorder] { cursor: grab; }
 [data-usage-reorder]:active { cursor: grabbing; }
 html[data-usage-dragging], html[data-usage-dragging] * { cursor: grabbing !important; -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; }
-[data-usage-lifted] { z-index: 5; background: var(--color-panel); border-radius: var(--radius-lg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); scale: 1.03; transition: scale 140ms ease-out, box-shadow 140ms ease-out; }
+[data-usage-lifted] { z-index: 5; background: var(--color-panel); border-radius: var(--radius-lg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); scale: 1.03; transition: scale var(--motion-moderate) var(--ease-standard), box-shadow var(--motion-moderate) var(--ease-standard); }
 .usage-chat-button { --cells-w: 140.75px; --cell-h: 7px; color: var(--color-ink); }
 .usage-chat-windows { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
 .usage-chat-windows[data-windows="1"] { grid-template-columns: 1fr; }

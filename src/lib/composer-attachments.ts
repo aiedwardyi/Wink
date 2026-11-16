@@ -3,7 +3,7 @@
 // send, so every driver receives the same message shape.
 import { z } from "zod";
 
-import { holdReload } from "./reload-hold.js";
+import { holdReload } from "./reload-hold.ts";
 
 export type PasteAttachment = {
   kind: "paste";
@@ -22,6 +22,8 @@ export type FileAttachment = {
   type?: string;
   /** Set when the file was uploaded; it counts toward the per-message upload limit. */
   uploadId?: string;
+  /** A picture too big to go inline: the saved smaller copy the bot sees. */
+  preview?: string;
 };
 
 /** A file still on its way to the PC. Send waits until it becomes a file chip. */
@@ -35,6 +37,10 @@ export type UploadAttachment = {
   lastModified: number;
   sent: number;
   state: "uploading" | "resuming" | "failed" | "repick";
+  /** A big picture whose upload also saves a smaller copy. */
+  shrink?: boolean;
+  /** A picture sent whole to the image route; the chip it becomes. */
+  picture?: "image" | "file";
 };
 
 export type ImageAttachment = {
@@ -159,8 +165,8 @@ export function fileAttachment(name: string, path: string, size: number, type = 
   return attachment;
 }
 
-export function uploadAttachment(file: Pick<File, "name" | "size" | "type" | "lastModified">): UploadAttachment {
-  return {
+export function uploadAttachment(file: Pick<File, "name" | "size" | "type" | "lastModified">, shrink = false): UploadAttachment {
+  const chip: UploadAttachment = {
     kind: "upload",
     id: newId(),
     name: file.name,
@@ -170,13 +176,16 @@ export function uploadAttachment(file: Pick<File, "name" | "size" | "type" | "la
     sent: 0,
     state: "uploading",
   };
+  if (shrink) chip.shrink = true;
+  return chip;
 }
 
 /** Matches the server's IMAGE_MAX_BYTES — checked client-side so an
  * oversized paste is refused before the upload starts, not mid-stream. */
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
-export const UPLOAD_MAX_BYTES = 10 * 1024 ** 3;
+/** Matches claude.ts NATIVE_IMAGE_MAX_BYTES, the lowest inline limit; other engines open the path. */
+export const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024;
 
 const DOCUMENT_EXTENSION = /\.(pdf|docx?|xlsx?|pptx?|txt|md|csv|json)$/i;
 
@@ -187,9 +196,29 @@ export function isImageFile(file: { type: string; size: number }): boolean {
   );
 }
 
-async function uploadAttachmentFile(
+/** GIF keeps its frames as a plain file. */
+export function shrinksImage(file: { type: string; size: number }): boolean {
+  return file.size > IMAGE_INLINE_MAX_BYTES && ["image/png", "image/jpeg", "image/webp"].includes(file.type.split(";")[0]!.trim().toLowerCase());
+}
+
+/** The saved smaller copy of a big picture, or undefined when none fits. */
+export async function shrunkImagePath(
+  file: Blob & { name: string },
+  shrink: (file: Blob, maxBytes: number) => Promise<Blob | null>,
+  uploader: (file: File) => Promise<{ path: string }> = uploadAttachmentFile,
+): Promise<string | undefined> {
+  try {
+    const small = await shrink(file, IMAGE_INLINE_MAX_BYTES);
+    return small ? (await uploader(new File([small], file.name, { type: small.type }))).path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function uploadAttachmentFile(
   file: Pick<File, "name" | "type" | "arrayBuffer">,
   document = false,
+  signal?: AbortSignal,
 ): Promise<{ path: string; name?: string; mime: string; bytes: number }> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const headers = new Headers({ "content-type": file.type || "application/octet-stream" });
@@ -199,6 +228,7 @@ async function uploadAttachmentFile(
       method: "POST",
       headers,
       body: bytes,
+      signal,
     }),
   );
   if (!response.ok) {
@@ -341,7 +371,9 @@ export function composeMessage(text: string, attachments: Attachment[]): string 
       parts.push(`<attached-image path="${escapeAttribute(a.path)}" />`);
     } else if (a.kind === "file") {
       const type = a.type ? ` type="${escapeAttribute(a.type)}"` : "";
-      parts.push(`<attached-file path="${escapeAttribute(a.path)}" name="${escapeAttribute(a.name)}" size="${a.size}"${type} />`);
+      const preview = a.preview ? ` preview="${escapeAttribute(a.preview)}"` : "";
+      if (a.preview) parts.push(`<attached-image path="${escapeAttribute(a.preview)}" />`);
+      parts.push(`<attached-file path="${escapeAttribute(a.path)}" name="${escapeAttribute(a.name)}" size="${a.size}"${type}${preview} />`);
     }
   });
   return parts.filter(Boolean).join("\n\n");
@@ -371,7 +403,7 @@ function unescapeAttribute(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
-export type AttachedFile = { path: string; name: string; size?: number };
+export type AttachedFile = { path: string; name: string; size?: number; preview?: string };
 
 const ATTACHED_FILE = /<attached-file\s+path="([^"]*)"((?:\s+[a-z]+="[^"]*")*)\s*\/?>/g;
 const PASTED_TEXT = /<pasted-text(?:\s+index="\d+")?(\s+encoding="xml")?>\n?([\s\S]*?)\n?<\/pasted-text>/g;
@@ -384,6 +416,7 @@ function attachedFile(rawPath: string, rawAttributes: string): AttachedFile {
   const file: AttachedFile = { path, name: attributes.name || attachmentBasename(path) };
   const size = Number(attributes.size);
   if (attributes.size && Number.isFinite(size) && size >= 0) file.size = size;
+  if (attributes.preview) file.preview = attributes.preview;
   return file;
 }
 
@@ -425,7 +458,9 @@ function splitAttachments(text: string, label?: (name: string) => string): { dis
     return "";
   });
   display = display.replace(/\0PASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)] ?? "");
-  return { display: display.trim(), images, files, tags };
+  // a big picture's original shows as its smaller copy
+  const shown = files.filter((file) => !file.preview || !images.includes(file.preview));
+  return { display: display.trim(), images, files: shown, tags };
 }
 
 const onOwnLines = (text: string, at: number, length: number) =>
@@ -475,22 +510,19 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   _opts: {
     allowImages: boolean;
     getPath: (file: T) => string;
-    uploadImage: (file: T, allowImages: boolean) => Promise<Attachment | null>;
-    t: (key: "composer.uploadTooBig" | "composer.uploadFailed", vars?: Record<string, string | number>) => string;
+    /** Saves a big picture's smaller copy; the browser passes shrunkPicture. */
+    shrunkPath?: (file: T) => Promise<string | undefined>;
+    t: (key: "composer.uploadFailed", vars?: Record<string, string | number>) => string;
   },
 ): Promise<{ attachments: Attachment[]; uploads: { id: string; file: T }[]; notice: string | null }> {
   const files = [..._files];
-  const { allowImages, getPath, uploadImage, t } = _opts;
+  const { allowImages, getPath, t } = _opts;
+  const shrunkPath = _opts.shrunkPath ?? (async () => undefined);
   const attachments: Attachment[] = [];
   const uploads: { id: string; file: T }[] = [];
-  const tooBig: string[] = [];
   const uploadErrors: string[] = [];
-  const bigUpload = (file: T) => {
-    if (file.size > UPLOAD_MAX_BYTES) {
-      tooBig.push(t("composer.uploadTooBig", { name: file.name }));
-      return;
-    }
-    const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 });
+  const bigUpload = (file: T, shrink = false) => {
+    const chip = uploadAttachment({ name: file.name, size: file.size, type: file.type, lastModified: file.lastModified ?? 0 }, shrink);
     attachments.push(chip);
     uploads.push({ id: chip.id, file });
   };
@@ -499,19 +531,23 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   for (const file of files) {
     const path = safeGetPath(file, getPath);
     if (isImageFile(file)) {
-      if (path && (!allowImages || file.size > IMAGE_MAX_BYTES)) {
-        attachments.push(fileAttachment(file.name, path, file.size, file.type));
-      } else if (file.size > IMAGE_MAX_BYTES) {
-        bigUpload(file);
+      // the original stays a file the bot can open; its smaller copy goes inline
+      const shrink = allowImages && shrinksImage(file);
+      if (path && (!allowImages || shrink || file.size > IMAGE_MAX_BYTES)) {
+        const attachment = fileAttachment(file.name, path, file.size, file.type);
+        const preview = shrink ? await shrunkPath(file) : undefined;
+        if (preview) attachment.preview = preview;
+        attachments.push(attachment);
+      } else if (shrink || file.size > IMAGE_MAX_BYTES) {
+        bigUpload(file, shrink);
       } else {
         // A pathless image (phone, web) has no other way to reach the bot, so
         // it uploads even when the engine cannot read it inline, same as paste.
-        try {
-          const attachment = await uploadImage(file, allowImages);
-          if (attachment) attachments.push(attachment);
-        } catch (err) {
-          uploadErrors.push(`${file.name}: ${err instanceof Error ? err.message : t("composer.uploadFailed")}`);
-        }
+        // Its chip shows at once, so Send waits for it.
+        const chip = uploadAttachment({ name: file.name || "pasted image", size: file.size, type: file.type, lastModified: file.lastModified ?? 0 });
+        chip.picture = allowImages ? "image" : "file";
+        attachments.push(chip);
+        uploads.push({ id: chip.id, file });
       }
       continue;
     }
@@ -532,6 +568,5 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       bigUpload(file);
     }
   }
-  const notices = [...tooBig, ...uploadErrors];
-  return { attachments, uploads, notice: notices.length ? notices.join(" ") : null };
+  return { attachments, uploads, notice: uploadErrors.length ? uploadErrors.join(" ") : null };
 }

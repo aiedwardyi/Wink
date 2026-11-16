@@ -591,7 +591,7 @@ function handle(msg: any) {
             ? { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 }, _meta: {} }
             : { stopReason: "end_turn", _meta: process.env.FAKE_ACP_PROMPT_META ? JSON.parse(process.env.FAKE_ACP_PROMPT_META) : { inputTokens: 10, outputTokens: 5 } },
         );
-        // SPEED-4: inject a late session/update after the prompt result so tests
+        // Inject a late session/update after the prompt result so tests
         // can prove wrong-session / isReplay filtering. Untagged same-session
         // late chunks are intentionally not distinguishable once the next turn
         // has armed promptSent — do not claim otherwise.

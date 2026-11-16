@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from "react";
+import { trackSetting } from "./usage-stats";
 
 export type UsageMode = "used" | "remaining";
 const KEY = "omb-usage-mode";
 const watchers = new Set<() => void>();
 
-function readUsageMode(): UsageMode {
+export function readUsageMode(): UsageMode {
   try {
     return localStorage.getItem(KEY) === "used" ? "used" : "remaining";
   } catch {
@@ -15,6 +16,7 @@ function readUsageMode(): UsageMode {
 let mode = readUsageMode();
 
 export function setUsageMode(value: UsageMode) {
+  trackSetting("usageMode", mode, value, "settings", KEY);
   mode = value;
   try { localStorage.setItem(KEY, value); } catch { /* Keep the session choice. */ }
   watchers.forEach((notify) => notify());

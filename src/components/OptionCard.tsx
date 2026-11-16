@@ -70,7 +70,7 @@ export function OptionCard({
             type="button"
             onClick={() => dispatch({ type: "dismissCard", botId, messageId: message.id })}
             aria-label={t("chat.dismissQuestion")}
-            className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+            className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
           >
             <X size={16} aria-hidden="true" />
           </button>
@@ -87,7 +87,7 @@ export function OptionCard({
             if (e.key === "Enter" && !e.nativeEvent.isComposing) answer(custom);
           }}
           placeholder={t("chat.ownAnswer")}
-          className="w-full max-w-[560px] rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+          className="w-full max-w-[560px] rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none max-md:text-[16px]"
         />
       )}
     </div>

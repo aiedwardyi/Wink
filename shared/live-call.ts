@@ -1,8 +1,18 @@
 // Live call: Gemini Live is the bot's ears and mouth; the bot stays the only worker.
 
 export const LIVE_MODEL = "gemini-3.8-live";
-/** One voice for every bot. */
-export const LIVE_VOICE = "Kore";
+/** The call voice until the person picks another. */
+export const LIVE_VOICE = "Aoede";
+/** Gemini Live prebuilt voices offered in Settings, shown as Jenn, Eddie and Adele. */
+export const LIVE_VOICES = ["Aoede", "Alnilam", "Erinome"] as const;
+export type LiveVoice = (typeof LIVE_VOICES)[number];
+// Must match the picker labels (callVoice.* in the i18n catalog).
+export const LIVE_VOICE_NAMES: Record<LiveVoice, readonly string[]> = { Aoede: ["Jenn"], Alnilam: ["Eddie"], Erinome: ["Adele", "아델"] };
+// Live has no accent field, so the accent rides the system instruction.
+export const LIVE_ACCENTS: Partial<Record<LiveVoice, string>> = { Erinome: "When you speak English, use a natural British accent." };
+export function liveGeneration(voice: LiveVoice = LIVE_VOICE) {
+  return { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } };
+}
 export const LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 export const CALL_ID = /^c-[0-9a-f]{12}$/;
@@ -30,8 +40,17 @@ export const LIVE_TOOLS = [
     description: "Propose work you will do with full access to the user's PC and projects (open, find, run, check, fix, send, look up a file), for the user to confirm. Nothing starts until they say yes; the result says sent, queued, declined or expired.",
     parameters: {
       type: "OBJECT",
-      properties: { order: { type: "STRING", description: "The user's request as an instruction, in their words and language, e.g. \"Fix the login page bug.\"" } },
+      properties: { order: { type: "STRING", description: "The user's request as they would say it to you, in their words and language, never your offer or reply, e.g. \"Fix the login page bug.\"" } },
       required: ["order"],
+    },
+  },
+  {
+    name: "ask",
+    description: "Ask about anything not in YOUR NOTES, RECENT CHAT or [Wink] lines (status, files, results, times). No yes needed; the result says sent, queued or not sent, and the answer comes back as a [Wink] line. Anything that changes something is propose_work, even phrased as a question (\"Can you restart it?\").",
+    parameters: {
+      type: "OBJECT",
+      properties: { question: { type: "STRING", description: "The question in the person's words and language, e.g. \"When do the eval loops finish?\"" } },
+      required: ["question"],
     },
   },
 ];
@@ -40,3 +59,6 @@ export const LIVE_TOOLS = [
 export function isVoiceLine(row: { call?: CallTag }): boolean {
   return Boolean(row.call && !row.call.order && !row.call.ask);
 }
+
+/** Leads a voice line wherever it is replayed to a model: the voice checked nothing. */
+export const VOICE_SAID = "[said on a call, unverified]";

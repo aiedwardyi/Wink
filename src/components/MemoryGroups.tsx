@@ -64,7 +64,7 @@ export function MemoryFold({ title, hint, status, open, onToggle, ref, children 
   return (
     <section className={DETAILS_BOX}>
       <div ref={header} className={cn("flex items-center scroll-my-px", open && "sticky top-0 z-10 border-b border-hairline/40 bg-card")}>
-        <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none">
+        <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left hover:bg-control">
           <div className="min-w-0 flex-1">
             <DetailsLabel label={title} hint={hint} />
           </div>

@@ -8,6 +8,9 @@ import { startColdOpenTiming } from "./lib/cold-open-timing";
 import { installRendererErrorReports } from "./lib/error-reports";
 import { startPhoneSeen } from "./lib/phone-seen";
 import { startTeamActive } from "./lib/team-active";
+import { isPhone } from "./lib/phone-swipe";
+import { startUsageStats } from "./lib/usage-stats";
+import { statsUi } from "./lib/usage-stats-ui";
 import "./styles.css";
 
 // Before the first paint, not inside a component: stamping the skin during
@@ -23,6 +26,7 @@ startColdOpenTiming();
 installRendererErrorReports();
 startPhoneSeen();
 startTeamActive();
+startUsageStats(statsUi, isPhone);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

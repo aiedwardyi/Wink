@@ -7,6 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import { createGroupRoutes } from "../group-routes.ts";
 import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { addPerson, closeRoomsDb, roomById } from "./db.ts";
+import { writeRoomEntry } from "./mirror.ts";
 
 let store: Store;
 const engines = new Map<string, string>();
@@ -56,19 +57,16 @@ describe("hosted group routes", () => {
     expect(store.groups.find((g) => g.name === "Plain")!.hosted).toBeUndefined();
   });
 
-  it.each(["grok", "antigravityAgent", "boxAgent", "museAgent"])("refuses a %s bot at create", async (driverKind) => {
-    const odd = bot("Odd", driverKind);
-    const result = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex"), odd], hosted: true });
-    expect(result).toEqual({ status: 400, body: { error: "Odd can only answer in team rooms on Claude or Codex" } });
-    expect(store.groups).toHaveLength(0);
+  it.each(["grok", "antigravityAgent", "boxAgent", "museAgent"])("shares a %s bot at create", async (driverKind) => {
+    const result = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex"), bot("Odd", driverKind)], hosted: true });
+    expect(result.status).toBe(201);
   });
 
-  it("refuses a bot add whose engine or name doesn't fit", async () => {
+  it("refuses a bot add whose name clashes with a person", async () => {
     const wink = bot("Wink", "claudeAgent");
     const { body } = await call(routes().create, { name: "Team", memberIds: [wink], hosted: true });
     const group = store.group(body.group.id)!;
-    addPerson(group.hosted!.roomId, "Mina", "chat", ["Wink"]);
-    expect((await call(routes().patch, { memberIds: [wink, bot("Muse", "museAgent")] }, [group.id])).status).toBe(400);
+    addPerson(group.hosted!.roomId, "Mina", ["Wink"]);
     expect((await call(routes().patch, { memberIds: [wink, bot("mina", "codex")] }, [group.id])).body.error).toMatch(/already called mina/);
     expect((await call(routes().patch, { memberIds: [wink, bot("Helper", "codex")] }, [group.id])).status).toBe(200);
   });
@@ -79,9 +77,37 @@ describe("hosted group routes", () => {
     const r = routes();
     const refused = { status: 409, body: { error: "a team room keeps one conversation" } };
     expect(await call(r.createTask, { title: "Next" }, [group.id])).toEqual(refused);
-    expect(await call((_req, res, m) => r.switchTask(res, m, new URL("http://x/")), {}, [group.id, group.threadId])).toEqual(refused);
     expect(await call(r.patchTask, { title: "Renamed" }, [group.id, group.threadId])).toEqual(refused);
     expect(await call((_req, res, m) => r.deleteTask(res, m), {}, [group.id, group.threadId])).toEqual(refused);
     expect(store.groupTasks(group.id)).toHaveLength(1);
+  });
+
+  it("opens an older task of a shared group to read, keeping the shared thread active", async () => {
+    const group = store.createGroup("Crew", [bot("Wink", "codex")]);
+    const old = group.threadId;
+    store.appendMessage(old, { role: "user", kind: "text", text: "private plan" });
+    store.createGroupTask(group.id);
+    const shared = store.patchGroup(group.id, { hosted: { roomId: "room-1" } })!;
+    const open = (threadId: string) => call((_req, res, m) => routes().switchTask(res, m, new URL("http://x/")), {}, [group.id, threadId]);
+    expect(await open(old)).toEqual({ status: 200, body: { group: expect.objectContaining({ id: group.id, threadId: old }) } });
+    expect((await open("nope")).status).toBe(404);
+    expect(store.group(group.id)!.threadId).toBe(shared.threadId);
+    expect(store.messagesFor(old).map((message) => message.text)).toEqual(["private plan"]);
+  });
+
+  it("keeps the pinned line's text on the notice", async () => {
+    const created = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex")], hosted: true });
+    const group = store.group(created.body.group.id)! as GroupRecord & { hosted: { roomId: string } };
+    const { entry } = writeRoomEntry(store, group, { author: { kind: "host", id: "host", name: "Edward" }, text: "금요일 점심 12시" });
+    expect((await call(routes().patch, { notice: entry.id }, [group.id])).status).toBe(200);
+    expect(store.group(group.id)!.notice).toMatchObject({ entryId: entry.id, by: "host", text: "금요일 점심 12시" });
+  });
+
+  it("keeps only a 300-character preview of a long pinned line", async () => {
+    const created = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex")], hosted: true });
+    const group = store.group(created.body.group.id)! as GroupRecord & { hosted: { roomId: string } };
+    const { entry } = writeRoomEntry(store, group, { author: { kind: "host", id: "host", name: "Edward" }, text: "a".repeat(20_000) });
+    expect((await call(routes().patch, { notice: entry.id }, [group.id])).status).toBe(200);
+    expect(store.group(group.id)!.notice!.text).toBe(`${"a".repeat(300)}…`);
   });
 });

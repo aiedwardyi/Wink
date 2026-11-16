@@ -5,16 +5,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { uploadAttachment } from "@/lib/composer-attachments";
-import { getDraft, setDraft, setDraftAttachments } from "@/lib/drafts";
+import { clearReplyDraft, getDraft, setDraft, setDraftAttachments } from "@/lib/drafts";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
 import type { JoinedView, TeamRoom } from "@/lib/team-rooms";
+import type { Message } from "@/state/store-types";
 
 import { JoinedRoomView } from "./JoinedRoomView";
+import { TeamRoomComposer } from "./TeamRoomComposer";
 import { TeamRoomView } from "./TeamRoomView";
+import { Composer } from "./Composer";
+import { roomResponder } from "../../shared/room-routing";
+import type { Bot } from "@/state/store-types";
 
-const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null }));
+const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null, dispatched: [] as unknown[] }));
 vi.mock("@/lib/joined-rooms", () => ({ useJoinedRoom: () => joined.view }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ state: { connected: true } }), formatTime: () => "" }));
+vi.mock("@/lib/room-files-state", () => ({ useRoomFilesState: () => ({ deleted: [], error: null }) }));
+vi.mock("@/lib/room-translate", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/room-translate")>(),
+  useTranslationAvailable: () => false,
+}));
+vi.mock("@/state/store", async (original) => ({
+  ...await original<typeof import("@/state/store")>(),
+  useStore: () => ({ state: { connected: true, bots: [], acceptedSends: {}, instances: [], pendingQueued: {} }, dispatch: (action: unknown) => joined.dispatched.push(action) }),
+  formatTime: () => "",
+}));
 
 const group = {
   id: "g1", threadId: "t1", name: "Design team", memberIds: [], messages: [],
@@ -53,6 +67,24 @@ async function render(side = "host", missing = false) {
     : createElement(JoinedRoomView, { roomId: "r9" })));
 }
 
+it.each([
+  ["en", "스타줌 is finishing another task, then answers here."],
+  ["ko", "스타줌 다른 작업을 마치면 여기서 답해요."],
+] as const)("shows the %s room wait until the bot starts", async (locale, text) => {
+  applyLocale(locale);
+  joined.view!.state!.teamBots = [{ id: "tb1", name: "스타줌", color: "blue", owner: "p1" }];
+  joined.view!.myBots = [{ id: "tb1", botId: "b1", waiting: true }];
+  await render("joined");
+  expect(host.querySelector("[data-my-bot-turn]")!.textContent).toBe(text);
+  expect(host.querySelector("[data-my-bot-turn]")!.className).not.toContain("text-danger");
+  joined.view!.myBots = [{ id: "tb1", botId: "b1", working: true }];
+  await render("joined");
+  expect(host.textContent).not.toContain(text);
+  joined.view!.myBots = [];
+  await render("joined");
+  expect(host.querySelector("[data-my-bot-turn]")).toBeNull();
+});
+
 async function drag(type: string, files: File[], types = ["Files"], target: EventTarget = host.querySelector("[data-team-room-transcript]")!) {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", { value: { types, files } });
@@ -77,7 +109,7 @@ describe("room file drop", () => {
     const files = [file("plan.txt"), file("board.png", "image/png")];
     await drag("drop", files);
     expect(host.textContent).toContain("plan.txt");
-    expect(host.textContent).toContain("board.png");
+    expect(host.querySelector("img[alt='board.png']")).not.toBeNull();
     expect(fetch).not.toHaveBeenCalled();
     await send();
     const calls = vi.mocked(fetch).mock.calls;
@@ -94,12 +126,12 @@ describe("room file drop", () => {
     expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path).split("?")[0])).toEqual(["/api/joined/rooms/r9/files", "/api/joined/rooms/r9/send"]);
   });
 
-  it("shows the existing type refusal when the dropped upload is refused", async () => {
+  it("names the kinds a room takes when the dropped upload is refused", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => reply({ error: "file-type" }, 415)));
     await render();
     await drag("drop", [file("program.exe", "application/octet-stream")]);
     await send();
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("This kind of file can't be shared.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Only pictures, video, audio, PDF, zip, Office and text files can be shared.");
     expect(host.textContent).toContain("program.exe");
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -109,9 +141,9 @@ describe("room file drop", () => {
     const large = file("large.txt");
     Object.defineProperty(large, "size", { value: 10 ** 12 });
     await drag("drop", [large]);
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("large.txt is too big to send.");
-    await drag("drop", Array.from({ length: 11 }, (_, at) => file(`${at}.txt`)));
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Up to 10 files per message.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("large.txt is too big. Pictures can be up to 100 MB; other files up to 1 GB.");
+    await drag("drop", Array.from({ length: 51 }, (_, at) => file(`${at}.txt`)));
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Up to 50 files per message.");
     expect(host.querySelectorAll('button[aria-label^="Remove "]')).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -139,11 +171,10 @@ describe("room file drop", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each(["offline", "removed", "left", "gone", "missing"])("has no drop intake when the paperclip is absent: %s", async (phase) => {
+  it.each(["removed", "left", "gone", "missing"])("has no drop intake when the paperclip is absent: %s", async (phase) => {
     await render(phase === "missing" ? "host" : "joined");
     await drag("dragenter", []);
     expect(host.textContent).toContain("Drop to attach files");
-    if (phase === "offline") joined.view!.link = "offline";
     if (phase === "removed" || phase === "left") joined.view!.status = phase;
     if (phase === "gone") joined.view = null;
     await render(phase === "missing" ? "host" : "joined", phase === "missing");
@@ -160,7 +191,7 @@ describe("room file drop", () => {
     Object.defineProperty(event, "clipboardData", { value: { files: [file("clipboard.png", "image/png")] } });
     await act(async () => { box().dispatchEvent(event); });
     expect(event.defaultPrevented).toBe(true);
-    expect(host.textContent).toContain("clipboard.png");
+    expect(host.querySelector("img[alt='clipboard.png']")).not.toBeNull();
     await send();
     expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/files?name=clipboard.png");
   });
@@ -193,12 +224,31 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
     await act(async () => finish(reply({ file: { id: "uploaded" } })));
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(host.textContent).not.toContain("pending.txt");
+  });
+
+  it.each(["host", "joined"])("sends a %s photo once when Send is tapped after switching chats mid-upload", async (side) => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((path: string) => path.includes("/files?")
+      ? new Promise<Response>((resolve) => { finish = resolve; })
+      : Promise.resolve(reply({ ok: true }))));
+    await render(side);
+    await drag("drop", [file("photo.png", "image/png")]);
+    const tap = () => act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click());
+    await tap();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render(side);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
+    await tap();
+    await act(async () => finish(reply({ file: { id: "uploaded" } })));
+    expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path).split("?")[0]).filter((path) => path.endsWith("/send"))).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain("photo.png");
   });
 
   it.each(["host", "joined"])("keeps a pending %s send blocked across navigation", async (side) => {
@@ -209,12 +259,13 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
-    expect(button.disabled).toBe(true);
+    expect(box().value).toBe("");
+    await type("Next");
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
     await act(async () => finish(reply({ ok: true })));
-    expect(box().value).toBe("");
+    expect(box().value).toBe("Next");
   });
 
   it("blocks duplicate Enter events before React renders the pending state", async () => {
@@ -256,7 +307,7 @@ describe("room drafts", () => {
     await send();
     expect(fetch).not.toHaveBeenCalled();
     await act(async () => repick!.click());
-    const picker = host.querySelector('input[type="file"]')!;
+    const picker = host.querySelector('input[type="file"]:not([multiple]):not([data-room-picture-input])')!;
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [file("reload.txt")], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
@@ -280,10 +331,47 @@ describe("room drafts", () => {
     expect(getDraft(localStorage, "g1")).toBe(edited ? "New draft" : "");
   });
 
+  it.each(["host", "joined"])("clears the %s box at send and puts it back only on failure", async (side) => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    await render(side);
+    await type("hello");
+    await send();
+    expect(box().value).toBe("");
+    await act(async () => finish(reply({ error: "offline" }, 500)));
+    expect(box().value).toBe("hello");
+  });
+
+  it("puts a failed send back ahead of what was typed since", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    await render("joined");
+    await type("hello");
+    await send();
+    await type("more");
+    await act(async () => finish(reply({ error: "offline" }, 500)));
+    expect(box().value).toBe("hello\n\nmore");
+  });
+
+  it("keeps a reply picked while an earlier send is pending", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    const first = { id: "a", at: 1, role: "user", kind: "text", text: "first" } as Message;
+    const clear = vi.fn();
+    const composer = (replyTo: Message) => createElement(TeamRoomComposer, { name: "Design team", base: "/api/rooms/r1", draftId: "g1", replyTo, onClearReply: clear, onConsumeReply: vi.fn(), onRestoreReply: vi.fn() });
+    await act(async () => root.render(composer(first)));
+    await type("Sent text");
+    await send();
+    await act(async () => root.render(composer({ ...first, id: "b", text: "second" })));
+    await act(async () => finish(reply({ ok: true })));
+    expect(box().value).toBe("");
+    expect(clear).not.toHaveBeenCalled();
+  });
+
   it.each(["host", "joined"])("restores the %s draft and files after a bot switch, isolates room B, and clears on send", async (side) => {
     await render(side);
     await type("Room A draft");
-    const picker = host.querySelector('input[type="file"]')!;
+    const picker = host.querySelector('input[type="file"]:not([data-room-picture-input])')!;
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [file("draft.txt")], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
@@ -308,6 +396,74 @@ describe("room drafts", () => {
   });
 });
 
+describe("room mentions", () => {
+  const peers = [{ id: "p2", name: "Sora" }];
+  const teamBots = [{ id: "tb1", name: "Sora Coder", color: "blue", owner: "p2" }];
+  const own = { id: "b1", name: "Wink", color: "blue", modelSelection: { instanceId: "claude", model: "m" } } as Bot;
+  async function openMentions(text = "@") {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), text);
+      box().setSelectionRange(text.length, text.length);
+      box().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return [...host.querySelectorAll<HTMLElement>('[role="option"]')];
+  }
+
+  it("offers people and teammate bots alongside the host's room bots", async () => {
+    const hosted = { ...group, memberIds: [own.id], room: { people: peers, teamBots } } as TeamRoom;
+    await act(async () => root.render(createElement(Composer, { group: hosted, members: [own] })));
+    const options = await openMentions();
+    expect(options.map((option) => option.textContent)).toEqual(["everyoneGroup", "WinkAgent", "Sora Coder · Sora'sAgent", "SoraPerson"]);
+  });
+
+  it("offers teammate bots in a host room with no local bots", async () => {
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, room: { people: peers, teamBots } } as TeamRoom })));
+    expect((await openMentions()).map((option) => option.textContent)).toEqual(["Sora Coder · Sora'sAgent", "SoraPerson"]);
+  });
+
+  it.each(["en", "ko"] as const)("offers all joined room bots and inserts the routed name without its %s owner label", async (locale) => {
+    applyLocale(locale);
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: peers, bots: [{ id: own.id, name: own.name, color: own.color }], teamBots };
+    await render("joined");
+    const options = await openMentions("@Sora C");
+    expect(options).toHaveLength(1);
+    expect(options[0]?.textContent).toContain(locale === "en" ? "Sora Coder · Sora's" : "Sora Coder · Sora의 봇");
+    await act(async () => options[0]?.click());
+    expect(box().value).toBe("@Sora Coder ");
+    expect(roomResponder(box().value, teamBots, peers.map((person) => person.name))).toBe(teamBots[0]);
+    expect(host.querySelector('[role="listbox"]')).toBeNull();
+    await send();
+    const sent = vi.mocked(fetch).mock.calls.filter(([path]) => String(path).endsWith("/send")).at(-1);
+    expect(sent?.[0]).toBe("/api/joined/rooms/r9/send");
+    expect(JSON.parse(String(sent?.[1]?.body)).text).toBe("@Sora Coder");
+  });
+
+  it("offers a teammate the room's bots and people", async () => {
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: [{ id: "p2", name: "Sora" }], bots: [{ id: "b1", name: "Wink", color: "blue" }] } as NonNullable<JoinedView["state"]>;
+    await render("joined");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "@");
+      box().setSelectionRange(1, 1);
+      box().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect([...host.querySelectorAll('[role="option"]')].map((option) => option.textContent)).toEqual(["WinkAgent", "EdwardPerson", "SoraPerson"]);
+  });
+});
+
+describe("room bots", () => {
+  it("gives the host no dashed + on a room with no bots: Add lives in Room details", async () => {
+    await render();
+    expect(host.querySelector(".border-dashed")).toBeNull();
+    expect(host.querySelector('button[title="Manage members"]')).toBeNull();
+  });
+
+  it("gives a teammate no + even once the room has bots", async () => {
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: [], bots: [{ id: "b1", name: "Wink", color: "blue" }] } as NonNullable<JoinedView["state"]>;
+    await render("joined");
+    expect(host.querySelector('button[title="Manage members"]')).toBeNull();
+  });
+});
+
 describe("room focus", () => {
   it("lets the sidebar refocus an already open room through the shared rule", async () => {
     await render();
@@ -325,6 +481,36 @@ describe("room focus", () => {
     expect(document.activeElement).toBe(box());
   });
 
+  it("keeps the joined box and its focus while the link blips, holding Send until it is back", async () => {
+    await render("joined");
+    box().focus();
+    await type("안녕하세요");
+    joined.view!.link = "offline";
+    await render("joined");
+    expect(document.activeElement).toBe(box());
+    expect(box().value).toBe("안녕하세요");
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Unavailable. Edward is offline.");
+    expect(host.querySelector('[aria-label="Attach a file"]')).toBeNull();
+    await drag("drop", [file("blocked.txt")]);
+    await send();
+    expect(box().value).toBe("안녕하세요");
+    expect(host.textContent).not.toContain("blocked.txt");
+    expect(fetch).not.toHaveBeenCalled();
+    joined.view!.link = "live";
+    await render("joined");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await send();
+    expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path))).toEqual(["/api/joined/rooms/r9/send"]);
+  });
+
+  it.each(["en", "ko"])("says a room the host deleted is gone after Leave: %s", async (locale) => {
+    applyLocale(locale as "en" | "ko");
+    joined.view!.status = "left";
+    (joined.view as JoinedView).gone = true;
+    await render("joined");
+    expect(host.textContent).toContain(locale === "en" ? "This group is gone." : "없어진 그룹이에요.");
+  });
+
   it("leaves the phone keyboard closed and handles a left room", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
     await render();
@@ -332,5 +518,286 @@ describe("room focus", () => {
     joined.view!.status = "left";
     await render("joined");
     expect(host.querySelector("textarea")).toBeNull();
+  });
+});
+
+describe("joined room paging", () => {
+  it("asks the room for older lines once when a teammate scrolls to the top", async () => {
+    Object.assign(joined.view!, { hasMore: true, entries: [{ seq: 201, id: "e201", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "line 201" }] });
+    await render("joined");
+    const pane = host.querySelector("[data-team-room-transcript]")!;
+    await act(async () => pane.dispatchEvent(new Event("scroll")));
+    await act(async () => pane.dispatchEvent(new Event("scroll")));
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [path, init?.body])).toEqual([["/api/joined/rooms/r9/older", JSON.stringify({ before: 201 })]]);
+  });
+});
+
+describe("room click to type", () => {
+  const settle = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  const click = async (target: Element) => {
+    await act(async () => { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })); });
+    await settle();
+  };
+  const away = async () => {
+    await settle();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).not.toBe(box());
+  };
+
+  it.each(["host", "joined"])("focuses the %s composer on an empty transcript click", async (side) => {
+    await render(side);
+    await away();
+    await click(host.querySelector("[data-team-room-transcript]")!);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("focuses from the gap between messages", async () => {
+    await render();
+    await away();
+    await click(host.querySelector('[role="log"]')!);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("leaves buttons and links alone", async () => {
+    await render();
+    await away();
+    const log = host.querySelector('[role="log"]')!;
+    const button = log.appendChild(document.createElement("button"));
+    const link = log.appendChild(document.createElement("a"));
+    link.setAttribute("href", "https://example.com");
+    await click(button);
+    await click(link);
+    expect(document.activeElement).not.toBe(box());
+  });
+
+  it("leaves a text selection alone", async () => {
+    await render();
+    await away();
+    const log = host.querySelector('[role="log"]')!;
+    log.textContent = "picked words";
+    const range = document.createRange();
+    range.selectNodeContents(log);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    await click(log);
+    expect(document.activeElement).not.toBe(box());
+    window.getSelection()!.removeAllRanges();
+  });
+
+  it("stays out of the way on a phone", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    await render();
+    await click(host.querySelector("[data-team-room-transcript]")!);
+    expect(document.activeElement).not.toBe(box());
+  });
+
+  it.each(["host", "joined"])("gives the %s box the skin frame", async (side) => {
+    await render(side);
+    expect(box().closest("[data-orbit-composer-frame]")).not.toBeNull();
+  });
+});
+
+describe("room image preview", () => {
+  const urls = { made: [] as Blob[], revoked: [] as string[] };
+  beforeEach(() => {
+    urls.made = [];
+    urls.revoked = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => { urls.made.push(blob as Blob); return `blob:thumb-${urls.made.length}`; });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => { urls.revoked.push(url); });
+  });
+
+  it.each(["host", "joined"])("shows an attached image as a %s thumbnail with a remove button", async (side) => {
+    await render(side);
+    await drag("drop", [file("board.png", "image/png")]);
+    const thumb = host.querySelector<HTMLImageElement>("img[alt='board.png']");
+    expect(thumb?.getAttribute("src")).toBe("blob:thumb-1");
+    expect(thumb?.closest("[title='board.png']")?.className).toContain("w-[172px]");
+    await act(async () => host.querySelector<HTMLElement>("[aria-label='Remove image']")!.click());
+    expect(host.querySelector("img[alt='board.png']")).toBeNull();
+    expect(urls.revoked).toContain("blob:thumb-1");
+  });
+
+  it("keeps a plain row for a file that is not a picture", async () => {
+    await render();
+    await drag("drop", [file("plan.txt")]);
+    expect(host.querySelector("img")).toBeNull();
+    expect(host.textContent).toContain("plan.txt");
+  });
+});
+
+describe("room box is the 1:1 box", () => {
+  it.each(["host", "joined"])("renders the shared %s composer", async (side) => {
+    await render(side);
+    expect(host.querySelector("[data-team-room] textarea[data-orbit-composer]")).toBe(box());
+    expect(host.querySelector("[data-orbit-composer-host]")).not.toBeNull();
+  });
+
+  it("types from a press on the frame padding", async () => {
+    await render();
+    (document.activeElement as HTMLElement | null)?.blur();
+    const frame = box().closest<HTMLElement>("[data-orbit-composer-frame]")!;
+    await act(async () => {
+      frame.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+      frame.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    });
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("opens the attached image preview", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    await render();
+    await drag("drop", [file("board.png", "image/png")]);
+    await act(async () => host.querySelector<HTMLElement>("[aria-label='Preview board.png']")!.click());
+    expect(document.querySelector("[role='dialog'] img[src='blob:thumb']")).not.toBeNull();
+  });
+
+  it("offers room people in the @ list", async () => {
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, room: { name: "Design team", people: [{ id: "p1", name: "Mina" }] } } as unknown as TeamRoom })));
+    await type("hi @Mi");
+    expect(host.querySelector("[role='listbox'] [role='option']")?.textContent).toContain("Mina");
+  });
+
+  it("sends with the 1:1 send button", async () => {
+    await render();
+    await type("hello");
+    await act(async () => host.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!.click());
+    expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/send");
+  });
+});
+
+describe("room header", () => {
+  const labels = () => [...host.querySelector("main")!.firstElementChild!.querySelectorAll("button")].map((each) => each.getAttribute("aria-label"));
+
+  it("keeps only the name, the bell and the side pane, side pane last", async () => {
+    await render();
+    expect(labels()).toEqual(["Design team, Open group details", "Turn off alerts for this group", "Show and media"]);
+  });
+
+  it("gives a joined room only its name and bell", async () => {
+    await render("joined");
+    expect(labels()).toEqual(["Design team, Open group details", "Turn off alerts for this group"]);
+  });
+
+  it("opens Room details from the name", async () => {
+    joined.dispatched.length = 0;
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-room-title]")!.click());
+    expect(joined.dispatched).toEqual([{ type: "toggleSettings", open: true }]);
+  });
+});
+
+describe("joined room turns", () => {
+  beforeEach(() => {
+    joined.view!.state!.teamBots = [{ id: "tb1", name: "Pete", color: "blue", owner: "p1" }];
+  });
+
+  it("shows this PC's working bot like a 1:1 turn and swaps Send for Stop", async () => {
+    joined.view!.myBots = [{ id: "tb1", botId: "b1", working: true, since: Date.now() - 3000 }];
+    await render("joined");
+    expect(host.querySelector("[data-turn-mascot]")!.textContent).toContain("Pete is working");
+    expect(host.querySelector("[data-turn-mascot]")!.textContent).toContain("3s");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [String(path), init?.method])).toContainEqual(["/api/joined/rooms/r9/stop", "POST"]);
+  });
+
+  it("offers Stop while the bot only waits, and keeps the wait row in the composer like a host room", async () => {
+    joined.view!.myBots = [{ id: "tb1", botId: "b1", waiting: true }];
+    await render("joined");
+    expect(host.querySelector("[data-turn-mascot]")).toBeNull();
+    const row = host.querySelector<HTMLElement>("[data-my-bot-turn]")!;
+    expect(row.className).toContain("text-[12px]");
+    expect(row.className).toContain("px-1");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [String(path), init?.method])).toContainEqual(["/api/joined/rooms/r9/stop", "POST"]);
+  });
+
+  it.each([
+    ["en", "Bots are working it out · turn 2"],
+    ["ko", "봇끼리 맞추는 중 · 2턴"],
+  ] as const)("shows the %s handoff strip in the composer", async (locale, text) => {
+    applyLocale(locale);
+    joined.view!.botChain = 2;
+    await render("joined");
+    expect(host.querySelector("[data-bot-chain]")!.textContent).toBe(text);
+    expect(host.querySelector("[data-orbit-composer-stop]")).toBeNull();
+    joined.view!.myBots = [{ id: "tb1", botId: "b1", working: true }];
+    await render("joined");
+    expect(host.querySelector("[data-orbit-composer-stop]")).not.toBeNull();
+  });
+});
+
+describe("people-only room handoff", () => {
+  it("shows the strip and a room Stop on the host while teammates' bots hand off", async () => {
+    joined.dispatched.length = 0;
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, botChain: 4 } as TeamRoom })));
+    expect(host.querySelector("[data-bot-chain]")!.textContent).toBe("Bots are working it out · turn 4");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(joined.dispatched).toContainEqual({ type: "interruptGroup", groupId: "g1" });
+    await render();
+    expect(host.querySelector("[data-bot-chain]")).toBeNull();
+    expect(host.querySelector("[data-orbit-composer-stop]")).toBeNull();
+  });
+});
+
+describe("room reply target", () => {
+  const entry = { seq: 1, id: "e1", at: Date.now(), author: { kind: "person", id: "p2", name: "Mina" }, text: "hello there", files: [] };
+  const chip = () => host.querySelector("button[aria-label='Cancel reply']");
+  const pick = () => act(async () => host.querySelector<HTMLButtonElement>('[data-mid="e1"] button[aria-label="Reply to message"]')!.click());
+
+  afterEach(() => clearReplyDraft("/api/joined/rooms/r9"));
+
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    (joined.view as unknown as { entries: unknown[] }).entries = [entry];
+  });
+
+  it("keeps the chip on Escape, like a 1:1 chat", async () => {
+    await render("joined");
+    await pick();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(chip()).not.toBeNull();
+  });
+
+  it("keeps the chip across a room switch and puts it back after a failed send", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ error: "offline" }, 500)));
+    await render("joined");
+    await pick();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).not.toBeNull();
+    await type("answer");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).not.toBeNull();
+  });
+
+  it("puts the chip back in a view reopened before the send failed", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (answer = resolve))));
+    await render("joined");
+    await pick();
+    await type("answer");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).toBeNull();
+    await act(async () => answer(reply({ error: "offline" }, 500)));
+    expect(chip()).not.toBeNull();
+  });
+
+  it("drops the chip at send so a view opened mid-send does not reply again", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (answer = resolve))));
+    await render("joined");
+    await pick();
+    await type("answer");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).toBeNull();
+    await act(async () => answer(reply({ ok: true })));
+    expect(chip()).toBeNull();
   });
 });

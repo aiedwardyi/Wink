@@ -165,6 +165,8 @@ describe("skins", () => {
       "blueprint",
       "wink-day",
       "paper-tape",
+      "dim-sand",
+      "snow",
     ];
     for (const id of remapped) {
       expect([...tokensOf(id)]).toEqual(expect.arrayContaining(roles));
@@ -178,7 +180,7 @@ describe("skins", () => {
   it("drives native input color-scheme from the skin, not a hardcoded dark utility", () => {
     const rootBody = css.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(rootBody).toMatch(/color-scheme:\s*dark\s*;/);
-    const light = ["atelier", "lagoon", "ledger", "notebook", "messenger", "community-light", "code-review", "blueprint", "wink-day", "paper-tape"];
+    const light = ["atelier", "lagoon", "ledger", "notebook", "messenger", "community-light", "code-review", "blueprint", "wink-day", "paper-tape", "dim-sand"];
     for (const id of light) {
       const body = css.match(new RegExp(`\\[data-skin="${id}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
       expect(body).toMatch(/color-scheme:\s*light\s*;/);
@@ -217,11 +219,11 @@ describe("skins", () => {
   it("sets Precision in Space Grotesk with bubbles on both sides, wide, and no side line", () => {
     expect(css.match(/\[data-skin="precision"\]\s*\{([^}]*)\}/)![1]).toMatch(/--font-sans:\s*"Space Grotesk"/);
     expect(css).toMatch(/\[data-skin="precision"\]:lang\(ko\) \{\s*--font-sans: "Inter"/);
-    const own = css.match(/@scope \(\[data-skin="precision"\]\) to \(\[data-skin\]\) \{([\s\S]*?)\n\}/)![1];
+    const own = css.match(/@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{([\s\S]*?)\n\}/)![1];
     expect(own).toContain("max-width: min(54rem, 94%);");
     expect(own).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
     expect(own).toMatch(/\[data-orbit-message="user"\] \[data-orbit-message-content\] \{\s*box-shadow: none;/);
-    expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
+    expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
   });
 
   it("gives every non-Midnight skin its own focus and control tokens", () => {
@@ -713,10 +715,10 @@ describe("bundled-face skins", () => {
 const FRESH_SKINS = [
   { id: "inkwell", name: "Inkwell", face: "Atkinson Hyperlegible Next", file: "AtkinsonHyperlegibleNext-Variable.woff2", ratios: [12.4, 11.5, 1.12, 1.2] },
   { id: "graphite", name: "Graphite", face: "Lexend", file: "Lexend-Variable.woff2", ratios: [10.9, 9.8, 1.15, 1.28] },
-  { id: "moss", name: "Moss", face: "Nunito", file: "Nunito-Variable.woff2", ratios: [12.6, 9.3, 1.12, 1.5] },
+  { id: "merlot", name: "Merlot", face: "Manrope", file: "Manrope-Variable.woff2", ratios: [14.1, 11.6, 1.12, 1.36] },
 ] as const;
 
-describe("Inkwell, Graphite and Moss", () => {
+describe("Inkwell, Graphite and Merlot", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
   it("registers the three dark skins and keeps Wink Violet, Wink Black, Pewter and the default", () => {
@@ -743,7 +745,7 @@ describe("Inkwell, Graphite and Moss", () => {
   });
 
   it("puts both sides in wide bubbles", () => {
-    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {';
+    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="merlot"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {';
     const body = css.slice(css.indexOf(scope), css.indexOf("\n}\n", css.indexOf(scope)));
     expect(body).toContain("max-width: min(54rem, 94%);");
     expect(body).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
@@ -768,11 +770,67 @@ describe("Inkwell, Graphite and Moss", () => {
   });
 });
 
+const EDGE_SKINS = ["precision-dimmed", "bronze", "dim-sand", "wink-day", "atelier"] as const;
+
+describe("Precision Dimmed, Bronze, Dim Sand and the Light and Atelier fixes", () => {
+  it("registers the three skins, with Dim Sand as the light one", () => {
+    expect(SKINS.filter((skin) => ["precision-dimmed", "bronze", "dim-sand"].includes(skin.id))).toEqual([
+      { id: "precision-dimmed", name: "Precision Dimmed" },
+      { id: "bronze", name: "Bronze" },
+      { id: "dim-sand", name: "Dim Sand" },
+    ]);
+    expect(SKINS.find((skin) => skin.id === "merlot")?.name).toBe("Merlot");
+    expect([...LIGHT_SKIN_IDS].filter((id) => ["precision-dimmed", "bronze", "dim-sand"].includes(id))).toEqual(["dim-sand"]);
+  });
+
+  it("ships the fixed Light and Atelier tokens", () => {
+    const fixed = {
+      "wink-day": { app: "#eeebf7", panel: "#e3dff0", inset: "#e9e5f3", control: "#d9d4e9", "raised-hover": "#f3f0fa", hairline: "#aaa4c6", "bubble-user": "#fad6e6", scrollbar: "#9f99bd", edge: "#7f79a3", accent: "#b91a61", "accent-border": "#dc4188", success: "#17633e", danger: "#a5211a", warning: "#7b4e00" },
+      atelier: { app: "#f0e9de", panel: "#f8f3ea", inset: "#efe8dc", control: "#e4d9c6", "raised-hover": "#eadfcd", hairline: "#b3a78e", "bubble-user": "#ead9c0", scrollbar: "#ab9f87", edge: "#8b8069", "ink-secondary": "#615b50", "accent-text": "#8c4e1b", success: "#3a6442", warning: "#70572c" },
+    };
+    expect(Object.values(fixed).flatMap(Object.keys)).toHaveLength(27);
+    for (const [id, tokens] of Object.entries(fixed)) {
+      for (const [name, value] of Object.entries(tokens)) expect(cssToken(id, `--color-${name}`), `${id} ${name}`).toBe(value);
+    }
+  });
+
+  it("ships Bronze on the design tokens", () => {
+    const bronze = { app: "#181512", panel: "#120f0c", ink: "#ebe7e1", "ink-secondary": "#b4ada3", accent: "#cca779", "bubble-user": "#413321", hairline: "#47433f", edge: "#78746e" };
+    for (const [name, value] of Object.entries(bronze)) expect(cssToken("bronze", `--color-${name}`), name).toBe(value);
+  });
+
+  it.each(EDGE_SKINS)("keeps %s's text, muted text and accent text at AA on every surface", (id) => {
+    for (const text of ["--color-ink", "--color-ink-secondary", "--color-accent-text"]) {
+      for (const surface of ["--color-app", "--color-panel", "--color-raised", "--color-raised-hover", "--color-card", "--color-inset", "--color-control", "--color-bubble-user"]) {
+        expect(contrast(skinToken(id, text), skinToken(id, surface)), `${text} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    expect(contrast(skinToken(id, "--color-accent-ink"), skinToken(id, "--color-accent"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(EDGE_SKINS)("edges %s's chat box and search field at 3:1", (id) => {
+    for (const surface of ["--color-app", "--color-panel", "--color-raised", "--color-card"]) {
+      expect(contrast(skinToken(id, "--color-edge"), skinToken(id, surface)), surface).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("keeps Dim Sand's ground well under Wink Day's and every new color off green", () => {
+    expect(luminance(skinToken("dim-sand", "--color-app"))).toBeLessThan(luminance(skinToken("wink-day", "--color-app")) * 0.6);
+    for (const id of ["precision-dimmed", "bronze", "dim-sand"]) {
+      const body = css.match(new RegExp(`\\[data-skin="${id}"\\]\\s*\\{([^}]*)\\}`))![1];
+      for (const [, hex] of body.matchAll(/--color-[\w-]+:\s*(#[0-9a-f]{6})/g)) {
+        const { r, g, b } = channels(hex);
+        expect(g > r + 12 && g > b + 12, `${id} ${hex}`).toBe(false);
+      }
+    }
+  });
+});
+
 describe("Bot name on wide bubbles", () => {
-  const WIDE = ["precision", "inkwell", "graphite", "moss"];
+  const WIDE = ["precision", "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand", "snow-night"];
   const NAMED_ALREADY = [
     "wink", "wink-cyber", "wink-violet", "wink-black", "wink-day", "community", "community-light", "code-review",
-    "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
+    "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio", "snow",
   ];
 
   function scopeBodies(id: string): string {
@@ -818,7 +876,7 @@ const WINK_SKINS = [
   { id: "wink-cyber", name: "Wink Cyber", face: "IBM Plex Sans", file: "IBMPlexSans-Variable.woff2", lead: "#38d8ff", caret: "#aaff5a" },
   { id: "wink-violet", name: "Wink Violet", face: "Nunito", file: "Nunito-Variable.woff2", lead: "#a770ff", caret: "#6ef0be" },
   { id: "wink-black", name: "Wink Black", face: "JetBrains Mono", file: "JetBrainsMono-Variable.woff2", lead: "#ffd447", caret: "#ff4d9d" },
-  { id: "wink-day", name: "Wink Day", face: "Manrope", file: "Manrope-Variable.woff2", lead: "#c81e69", caret: "var(--color-accent)" },
+  { id: "wink-day", name: "Wink Day", face: "Manrope", file: "Manrope-Variable.woff2", lead: "#b91a61", caret: "var(--color-accent)" },
 ] as const;
 
 const WINK_NAVY = ["wink", "wink-cyber", "wink-violet"];
@@ -859,7 +917,7 @@ describe("Wink family", () => {
       expect(spread(cssToken(id, "--color-accent")!), id).toBeGreaterThan(140);
     }
     expect(cssToken("wink-black", "--color-app")).toBe("#000000");
-    expect(luminance(cssToken("wink-day", "--color-app")!)).toBeGreaterThan(0.85);
+    expect(luminance(cssToken("wink-day", "--color-app")!)).toBeGreaterThan(0.8);
     for (const other of ["hurtado", "tui-amber", "midnight", "tokyo-night"]) {
       for (const skin of WINK_SKINS) {
         expect(cssToken(skin.id, "--color-accent"), `${skin.id} vs ${other}`).not.toBe(cssToken(other, "--color-accent"));
@@ -1302,7 +1360,6 @@ describe("dark ink skins", () => {
 
     const sidebarSrc = readFileSync(join(repoRoot, "src/components/Sidebar.tsx"), "utf8");
     const avatarSrc = readFileSync(join(repoRoot, "src/components/BotProfileAvatarCard.tsx"), "utf8");
-    const compSrc = readFileSync(join(repoRoot, "src/components/CompanionSection.tsx"), "utf8");
 
     const deleteChannelIdx = sidebarSrc.indexOf("chrome.deleteChannel");
     expect(deleteChannelIdx, "chrome.deleteChannel found in Sidebar.tsx").toBeGreaterThanOrEqual(0);
@@ -1334,7 +1391,6 @@ describe("dark ink skins", () => {
       const raised = skinToken(skin, "--color-raised");
       const raisedHover = skinToken(skin, "--color-raised-hover");
       const control = skinToken(skin, "--color-control");
-      const inset = skinToken(skin, "--color-inset");
 
       // 1. Sidebar "chrome.deleteChannel"
       const deleteChannelRest = /(?<!hover:)bg-raised\b/.test(deleteChannelSlice) ? raised : card;
@@ -1359,10 +1415,6 @@ describe("dark ink skins", () => {
       // Icon-only control 2: BotProfileAvatarCard remove button
       const avatarHover = avatarSrc.includes("hover:bg-danger/10") ? blend(danger, card, 0.1) : control;
       expect.soft(contrast(danger, avatarHover), `${skin} BotProfileAvatarCard hover`).toBeGreaterThanOrEqual(3.0);
-
-      // Icon-only control 3: CompanionSection remove button
-      const compHover = compSrc.includes("hover:bg-danger/10") ? blend(danger, inset, 0.1) : control;
-      expect.soft(contrast(danger, compHover), `${skin} CompanionSection hover`).toBeGreaterThanOrEqual(3.0);
     }
   });
 
@@ -1628,6 +1680,11 @@ describe("skin persistence", () => {
     expect(readSkin()).toBe("tui-smoke");
   });
 
+  it("migrates a stored Moss to Merlot", () => {
+    store.set("omb-skin", "moss");
+    expect(readSkin()).toBe("merlot");
+  });
+
   it("lists the same light skins as the desktop overlay", () => {
     const { skinThemeSource } = createRequire(import.meta.url)("../../electron/skin-overlay.cjs");
     for (const id of SKIN_IDS) {
@@ -1644,5 +1701,36 @@ describe("skin persistence", () => {
     const renderAt = main.indexOf("createRoot(");
     expect(applyAt).toBeGreaterThan(-1);
     expect(applyAt).toBeLessThan(renderAt);
+  });
+});
+
+describe("Lagoon and Snow scene themes", () => {
+  it("pairs Lagoon with Lagoon Night and Snow with Snow Night, Day light and Night dark", () => {
+    for (const id of ["lagoon", "lagoon-night", "snow", "snow-night"] as const) expect(SKIN_IDS).toContain(id);
+    expect(["lagoon", "lagoon-night", "snow", "snow-night"].filter((id) => LIGHT_SKIN_IDS.has(id as SkinId))).toEqual(["lagoon", "snow"]);
+    expect(SKINS.find((skin) => skin.id === "lagoon-night")?.name).toBe("Lagoon Night");
+    expect(SKINS.find((skin) => skin.id === "snow-night")?.name).toBe("Snow Night");
+  });
+
+  it("gives Lagoon Night the prototype's water palette", () => {
+    const night = { app: "#0b242a", panel: "#081c21", raised: "#12323a", card: "#10303a", ink: "#e4f5f3", "ink-secondary": "#9fc2c0", accent: "#3ed6c8", "bubble-user": "#134a4b" };
+    for (const [name, value] of Object.entries(night)) expect(cssToken("lagoon-night", `--color-${name}`), name).toBe(value);
+  });
+
+  it("adds Neon Grid as a dark theme with its own indigo, pink and cyan palette", () => {
+    expect(SKIN_IDS).toContain("neon-grid");
+    expect(LIGHT_SKIN_IDS.has("neon-grid")).toBe(false);
+    expect(SKINS.find((skin) => skin.id === "neon-grid")?.name).toBe("Neon Grid");
+    const grid = { app: "#100c25", card: "#161233", ink: "#f2edff", accent: "#ff4fd8", focus: "#5ce1f5", "bubble-user": "#1d3fa8" };
+    for (const [name, value] of Object.entries(grid)) expect(cssToken("neon-grid", `--color-${name}`), name).toBe(value);
+  });
+
+  it("dresses Snow in Wink Day's palette and Snow Night in Precision's, everywhere those skins are styled", () => {
+    for (const [twin, base] of [["snow", "wink-day"], ["snow-night", "precision"]] as const) {
+      const lists = [...css.matchAll(/[^{}]*\{/g)].map(([selector]) => selector).filter((selector) => selector.includes(`[data-skin="${base}"]`));
+      expect(lists.length).toBeGreaterThan(2);
+      for (const selector of lists) expect(selector, selector.trim()).toContain(`[data-skin="${twin}"]`);
+      expect(tokensOf(twin)).toEqual(tokensOf(base));
+    }
   });
 });

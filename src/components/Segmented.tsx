@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 function edgeFade(el: HTMLElement): string | undefined {
@@ -16,13 +16,15 @@ export interface SegmentedProps<T extends string> {
   disabled?: (id: T) => boolean;
   title?: string;
   peek?: boolean;
+  ring?: ReactNode;
 }
 
-export function Segmented<T extends string>({ label, value, options, onChange, disabled, title, peek }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ label, value, options, onChange, disabled, title, peek, ring }: SegmentedProps<T>) {
   const ref = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ x: number; w: number } | null>(null);
   const [mask, setMask] = useState<string | undefined>();
   const [peekWidth, setPeekWidth] = useState<number>();
+  const wide = Boolean(ring);
   useLayoutEffect(() => {
     const group = ref.current;
     if (!group) return;
@@ -48,7 +50,13 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
         const right = on.offsetLeft + on.offsetWidth + 3 - (width ?? group.clientWidth);
         group.scrollLeft = Math.max(0, Math.min(on.offsetLeft - 3, Math.max(group.scrollLeft, right)));
       }
-      setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
+      if (on && wide) {
+        // Whole-px offsets leave a strip of bar beside the ring; rects carry the modal's pop-in scale.
+        const box = group.getBoundingClientRect();
+        const pick = on.getBoundingClientRect();
+        const scale = box.width / Number.parseFloat(getComputedStyle(group).width) || 1;
+        setThumb({ x: (pick.left - box.left) / scale + group.scrollLeft - 3, w: pick.width / scale + 6 });
+      } else setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
       setMask(edgeFade(group));
     };
     place();
@@ -58,7 +66,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
     if (peek && group.parentElement) observer.observe(group.parentElement);
     for (const button of group.querySelectorAll("button")) observer.observe(button);
     return () => observer.disconnect();
-  }, [value, options.length, peek]);
+  }, [value, options.length, peek, wide]);
   return (
     <div
       ref={ref}
@@ -73,9 +81,11 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
         <span
           aria-hidden
           data-segmented-thumb
-          className="pointer-events-none absolute inset-y-[3px] left-0 rounded-[max(0px,calc(var(--radius-lg)_-_3px))] bg-raised shadow-sm ring-1 ring-hairline/60 transition-[transform,width]"
+          className={cn("pointer-events-none absolute left-0 bg-raised shadow-sm transition-[transform,width,top,bottom,border-radius]", ring ? "inset-y-0 rounded-lg border border-transparent" : "inset-y-[3px] rounded-[max(0px,calc(var(--radius-lg)_-_3px))] ring-1 ring-hairline/60")}
           style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
-        />
+        >
+          {ring}
+        </span>
       )}
       {options.map((option) => (
         <button

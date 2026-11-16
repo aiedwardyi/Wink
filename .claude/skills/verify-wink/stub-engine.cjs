@@ -164,6 +164,11 @@ if (engine === "antigravity") {
     if (content === undefined) process.exit(0);
     const { text, delay } = reply(model, content);
     out({ event: "init", conversation_id: conversation, init: { cwd: process.cwd(), tools: [], permission_mode: "accept-edits" } });
+    // agy streams the reply as text_delta steps across the turn; result.response is them joined
+    const parts = text.match(/\S+\s*|\s+/g) ?? [];
+    parts.forEach((text_delta, i) => setTimeout(() => {
+      out({ event: "step_update", conversation_id: conversation, step_update: { conversation_id: conversation, step_index: 0, state: "ACTIVE", step_type: "agent_response", text_delta } });
+    }, (delay * i) / parts.length));
     setTimeout(() => {
       const usage = { input_tokens: 1, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 2 };
       out({ event: "step_update", conversation_id: conversation, step_update: { conversation_id: conversation, step_index: 0, state: "DONE", step_type: "agent_response", usage } });

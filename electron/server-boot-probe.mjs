@@ -1,4 +1,4 @@
-// Kernel of the packaged-server boot wait (see issue #506): poll a freshly
+// Kernel of the packaged-server boot wait: poll a freshly
 // forked child's /api/health until it either proves its identity, we learn
 // some other process owns the port, or the wall-clock budget runs out.
 //

@@ -223,14 +223,14 @@ describe("terminal pane counts", () => {
     ]);
   });
 
-  it("drops a bad bot id and a count past the pane cap, and can answer counts alone", () => {
+  it("drops a bad bot id, keeps a bot past 192 panes, and can answer counts alone", () => {
     expect(acceptedPaneCounts({
       panes: { "bot-1": ["w1", "w2"], "../x": ["nope"], "bot-2": [] },
       counts: { "bot-1": 17 },
     })).toEqual({ counts: { "bot-1": 2 }, panes: { "bot-1": ["w1", "w2"] } });
-    const sixteen = Array.from({ length: 16 }, (_, index) => `w${index}`);
-    expect(acceptedPaneCounts({ panes: { "bot-1": sixteen, "bot-2": [...sixteen, "w16"] } })).toEqual({ counts: { "bot-1": 16 }, panes: { "bot-1": sixteen } });
-    expect(acceptedPaneCounts({ counts: { "bot-1": 16, "bot-2": 17 } })).toEqual({ counts: { "bot-1": 16 }, panes: {} });
+    const many = Array.from({ length: 193 }, (_, index) => `w${index}`);
+    expect(acceptedPaneCounts({ panes: { "bot-1": many } })).toEqual({ counts: { "bot-1": 193 }, panes: { "bot-1": many } });
+    expect(acceptedPaneCounts({ counts: { "bot-1": 193 } })).toEqual({ counts: { "bot-1": 193 }, panes: {} });
     expect(acceptedPaneCounts({ counts: { "bot-3": 2, "bot-4": 0, "bad id": 1 } })).toEqual({
       counts: { "bot-3": 2 },
       panes: {},

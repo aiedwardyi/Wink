@@ -3,6 +3,7 @@
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
+import type { RoomNotice } from "../store.ts";
 import type { RoomAuthor, RoomEntry, RoomFile } from "./db.ts";
 
 /** The relay cuts a socket idle for 10 minutes. */
@@ -23,38 +24,76 @@ export interface DoorEntry {
 
 export interface DoorState {
   version: number;
+  picture?: string;
+  notice?: RoomNotice;
   roomName: string;
   instructions: string;
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
-  bots: never[];
+  bots: Array<{ id: string; name: string; color: string }>;
+  /** Teammates' own bots; only a host that takes them sends this. */
+  teamBots: Array<{ id: string; name: string; color: string; owner: string }>;
   myAsks: never[];
 }
 
-export type DoorFrame = { kind: "entry"; entry: DoorEntry } | { kind: "state"; state: DoorState } | { kind: "reset" } | { kind: "ended" };
+/** `by` is "host", "person:<id>" or "bot:<id>". */
+export interface LineReactions {
+  id: string;
+  marks: Array<{ emoji: string; by: string }>;
+}
+
+/** Older guests drop an unknown kind, so this never breaks their stream. A `reset` frame starts a full set. */
+export type DoorFrame =
+  | { kind: "entry"; entry: DoorEntry }
+  | { kind: "state"; state: DoorState }
+  | { kind: "reactions"; reset?: true; lines: LineReactions[] }
+  | { kind: "deleted"; ids: string[]; count?: number }
+  | { kind: "reset" }
+  | { kind: "stop" }
+  | { kind: "ended" };
 
 export interface DoorStream {
   roomId: string;
   personId: string;
   res: ServerResponse;
+  /** Asked with `with=bots`; anyone else reads a bot as a person by its name. */
+  bots: boolean;
+  largeFiles?: boolean;
+  media?: boolean;
   /** Live frames held until replay is done; null once live. */
   buffer: DoorFrame[] | null;
+  heldBytes?: number;
 }
 
 const streams = new Set<DoorStream>();
 const sockets = new Map<string, Set<Duplex>>();
 const personKey = (roomId: string, personId: string) => `${roomId}\n${personId}`;
 
-export const doorEntry = (entry: RoomEntry): DoorEntry => ({
+/** Builds before bots in rooms parse only host and person authors. */
+const wireAuthor = (author: RoomAuthor, bots: boolean): RoomAuthor =>
+  bots || author.kind !== "bot" ? author : { kind: "person", id: `bot-${author.id}`, name: author.name };
+
+export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
   seq: entry.seq,
   id: entry.id,
   at: entry.at,
-  author: entry.author,
+  author: wireAuthor(entry.author, bots),
   text: entry.text,
   ...(entry.replyToId ? { replyToId: entry.replyToId } : {}),
   ...(entry.files ? { files: entry.files } : {}),
 });
+
+/** The only types builds before video and audio parse; any other fails their whole line or snapshot. */
+const OLDER_FILE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]);
+
+export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean, media = true): DoorEntry {
+  if (!entry.files?.length || (largeFiles && media)) return entry;
+  const fits = (file: RoomFile) => (media || OLDER_FILE_TYPES.has(file.type)) && (largeFiles || (!file.deleted && file.bytes <= 25 * 1024 ** 2));
+  const files = entry.files.filter(fits).slice(0, largeFiles ? undefined : 10);
+  const omitted = entry.files.filter((file) => !file.deleted && !files.includes(file));
+  return { ...entry, files, text: [entry.text, ...omitted.map((file) => file.name)].filter(Boolean).join("\n").slice(0, 20_000) };
+}
 
 /** Remembers which sockets a person used, so Remove can cut keep-alive ones too. */
 export function trackDoorSocket(roomId: string, personId: string, socket: Duplex): void {
@@ -77,13 +116,36 @@ function write(stream: DoorStream, chunk: string): void {
   if (stream.res.writableLength > MAX_BACKLOG_BYTES) stream.res.destroy();
 }
 
+function frameText(stream: DoorStream, frame: DoorFrame): string {
+  const sent = frame.kind === "entry" ? { kind: "entry", entry: compatibleDoorEntry({ ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) }, stream.largeFiles !== false, stream.media !== false) } : frame;
+  return `data: ${JSON.stringify(sent)}\n\n`;
+}
+
 export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
-  write(stream, `data: ${JSON.stringify(frame)}\n\n`);
+  write(stream, frameText(stream, frame));
+}
+
+/** The catch-up waits on drain, so a long one never trips the cut live frames get. */
+export async function writeCatchUp(stream: DoorStream, frames: Iterable<DoorFrame>): Promise<void> {
+  const { res } = stream;
+  for (const frame of frames) {
+    if (res.writableEnded || res.destroyed) return;
+    if (res.write(frameText(stream, frame))) continue;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        res.off("drain", done);
+        res.off("close", done);
+        resolve();
+      };
+      res.on("drain", done);
+      res.on("close", done);
+    });
+  }
 }
 
 /** Registered and buffering: live frames wait until goLive. */
-export function openDoorStream(roomId: string, personId: string, res: ServerResponse): DoorStream {
-  const stream: DoorStream = { roomId, personId, res, buffer: [] };
+export function openDoorStream(roomId: string, personId: string, res: ServerResponse, bots = false, largeFiles = true, media = true): DoorStream {
+  const stream: DoorStream = { roomId, personId, res, bots, buffer: [], largeFiles, media };
   streams.add(stream);
   const heartbeat = setInterval(() => write(stream, ": ping\n\n"), HEARTBEAT_MS);
   res.once("close", () => {
@@ -103,16 +165,31 @@ export function goLive(stream: DoorStream, sentThrough: number): void {
 }
 
 function deliver(stream: DoorStream, frame: DoorFrame): void {
-  if (stream.buffer) stream.buffer.push(frame);
-  else writeFrame(stream, frame);
+  if (!stream.buffer) return writeFrame(stream, frame);
+  stream.buffer.push(frame);
+  stream.heldBytes = (stream.heldBytes ?? 0) + JSON.stringify(frame).length;
+  // A catch-up the reader stopped draining holds live frames; cut it like a live backlog.
+  if (stream.heldBytes > MAX_BACKLOG_BYTES) stream.res.destroy();
 }
 
 const roomStreams = (roomId: string) => [...streams].filter((stream) => stream.roomId === roomId);
+
+export function broadcastDoorDeleted(roomId: string, ids: string[], count: number): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "deleted", ids, count });
+}
 
 export function broadcastDoorEntry(roomId: string, entry: RoomEntry): void {
   if (!streams.size) return;
   const frame: DoorFrame = { kind: "entry", entry: doorEntry(entry) };
   for (const stream of roomStreams(roomId)) deliver(stream, frame);
+}
+
+export function broadcastDoorStop(roomId: string): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "stop" });
+}
+
+export function broadcastDoorReactions(roomId: string, lines: LineReactions[]): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "reactions", lines });
 }
 
 export function sendDoorState(roomId: string, stateFor: (personId: string) => DoorState | null): void {

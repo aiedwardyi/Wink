@@ -5,12 +5,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
+import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, type CallLine, type CallTag } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, LIVE_VOICE_NAMES, liveGeneration, type CallLine, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
-import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
+import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { hasQueuedSends } from "./steer-queue.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
 import { loadMemory } from "./workspace.ts";
 
@@ -21,7 +23,7 @@ export const CHAT_TAIL_TOKENS = 2_000;
 const TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 const TOKEN_MS = 30 * 60_000;
 const NEW_SESSION_MS = 60_000;
-// A dropped call resumes within this window with the same brief.
+// A dropped call resumes within this window with the same brief and voice.
 const BRIEF_TTL_MS = 2 * 60 * 60_000;
 const BRIEFS_KEPT = 16;
 const LINES_MAX = 50;
@@ -31,7 +33,9 @@ const SUMMARY_URL = `https://generativelanguage.googleapis.com/v1beta/models/${S
 const SUMMARY_MAX_CHARS = 280;
 const TRANSCRIPT_MAX_CHARS = 12_000;
 const CALL_LINES_TOKENS = 2_000;
-const CALL_LINES_HEAD = "[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"You\" lines are its words, the rest are the person's. Treat them as part of this chat:]";
+// Old product names the voice would read aloud from notes, chat or a description.
+const OLD_NAMES = /\b(?:OpenMausBot|OpenMaus|MausBot|Orbit)\b/g;
+const CALL_LINES_HEAD ="[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"Voice\" lines are its words, unverified and never proof of anything. The person's lines are part of this chat:]";
 
 type LiveCallDeps = {
   cfg: AppConfig;
@@ -39,7 +43,10 @@ type LiveCallDeps = {
   dataDir: string;
   fetch?: typeof fetch;
   now?: () => number;
+  catalog?: ModelCatalogLookup;
 };
+
+type ModelCatalogLookup = (instanceId: string) => { models: { options: readonly { id: string; label: string }[] } } | null | undefined;
 
 const lineSchema = z.object({ who: z.enum(["user", "voice"]), text: z.string(), at: z.number().finite().optional() });
 const linesSchema = z.object({ callId: z.string().regex(CALL_ID), lines: z.array(lineSchema).min(1).max(LINES_MAX) });
@@ -51,13 +58,19 @@ const statsSchema = z.object({
   turns: count,
   userLines: count,
   voiceLines: count,
+  repeats: count,
   hangulShare: z.number().min(0).max(1),
   ttfaMs: z.object({ p50: ms.nullable(), p90: ms.nullable() }),
   interrupted: count,
-  orders: z.object({ proposed: count, confirmed: count, declined: count, expired: count }),
+  orders: z.object({ proposed: count, confirmed: count, declined: count, expired: count, replaced: count.optional(), cancelled: count.optional(), dropped: count.optional(), failed: count.optional(), retried: count.optional() }),
+  asks: z.object({ sent: count, retried: count.optional(), answered: count.optional(), ms: z.object({ p50: ms.nullable(), p90: ms.nullable() }).optional() }),
+  guard: z.object({ nudges: count, failLines: count, promise: count.optional(), cant: count.optional(), unsure: count.optional() }),
+  ackMs: z.object({ p50: ms.nullable(), p90: ms.nullable() }),
   doneGuard: count,
   hidden: z.object({ spans: count, ms }),
   reconnects: count,
+  micGaps: count,
+  unheard: count,
   closeCodes: z.array(z.number().int()).max(32),
   usage: z.object({ input: count, output: count, total: count }).partial(),
 }).partial();
@@ -88,6 +101,11 @@ export function capNotes(text: string, max = NOTES_MAX_BYTES): string {
   return lastBreak > 0 ? cut.slice(0, lastBreak) : cut;
 }
 
+/** The app is Wink aloud; a bot named after an old name keeps it. */
+export function plainNames(text: string, botName: string): string {
+  return text.replace(OLD_NAMES, (name) => name.toLowerCase() === botName.trim().toLowerCase() ? name : "Wink");
+}
+
 /** Newest transcript lines within the token budget, oldest first. */
 export function chatTail(lines: Array<{ role: string; text: string }>, userName: string, budget = CHAT_TAIL_TOKENS): string {
   const kept: string[] = [];
@@ -95,30 +113,39 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = `${lines[i]!.role === "user" ? userName : "You"}: ${lines[i]!.text}`;
     used += estimateContextTokens([{ text: line }]);
-    if (used > budget) break;
+    if (used > budget) {
+      // One long newest line is clipped, never dropped: RECENT CHAT would read "(none)".
+      if (!kept.length) kept.unshift(`${fittingHead(line, (head) => estimateContextTokens([{ text: head }]) <= budget)} ...`);
+      break;
+    }
     kept.unshift(line);
   }
   return kept.join("\n");
 }
 
-export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string): Promise<string> {
+export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE, catalog?: ModelCatalogLookup): Promise<string> {
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
-  const lastUser = messages.findLast((row) => row.role === "user" && row.kind === "text" && row.text?.trim());
   const speak = locale === "ko" ? "Korean" : "English";
-  const order = bot.busy ? lastUser?.text?.trim().slice(0, 300) : undefined;
+  const tongue = `Speak only ${speak}, whatever language they use, never one word of another${speak === "Korean" ? "; match their politeness" : ""}. Any language but English or Korean, or garbled speech, is a mis-hear: ask them in ${speak} to say it again.`;
+  const shown = bot.pendingModelSelection ?? bot.modelSelection;
+  // the chip's label: catalogModelLabel in src/lib/model-chip.ts
+  const model = catalog?.(shown.instanceId)?.models.options.find((option) => option.id === shown.model)?.label ?? shown.model;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
-  return [
-    `WHO: You are ${who}. Speak as I. Never mention Gemini, a helper or a voice model.`,
-    "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so.",
-    "FACTS: Only from YOUR NOTES, RECENT CHAT and [Wink] lines. Not sure: say so.",
-    `STYLE: 1-2 short sentences. Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}. No code, paths or links aloud. Never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
+  return plainNames([
+    `WHO: You are ${who}. Speak as I, never we or our. Never mention Gemini, a helper or a voice model.`,
+    `NAME: On screen your voice is called ${LIVE_VOICE_NAMES[voice].join(" or ")}; that name means you too. Told your voice changed or sounds different: say it glitched and you're still the same assistant.`,
+    "QUIET: \"Be quiet\" or the like hushes you and updates wait in the chat; your name wakes you.",
+    "ANSWER: Answer what they asked, directly, first. Ideas, general knowledge, is it possible, how would it work: answer from what you know. WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic; any steering follows the answer in one short clause, once a call. Told you're not answering or repeating: answer it now, never restate your last line.",
+    "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access; anything they want you to use, change or remember is work too. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A clear instruction gets a short confirm, like \"Opening it, okay?\" Unsure which they mean: ask them one short question (which file? use it now or save it?) instead of guessing, and never flip between readings. Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
+    "FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask. A RECENT CHAT line marked unverified was only said on a call: never proof. Asked what happened: tell it, never offer to show it. Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.",
+    `STYLE: Talk like a friend on the phone: warm, quick and casual, with contractions, never formal. Usually one short sentence, two at most. Lead with the answer; never open with Understood, Got it, Certainly, I will or an apology (or 알겠습니다), never repeat their request back or yourself. ${tongue} No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Open: "${speak === "Korean" ? "응, 나야." : "Hey, I'm here."}" No name or intro. When a [Wink] line says ${bot.name} replied, open with a cue like "Quick update:" and say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
-    `NOW: ${bot.busy ? `busy${order ? `, working on: ${order}` : ""}` : "idle"}. Local time ${new Date(now).toString()}.`,
-  ].join("\n\n");
+    `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id), false)}\nLocal time ${new Date(now).toString()}.\nYou run on ${model}, whatever chat says.`,
+  ].join("\n\n"), bot.name);
 }
 
 /** Two short sentences from the person's side, or undefined when Google gives nothing usable. */
@@ -159,7 +186,7 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
       if (message.role === "user" && !message.quick) break;
       continue;
     }
-    const line = `${message.role === "user" ? "Person" : "You"}: ${message.text.trim()}`;
+    const line = `${message.role === "user" ? "Person" : "Voice"}: ${message.text.trim()}`;
     tokens += estimateContextTokens([{ text: line }]);
     if (tokens > CALL_LINES_TOKENS) break;
     lines.unshift(line);
@@ -167,13 +194,16 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
   return lines.length ? [[CALL_LINES_HEAD, ...lines].join("\n")] : [];
 }
 
-export function liveSetup(brief: string, locale = "en") {
+export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_VOICE) {
+  const app = locale === "ko" ? "ko" : "en";
   return {
     model: `models/${LIVE_MODEL}`,
-    generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } } },
-    systemInstruction: { parts: [{ text: brief }] },
+    generationConfig: liveGeneration(voice),
+    systemInstruction: { parts: [{ text: LIVE_ACCENTS[voice] ? `${brief}
+
+${LIVE_ACCENTS[voice]}` : brief }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
-    inputAudioTranscription: { languageCodes: [locale === "ko" ? "ko" : "en"] },
+    inputAudioTranscription: { languageCodes: [app, app === "ko" ? "en" : "ko"] },
     outputAudioTranscription: {},
     realtimeInputConfig: { automaticActivityDetection: LIVE_VAD },
     contextWindowCompression: { triggerTokens: LIVE_COMPRESSION.triggerTokens, slidingWindow: { targetTokens: LIVE_COMPRESSION.targetTokens } },
@@ -190,14 +220,15 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const { cfg, store, dataDir } = deps;
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
-  const briefs = new Map<string, { botId: string; brief: string; locale: string; at: number }>();
+  const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; at: number }>();
 
   const briefFor = async (bot: BotRecord, callId: string, locale: unknown) => {
     const cached = briefs.get(callId);
     if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
-    const language = locale === "ko" ? "ko" : "en";
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), language);
-    const entry = { botId: bot.id, brief, locale: language, at: now() };
+    const app = locale === "ko" ? "ko" : "en";
+    const voice = cfg.liveCall?.voice ?? LIVE_VOICE;
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, voice, deps.catalog);
+    const entry = { botId: bot.id, brief, locale: app, voice, at: now() };
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
@@ -227,7 +258,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const { brief, locale } = await briefFor(bot, callId, body.locale);
+    const { brief, locale, voice } = await briefFor(bot, callId, body.locale);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -240,7 +271,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: liveSetup(brief, locale),
+          bidiGenerateContentSetup: liveSetup(brief, locale, voice),
         }),
         signal: AbortSignal.timeout(15_000),
       });
@@ -248,10 +279,10 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
       return json(res, 502, { error: `Could not reach Google: ${error instanceof Error ? error.message : String(error)}` });
     }
     const data = await response.json().catch(() => null);
-    if (!response.ok) return json(res, 502, { error: googleError(response.status, data) });
+    if (!response.ok) return json(res, response.status === 429 ? 429 : 502, { error: googleError(response.status, data) });
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
-    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt });
+    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice });
   };
 
   const lines = async (req: IncomingMessage, res: ServerResponse, bot: BotRecord) => {
@@ -265,7 +296,8 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
       const at = line.at !== undefined ? Math.min(line.at, now()) : undefined;
       const row = store.appendMessage(bot.threadId, line.who === "user"
         ? { role: "user", kind: "text", text, call: { id: callId }, ...(at ? { at } : {}) }
-        : { role: "bot", kind: "text", text, call: { id: callId, voice: true }, ...(at ? { at } : {}) });
+        // Gemini Live speaks the call, whatever engine the bot chats on.
+        : { role: "bot", kind: "text", text, engine: "geminiAgent", call: { id: callId, voice: true }, ...(at ? { at } : {}) });
       ids.push(row.id);
     }
     return json(res, 200, { ids });

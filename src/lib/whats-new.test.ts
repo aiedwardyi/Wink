@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { unseenRelease } from "./whats-new";
+import { unseenRelease, WHATS_NEW } from "./whats-new";
 
 describe("unseen release notes", () => {
   it("shows the notes a skipped release carried", () => {
@@ -33,4 +33,9 @@ describe("unseen release notes", () => {
     expect(unseenRelease("1.0.100", "1.0.98", ["1.0.99", "1.0.100"])).toBe("1.0.100");
     expect(unseenRelease("1.1.0", "1.0.99", ["1.0.100"])).toBe("1.0.100");
   });
+});
+
+it("calls a worker 작업자 in Korean, as the rest of the app does", () => {
+  expect(JSON.stringify(WHATS_NEW["1.0.263"])).not.toContain("워커");
+  expect(JSON.stringify(WHATS_NEW["1.0.263"].tiles[0].show)).toContain("작업자");
 });

@@ -23,7 +23,7 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
 
   it("still mounts chat chrome eagerly", () => {
     expect(app).toMatch(/^import \{ Sidebar \} from "@\/components\/Sidebar";/m);
-    expect(app).toMatch(/^import \{ ChatView \} from "@\/components\/ChatView";/m);
+    expect(app).toMatch(/^import \{ ChatView(, \w+)* \} from "@\/components\/ChatView";/m);
     expect(app).toContain("<LazyView");
   });
 
@@ -35,7 +35,10 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
   });
 
   it("warms lazy screens in every window once the first chat is up", () => {
-    expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(state\.hydrated\) return warmViews\(\[SettingsPanel\.preload, SettingsModal\.preload\]\);\s*\}, \[state\.hydrated\]\);/);
+    const warmed = app.match(/useEffect\(\(\) => \{\s*if \(state\.hydrated\) return warmViews\(\[([^\]]*)\]\);\s*\}, \[state\.hydrated\]\);/)?.[1].split(", ");
+    expect(warmed).toEqual([
+      "SettingsPanel.preload", "SettingsModal.preload", "CreateBotSheet.preload", "ShowPane.preload", "warmCallSlots", "warmCallViews", "RoomDetailsPanel.preload",
+    ]);
   });
 
   it("fetches app settings on desktop before boot API calls can hold every connection", () => {
@@ -46,7 +49,7 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
     expect(app).toMatch(/preloadConnectedApps/);
     expect(app).toMatch(/requestIdleCallback/);
     expect(app).toMatch(/timeout:\s*800/);
-    expect(app).toMatch(/import\("@\/components\/PluginsPanel"\)/);
+    expect(app).toMatch(/PluginsPanel\.preload\(\)\s*\.then\(\(\) => import\("@\/components\/PluginsPanel"\)\)/);
   });
 
   it("isolates lazy overlays so one chunk cannot unmount the others", () => {

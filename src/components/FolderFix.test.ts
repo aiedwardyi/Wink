@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { MOTION_FAST_MS } from "@/lib/motion";
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
 
 import { ChatView } from "./ChatView";
@@ -113,7 +114,7 @@ describe("missing project folder", () => {
     expect(pickFolder).toHaveBeenCalledWith("C:\\old-parent\\");
     expect(patches()).toEqual([{ url: "/api/bots/b1", method: "PATCH", body: { cwd: replacement } }]);
     expect(host.querySelector('[data-folder-fix="fading"]')).not.toBeNull();
-    await advance(200);
+    await advance(MOTION_FAST_MS);
     const success = host.querySelector('[data-folder-fix="success"]')!;
     expect(success.textContent).toBe("Project folder set to new-project");
     expect(success.querySelector(".text-success")).not.toBeNull();

@@ -58,12 +58,12 @@ test("only the bus's canonical log failure is reported from runtime.error", () =
   const message = bus.match(/INCOMPLETE_LOG_MESSAGE\s*=\s*\n?\s*"([^"]+)"/)[1];
   const branch = source("../server/index.ts").split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0].replace(/break;(\s*\})?\s*$/, "$1");
   const calls = [];
-  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", "runtimeErrorTool", "accounts", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
+  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", "runtimeErrorTool", "accounts", "refreshCodexPromo", "usageBoard", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
   for (const event of [
     { message: "usage limit", usageLimit: { resetsAt: null } }, { message: "sign in", signIn: true },
     { message: "setup", setup: true }, { message: "CLI not found" }, { message: "Permission request timed out" },
     { message: "provider offline" }, { message },
-  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError, runtimeErrorTool, new Map());
+  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError, runtimeErrorTool, new Map(), () => {}, { touch() {} });
   assert.deepEqual(calls, [{ message }]);
 });
 
@@ -177,11 +177,12 @@ test("release and dev builds bake the repo DSN variable, including empty and uns
   const target = path.join(dir, "config.json");
   for (const value of [undefined, "", " https://public@reports.example/1 "]) {
     const env = { ...process.env };
+    delete env.WINK_STATS_URL;
     if (value === undefined) delete env.ERROR_REPORT_DSN;
     else env.ERROR_REPORT_DSN = value;
     const result = spawnSync(process.execPath, ["scripts/write-error-report-config.mjs", target], { env, encoding: "utf8", windowsHide: true });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), { dsn: value?.trim() ?? "" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), { dsn: value?.trim() ?? "", statsUrl: "" });
   }
 });
 
@@ -203,15 +204,17 @@ test("own startup kills skip SERVER_GONE but child crashes still report", async 
   const body = main.slice(main.indexOf("async function startServerOn("), main.indexOf("async function startServerPackaged("));
   for (const outcome of ["timeout", "foreign-owner", "exited", "ready"]) {
     const captures = [];
+    const crashes = [];
     const proc = new EventEmitter();
     proc.kill = () => proc.emit("exit", 1);
     proc.pid = 123;
     const serverToken = "token";
-    const context = { path, startupWindowMs: 0, process: { resourcesPath: "test", env: {}, uptime: () => 0 }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", BRAND: null, terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
+    const context = { path, startupWindowMs: 0, process: { resourcesPath: "test", env: {}, uptime: () => 0 }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", BRAND: null, terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, STATS_URL: "", screen: { getPrimaryDisplay: () => ({ scaleFactor: 1 }), getAllDisplays: () => [{}] }, crashStats: { capture: (...value) => crashes.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
     const start = runInNewContext(`${body}\nstartServerOn`, context);
     await start(9311);
     if (outcome === "ready") proc.emit("exit", 1);
     assert.deepEqual(captures.map((value) => value.code), outcome === "timeout" ? ["STARTUP_TIMEOUT"] : outcome === "foreign-owner" ? [] : ["SERVER_GONE"], outcome);
+    assert.deepEqual(crashes, outcome === "timeout" ? [["main", "startup-timeout"]] : outcome === "foreign-owner" ? [] : [["server", "server-gone", 1]], outcome);
   }
 });
 

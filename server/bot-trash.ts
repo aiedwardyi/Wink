@@ -288,7 +288,8 @@ export class BotTrash {
     }
     this.list.entries = this.list.entries.filter((candidate) => candidate !== entry);
     this.list.save();
-    this.store.emit({ type: "bot", botId: bot.id });
+    // clients that dropped the bot need its transcript back, as on a task switch
+    this.store.emit({ type: "bot", botId: bot.id, switched: true });
     return bot;
   }
 

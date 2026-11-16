@@ -4,6 +4,7 @@ import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Penc
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { ReplyQuote } from "./ReplyQuote";
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRows } from "./FileAttachmentRow";
@@ -24,9 +25,23 @@ import { localeTag, useI18n } from "@/lib/i18n";
  * bury the conversation; bots get full markdown. */
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
+export const USER_FOLD_CLASS = "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]";
+
+export function userTextFolds(text: string): boolean {
+  return text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES;
+}
+
+export function FoldToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  const { t } = useI18n();
+  return (
+    <button onClick={onToggle} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
+      {t(expanded ? "chat.showLess" : "chat.showFullMessage")}
+    </button>
+  );
+}
 
 /** Hover/focus-revealed copy control shared by user + bot bubbles. */
-function CopyButton({ text, className }: { text: string; className?: string }) {
+export function CopyButton({ text, className }: { text: string; className?: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   return (
@@ -117,7 +132,7 @@ function BubbleEditor({
  *  under the body so the transcript's overflow-x-hidden cannot clip it, and so
  *  the date stays out of the transcript's live region: otherwise every
  *  arriving message would be read out with its own datestamp. */
-function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }) {
+export function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }) {
   const { locale } = useI18n();
   const tag = localeTag(locale);
   const full = useMemo(() => formatDateTime(at, tag), [at, tag]);
@@ -250,6 +265,7 @@ const Bubble = memo(function Bubble({
   editing,
   isLastBotText,
   streaming = false,
+  pictured = false,
   dock,
   sendsNext = false,
   sendsAfterSync = false,
@@ -269,6 +285,7 @@ const Bubble = memo(function Bubble({
   editing: boolean;
   isLastBotText: boolean;
   streaming?: boolean;
+  pictured?: boolean;
   dock?: ReplyDock;
   sendsNext?: boolean;
   sendsAfterSync?: boolean;
@@ -300,8 +317,11 @@ const Bubble = memo(function Bubble({
   const webhookView = user ? webhookMessageView(text) : null;
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
-  const collapsible =
-    user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
+  const collapsible = user && !webhookView && !expanded && userTextFolds(visibleText);
+  // floated beside markdown: shorter than a line, so only the first line makes room
+  const callMark = message.call && (
+    <Phone size={12} className={cn("mr-1.5 text-ink-secondary/70", user ? "inline align-[-1px]" : "float-left mt-[calc((1lh-12px)/2)]")} />
+  );
 
   if (user && editing && !webhookView) {
     return (
@@ -368,7 +388,7 @@ const Bubble = memo(function Bubble({
               <AttachedImageGallery paths={attachedImages.images} className="ml-3 max-w-[min(42rem,78%)] justify-start pl-3" />
             )}
             <PeerMessageBody text={visibleText} />
-            {attachedImages && <FileAttachmentRows files={attachedImages.files} className="mt-2 ml-3 max-w-[min(42rem,78%)] pl-3" />}
+            {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className="mt-2 ml-3 max-w-[min(42rem,78%)] pl-3" />}
           </div>
           {!message.placeholder && <ReactionChips threadId={threadId} message={message} members={members} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
         </div>
@@ -465,31 +485,22 @@ const Bubble = memo(function Bubble({
               {attachedImages && attachedImages.images.length > 0 && (
                 <AttachedImageGallery paths={attachedImages.images} />
               )}
-              <div
-                className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
-              >
-                {visibleText}
+              <div className={cn(collapsible && USER_FOLD_CLASS)}>
+                {callMark}
+                <LinkedText text={visibleText} />
               </div>
-              {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(visibleText && "mt-2")} />}
+              {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
               {message.steered && (
                 <div className="mt-1 text-[11px] text-ink-secondary/70" title={t("chat.sentMidTurnHint")}>
                   {t("chat.sentMidTurn")}
                 </div>
               )}
-              {collapsible && (
-                <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                  {t("chat.showFullMessage")}
-                </button>
-              )}
-              {expanded && (
-                <button onClick={() => setExpanded(false)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                  {t("chat.showLess")}
-                </button>
-              )}
+              {(collapsible || expanded) && <FoldToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />}
             </>
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
-              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
+              {callMark}
+              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />
             </MessageBoundary>
           ) : null}
         </div>
@@ -546,14 +557,7 @@ const Bubble = memo(function Bubble({
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
         />
       )}
-      {message.call ? (
-        <div className="flex items-center gap-1">
-          <Phone size={11} className="mt-0.5 text-ink-secondary/70" />
-          <TimestampLabel at={message.at} hidden={streaming} />
-        </div>
-      ) : (
-        <TimestampLabel at={message.at} hidden={streaming} />
-      )}
+      <TimestampLabel at={message.at} hidden={streaming} />
       {(sendsNext || sendsAfterSync) && (
         <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
           <Clock size={11} aria-hidden="true" />

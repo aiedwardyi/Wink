@@ -10,8 +10,9 @@ import { PhoneAccess } from "../phone-access.ts";
 import { relayVerdict } from "../phone-auth.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
-import type { HostedGroup } from "./asks.ts";
+import { closeAsksDb, type HostedGroup } from "./asks.ts";
 import { closeRoomsDb, createRoom, roomPeople } from "./db.ts";
+import { hostedRoomView } from "./guards.ts";
 import { configureRoomDoor, handleRoomDoor } from "./door.ts";
 import type { DoorFrame } from "./door-streams.ts";
 import { closeInvitesDb, createInvite, roomInvites } from "./invites.ts";
@@ -37,7 +38,7 @@ async function app(req: IncomingMessage, res: ServerResponse) {
   if (isRelayRequest(req) && (await access.gate(req, res)).handled) return;
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
   reached.push(path);
-  const deps = { store, relayHost: () => relayHost, botCaller: req.headers.authorization === BOT };
+  const deps = { store, relayHost: () => relayHost };
   if (await peopleRoute(req, res, req.method ?? "GET", path, deps)) return;
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
@@ -80,6 +81,7 @@ function call(path: string, init: { method?: string; body?: unknown; relay?: boo
 
 const invite = (roomId: string, authorization?: string) => call(`/api/rooms/${roomId}/invites`, { method: "POST", authorization });
 const remove = (roomId: string, personId: string, authorization?: string) => call(`/api/rooms/${roomId}/people/${personId}`, { method: "DELETE", authorization });
+const letBack = (roomId: string, personId: string, authorization?: string) => call(`/api/rooms/${roomId}/people/${personId}/back`, { method: "POST", authorization });
 const joinAs = (code: unknown, name: string, device?: string) => call("/room/v1/join", { method: "POST", relay: true, body: { code, name, device } });
 const pcOf = (name: string) => `pc-${name.toLowerCase()}-0123456789abcdef`;
 
@@ -116,7 +118,9 @@ function openStream(roomId: string, key: string, device?: string): Promise<Strea
         while ((cut = text.indexOf("\n\n")) >= 0) {
           const block = text.slice(0, cut);
           text = text.slice(cut + 2);
-          if (block.startsWith("data: ")) stream.frames.push(JSON.parse(block.slice(6)));
+          if (!block.startsWith("data: ")) continue;
+          const frame = JSON.parse(block.slice(6)) as DoorFrame;
+          if (frame.kind !== "reactions") stream.frames.push(frame);
         }
       });
       res.on("error", () => {});
@@ -140,6 +144,7 @@ async function joined(group: HostedGroup, name: string): Promise<{ key: string; 
 
 const close = () => {
   configureRoomDoor(null);
+  closeAsksDb();
   closeInvitesDb();
   closeRoomsDb();
 };
@@ -238,7 +243,7 @@ describe("remove", () => {
   it("binds a pre-upgrade member's resumed stream to the same seat and removal ban", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina");
     expect(mina.status).toBe(200);
     const stream = await openStream(id, mina.body.key, pcOf("Mina"));
@@ -258,7 +263,7 @@ describe("remove", () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
     const mina = await joined(group, "Mina");
-    const legacy = createInvite(id, "Joon", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Joon", ["Edward"]);
     const joon = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Joon");
     const { body } = await invite(id);
     const snapshot = () => call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: joon.body.key, device: pcOf("Mina") });
@@ -272,7 +277,7 @@ describe("remove", () => {
   it("does not bind a device without a live guest key", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina");
     expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: "wkg_wrong", device: pcOf("Mina") })).status).toBe(401);
     const { body } = await invite(id);
@@ -283,11 +288,11 @@ describe("remove", () => {
   it("retires the shared code when removing a member who joined before device tracking", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await call("/room/v1/join", { method: "POST", relay: true, body: { code: `wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}` } });
     expect(mina.status).toBe(200);
     const { body } = await invite(id);
-    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    expect(await remove(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true, codeChanged: true } });
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
     expect(roomPeople(id)).toEqual([]);
     expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: mina.body.key })).status).toBe(401);
@@ -299,7 +304,7 @@ describe("remove", () => {
   it("keeps a legacy invite join on the same seat when that PC uses the room code", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const first = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
     expect(first.status).toBe(200);
     const { body } = await invite(id);
@@ -312,7 +317,7 @@ describe("remove", () => {
   it("bars a legacy invite joiner's PC from the room code after Remove", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
     expect(mina.status).toBe(200);
     expect((await remove(id, mina.body.person.id)).status).toBe(200);
@@ -376,6 +381,23 @@ describe("remove", () => {
     expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Joon"]);
   });
 
+  it("lists a removed teammate until the host lets them back in with the same code", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const { body } = await invite(id);
+    const mina = await joinAs(body.code, "Mina", pcOf("Mina"));
+    const emitted = vi.spyOn(store, "emit");
+    expect(await remove(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true } });
+    expect(emitted).toHaveBeenLastCalledWith({ type: "group", groupId: group.id });
+    expect(hostedRoomView(group.hosted)).toMatchObject({ people: [], removed: [{ id: mina.body.person.id, name: "Mina" }] });
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect(await letBack(id, mina.body.person.id, BOT)).toEqual({ status: 200, body: { ok: true } });
+    expect(hostedRoomView(group.hosted)).not.toHaveProperty("removed");
+    expect(await letBack(id, mina.body.person.id)).toEqual({ status: 404, body: { error: "not found" } });
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toMatchObject({ status: 200, body: { person: { name: "Mina" } } });
+    expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);
+  });
+
   it("lets a teammate who left come back, and never lists one PC twice", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
@@ -396,25 +418,30 @@ describe("who reaches them", () => {
   it("is 404 with team rooms off, for other rooms and other methods", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");
-    const botRoom = store.createGroup("Bots", [], false, undefined, undefined, { roomId: createRoom("Bots").id }) as HostedGroup;
+    const loose = createRoom("Loose");
     const id = group.hosted.roomId;
     const misses: Array<[string, string]> = [
       ["GET", `/api/rooms/${id}/invites`], ["DELETE", `/api/rooms/${id}/invites`], ["POST", `/api/rooms/${id}/people/${mina.personId}`],
-      ["GET", `/api/rooms/${id}/people/${mina.personId}`], ["POST", `/api/rooms/${botRoom.hosted.roomId}/invites`], ["POST", "/api/rooms/nope/invites"],
+      ["GET", `/api/rooms/${id}/people/${mina.personId}`], ["POST", `/api/rooms/${loose.id}/invites`], ["POST", "/api/rooms/nope/invites"],
+      ["DELETE", `/api/rooms/${id}/people/${mina.personId}/back`], ["POST", `/api/rooms/${id}/people/${mina.personId}/back`],
     ];
     for (const [method, path] of misses) expect([method, path, (await call(path, { method, body: { name: "Joon" } })).status]).toEqual([method, path, 404]);
     expect(roomInvites(id)).toEqual([]);
-    expect(roomInvites(botRoom.hosted.roomId)).toEqual([]);
+    expect(roomInvites(loose.id)).toEqual([]);
     expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);
   });
 
-  it("refuses a bot's comms token", async () => {
+  it("hands a hosted group with bots its code too", async () => {
+    const botRoom = store.createGroup("Bots", [], false, undefined, undefined, { roomId: createRoom("Bots").id }) as HostedGroup;
+    expect((await call(`/api/rooms/${botRoom.hosted.roomId}/invites`, { method: "POST" })).body.code).toMatch(CODE);
+  });
+
+  it("lets the user's own bot invite and remove like the host", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");
-    expect(await invite(group.hosted.roomId, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect(await remove(group.hosted.roomId, mina.personId, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect(roomInvites(group.hosted.roomId)).toEqual([]);
-    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
+    expect(await invite(group.hosted.roomId, BOT)).toMatchObject({ status: 200, body: { code: expect.stringMatching(CODE) } });
+    expect(await remove(group.hosted.roomId, mina.personId, BOT)).toMatchObject({ status: 200, body: { ok: true } });
+    expect(roomPeople(group.hosted.roomId)).toEqual([]);
   });
 
   it("refuses guest keys without a phone session through the relay", async () => {
@@ -435,12 +462,12 @@ describe("who reaches them", () => {
 describe("wiring", () => {
   const index = readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n");
 
-  it("index.ts mounts the people routes before the room file routes, owner only", () => {
+  it("index.ts mounts the people routes before the room file routes, bots included", () => {
     const people = index.indexOf("await peopleRoute(req, res, method, path, {");
     expect(people).toBeGreaterThan(0);
     expect(people).toBeLessThan(index.indexOf("await hostFileRoute("));
     const line = index.slice(people, index.indexOf("\n", people));
-    expect(line).toContain("botCaller: Boolean(commsCallers.resolve(req.headers.authorization))");
+    expect(line).not.toContain("botCaller");
     expect(line).toContain("relayHost: () => phoneAccess.presenceHost()");
   });
 });

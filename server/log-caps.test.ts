@@ -51,7 +51,8 @@ describe("thread log caps", () => {
       return ts.forEachChild(node, find);
     };
     const declaration = find(parsed)!;
-    const javascript = ts.transpileModule(`const invoke = ${declaration.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const stop = parsed.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "stopBotWork");
+    const javascript = ts.transpileModule(`${kind === "bot" ? stop!.getText(parsed) : ""}\nconst invoke = ${declaration.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const deps = {
       botAccounts: { instance: () => undefined },
       registry: { get: () => undefined }, store: { groups: [], deleteBot: noop, group: () => record, deleteGroup: noop },

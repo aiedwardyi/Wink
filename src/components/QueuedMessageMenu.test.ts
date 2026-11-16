@@ -138,14 +138,14 @@ async function mount(room = false, steering = true, coarse = false, locale = "en
 describe("queued message menu", () => {
   it.each([
     [false, true, false], [false, true, true], [false, false, false],
-    [false, false, true], [true, true, false], [true, true, true],
+    [false, false, true], [true, true, false], [true, true, true], [true, false, false],
   ])("offers Enter's choices: room=%s steering=%s touch=%s", async (room, steering, touch) => {
     const ui = await mount(room, steering, touch);
     await ui.send("held");
     if (!room) await ui.running();
     await ui.open("held");
     const labels = [...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent);
-    expect(labels).toEqual(!room && steering ? ["Send now", "Cancel"] : ["Cancel"]);
+    expect(labels).toEqual(steering ? ["Send now", "Cancel"] : ["Cancel"]);
   });
 
   it.each([false, true])("translates the queued menu, room=%s", async (room) => {
@@ -154,7 +154,7 @@ describe("queued message menu", () => {
     if (!room) await ui.running();
     await ui.open("held");
     expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent))
-      .toEqual(room ? ["취소"] : ["지금 보내기", "취소"]);
+      .toEqual(["지금 보내기", "취소"]);
   });
 
   it("hides Send now while the turn still prepares, shows it once the reply runs", async () => {
@@ -243,6 +243,26 @@ describe("queued message menu", () => {
     await ui.click("[data-menu-send-now]");
     expect(ui.posts).toHaveLength(1);
     expect(ui.host.querySelectorAll("[data-orbit-message='user']")).toHaveLength(1);
+  });
+
+  it("sends a room hold into the running turn once", async () => {
+    const ui = await mount(true);
+    await ui.send("held");
+    await ui.open("held");
+    await ui.click("[data-menu-send-now]");
+    expect(ui.posts.map((post) => post.body.text)).toEqual(["held"]);
+    expect(ui.posts[0]!.path).toBe("/api/groups/room/messages");
+    expect(ui.host.textContent).not.toContain("Sends next");
+  });
+
+  it("sends a room hold once when it flushes while its menu is open", async () => {
+    const ui = await mount(true);
+    await ui.send("held");
+    await ui.open("held");
+    await ui.idle();
+    expect(ui.posts).toHaveLength(1);
+    await ui.click("[data-menu-send-now]");
+    expect(ui.posts).toHaveLength(1);
   });
 
   it("does not cancel the next group hold after the open hold flushes", async () => {
