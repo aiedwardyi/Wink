@@ -60,7 +60,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createRoomLanes, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askRiders, asksWork, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -453,7 +453,7 @@ import { removeRotatingLog } from "./rotating-log.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
-import { createPlaybookGate, harnessPlaybookPrompt } from "./harness-playbook.ts";
+import { createPlaybookGate, harnessPlaybookPrompt, modelPicksPrompt } from "./harness-playbook.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -685,7 +685,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -698,6 +698,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       OMB_TURN_DEPTH: String(depth),
       OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
       ...(searchOwnerChats ? { OMB_OWNER_CHATS: "1" } : {}),
+      ...(readOnly ? { OMB_READ_ONLY_TURN: "1" } : {}),
     },
   };
 }
@@ -2700,6 +2701,10 @@ function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = f
 // once can collide on a bare id and patch each other's messages.
 const toolMessageByItem = new Map<string, { messageId: string; turnId?: string }>(); // threadId:itemId -> message + owning turn
 const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> messageId
+/** Threads whose current turn someone else asked for in a room this PC joined. */
+const readOnlyTurnThreads = new Set<string>();
+/** Task threads that answer a room this PC joined: their Board posts are room posts. */
+const joinedRoomThreads = new Set<string>();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -3835,8 +3840,10 @@ bus.subscribe((event: RuntimeEvent) => {
       const permission = event.requestType === "permission";
       // Auto mode answers permissions; questions still reach the human.
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
+      // Someone without "Can make bots work" asked for this turn: nothing it asks for is approved.
+      const readOnly = readOnlyTurnThreads.has(event.threadId) || Boolean(group?.hosted && asker && readOnlyAskTurn(group.hosted.roomId, event.threadId, asker.id));
       // Only the host could answer a card on a teammate's request, and the room waits behind it.
-      const cardless = event.background || Boolean(group?.hosted && asker && teammateAskTurn(group.hosted.roomId, event.threadId, asker.id));
+      const cardless = event.background || readOnly || Boolean(group?.hosted && asker && teammateAskTurn(group.hosted.roomId, event.threadId, asker.id));
       if (permission && asker?.autoApprove && !event.requestId) {
         pushMessage({
           role: "bot",
@@ -3852,7 +3859,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // tee; SSE/broadcast (PR72) redacts the client copy. Masking first
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
-      const verdict = permission && asker && event.requestId && (!cardless || asker.autoApprove)
+      const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
         ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
         : null;
       if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
@@ -4827,6 +4834,8 @@ type StartTurnOptions = {
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
+  /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
+  readOnly?: boolean;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -4857,7 +4866,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
 // One block for every route, so none can carry one rule set without the other.
-const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS;
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + modelPicksPrompt();
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -5616,8 +5625,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     const releaseStarting = takeStartingHold(bot.id);
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
     try {
+      const readOnly = opts?.readOnly === true;
+      if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
+      if (readOnly) readOnlyTurnThreads.add(threadId);
+      else readOnlyTurnThreads.delete(threadId);
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
-      if (bot.shareTerminalWithChat !== false) {
+      if (!readOnly && bot.shareTerminalWithChat !== false) {
         const terminal = terminalIntegration(bot.id);
         if (terminal) integrations.terminal = terminal;
       }
@@ -5626,14 +5639,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
         availableSkills(),
       );
-      if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
+      if (!readOnly && selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
         integrations.phone = phoneIntegration();
       }
       // the user's connected apps, but only to a driver that can mount
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
       // switched off: the key is workspace-wide, the grant is per bot.
-      if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+      if (!readOnly && bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
         const connection = await connectedAppsIntegration(bot.id, threadId);
         if (connection) integrations.composio = connection;
       }
@@ -5691,8 +5704,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
       const dwebUrl = process.env.DWEB_URL?.trim();
-      if (dwebUrl) integrations.dweb = { url: dwebUrl };
-      const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
+      if (dwebUrl && !readOnly) integrations.dweb = { url: dwebUrl };
+      const wants = readOnly ? "off" : opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
       // Cloud routines always use Box/BoxAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
       const cloudBackend = opts?.runOn === "cloud" || bot.cloudBackend !== "vps" ? "box" : "vps";
@@ -5863,9 +5876,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly);
       }
-      const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
+      const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
       // itself, so the harness stays the single owner of turns/permissions
@@ -5942,7 +5955,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";
         const withLate = (base: string) =>
           [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
-        const approval = bot.autoApprove ? "auto" : "ask";
+        const approval = bot.autoApprove && !readOnly ? "auto" : "ask";
         const system =
           persona +
           // The folder is already this turn's cwd, but nothing told the model
@@ -5981,7 +5994,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           DEFAULT_RULES +
-          accessRules(live.adapter.access?.({ approval, cwd, leanStartup, integrations }), integrations) +
+          accessRules(live.adapter.access?.({ approval, ...(readOnly ? { readOnly } : {}), cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
@@ -6089,6 +6102,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         system,
         systemUpdate,
         approval,
+        ...(readOnly ? { readOnly } : {}),
         attended: !isUnattended(bot.id),
         integrations,
         cwd,
@@ -6663,7 +6677,14 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed) => startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed }),
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+    joinedRoomThreads.add(threadId);
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+  },
+  readOnlyTurns: (botId, threadId) => {
+    const bot = store.bot(botId);
+    return Boolean(bot && botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true);
+  },
   messagesFor: (threadId) => store.messagesFor(threadId),
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   interrupt: async (botId, threadId) => {
@@ -6913,27 +6934,35 @@ async function runClaimedGroupMemberTurn(
   // could run its 1:1 turn and a room turn concurrently, creating two provider
   // processes, interleaved token spend, and an interrupt that only ever
   // reached one of them.
+  const riders = authority ? askRiders(authority) : [];
+  const lead = authority ? askById(authority) : null;
+  // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
+  const works = !authority || Boolean(lead && asksWork([lead, ...riders]));
+  if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
+    void endAsk(authority!, "failed", `${bot.name} can't take requests from you yet. ${userName} has to turn on "Can make bots work" for you.`);
+    return true;
+  }
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
-  if (!lane && bot.shareTerminalWithChat !== false) {
+  if (!lane && works && bot.shareTerminalWithChat !== false) {
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
-  const owned = group.dm ? [] : ownerChats(bot, notOwnerChats());
+  const owned = group.dm || authority ? [] : ownerChats(bot, notOwnerChats());
   const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable);
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works);
   }
-  const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
+  const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
     !lane && instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
     availableSkills(),
   );
-  if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
+  if (works && selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
     integrations.phone = phoneIntegration();
   }
   try {
-    if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+    if (works && bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
       const connection = await connectedAppsIntegration(bot.id, threadId);
       if (connection) integrations.composio = connection;
     }
@@ -7023,7 +7052,6 @@ async function runClaimedGroupMemberTurn(
 
   // turn text, not system: the cached room system stays byte-stable while the 1:1 moves
   const topics = searchable ? ownerTopics(store.activePath(bot.threadId), userName) : "";
-  const riders = authority ? askRiders(authority) : [];
   const text = `${roomContext}\n\n${askNote(authority, bot.name, riders)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
   }`;
@@ -7039,8 +7067,8 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
-  // A teammate's request runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove ? "auto" : "ask", ...(lane || (authority && !bot.autoApprove) ? { readOnly: true } : {}) };
+  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (authority && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
@@ -7180,8 +7208,9 @@ async function runClaimedGroupMemberTurn(
     drainSecretResumes();
   }
 
-  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain
-  if (!isCancelled?.() && replyText.trim()) {
+  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain.
+  // A read-only turn hands work to no bot: the next one would run without the asker's limits.
+  if (works && !isCancelled?.() && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
@@ -7743,6 +7772,11 @@ const boardRoutes = createBoardRoutes({
   caller: (header) => commsCallers.resolve(header),
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
+  roomTurn: ({ botId, threadId }) => {
+    const hosted = store.groupByThread(threadId)?.hosted;
+    if (readOnlyTurnThreads.has(threadId) || (hosted && readOnlyAskTurn(hosted.roomId, threadId, botId))) return "read-only";
+    return hosted || joinedRoomThreads.has(threadId) ? "room" : null;
+  },
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
