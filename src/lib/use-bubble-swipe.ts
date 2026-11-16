@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 
 import { BUBBLE_ARM, SWIPE_MOTION_MS, SWIPE_SPRING, bubbleSwipe, hapticTick, lockAxis, reducedMotion, swipeBlocked, type BubbleSide } from "./phone-swipe";
 import { useIsPhone } from "./use-phone-swipe";
+import { useChatPreview } from "./chat-preview";
 
 const CLICK_SWALLOW_MS = 400;
 
@@ -25,10 +26,16 @@ function rowOf(list: HTMLElement, target: EventTarget | null): Row | undefined {
 function listen(list: HTMLElement): () => void {
   let held = lists.get(list);
   if (!held) {
-    const start = (e: TouchEvent) => rowOf(list, e.target)?.start(e);
-    const move = (e: TouchEvent) => rowOf(list, e.target)?.move(e);
-    const end = (e: TouchEvent) => rowOf(list, e.target)?.end(e);
-    const cancel = (e: TouchEvent) => rowOf(list, e.target)?.cancel();
+    let active: Row | undefined;
+    const start = (e: TouchEvent) => {
+      const next = rowOf(list, e.target);
+      if (active !== next) active?.cancel();
+      active = next;
+      active?.start(e);
+    };
+    const move = (e: TouchEvent) => active?.move(e);
+    const end = (e: TouchEvent) => { active?.end(e); active = undefined; };
+    const cancel = () => { active?.cancel(); active = undefined; };
     const click = (e: MouseEvent) => rowOf(list, e.target)?.click(e);
     list.addEventListener("touchstart", start, { passive: true });
     list.addEventListener("touchmove", move, { passive: true });
@@ -67,6 +74,7 @@ interface BubbleSwipe {
 
 /** Phone-only, inside a [data-swipe-list]: swipe a room row right to reply, left to translate. Sets data-swipe, data-armed and --bubble-swipe (0..1) on the row, and returns true while a swipe is on, for the icons behind the bubble. */
 export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, onTranslate }: BubbleSwipe): boolean {
+  const preview = useChatPreview();
   const phone = useIsPhone();
   const [swiping, setSwiping] = useState(false);
   const latest = useRef({ canReply, canTranslate, onReply, onTranslate });
@@ -78,8 +86,9 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
     const el = row.current;
     const moving = bubble.current;
     const list = el?.closest<HTMLElement>("[data-swipe-list]");
-    if (!phone || !el || !moving || !list) return;
+    if (preview || !phone || !el || !moving || !list) return;
     el.style.touchAction = "pan-y";
+    moving.setAttribute("data-bubble-swipe", "");
     let drag: Drag | null = null;
     let swallow = false;
     let swallowTimer: ReturnType<typeof setTimeout> | undefined;
@@ -123,7 +132,7 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
       spring?.cancel();
       spring = undefined;
       const touch = e.touches[0];
-      if (e.touches.length !== 1 || !touch || menuOpen || swipeBlocked(e.target, touch.clientX)) return;
+      if (e.touches.length !== 1 || !touch || !(e.target instanceof Node) || !moving.contains(e.target) || menuOpen || swipeBlocked(e.target, touch.clientX)) return;
       drag = { x: touch.clientX, y: touch.clientY, dx: 0, locked: false, armed: null };
     };
     const onMove = (e: TouchEvent) => {
@@ -174,9 +183,10 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
       off();
       clearTimeout(swallowTimer);
       el.style.touchAction = "";
+      moving.removeAttribute("data-bubble-swipe");
       moving.style.transform = "";
       mark(null, 0, null);
     };
-  }, [phone, row, bubble]);
+  }, [phone, row, bubble, preview]);
   return swiping;
 }

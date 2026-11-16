@@ -5,10 +5,13 @@ import { Languages, MessageSquareReply } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { CHAT_PEEK_WINDOW_SIZE, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
+import { tailWindowStart } from "@/lib/transcript-window";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import type { PreviewImage } from "@/lib/media-viewer";
@@ -233,6 +236,10 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string; onReply: (message: Message) => void;
   onReact?: (message: Message, emoji: string) => void; reactionNames?: ReadonlyMap<string, string>; notice?: RoomNoticeControl; empty?: RoomEmpty; presence?: ReactNode;
 }) {
+  const preview = useChatPreview();
+  const shownRows = useChatPeekRows();
+  const peekSettled = useChatPeekSettled();
+  const phone = useIsPhone();
   const { t } = useI18n();
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
@@ -250,22 +257,62 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   // A finger, wheel or key asking for older lines. It breaks follow only through a scroll that leaves the end.
   const reaching = useRef(false);
   const beforePage = useRef<TranscriptScroll | null>(null);
-  const loadPage = useCallback(() => loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); }), [loadOlder]);
+  const [compactWindow, setCompactWindow] = useState(preview || phone);
+  const [windowHead, setWindowHead] = useState(() => preview || phone ? lines[tailWindowStart(lines.length, CHAT_PEEK_WINDOW_SIZE)]?.id : undefined);
+  const locatedHead = windowHead ? lines.findIndex((line) => line.id === windowHead) : -1;
+  if (compactWindow && lines.length && locatedHead < 0) setWindowHead(lines[tailWindowStart(lines.length, CHAT_PEEK_WINDOW_SIZE)].id);
+  useLayoutEffect(() => {
+    if (preview || phone || !compactWindow) return;
+    if (!atEnd.current) beforePage.current = captureTranscriptScroll(scrollRef.current);
+    setCompactWindow(false);
+    setWindowHead(undefined);
+  }, [preview, phone, compactWindow]);
+  const startIndex = Math.max(0, locatedHead);
+  const shownLines = peekRows(lines.slice(startIndex), shownRows);
+  const earlierLines = startIndex > 0 ? lines : null;
+  const loadPage = useCallback(() => {
+    if (earlierLines) {
+      beforePage.current = captureTranscriptScroll(scrollRef.current);
+      setWindowHead(earlierLines[Math.max(0, startIndex - CHAT_PEEK_WINDOW_SIZE)].id);
+      return;
+    }
+    if (!preview) loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); });
+  }, [loadOlder, preview, startIndex, earlierLines]);
   const fill = useCallback(() => {
     const el = scrollRef.current;
-    if (hasMore && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) loadPage();
-  }, [hasMore, loadPage]);
+    if (!peekSettled) return;
+    if (startIndex > 0 && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) {
+      beforePage.current = captureTranscriptScroll(el);
+      setWindowHead(lines[Math.max(0, startIndex - (lines.length - startIndex))].id);
+      return;
+    }
+    if ((startIndex > 0 || !preview && hasMore) && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) loadPage();
+  }, [hasMore, loadPage, peekSettled, preview, startIndex, lines]);
   useLayoutEffect(() => {
     if (beforePage.current && scrollRef.current) restoreTranscriptScroll(scrollRef.current, beforePage.current);
     beforePage.current = null;
-  }, [lines]);
+  }, [lines, windowHead]);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !atEnd.current) return;
+    el.scrollTop = el.scrollHeight;
+    previousTop.current = el.scrollTop;
+  }, [windowHead, compactWindow]);
   const last = lines.at(-1);
   const lastId = last?.id;
   const lastMine = last ? mine(last) : false;
   const jump = (id: string) => {
-    const row = [...(logRef.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? [])].find((el) => el.dataset.mid === id);
-    row?.scrollIntoView({ block: "center" });
-    row?.focus({ preventScroll: true });
+    const show = () => {
+      const row = [...(logRef.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? [])].find((el) => el.dataset.mid === id);
+      row?.scrollIntoView({ block: "center" });
+      row?.focus({ preventScroll: true });
+    };
+    const index = lines.findIndex((line) => line.id === id);
+    if (index >= 0 && index < startIndex) {
+      atEnd.current = false;
+      setWindowHead(lines[Math.max(0, index - 10)].id);
+      requestAnimationFrame(show);
+    } else show();
   };
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -278,6 +325,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
     }
   }, [lastId, lastMine]);
   useEffect(fill, [fill, lines]);
+  useLayoutEffect(() => { if (startIndex > 0) fill(); }, [fill, startIndex]);
   const jumpToLatest = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -321,6 +369,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         ref={scrollRef}
         data-team-room-transcript
         data-orbit-transcript
+        data-compact-transcript={compactWindow && atEnd.current || undefined}
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         onWheel={(event) => { reaching.current = event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight; }}
         onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; reaching.current = false; }}
@@ -353,16 +402,16 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
       >
         <div ref={logRef} data-swipe-list role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
           {fileState.error && <div role="alert" className="text-[13px] text-danger">{t("teamRoom.folderError")}</div>}
-          {empty && !lines.length && !hasMore && (
+          {!preview && empty && !lines.length && !hasMore && (
             <div data-room-empty className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
               <RoomPicture src={empty.picture} size={64} retry={empty.retry} />
               <div className="text-[17px] font-semibold text-ink">{empty.name}</div>
               <div className="max-w-[360px] text-[14px] text-ink-secondary">{empty.members.join(", ")}</div>
             </div>
           )}
-          {lines.map((line, index) => {
+          {shownLines.map((line, index) => {
             const own = mine(line);
-            const before = lines[index - 1];
+            const before = lines[startIndex + index - 1];
             const named = !own && (!before || before.author.id !== line.author.id || before.author.kind !== line.author.kind);
             const owner = ownerName(line.author, people);
             const authorName = owner ? t("teamRoom.botOwner", { name: line.author.name, owner }) : line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;

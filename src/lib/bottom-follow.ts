@@ -81,7 +81,7 @@ export function spaceAfterNewestRow(content: HTMLElement): number {
   return bottoms.length ? Math.max(0, content.getBoundingClientRect().bottom - Math.max(...bottoms)) : 0;
 }
 
-/** Nothing to scroll; a transcript that isn't laid out (hidden, test DOM) reads 0 and never counts. */
+/** Too little to scroll back far enough to break follow; a transcript that isn't laid out (hidden, test DOM) reads 0 and never counts. */
 export function transcriptUnderfilled(el: ScrollBox): boolean {
-  return el.clientHeight > 0 && el.scrollHeight <= el.clientHeight;
+  return el.clientHeight > 0 && el.scrollHeight - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
 }

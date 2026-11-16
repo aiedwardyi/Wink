@@ -1,13 +1,15 @@
 import { useReplyDraft } from "@/lib/drafts";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { ChatPeekPart, useChatPreview } from "@/lib/chat-preview";
 import type { Message } from "@/state/store-types";
 
 import { CallWidgetSlot } from "./CallSlots";
 import { Composer, type RoomBotStatus, type RoomPerson } from "./Composer";
 
 export function useTeamRoomReply(base: string, draftId: string, messages: Message[]) {
+  const preview = useChatPreview();
   const reply = useReplyDraft(base, draftId, messages);
-  useBackLayer(Boolean(reply.replyTo), reply.clearReply);
+  useBackLayer(!preview && Boolean(reply.replyTo), reply.clearReply);
   return reply;
 }
 
@@ -16,11 +18,12 @@ export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, o
   onConsumeReply: () => void; onRestoreReply: (message: Message, threadId: string) => void;
   status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number; onSend?: () => void;
 }) {
+  const preview = useChatPreview();
   return (
-    <>
-      <CallWidgetSlot className="px-3 pb-2 md:hidden" />
-      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} replyTo={replyTo} onSend={onSend} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
-    </>
+    <ChatPeekPart part="composer">
+      {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
+      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} focusBlocked={preview} replyTo={replyTo} onSend={onSend} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
+    </ChatPeekPart>
   );
 }
 

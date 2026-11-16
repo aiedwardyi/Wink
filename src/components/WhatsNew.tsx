@@ -3,6 +3,7 @@ import { lazyView } from "@/lib/stale-build";
 import { CATCHING_UP_POLL_MS } from "@/lib/use-catching-up";
 import { usePresence } from "@/lib/use-presence";
 import { api, useStore } from "@/state/store";
+import { useChatPreview } from "@/lib/chat-preview";
 import type { SceneId } from "./ChatScene";
 import { LazyView } from "./LazyView";
 
@@ -96,22 +97,27 @@ export function scenePlayed(scene: SceneId) {
 export const useWhatsNewAnchor = () => useSyncExternalStore(subscribe, () => anchor, () => undefined);
 
 export function WhatsNewSlot({ hidden = false, last, thread }: { hidden?: boolean; last?: string; thread?: string }) {
+  const preview = useChatPreview();
   const { state } = useStore();
   const [me] = useState(() => Symbol());
-  useEffect(() => () => {
-    slots.delete(me);
-    notify();
-  }, [me]);
   useEffect(() => {
+    if (preview) return;
+    return () => {
+      slots.delete(me);
+      notify();
+    };
+  }, [me, preview]);
+  useEffect(() => {
+    if (preview) return;
     slots.set(me, { hidden, last, thread });
     notify();
-  }, [me, hidden, last, thread]);
+  }, [me, hidden, last, thread, preview]);
   const mine = useSyncExternalStore(subscribe, () => (owner() === me ? release : null), () => null);
   const mineRow = useSyncExternalStore(subscribe, () => (owner() === me && !release ? themeRow() : null), () => null);
   const shown = usePresence(mine);
   const row = usePresence(mineRow);
   useEffect(() => {
-    if (!state.hydrated) return;
+    if (preview || !state.hydrated) return;
     const timer = setTimeout(() => {
       let themes: string[] | undefined;
       // The notes stay out of the startup bundle: they load only when an update may have some to show.
@@ -135,7 +141,7 @@ export function WhatsNewSlot({ hidden = false, last, thread }: { hidden?: boolea
       });
     }, ASK_AFTER_MS);
     return () => clearTimeout(timer);
-  }, [state.hydrated]);
+  }, [state.hydrated, preview]);
   const close = useCallback(() => {
     if (release) void api("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ release }) }).catch(() => {});
     asked = Promise.resolve(null);
