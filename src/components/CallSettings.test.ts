@@ -147,6 +147,20 @@ it("fits the panel and its volume slider on a phone", async () => {
   expect(menu()!.style.left).toBe("8px");
 });
 
+it("fades the voice grid while more voices sit below, and drops the fade at the end", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const grid = host.querySelector<HTMLElement>("[data-call-voices]")!;
+  expect(grid.className).toContain("max-h-80");
+  expect(grid.className).toContain("data-[cut]:[mask-image:");
+  const size = { scrollHeight: 1_400, clientHeight: 320, scrollTop: 0 };
+  for (const key of Object.keys(size) as Array<keyof typeof size>) Object.defineProperty(grid, key, { configurable: true, get: () => size[key] });
+  await act(async () => grid.dispatchEvent(new Event("scroll")));
+  expect(grid.hasAttribute("data-cut")).toBe(true);
+  size.scrollTop = 1_080;
+  await act(async () => grid.dispatchEvent(new Event("scroll")));
+  expect(grid.hasAttribute("data-cut")).toBe(false);
+});
+
 it("patches the bot with the whole merged call object", async () => {
   store.bots = [tuned];
   const host = await render(createElement(CallSettings, { bot: tuned }));

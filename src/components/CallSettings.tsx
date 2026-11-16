@@ -8,6 +8,7 @@ import { useI18n } from "@/lib/i18n";
 import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
 import { hapticTick } from "@/lib/phone-swipe";
+import { markCut } from "@/lib/scroll-cut";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
@@ -42,7 +43,7 @@ function useCallPrefs(bot: Bot) {
   };
 }
 
-function usePreview(language: "en" | "ko") {
+export function usePreview(language: "en" | "ko") {
   const [playing, setPlaying] = useState<LiveVoice | null>(null);
   const clip = useRef<HTMLAudioElement | null>(null);
   const stop = () => {
@@ -99,6 +100,52 @@ function CallLanguage({ bot }: { bot: Bot }) {
   );
 }
 
+/** Every voice as a card with its vibe and a preview; three rows show, and the cut-off fourth row and fade say the rest scroll. */
+export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
+  label?: string;
+  value: LiveVoice;
+  onPick: (voice: LiveVoice) => void;
+  playing: LiveVoice | null;
+  preview: (voice: LiveVoice) => void;
+  badge?: ReactNode;
+}) {
+  const { t } = useI18n();
+  const grid = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = grid.current;
+    if (!el) return;
+    markCut(el);
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(() => markCut(el));
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+  return (
+    <div ref={grid} role="radiogroup" aria-label={label ?? t("callMenu.voice")} data-call-voices="" onScroll={(event) => markCut(event.currentTarget)}
+      className="-mx-1 mt-1 grid max-h-80 grid-cols-2 gap-2 overflow-y-auto overscroll-contain p-1 data-[cut]:[mask-image:linear-gradient(to_bottom,black_calc(100%-3rem),transparent)]">
+      {LIVE_VOICES.map((id) => {
+        const shown = voiceLabel(t, id);
+        const picked = id === value;
+        return (
+          <div key={id} data-call-voice={id} className={cn("relative rounded-xl ring-1", picked ? "bg-raised-hover ring-ink-secondary/40" : "ring-hairline hover:bg-raised-hover/50")}>
+            <button type="button" role="radio" aria-checked={picked} onClick={() => onPick(id)}
+              className="flex w-full min-w-0 flex-col items-start rounded-xl px-3 pb-2.5 pt-10 text-left">
+              <span className="max-w-full truncate text-[14px] font-medium text-ink">{shown}</span>
+              <span className="max-w-full truncate text-[12px] text-ink-secondary">{t(`callVoice.vibe.${id}`)}</span>
+            </button>
+            {picked && badge && <span aria-hidden className="pointer-events-none absolute left-3 top-2.5">{badge}</span>}
+            <button type="button" aria-label={t(playing === id ? "callVoice.stop" : "callVoice.play", { name: shown })} aria-pressed={playing === id}
+              onClick={() => preview(id)}
+              className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-ink/10 text-ink-secondary hover:text-ink max-md:size-8">
+              {playing === id ? <Pause size={12} aria-hidden className="fill-current" /> : <Play size={12} aria-hidden className="fill-current" />}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** The per-bot call panel: speed, volume (this device), style, voice and language. */
 export function CallSettings({ bot, language = true, className }: { bot: Bot; language?: boolean; className?: string }) {
   const { t, locale } = useI18n();
@@ -123,27 +170,8 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
           ))}
         </div>
       </div>
-      <div role="radiogroup" aria-label={t("callMenu.voice")} className="-mx-1 mt-1 grid max-h-72 grid-cols-2 gap-2 overflow-y-auto overscroll-contain p-1">
-        {LIVE_VOICES.map((id) => {
-          const label = voiceLabel(t, id);
-          const picked = id === prefs.voice;
-          return (
-            <div key={id} data-call-voice={id} className={cn("relative rounded-xl ring-1", picked ? "bg-raised-hover ring-ink-secondary/40" : "ring-hairline hover:bg-raised-hover/50")}>
-              <button type="button" role="radio" aria-checked={picked} onClick={() => prefs.set({ voice: id })}
-                className="flex w-full min-w-0 flex-col items-start rounded-xl px-3 pb-2.5 pt-10 text-left">
-                <span className="max-w-full truncate text-[14px] font-medium text-ink">{label}</span>
-                <span className="max-w-full truncate text-[12px] text-ink-secondary">{t(`callVoice.vibe.${id}`)}</span>
-              </button>
-              {picked && <span aria-hidden className="pointer-events-none absolute left-3 top-2.5"><BotAvatar bot={bot} state="happy" size={20} /></span>}
-              <button type="button" aria-label={t(playing === id ? "callVoice.stop" : "callVoice.play", { name: label })} aria-pressed={playing === id}
-                onClick={() => preview(id)}
-                className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-ink/10 text-ink-secondary hover:text-ink max-md:size-8">
-                {playing === id ? <Pause size={12} aria-hidden className="fill-current" /> : <Play size={12} aria-hidden className="fill-current" />}
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
+        badge={<BotAvatar bot={bot} state="happy" size={20} />} />
       {language && (
         <div className="flex items-center justify-between gap-3">
           <span className={LABEL}>{t("callMenu.language")}</span>

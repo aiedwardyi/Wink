@@ -275,9 +275,11 @@ describe("call follows you", () => {
 });
 
 describe("call voice in Settings", () => {
-  it("offers three voices, no call language, and saves each pick", async () => {
+  it("offers every voice in the call menu's grid, no call language, and saves each pick", async () => {
     await mount(atlas);
-    expect(pills("Call voice").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"], ["Adele", "false"]]);
+    expect(pills("Call voice")).toHaveLength(30);
+    expect(pills("Call voice").slice(0, 3).map((p) => [p.textContent!.replace(/^(Jenn|Eddie|Adele).*/, "$1"), p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"], ["Adele", "false"]]);
+    expect(settings().querySelector("[data-call-voices]")).not.toBeNull();
     expect(settings().textContent).not.toContain("Call language");
     await act(async () => pills("Call voice")[1]!.click());
     expect(fakes.puts).toEqual([{ liveCall: { voice: "Alnilam" } }]);
@@ -344,12 +346,10 @@ describe("call voice in Settings", () => {
     expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Aoede-en.mp3", false]]);
   });
 
-  it("stops and hides the preview during a live call", async () => {
+  it("keeps previews during a live call, as the call menu does", async () => {
     await mount(atlas);
-    await act(async () => preview("Jenn")!.click());
     await call();
-    expect(fakes.clips[0]!.paused).toBe(true);
-    expect(preview("Jenn")).toBeNull();
-    expect(preview("Eddie")).toBeNull();
+    await act(async () => preview("Eddie")!.click());
+    expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Alnilam-en.mp3", false]]);
   });
 });
