@@ -4,7 +4,7 @@ import type { MapDiff, MapDiffLine, MapRepo, MapSnapshot } from "../../shared/ma
 import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
 import { mapFollow, type MapSelection } from "@/lib/map-follow";
-import { useMapTokens, type MapToken } from "@/lib/map-highlight";
+import { useLineTokens, useMapTokens, type MapTokens } from "@/lib/map-highlight";
 import { EASE_STANDARD, MOTION_MODERATE_MS } from "@/lib/motion";
 import { mapClashes, treeIndex, treeOrder } from "@/lib/map-tree";
 import { mapWorkerSlots } from "@/lib/map-worker-colors";
@@ -30,7 +30,8 @@ type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
 const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
 const fade = (part?: Element | null) => ease(part, [{ opacity: 0.5 }, { opacity: 1 }]);
-const CodeRow = memo(function CodeRow({ line, tokens }: { line: MapDiffLine; tokens?: MapToken[] }) {
+const CodeRow = memo(function CodeRow({ line, source }: { line: MapDiffLine; source: MapTokens }) {
+  const tokens = useLineTokens(source, line);
   return <div className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{tokens?.length ? tokens.map((token, i) => token.color ? <span key={i} style={{ color: token.color }}>{token.content}</span> : token.content) : line.text || " "}</code></div>;
 });
 
@@ -233,7 +234,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     const focus = event.target instanceof Element && event.target.matches("[data-map-file]");
     pending.current = reach(next, focus) ? null : { path: next, focus };
   };
-  const codeRow = (line: MapDiffLine, key: React.Key, of = tokens) => <CodeRow key={key} line={line} tokens={of(line)} />;
+  const codeRow = (line: MapDiffLine, key: React.Key, of = tokens) => <CodeRow key={key} line={line} source={of} />;
   const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
   return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
