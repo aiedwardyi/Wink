@@ -685,7 +685,7 @@ export function SettingsModal({
               <>
                 <RainbowBoxRow />
                 <Card>
-                  <SkinPicker />
+                  <SkinPicker reveal={state.appSettingsSkins} />
                 </Card>
               </>
             )}

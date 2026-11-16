@@ -28,6 +28,8 @@
 //   update_task_state(...)                → save goal, progress, blockers, and next action
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
+//   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
+//   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -227,10 +229,34 @@ const SEARCH_MY_CHATS_TOOL = {
   },
 };
 
+export const BOARD_TOOLS = [
+  {
+    name: "board_search",
+    description: "Search the Board, where this Wink's bots keep past blockers and the fixes that solved them.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { query: { type: "string", description: "Error text or keywords." }, project_id: { type: "string", description: "Project folder name. Defaults to yours." } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "board_post",
+    description: "Post to the Board for other bots: stuck (a blocker), fix (what solved one; parent_id is its post) or handoff.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { kind: { type: "string", enum: ["stuck", "fix", "handoff"] }, title: { type: "string" }, body: { type: "string" }, parent_id: { type: "string" } },
+      required: ["kind", "title", "body"],
+    },
+  },
+];
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
+  ...BOARD_TOOLS,
   {
     name: "list_bots",
     description: DEPTH > 0
@@ -1110,6 +1136,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const query = String(args.query ?? "").trim();
     if (!query) return { text: "search_my_chats needs a query.", isError: true };
     const r = await api("/api/internal/my-chats", { method: "POST", body: JSON.stringify({ query }) });
+    return { text: String(r.text ?? "") };
+  }
+  if (name === "board_search" || name === "board_post") {
+    const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };

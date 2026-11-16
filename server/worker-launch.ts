@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { accountLaunch, canonicalAccountHome, type AccountContext } from "./account-policy.ts";
+import { ACCOUNT_DRIVERS } from "./accounts.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
 import { CODEX_CREDIT_ENV, CODEX_CREDIT_NAME, isCodexCredit, withCodexCredit, type CodexCredit } from "./codex-credit.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
@@ -74,7 +75,7 @@ export function workerCommand(command: string, unmanaged = false) {
   for (let match = ENV_PREFIX.exec(rest); match; match = ENV_PREFIX.exec(rest)) {
     if (HOME_SELECTOR.test(match[1])) {
       if (unmanaged) return { kind: "unmanaged" as const };
-      if (home || !/^(?:CODEX_HOME|CLAUDE_CONFIG_DIR)$/i.test(match[1])) throw new Error("Conflicting worker home override");
+      if (home || !/^(?:CODEX_HOME|CLAUDE_CONFIG_DIR|GROK_HOME)$/i.test(match[1])) throw new Error("Conflicting worker home override");
       home = { selector: match[1].toUpperCase(), value: match[2].startsWith("'") ? match[2].slice(1, -1).replace(/''/g, "'") : match[2].replace(/^"|"$/g, "") };
     } else environment[match[1].toUpperCase()] = match[2].replace(/^['"]|['"]$/g, "");
     rest = rest.slice(match[0].length);
@@ -87,7 +88,7 @@ export function workerCommand(command: string, unmanaged = false) {
       || /^(?:pnpm|npm|npx|bunx)\s+(?:exec\s+)?(?:claude|codex|grok|muse|agy)\b/i.test(rest)) throw new Error("Ambiguous worker launch; use a direct engine command");
     return { kind: "shell" as const };
   }
-  if (home && home.selector !== (engine.driver === "codex" ? "CODEX_HOME" : engine.driver === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : "")) throw new Error("Worker account prefix must match the engine");
+  if (home && home.selector !== (engine.driver === "codex" ? "CODEX_HOME" : engine.driver === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : engine.driver === "grokAgent" ? "GROK_HOME" : "")) throw new Error("Worker account prefix must match the engine");
   if (Object.keys(environment).some((name) => name !== "AGY_CLI_DISABLE_AUTO_UPDATE")) throw new Error("Conflicting worker environment override");
   const [executable, ...args] = tokens(rest);
   if (engineToken(executable) !== first.toLowerCase()) throw new Error("Ambiguous worker executable");
@@ -207,7 +208,7 @@ export function createWorkerLaunch(options: {
       if (!deps.available(account.id, account.generation) || current?.id !== account.id || current.generation !== account.generation) throw new Error("Worker account changed before launch");
       return { kind: "unrouted" as const, account: { id: account.id, generation: account.generation }, executable: command.executable, args, workerSettings, session, line: usage.line };
     }
-    const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
+    const managedEngine = ACCOUNT_DRIVERS.includes(command.driver);
     const creditKey = isCodexCredit(account) ? deps.credit?.()?.key : undefined;
     const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source, account.generation > 0, creditKey);
     if (command.driver === "claudeAgent" && account.generation === 0
@@ -221,8 +222,7 @@ export function createWorkerLaunch(options: {
       for (const key of Object.keys(policy.env)) if (HOME_SELECTOR.test(key)) delete policy.env[key];
       policy.env.HOME = base.environment?.HOME ?? homedir();
       policy.env.USERPROFILE = base.environment?.USERPROFILE ?? homedir();
-      for (const name of ["GROK_HOME", "MUSE_AUTH_PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]) if (base.environment?.[name]) policy.env[name] = base.environment[name];
-      if (command.executable === "grok") policy.env.GROK_HOME ??= join(policy.env.HOME, ".grok");
+      for (const name of ["MUSE_AUTH_PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]) if (base.environment?.[name]) policy.env[name] = base.environment[name];
     }
     const captured = Object.freeze({ id: account.id, generation: account.generation, name: selected ? deps.nameOf?.(account.id, command.name) ?? command.name : command.name });
     const usage = await deps.usage(input.command, captured);

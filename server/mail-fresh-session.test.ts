@@ -80,7 +80,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
   const reply = `BEGIN-REPLY\n${Array.from({ length: 520 }, (_, i) => `Result ${i}: verified the complete payload.`).join("\n")}\nEND-REPLY`;
   let turnNumber = 0;
   const sendTurn = vi.fn(async (_input: { text: string; transcript: Array<{ text: string }>; resumeCursor?: unknown }) => ({ turnId: `turn-${++turnNumber}` }));
-  const instance = { driverKind: "fake", adapter: { capabilities: { sessionModelSwitch: "in-session" }, sendTurn } };
+  const instance = { driverKind: "fake", adapter: { capabilities: { sessionModelSwitch: "in-session" }, sendTurn, access: () => ({}) } };
 
   const send = async (text: string) => {
     const userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
@@ -107,7 +107,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
       commsDepth: 0, MAX_COMMS_DEPTH: 1,
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
-      ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", keepGoing: { rules: () => "" },
+      ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
       skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", tagged: [],
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },
