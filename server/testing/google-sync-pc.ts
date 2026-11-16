@@ -16,6 +16,7 @@ import {
 } from "../profile-sync.ts";
 import { ensureMemorySyncDevice, loadMemorySyncLedger, saveMemorySyncLedger, syncBotMemory } from "../memory-sync.ts";
 import { pullSyncedPicture, pruneSyncedPictures } from "../picture-sync.ts";
+import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "../room-sync.ts";
 import { RoutineManager } from "../routines.ts";
 import { Store, type BotRecord } from "../store.ts";
 import { ensureSyncV2Identity } from "../thread-sync-v2-engine.ts";
@@ -27,8 +28,9 @@ export interface BotSpec { name: string; memory?: string; chats?: ChatSpec[] }
 export interface ReportBot { name: string; syncId: string | null; chats: string[]; rows: string[]; memory: string | null; pictures: string }
 export interface PlaceBot { id: string; syncId: string | null; name: string; chats: string[]; memory: string | null; files: number; daysLeft?: number }
 export interface Places { bots: PlaceBot[]; trash: PlaceBot[] }
-export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean }
-export type TestResult = ReportBot[] | Places | boolean | undefined;
+export interface PlaceRoom { id: string; threadId: string; name: string; members: string[]; dm: boolean; setup: boolean }
+export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean; room?: string; members?: string[]; dm?: boolean }
+export type TestResult = ReportBot[] | Places | PlaceRoom[] | boolean | undefined;
 
 const { dataDir } = z.object({ dataDir: z.string() }).parse(workerData);
 const DAY = 86_400_000;
@@ -52,6 +54,7 @@ let busy = false;
 // a build before the trash: never reads a mark
 let old = false;
 const host: TrashSyncHost = { dataDir, store, trash, settings: () => settings, now };
+const roomHost: RoomSyncHost = { dataDir, store, settings: () => settings, now, working: () => false };
 const trashActions = createBotTrashActions({
   host: () => host,
   queueDeletes: (syncIds) => {
@@ -128,7 +131,9 @@ function syncProfile(folder: string): void {
   const state = applySyncOperations(emptyProfileSyncState(), operations);
   const marks = old ? { trashed: [], revive: [] } : importTrashMarks(host, state);
   importProfile(state, marks);
+  if (!old) importRooms(roomHost, state, folder);
   publishProfile(folder);
+  if (!old) publishRooms(roomHost, folder);
   finishRevive(host, marks.revive, (botId) => v2?.rebuild(botId));
   for (const bot of store.bots) if (settings.botMap[bot.id]) syncBotMemory(folder, settings.botMap[bot.id]!, workspaceDir(bot.id), ledger);
   writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: "test.example.ts.net", chatSync: 2 }, Date.now());
@@ -201,7 +206,16 @@ function places(): Places {
   };
 }
 
+function rooms(): PlaceRoom[] {
+  const name = (id: string) => store.bot(id)?.name ?? id;
+  return store.groups.map((group) => ({
+    id: group.id, threadId: group.threadId, name: group.name, members: group.memberIds.map(name).sort(), dm: Boolean(group.dm),
+    setup: group.setupCompletedAt != null || group.setupSkippedAt != null,
+  })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 const live = (name: string) => store.bots.find((bot) => bot.name === name)!;
+const room = (name: string) => store.groups.find((group) => group.name === name)!;
 const trashed = (name: string) => store.trash.entries.find((entry) => entry.record.name === name)!;
 
 async function run(method: string, args: TestArgs): Promise<TestResult> {
@@ -317,6 +331,22 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
     case "clock":
       skew = args.skew!;
       return;
+    case "room":
+      // index.ts group routes: a create publishes on the next pass, an edit or delete is heard before it lands
+      store.createGroup(args.room!, (args.members ?? []).map((name) => live(name).id), args.dm === true);
+      return;
+    case "roomEdit": {
+      const patch = { ...(args.to ? { name: args.to } : {}), ...(args.members ? { memberIds: args.members.map((name) => live(name).id) } : {}) };
+      roomEdited(roomHost, room(args.room!), patch);
+      store.patchGroup(room(args.room!).id, patch);
+      return;
+    }
+    case "roomDelete":
+      roomRemoved(roomHost, room(args.room!));
+      store.deleteGroup(room(args.room!).id);
+      return;
+    case "rooms":
+      return rooms();
     case "old":
       old = args.old!;
       return;

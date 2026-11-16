@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { capturedSession, resumeSessionReason } from "./worker-session.mjs";
+import { capturedSession, resumeSessionReason, workerSessionAuthorized } from "./worker-session.mjs";
 
 const RETRY_MS = 15_000;
 const TRIES = 20;
@@ -76,9 +76,9 @@ export function createPaneRuns(file) {
       if (original?.recovery && prior.has(original.id)) original.recovery.replacement = id;
       save();
     },
-    capture(input) {
+    capture(input, authorization) {
       const run = runs.get(input?.pane);
-      if (prior.has(input?.pane)) return false;
+      if (prior.has(input?.pane) && (run?.recovery || !workerSessionAuthorized(run?.session?.authHash, authorization))) return false;
       const session = capturedSession(run, input);
       if (!session) return false;
       const previous = run.session;
@@ -96,7 +96,12 @@ export function createPaneRuns(file) {
     },
     ended: (id) => mark(id, "ended"),
     closed(id) {
-      if (runs.delete(id)) save();
+      const run = runs.get(id);
+      if (!run) return true;
+      runs.delete(id);
+      if (save()) return true;
+      runs.set(id, run);
+      return false;
     },
     /** A pane left running in the worker host at quit. */
     kept(id) {
@@ -123,28 +128,28 @@ export function createPaneRuns(file) {
       if (waiting.delete(id)) prior.add(id);
     },
     /** Panes a previous run left mid-run, by the bot that spawned them. */
-    restarted() {
+    restarted(excluded = new Set()) {
       const bots = new Map();
       for (const id of prior) {
         const run = runs.get(id);
-        if (run?.state === "running") bots.set(run.botId, [...(bots.get(run.botId) ?? []), run]);
+        if (run?.state === "running" && !excluded.has(id)) bots.set(run.botId, [...(bots.get(run.botId) ?? []), run]);
       }
       return bots;
     },
-    forget(botId) {
+    forget(botId, excluded = new Set()) {
       for (const id of prior) {
-        if (runs.get(id)?.botId !== botId) continue;
+        if (runs.get(id)?.botId !== botId || excluded.has(id)) continue;
         runs.delete(id);
         prior.delete(id);
       }
       save();
     },
     /** Counts a launch whose note never landed; returns how many records that dropped. */
-    missed(botId) {
+    missed(botId, excluded = new Set()) {
       let dropped = 0;
       for (const id of prior) {
         const run = runs.get(id);
-        if (run?.botId !== botId) continue;
+        if (run?.botId !== botId || excluded.has(id)) continue;
         run.missed = (run.missed ?? 0) + 1;
         if (run.missed < MISSES) continue;
         runs.delete(id);

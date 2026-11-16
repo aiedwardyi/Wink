@@ -107,7 +107,9 @@ afterAll(async () => {
 
 it.each(["claudeAgent", "codex"])("delivers a remote room image to the %s turn", async (driver) => {
   const item = cases.find((test) => test.driver === driver)!;
-  const joined = await remote<{ key: string }>("join", { code: item.code, name: "JJ", device: "pc-jj-0123456789abcdef" });
+  const joined = await remote<{ key: string; person: { id: string } }>("join", { code: item.code, name: "JJ", device: "pc-jj-0123456789abcdef" });
+  const works = await harnessFetch(`${base}/api/rooms/${item.roomId}/people/${joined.person.id}/works`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ on: true }) });
+  expect(works.status).toBe(200);
   const uploaded = await fetch(`${door}/room/v1/rooms/${item.roomId}/files?uploadId=room-image-upload-0001&name=image.png`, {
     method: "POST",
     headers: { authorization: `Bearer ${joined.key}`, "x-wink-device": "pc-jj-0123456789abcdef", "content-type": "image/png" },

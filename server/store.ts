@@ -135,6 +135,7 @@ export interface Message {
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
   text?: string;
+  mailbox?: { key: string };
   /** Versioned model-context state. Unknown versions stay intact on disk. */
   compaction?: unknown;
   card?: OptionCardData;
@@ -766,6 +767,7 @@ export class Store {
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
   botsFile: "loaded" | "missing" | "unreadable" = "loaded";
   groups: GroupRecord[] = [];
+  groupsFile: "loaded" | "missing" | "unreadable" = "loaded";
   readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
@@ -797,7 +799,8 @@ export class Store {
       this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
     } catch (error) {
       this.groups = [];
-      if (!fileMissing(error)) this.unloaded.add(GROUPS_FILE);
+      this.groupsFile = fileMissing(error) ? "missing" : "unreadable";
+      if (this.groupsFile === "unreadable") this.unloaded.add(GROUPS_FILE);
     }
     // busy never survives a restart - no turn does either.
     let botsMigrated = false;
@@ -1133,6 +1136,15 @@ export class Store {
       group.setupCompletedAt = setup?.completed ? createdAt : null;
       group.setupSkippedAt = setup?.completed ? null : createdAt;
     }
+    this.groups.unshift(group);
+    this.saveGroups();
+    this.emit({ type: "group", groupId: group.id });
+    return group;
+  }
+
+  /** A room another PC made, under that PC's ids. */
+  addSyncedGroup(group: GroupRecord): GroupRecord {
+    group.defaultResponder = normalizeGroupDefaultResponder(group.defaultResponder, group.memberIds, Boolean(group.dm));
     this.groups.unshift(group);
     this.saveGroups();
     this.emit({ type: "group", groupId: group.id });
@@ -2143,6 +2155,8 @@ export class Store {
     const followed = follow && !bot.busy && current !== threadId
       && (empty || newest(messages, -Infinity) > newest(this.messagesFor(current), this.activeTask(botId)?.createdAt ?? 0));
     const t = this.thread(threadId);
+    const receipts = new Map(t.messages.filter(message => message.mailbox).map(message => [message.id, message.mailbox]));
+    messages = messages.map(message => receipts.has(message.id) ? { ...message, mailbox: receipts.get(message.id) } : message);
     const before = new Map(t.messages.map((m) => [m.id, JSON.stringify(m)]));
     mdb.replaceThread(threadId, messages, activeLeafId);
     t.messages = messages;
