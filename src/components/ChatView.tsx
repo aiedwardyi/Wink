@@ -710,6 +710,16 @@ const MessagesList = memo(function MessagesList({
   }, [transcript]);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
+  // A live call holds its first row; an ended one moves to its last, after what was sent during it.
+  const callAt = useMemo(() => {
+    const at = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind !== "message" || !item.message.call) continue;
+      const { id } = item.message.call;
+      if (id !== calls.live || !at.has(id)) at.set(id, item.message.id);
+    }
+    return at;
+  }, [items, calls.live]);
   // A search hit inside a folded run has to open it: the fold keeps the
   // row out of the DOM, and there is nothing for the scroll to land on.
   const focus = state.focusMessage;
@@ -766,7 +776,7 @@ const MessagesList = memo(function MessagesList({
         }
         const m = item.message;
         const callId = m.call?.id;
-        const callStart = callId && !items.some((x, j) => j < i && x.kind === "message" && x.message.call?.id === callId);
+        const callHere = callId && callAt.get(callId) === m.id;
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -874,13 +884,14 @@ const MessagesList = memo(function MessagesList({
               );
           }
         })();
-        if (!row && !callStart) return null;
+        // a call line that opens a day keeps the divider, now that the card may sit further down
+        if (!row && !callHere && !(callId && newDay)) return null;
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
-            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
+            {callHere && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}

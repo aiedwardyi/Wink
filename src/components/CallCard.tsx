@@ -8,7 +8,7 @@ import { callLength, callStripe, callSummary } from "@/lib/live-call/call-card";
 import { formatTime, type Message } from "@/state/store";
 import { Fold } from "./Fold";
 
-/** One call in the chat: the "Call · time" line while you talk, then a card with its length, summary, voice stripe and transcript. */
+/** One call in the chat: the "Call · time" line while you talk, then a card at its end time with its length, summary, voice stripe and transcript. */
 export function CallCard({ rows, live, botName, forceOpen = false }: { rows: Message[]; live: boolean; botName: string; forceOpen?: boolean }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(forceOpen);
@@ -16,7 +16,7 @@ export function CallCard({ rows, live, botName, forceOpen = false }: { rows: Mes
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
   const first = rows[0]!;
-  const time = formatTime(first.at, localeTag(locale));
+  const time = formatTime((live ? first : rows.at(-1)!).at, localeTag(locale));
   const said = useMemo(() => rows.filter((row) => isVoiceLine(row) && row.text?.trim()), [rows]);
   const stripe = useMemo(() => callStripe(rows), [rows]);
   const summary = callSummary(rows);
