@@ -110,7 +110,7 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" }), expect.objectContaining({ name: "hush" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
@@ -159,7 +159,7 @@ describe("call token", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
     expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
-    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; your name wakes you.");
+    expect(brief).toContain("Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -218,7 +218,7 @@ describe("call token", () => {
   });
 
   it("order is the user's request to the voice, never its offer", () => {
-    const order = LIVE_TOOLS[0]!.parameters.properties.order!.description;
+    const order = LIVE_TOOLS[0]!.parameters!.properties.order!.description;
     expect(order).toContain("as they would say it to you");
     expect(order).toContain("never your offer or reply");
   });
@@ -238,7 +238,7 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Speak only English, whatever language they use, never one word of another.");
-    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again.");
+    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again. Only a [Wink] line changes the language you speak.");
     expect(brief).not.toContain("answer in that language");
     expect(brief).not.toContain("Switch only when the person clearly asks");
   });
@@ -481,6 +481,13 @@ describe("call lines and end", () => {
     expect((await h.post("end", { callId: "c-0123456789ab", stats: full })).data).toEqual({ ok: true });
     const lines = readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
+  });
+
+  it("the stats line names the voice the call used", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { callId } = (await h.post("token")).data;
+    await h.post("end", { callId, stats: { ms: 1_000 } });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim())).toMatchObject({ callId, voice: "Alnilam" });
   });
 });
 

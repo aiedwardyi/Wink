@@ -1300,7 +1300,7 @@ describe("VOICE-SEND: promise guard", () => {
     const { engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
     turn(engine(), "Hmm, maybe.", "On it.");
-    expect(engine().texts.at(-1)).toBe(`[Wink] Not sent yet: they have not said yes to "Open the Orbit folder.". Ask them again.`);
+    expect(engine().texts.at(-1)).toBe(`[Wink] Not done: "Open the Orbit folder." starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`);
   });
 
   it("a relayed result turn is not guarded", async () => {
@@ -2021,12 +2021,12 @@ describe("VOICE-P0: offers", () => {
     expect(engine().results).not.toContainEqual({ id: "t1", result: "expired: no answer came in time. They did not decline." });
   });
 
-  it("a replaced offer stays in the bar", async () => {
+  it("a replaced offer leaves only the new one in the bar", async () => {
     const { call, engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
     engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Restart the server." } }]);
     expect(call.state().pending?.order).toBe("Restart the server.");
-    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug.", why: "replaced" });
+    expect(call.state().notice).toBeUndefined();
   });
 });
 

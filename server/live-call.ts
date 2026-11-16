@@ -130,7 +130,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const speak = locale === "ko" ? "Korean" : "English";
-  const tongue = `Speak only ${speak}, whatever language they use, never one word of another${speak === "Korean" ? "; match their politeness" : ""}. Any language but English or Korean, or garbled speech, is a mis-hear: ask them in ${speak} to say it again.`;
+  const tongue = `Speak only ${speak}, whatever language they use, never one word of another${speak === "Korean" ? "; match their politeness" : ""}. Any language but English or Korean, or garbled speech, is a mis-hear: ask them in ${speak} to say it again. Only a [Wink] line changes the language you speak.`;
   const shown = bot.pendingModelSelection ?? bot.modelSelection;
   // the chip's label: catalogModelLabel in src/lib/model-chip.ts
   const model = catalog?.(shown.instanceId)?.models.options.find((option) => option.id === shown.model)?.label ?? shown.model;
@@ -138,7 +138,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   return plainNames([
     `WHO: You are ${who}. Speak as I, never we or our. Never mention Gemini, a helper or a voice model.`,
     `NAME: On screen your voice is called ${LIVE_VOICE_NAMES[voice].join(" or ")}; that name means you too. Told your voice changed or sounds different: say it glitched and you're still the same assistant.`,
-    "QUIET: \"Be quiet\" or the like hushes you and updates wait in the chat; your name wakes you.",
+    "QUIET: Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.",
     "ANSWER: Answer what they asked, directly, first. Ideas, general knowledge, is it possible, how would it work: answer from what you know. WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic; any steering follows the answer in one short clause, once a call. Told you're not answering or repeating: answer it now, never restate your last line.",
     "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access; anything they want you to use, change or remember is work too. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A clear instruction gets a short confirm, like \"Opening it, okay?\" Unsure which they mean: ask them one short question (which file? use it now or save it?) instead of guessing, and never flip between readings. Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
     "FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask. A RECENT CHAT line marked unverified was only said on a call: never proof. Asked what happened: tell it, never offer to show it. Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.",
@@ -309,6 +309,8 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const end = async (req: IncomingMessage, res: ServerResponse, bot: BotRecord) => {
     const parsed = endSchema.safeParse(await readBody(req));
     if (!parsed.success) return json(res, 400, { error: "invalid call stats" });
+    // One voice per call: the setup names it once per socket, so the row shows what every turn used.
+    const voice = briefs.get(parsed.data.callId)?.voice;
     briefs.delete(parsed.data.callId);
     const path = join(dataDir, LIVE_CALL_FILE);
     mkdirSync(join(dataDir, "diag"), { recursive: true });
@@ -318,7 +320,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     } catch {
       // First call.
     }
-    kept.push(JSON.stringify({ receivedAt: new Date(now()).toISOString(), callId: parsed.data.callId, botId: bot.id, model: LIVE_MODEL, ...parsed.data.stats }));
+    kept.push(JSON.stringify({ receivedAt: new Date(now()).toISOString(), callId: parsed.data.callId, botId: bot.id, model: LIVE_MODEL, ...(voice ? { voice } : {}), ...parsed.data.stats }));
     writeFileAtomic(path, `${kept.slice(-LIVE_CALL_KEEP).join("\n")}\n`);
     void recap(bot, parsed.data.callId, parsed.data.stats.ms);
     return json(res, 200, { ok: true });

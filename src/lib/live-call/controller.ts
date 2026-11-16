@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, asksForLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -70,6 +70,8 @@ type ToolRun = (call: LiveCall, args: Record<string, unknown>, id: string) => vo
 const TOOLS: Record<string, ToolRun> = {
   propose_work: (call, args, id) => call.propose(String(args.order ?? "").trim(), [id]),
   ask: (call, args, id) => call.query(String(args.question ?? "").trim(), [id]),
+  // The model hears "let me see if you can stay quiet" where a phrase match does not.
+  hush: (call, _args, id) => call.quietDown(id),
 };
 
 /** One thing the person said: a request until something real accounts for it. */
@@ -112,8 +114,8 @@ const CLOSE_WAIT_MS = 10_000;
 // The voice is the bot calling, so it asks for itself: "I need you to...", never its own name.
 const openerLine = (note: string, app: "en" | "ko") =>
   `[Wink] You are the caller: you rang them because you are stuck until they act: "${note}". In ${TONGUE[app]}, in first person, say what you need them to do in one or two short, plain sentences, like "I need you to sign in on Home so tonight's run can go." Then wait for their answer. Nothing else.`;
-const wrongTongue = (app: "en" | "ko") => `[Wink] Wrong language: speak only ${TONGUE[app]}. In ${TONGUE[app]}, ask them in a few words to say that again.`;
-const misheardMsg = (app: "en" | "ko") => `not sent: that line was in another language, so it is likely a mis-hear. In ${TONGUE[app]}, ask them in one short line to say that again`;
+const wrongTongue = (tongue: string) => `[Wink] Wrong language: speak only ${tongue}. In ${tongue}, ask them in a few words to say that again.`;
+const misheardMsg = (tongue: string) => `not sent: that line was in another language, so it is likely a mis-hear. In ${tongue}, ask them in one short line to say that again`;
 // What the bot wrote after these answers them, not the person.
 const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
 // An order from a call this recent is still his when he calls back to hear how it went.
@@ -328,6 +330,11 @@ export class LiveCall {
   // The newest bot message in the chat, and the turn already answering a read-back ask from memory, which is thrown away.
   private newest?: string;
   private readNext = false;
+  // A language he asked for by name; the app's otherwise.
+  private tongue?: string;
+  // A spoken yes or no gets one ack: Google also speaks after its tool result, sometimes with no words to compare.
+  private acked?: "armed" | "spent";
+  private reack = false;
   private closing = false;
   private closeTimer?: ReturnType<typeof setTimeout>;
 
@@ -479,6 +486,10 @@ export class LiveCall {
       audio: (pcm) => {
         if (!mine()) return;
         this.stir();
+        if (this.reack) {
+          this.reack = false;
+          this.stats.repeats += 1;
+        }
         if (this.snapshot.hushed || this.dropping) return;
         if (this.echo) this.echo.push(pcm);
         else this.deps.audio.play(pcm);
@@ -512,7 +523,7 @@ export class LiveCall {
         if (this.snapshot.hushed || this.dropping) return;
         this.saidBuf += text;
         const words = spokenText(this.saidBuf);
-        if (offLanguage(words)) return this.drop(wrongTongue(this.app));
+        if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
         const ask = this.checkAsk && !offerFirst(words) ? reasks(words, this.closed) : "no";
         if (ask === "yes") return this.drop(this.askedLine());
         if (this.echo && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
@@ -529,7 +540,8 @@ export class LiveCall {
         this.stir();
         this.generating = true;
         this.flushHeard();
-        this.dropping = this.readNext;
+        this.reack = this.acked === "spent" && !this.playing;
+        this.dropping = this.readNext || this.reack;
         this.readNext = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
         this.echo = this.lastLine || this.offTongue || this.checkAsk ? [] : undefined;
@@ -565,6 +577,7 @@ export class LiveCall {
         this.doneTold = false;
         if (this.cutHold === "answering") this.cutHold = undefined;
         if (spoke) {
+          if (this.acked === "armed" && !this.reack) this.acked = "spent";
           this.pause();
           // A plain reply settles his lines; a promise, a refusal or an open offer leaves them for the hang-up.
           if (this.replyTo && !this.pending && !this.req.nudged && !this.req.told && !this.req.failed) this.open.settle(this.replyTo);
@@ -579,6 +592,7 @@ export class LiveCall {
           }
         }
         this.replyTo = 0;
+        this.reack = false;
         if (this.playing) this.playing.ended = true;
         this.playedOut();
         this.release();
@@ -667,7 +681,10 @@ export class LiveCall {
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
   private toolResult(ids: string[], name: string, subject: string, result: string, note?: string, said?: number) {
     // An ask redirected to propose_work shows until its offer replaces it.
-    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
+    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) {
+      this.acked = undefined;
+      this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
+    }
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
@@ -699,7 +716,7 @@ export class LiveCall {
   propose(order: string, ids: string[]) {
     if (!order) return this.toolResult(ids, "propose_work", order, "not sent: no order given");
     order = asRequest(order);
-    if (this.req.misheard) return this.toolResult(ids, "propose_work", order, misheardMsg(this.app));
+    if (this.req.misheard) return this.toolResult(ids, "propose_work", order, misheardMsg(this.speaking));
     if (this.req.read) return this.toolResult(ids, "propose_work", "", READ_NEXT);
     // The bot's own question already takes the spoken answer; an order would ask twice.
     if (this.cardTakes) return this.toolResult(ids, "propose_work", order, this.notNeeded);
@@ -715,7 +732,6 @@ export class LiveCall {
     if (replaced) {
       this.stats.orders.replaced += 1;
       this.clearPending();
-      this.notSent(replaced.order, "replaced");
     }
     if (lookup) return this.query(order, [...(replaced?.toolIds ?? []), ...ids], "propose_work");
     this.stats.orders.proposed += 1;
@@ -745,7 +761,7 @@ export class LiveCall {
     this.pending = pending;
     this.closing = false;
     clearTimeout(this.closeTimer);
-    this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
+    this.set({ pending: { order, expiresAt }, notice: undefined });
     if (yes) void this.answer(true);
   }
 
@@ -777,6 +793,7 @@ export class LiveCall {
   async answer(yes: boolean, spoken = false) {
     const pending = this.pending;
     if (!pending) return;
+    if (spoken) this.acked = "armed";
     const said = this.stats.voiceLines;
     if (!yes) {
       this.stats.orders.declined += 1;
@@ -805,7 +822,7 @@ export class LiveCall {
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
   query(question: string, ids: string[], tool = "ask") {
     if (!question) return this.toolResult(ids, tool, question, "not sent: no question");
-    if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.app));
+    if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.speaking));
     if (this.req.read) return this.toolResult(ids, tool, "", READ_NEXT);
     if (this.cardTakes) return this.toolResult(ids, tool, question, this.notNeeded);
     if (ordersChange(question, [this.deps.botName, ...this.aliases])) return this.toolResult(ids, tool, question, CHANGE_ASK);
@@ -944,7 +961,8 @@ export class LiveCall {
       return;
     }
     if (this.pending && claim?.claim === "promise") {
-      this.held.push({ text: `[Wink] Not sent yet: they have not said yes to "${this.pending.order}". Ask them again.`, fix: true });
+      // Its question is already on screen: asking again makes a reworded offer that replaces it, and drowns out his yes.
+      this.held.push({ text: `[Wink] Not done: "${this.pending.order}" starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`, fix: true });
       return;
     }
     // An ask stands behind "let me check" only for what it asked: no watch history, no thinking up picks.
@@ -959,7 +977,7 @@ export class LiveCall {
     if (claim && !req.nudged && this.stats.guard.nudges < MAX_NUDGES) {
       req.nudged = true;
       this.stats.guard.nudges += 1;
-      this.held.push({ text: `[Wink] Not done: you said "${claim.sentence}", but nothing was sent, so nothing is running. Call ask or propose_work now${this.busy ? `: ${this.deps.botName} is busy, so it queues after the current work.` : ", or say plainly it was not sent."}`, nudge: true, fix: true });
+      this.held.push({ text: `[Wink] Not done: you said "${claim.sentence}", but nothing was sent, so nothing is running. Call ask or propose_work now${this.busy ? `: ${this.deps.botName} is busy, so it queues after the current work.` : ", or say plainly it was not sent."}`, nudge: true, fix: true, valid: () => !req.accounted });
       return;
     }
     req.told = true;
@@ -993,6 +1011,7 @@ export class LiveCall {
     if (!text) return;
     this.lastLine = "";
     this.readNext = false;
+    this.acked = undefined;
     if (this.cutHold) this.cutHold = "heard";
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -1001,8 +1020,10 @@ export class LiveCall {
     this.justAnswered = false;
     const card = this.card;
     // A mis-hear is shown, never sent: no order, ask, card answer or yes comes from it.
-    const offTongue = offLanguage(text);
-    const unsure = offTongue || misheard(text);
+    const asked = asksForLanguage(text);
+    if (asked) this.speakIn(asked);
+    const offTongue = offLanguage(text, this.tongue);
+    const unsure = offTongue || misheard(text, this.tongue);
     this.offTongue = offTongue;
     // A hello or a question back answers nothing, and the question stays open.
     const answers = card?.armed && card.options.length ? answersCard(text, card.options) : !/\?\s*$/.test(text) && !asksToRepeat(text) && !greets(text);
@@ -1281,6 +1302,18 @@ export class LiveCall {
     this.release();
   }
 
+  private get speaking() {
+    return this.tongue ?? TONGUE[this.app];
+  }
+
+  private speakIn(tongue: string) {
+    this.tongue = tongue === TONGUE[this.app] ? undefined : tongue;
+    this.readNext = true;
+    if (this.generating) this.discard();
+    this.held.unshift({ text: `[Wink] They asked you to speak ${tongue}. From now on in this call speak only ${tongue}, whatever language they use. In ${tongue}, say in a few words that you will.`, fix: true });
+    this.release();
+  }
+
   /** Asked what it said in the chat: the newest message goes out whole, so the voice never paraphrases its own short summary again. */
   private readOut(req: Request): boolean {
     const text = this.newest?.trim();
@@ -1331,6 +1364,11 @@ export class LiveCall {
       this.engine?.sendContext(text);
       this.riding.push(text);
     }
+  }
+
+  quietDown(id: string) {
+    this.hush();
+    this.engine?.sendToolResult([id], "hush", "quiet: say nothing until they say your name");
   }
 
   // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.

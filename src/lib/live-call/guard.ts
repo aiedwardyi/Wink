@@ -173,19 +173,45 @@ export function callsVoice(heard: string, name: string, aliases: readonly string
 
 // Letters English and Korean never use, and the words a mis-hear lands on ("¿Qué?", "Hola, aquí estoy.").
 const FOREIGN_SCRIPT = /[¿¡ñЀ-ۿऀ-๿぀-ヿ一-鿿]/iu;
+const NON_LATIN = /[Ѐ-ۿऀ-๿぀-ヿ一-鿿]/u;
 const FOREIGN_WORDS = /(?<![\p{L}\p{N}])(?:hola|aquí|estoy|gracias|qué|cómo|está|estás|bueno|claro|perdón|bonjour|merci|oui|danke|hallo|obrigado|olá|ciao|grazie)(?![\p{L}\p{N}])/giu;
 const HANGUL = /[가-힣]/;
 
-/** Speech in a third language. The brief keeps the voice to the app's; English and Korean lines are never cut here, he may mix them. */
-export function offLanguage(text: string): boolean {
+// What a spoken "reply in Thai" can switch the call to, and the letters each is written in; null is a Latin one.
+const TONGUES: Record<string, RegExp | null> = {
+  English: null, Korean: null, Thai: /[฀-๿]/gu, Japanese: /[぀-ヿ一-鿿]/gu, Chinese: /[一-鿿]/gu,
+  Russian: /[Ѐ-ӿ]/gu, Hindi: /[ऀ-ॿ]/gu, Arabic: /[؀-ۿ]/gu,
+  Spanish: null, French: null, German: null, Portuguese: null, Italian: null, Vietnamese: null,
+};
+const KO_TONGUES: Record<string, string> = { 영어: "English", 한국어: "Korean", 태국어: "Thai", 일본어: "Japanese", 중국어: "Chinese", 러시아어: "Russian", 힌디어: "Hindi", 아랍어: "Arabic", 스페인어: "Spanish", 프랑스어: "French", 독일어: "German", 포르투갈어: "Portuguese", 이탈리아어: "Italian", 베트남어: "Vietnamese" };
+const NAMES = Object.keys(TONGUES).join("|");
+const ASK_TONGUE = new RegExp(`^(?:(?:okay|ok|so|hey|and|now|just|please)[,\\s]+)*(?:(?:can|could|would|will) you\\s+)?(?:please\\s+)?(?:(?:respond|reply|answer|speak|talk|go)(?:\\s+back)?(?:\\s+to me)?\\s+in|speak|switch(?:\\s+back)?\\s+to|back\\s+to)\\s+(${NAMES})\\b`, "i");
+const ASK_TONGUE_KO = new RegExp(`(${Object.keys(KO_TONGUES).join("|")})로\\s*(?:좀\\s*)?(?:말|대답|얘기|이야기)\\s*해`);
+
+/** A plain ask to speak another language from here on, as the language's English name. */
+export function asksForLanguage(heard: string): string | undefined {
+  for (const line of heard.split(/(?<=[.?!])\s+/)) {
+    const en = ASK_TONGUE.exec(line.trim())?.[1];
+    if (en) return Object.keys(TONGUES).find((name) => name.toLowerCase() === en.toLowerCase());
+    const ko = ASK_TONGUE_KO.exec(line)?.[1];
+    if (ko) return KO_TONGUES[ko];
+  }
+  return undefined;
+}
+
+/** Speech in a third language. The brief keeps the voice to the app's; English and Korean lines are never cut here, he may mix them. Once he asked for one, it is his too. */
+export function offLanguage(text: string, tongue?: string): boolean {
+  const own = tongue === undefined ? undefined : TONGUES[tongue];
+  if (own === null && tongue !== "English" && tongue !== "Korean") return NON_LATIN.test(text);
+  if (own) text = text.replace(own, "");
   if (FOREIGN_SCRIPT.test(text)) return true;
   // Capitalized mid-sentence it is a name, like the Bonjour service; "Hola" opening a line is Spanish.
   return [...text.matchAll(FOREIGN_WORDS)].some((word) => !/^\p{Lu}/u.test(word[0]) || !/\p{L}[^.!?]*$/u.test(text.slice(0, word.index)));
 }
 
 /** A line speech-to-text likely got wrong: another language, or a word or two that trail off with no end mark. Korean transcripts often have none. */
-export function misheard(text: string): boolean {
-  if (offLanguage(text)) return true;
+export function misheard(text: string, tongue?: string): boolean {
+  if (offLanguage(text, tongue)) return true;
   if (HANGUL.test(text) || bareYes(text) || ordersChange(text) || looksUp(text)) return false;
   return !/[.!?…]["'”’)\]]*\s*$/.test(text) && (text.match(/\p{L}[\p{L}'’-]*/gu)?.length ?? 0) <= 2;
 }
