@@ -26,7 +26,8 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
-  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
+  const answered = vi.fn();
+  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered });
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -35,7 +36,7 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
-  return { dir, cfg, store, bot, fetch, post, sent };
+  return { dir, cfg, store, bot, fetch, post, sent, answered };
 }
 
 describe("call token", () => {
@@ -274,6 +275,16 @@ describe("call token", () => {
     expect(cards[0]!.secret).toMatchObject({ target: "geminiApiKey", helpUrl: "https://aistudio.google.com/apikey" });
     expect(isCallKeyCard(cards[0]!.secret!)).toBe(true);
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a minted token", {}, true],
+    ["no key", { key: undefined }, false],
+    ["Google's refusal", { reply: () => Response.json({ error: { message: "quota" } }, { status: 429 }) }, false],
+  ])("stops a ringing bot call only on %s", async (_case, opts, stops) => {
+    const h = harness(opts);
+    await h.post("token");
+    expect(h.answered.mock.calls).toEqual(stops ? [[h.bot.id]] : []);
   });
 
   it("passes Google's quota 429 through", async () => {
