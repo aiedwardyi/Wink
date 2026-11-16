@@ -22,15 +22,15 @@ export const pushSubscriptionSchema = z.object({
   endpoint: z.string().url().startsWith("https://"),
   keys: z.object({ p256dh: b64url, auth: b64url }),
   off: z.array(z.string().max(100)).max(500).optional(),
-  /** The phone that subscribed; signing it out drops the subscription. */
-  phone: z.string().max(100).optional(),
 });
+/** The phone that subscribed is set by the server, never read from the request; signing it out drops the subscription. */
+const storedSubscriptionSchema = pushSubscriptionSchema.extend({ phone: z.string().max(100).optional() });
 const subscriptionsFileSchema = z.object({ subscriptions: z.array(z.unknown()) });
 export const pushEndpointSchema = z.object({ endpoint: z.string() });
 export const pushTestSchema = pushEndpointSchema.extend({ botId: z.string().optional() });
 
 export type VapidKeys = z.infer<typeof vapidKeysSchema>;
-export type PushSubscriptionRecord = z.infer<typeof pushSubscriptionSchema>;
+export type PushSubscriptionRecord = z.infer<typeof storedSubscriptionSchema>;
 /** `call` marks a ringing call alert by its call id. */
 export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string; at?: number; call?: string };
 export type PushTarget = { botId: string; threadId: string };
@@ -164,7 +164,7 @@ export function loadPushSubscriptions(dataDir: string): PushSubscriptionRecord[]
     const parsed = subscriptionsFileSchema.safeParse(JSON.parse(readFileSync(join(dataDir, WEB_PUSH_SUBS_FILE), "utf8")));
     if (!parsed.success) return [];
     return parsed.data.subscriptions.flatMap((entry) => {
-      const sub = pushSubscriptionSchema.safeParse(entry);
+      const sub = storedSubscriptionSchema.safeParse(entry);
       return sub.success ? [sub.data] : [];
     });
   } catch {

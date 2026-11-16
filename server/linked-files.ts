@@ -364,7 +364,8 @@ export function linkedFileGrant(method: string | undefined, path: string, holds:
   const match = /^\/api\/threads\/([\w-]+)\/linked-file\/([^/]+)\/([^/]+)\//.exec(path);
   if (method !== "GET" || !match) return false;
   try {
-    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!) && holds(match[3]!.split(".")[1]!);
+    const [, holder = ""] = match[3]!.split(".");
+    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!) && holds(holder);
   } catch {
     return false;
   }
