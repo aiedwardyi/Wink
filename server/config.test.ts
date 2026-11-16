@@ -184,12 +184,12 @@ describe("configuration boundaries", () => {
     expect(vpsSshAlias({ vps: { sshAlias: "-bad" } })).toBeNull();
   });
 
-  it("accepts a persisted global room turn timeout and supplies the legacy default", () => {
+  it("accepts a persisted global room turn timeout and defaults to a full day", () => {
     expect(parseStoredConfig({ rooms: { turnTimeoutMinutes: 20 } })).toEqual({
       rooms: { turnTimeoutMinutes: 20 },
     });
     expect(roomTurnTimeoutMinutes({ rooms: { turnTimeoutMinutes: 20 } })).toBe(20);
-    expect(roomTurnTimeoutMinutes({})).toBe(5);
+    expect(roomTurnTimeoutMinutes({})).toBe(1_440);
   });
 
   it.each([0, 1.5, 1441, "20", null])(
@@ -240,7 +240,11 @@ describe("configuration boundaries", () => {
     expect(showToolCallsEnabled({ features: { showToolCalls: true } })).toBe(true);
   });
 
-  it.each([0, 1.5, 5, "2", null])("rejects an invalid per-bot VM limit: %j", (maxInstances) => {
+  it.each([5, 64])("accepts a per-bot VM limit of %j", (maxInstances) => {
+    expect(parseConfigPatch({ localVm: { maxInstances } })).toEqual({ localVm: { maxInstances } });
+  });
+
+  it.each([0, 1.5, "2", null])("rejects an invalid per-bot VM limit: %j", (maxInstances) => {
     expect(() => parseConfigPatch({ localVm: { maxInstances } })).toThrow("localVm.maxInstances");
   });
 

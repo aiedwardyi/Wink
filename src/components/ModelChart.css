@@ -1,22 +1,30 @@
 .model-chart {
-  --bg: #060709;
-  --raise: #0e0f13;
-  --line: #1c1d22;
-  --line-2: #2c2e34;
-  --ink: #f0eee8;
-  --ink-2: #a5a49f;
-  --ink-3: #6b6b69;
-  --ink-4: #3b3c40;
-  --accent: #ab9cf0;
-  --on-ink: #050506;
-  --mdl: #292a30;
-  --mdl-dot: #3d3e45;
-  --mdl-lab: #56575c;
-  --mdl-lab-dot: #8f8e8a;
-  --tip: #15161b;
+  --bg: #050608;
+  --raise: #0d0f14;
+  --line: #15171c;
+  --line-2: #272a31;
+  --ink: #f2f4f7;
+  --ink-2: #a3a8b1;
+  --ink-3: #6a6f79;
+  --ink-4: #3b3f48;
+  --accent: var(--picker-accent, #8b929c);
+  --edge: color-mix(in srgb, var(--accent) 55%, var(--line-2));
+  --mdl: #262931;
+  --mdl-dot: #3b3f49;
+  --mdl-lab: #4e535d;
+  --mdl-lab-dot: #8b919c;
+  --tip: #0c0e13;
+  --r: 3px;
+  --r-chip: 2px;
+  --cap: 10.5px;
+  --cap-plot: 9.5px;
+  --track: .16em;
+  --font: var(--font-sans, "Segoe UI", system-ui, sans-serif);
   --mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
-  --sans: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --ease: cubic-bezier(.2, .8, .2, 1);
+  --ease: var(--ease-standard, cubic-bezier(.2, 0, .38, .9));
+  --fast: var(--motion-fast, 110ms);
+  --mod: var(--motion-moderate, 150ms);
+  --slow: var(--motion-large, 240ms);
   position: absolute;
   inset: 0;
   display: grid;
@@ -26,12 +34,13 @@
   overflow: hidden;
   background: var(--bg);
   color: var(--ink);
-  font: 14px/1.3 var(--sans);
+  font: 14px/1.3 var(--font);
+  font-variant-numeric: lining-nums tabular-nums;
   -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
-.model-cross-backdrop:has(.model-chart) { background: #060709; backdrop-filter: none; }
+.model-cross-backdrop:has(.model-chart) { background: #050608; backdrop-filter: none; }
 .model-chart :where(button) { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .model-chart :where(h2, h3, p, dl, dd) { margin: 0; }
 .model-chart button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
@@ -44,102 +53,122 @@ html[data-orbit-caption="win32"] .model-chart { top: var(--orbit-caption-height)
 html[data-orbit-caption="win32"] .model-cross-backdrop:has(.model-chart) .model-cross-header { top: calc(var(--orbit-caption-height) + 34px); }
 
 .chart-top { grid-column: 1 / -1; display: flex; height: 30px; align-items: center; justify-content: space-between; padding-right: 212px; }
-.chart-title { font: 500 11px var(--mono); letter-spacing: .24em; text-transform: uppercase; color: var(--ink-2); }
-.chart-now { display: flex; height: 30px; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid var(--line); font: 11px var(--mono); letter-spacing: .06em; color: var(--ink-2); white-space: nowrap; }
-.chart-now i { font-style: normal; letter-spacing: .24em; text-transform: uppercase; color: var(--ink-3); }
+.chart-title { font: 500 var(--cap) var(--font); letter-spacing: var(--track); text-transform: uppercase; color: var(--ink-2); }
+.chart-now { display: flex; height: 30px; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-chip); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.chart-now i { font-size: var(--cap); font-style: normal; font-weight: 500; letter-spacing: var(--track); text-transform: uppercase; color: var(--ink-3); }
 
 .chart-controls { display: flex; min-height: 0; flex-direction: column; gap: 30px; overflow-y: auto; scrollbar-width: none; }
-.chart-controls h3 { display: flex; gap: 10px; margin: 0 0 12px; font: 500 10.5px var(--mono); letter-spacing: .24em; text-transform: uppercase; color: var(--ink-3); }
-.chart-controls h3 i { font-style: normal; color: var(--ink-4); }
+.chart-controls h3 { margin: 0 0 12px; font: 500 var(--cap) var(--font); letter-spacing: var(--track); text-transform: uppercase; color: var(--ink-3); }
 
 .chart-labs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-.chart-lab { position: relative; display: flex; height: 84px; min-width: 0; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--line); color: var(--ink-3); font-size: 12px; transition: border-color .15s, color .15s, background .15s; }
-.chart-lab .chart-mk { height: 28px; opacity: .5; transition: opacity .15s; }
-.chart-lab-name { max-width: 100%; overflow: hidden; padding: 0 4px; text-overflow: ellipsis; white-space: nowrap; }
-.chart-lock { position: absolute; top: 6px; right: 6px; }
-.chart-lab[aria-checked="true"] { border-color: var(--ink); background: var(--raise); color: var(--ink); }
+.chart-lab { position: relative; display: flex; height: 84px; min-width: 0; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--line); border-radius: var(--r); color: var(--ink-3); font-size: 11px; transition: border-color var(--mod) var(--ease), color var(--mod) var(--ease), background var(--mod) var(--ease); }
+.chart-lab .chart-mk { height: 28px; opacity: .5; transition: opacity var(--mod) var(--ease); }
+.chart-lab-name { max-width: 100%; overflow: hidden; padding: 0 2px; text-overflow: ellipsis; white-space: nowrap; }
+.chart-lock { position: absolute; top: 7px; right: 7px; }
+.chart-lab[aria-checked="true"] { border-color: var(--edge); background: linear-gradient(color-mix(in srgb, var(--accent) 14%, transparent), transparent 80%), var(--raise); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 80%, transparent); color: var(--ink); }
 .chart-lab[aria-checked="true"] .chart-mk { opacity: 1; }
 @media (hover: hover) {
-  .chart-lab:hover { border-color: var(--line-2); color: var(--ink-2); }
+  .chart-lab:hover { color: var(--ink-2); }
+  .chart-lab:not([aria-checked="true"]):hover { border-color: var(--line-2); }
   .chart-lab:hover .chart-mk { opacity: .8; }
-  .chart-lab[aria-checked="true"]:hover { border-color: var(--ink); color: var(--ink); }
+  .chart-lab[aria-checked="true"]:hover { color: var(--ink); }
+  .chart-lab[aria-checked="true"]:hover .chart-mk { opacity: 1; }
 }
 
 .chart-models { min-height: 246px; }
-.chart-mrow { display: flex; width: 100%; height: 49px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: 15px; text-align: left; transition: color .15s, background .15s; }
+.chart-mrow { display: flex; width: 100%; height: 49px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: 15px; text-align: left; transition: color var(--mod) var(--ease), background var(--mod) var(--ease), box-shadow var(--mod) var(--ease); }
 .chart-mrow:first-child { border-top: 1px solid var(--line); }
-.chart-mrow[aria-checked="true"] { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); color: var(--ink); }
-.chart-mrow small { margin-left: 8px; font: 9.5px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
+.chart-mrow[aria-checked="true"] { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 78%); box-shadow: inset 2px 0 0 var(--accent); color: var(--ink); }
+.chart-mrow small { margin-left: 8px; font-size: 11px; color: var(--ink-3); }
 .chart-tier { flex: none; font: 11px var(--mono); letter-spacing: .08em; color: var(--ink-4); }
 .chart-tier b { font-weight: 400; color: var(--ink-2); }
 svg.chart-tier { color: var(--ink-3); }
 @media (hover: hover) { .chart-mrow:hover { color: var(--ink); } }
 
 .chart-efforts { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 4px; }
-.chart-eff { position: relative; display: flex; height: 62px; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); color: var(--ink-2); font: 11.5px var(--mono); transition: border-color .15s, color .15s, background .15s; }
-.chart-eff::before { content: ""; position: absolute; top: -1px; right: -1px; left: -1px; height: 3px; background: var(--line-2); transition: background .15s; }
-.chart-eff[data-on]::before { background: var(--accent); }
-.chart-eff span { font-size: 10.5px; color: var(--ink-3); }
-.chart-eff[aria-checked="true"] { border-color: var(--ink); background: var(--raise); color: var(--ink); }
+.chart-eff { position: relative; display: flex; height: 62px; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: var(--r); color: var(--ink-2); font-size: 12.5px; transition: border-color var(--mod) var(--ease), color var(--mod) var(--ease), background var(--mod) var(--ease); }
+.chart-eff::before { content: ""; position: absolute; top: -1px; right: -1px; left: -1px; height: 2px; background: var(--line-2); transition: background var(--mod) var(--ease), box-shadow var(--mod) var(--ease); }
+.chart-eff[data-on]::before { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 65%, transparent); }
+.chart-eff span { font: 11px var(--mono); color: var(--ink-3); }
+.chart-eff[aria-checked="true"] { border-color: var(--edge); background: var(--raise); color: var(--ink); }
 .chart-eff[aria-checked="true"] span { color: var(--ink-2); }
-@media (hover: hover) { .chart-eff:hover { color: var(--ink); } }
+@media (hover: hover) {
+  .chart-eff:hover { color: var(--ink); }
+  .chart-eff:not([aria-checked="true"]):hover { border-color: var(--line-2); }
+}
 
 .model-chart .chart-setup { max-height: none; flex-shrink: 0; align-items: stretch; gap: 8px; overflow: visible; padding: 0; color: var(--ink-2); font-size: 12px; }
 .model-chart .chart-setup:empty { display: none; }
 .model-chart .chart-setup .model-cross-custom { width: 100%; }
 
 .chart-go { margin-top: auto; }
-.chart-pick { width: 100%; height: 58px; background: var(--ink); color: var(--on-ink); font: 600 13px var(--mono); letter-spacing: .34em; text-indent: .34em; text-transform: uppercase; transition: opacity .15s, transform .08s; }
+.chart-pick { width: 100%; height: 54px; border-radius: var(--r); background: var(--ink); color: var(--bg); font: 600 12.5px var(--font); letter-spacing: calc(var(--track) * 1.4); text-indent: calc(var(--track) * 1.4); text-transform: uppercase; transition: opacity var(--mod) var(--ease), box-shadow var(--mod) var(--ease), transform var(--fast) var(--ease); }
 .chart-pick:disabled { cursor: default; opacity: .35; }
 .chart-pick:enabled:active { transform: translateY(1px); }
-@media (hover: hover) { .chart-pick:enabled:hover { opacity: .9; } }
-.chart-keys { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 14px; font: 10.5px var(--mono); color: var(--ink-3); text-transform: lowercase; }
-.chart-keys span { white-space: nowrap; }
-.chart-keys b { margin-right: 6px; font-weight: 400; color: var(--ink-2); }
+@media (hover: hover) { .chart-pick:enabled:hover { box-shadow: 0 0 28px color-mix(in srgb, var(--accent) 50%, transparent); } }
+.chart-keys { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; font-size: 11.5px; color: var(--ink-3); }
+.chart-keys span { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+.chart-keys kbd { display: inline-grid; min-width: 20px; height: 20px; place-items: center; padding: 0 5px; border: 1px solid var(--line-2); border-radius: var(--r); color: var(--ink-2); font: 500 10.5px var(--mono); }
+.chart-keys kbd:last-of-type { margin-right: 4px; }
 
 .chart-stage { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 14px; }
 .chart-readout { display: grid; grid-template: "who stats" auto "delta stats" auto / minmax(0, 1fr) auto; align-items: end; column-gap: 32px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .chart-who { grid-area: who; min-width: 0; }
-.chart-rlab { display: flex; height: 16px; align-items: center; gap: 9px; font: 11px var(--mono); letter-spacing: .2em; text-transform: uppercase; color: var(--ink-2); }
-.chart-rname { display: flex; margin-top: 10px; align-items: center; gap: 14px; font-size: 44px; font-weight: 500; line-height: 1; letter-spacing: -.022em; white-space: nowrap; }
+.chart-rlab { display: flex; height: 16px; align-items: center; gap: 8px; font-size: var(--cap); font-weight: 500; letter-spacing: var(--track); text-transform: uppercase; color: var(--ink-2); }
+.chart-rname { display: flex; margin-top: 6px; align-items: center; gap: 14px; font: 500 44px/1.16 var(--font); letter-spacing: -.022em; white-space: nowrap; }
 .chart-rname > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.chart-tag { padding: 4px 9px; border: 1px solid var(--line-2); font: 12px var(--mono); letter-spacing: .04em; color: var(--ink-2); }
-.chart-delta { display: flex; grid-area: delta; height: 14px; margin-top: 12px; gap: 1.2em; font: 11px var(--mono); letter-spacing: .04em; color: var(--ink-3); white-space: nowrap; }
-.chart-delta b { font-weight: 400; color: var(--ink); }
+.chart-tag { padding: 4px 10px; border: 1px solid var(--edge); border-radius: var(--r-chip); font: 500 var(--cap)/1.3 var(--font); letter-spacing: var(--track); text-transform: uppercase; color: var(--ink); }
+.chart-delta { display: flex; grid-area: delta; height: 16px; margin-top: 10px; gap: 1.2em; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
+.chart-delta b { font: 500 1em var(--mono); color: var(--ink); }
 .chart-stats { display: flex; grid-area: stats; gap: 40px; }
-.chart-stats dt { font: 10px var(--mono); letter-spacing: .22em; text-transform: uppercase; color: var(--ink-3); }
-.chart-stats dd { min-width: 3.4ch; margin-top: 8px; font: 32px/1 var(--mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.chart-stats dt { font-size: var(--cap); font-weight: 500; letter-spacing: var(--track); text-transform: uppercase; color: var(--ink-3); }
+.chart-stats dd { min-width: 3.4ch; margin-top: 8px; font: 500 32px/1 var(--mono); letter-spacing: -.02em; transition: color var(--mod) var(--ease); }
+.chart-stats dd[data-none] { color: var(--ink-4); }
 .chart-stats div:last-child dd { min-width: 5.6ch; }
 
-.chart-plot { position: relative; min-height: 0; flex: 1; }
-.chart-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; font: 11px var(--mono); }
+.chart-plot { position: relative; min-height: 0; flex: 1; background: radial-gradient(70% 80% at 62% 36%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 72%); }
+.chart-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; font: 11px var(--font); }
 .chart-plot .grid { stroke: var(--line); }
-.chart-plot .axis { fill: none; stroke: var(--line-2); }
-.chart-plot .corner { fill: none; stroke: var(--ink-3); }
-.chart-plot .ax { fill: var(--ink-3); }
-.chart-plot .cap { fill: var(--ink-3); font-size: 10px; letter-spacing: .2em; }
-.chart-plot .mdl polyline { fill: none; stroke: var(--mdl); stroke-width: 1; transition: stroke .18s; }
-.chart-plot .mdl .dot { fill: var(--mdl-dot); transform: scale(.5); transform-box: fill-box; transform-origin: center; transition: fill .18s, transform .18s var(--ease); }
-.chart-plot .mdl[data-lab] polyline { stroke: var(--mdl-lab); }
-.chart-plot .mdl[data-lab] .dot { fill: var(--mdl-lab-dot); transform: scale(.72); }
-.chart-plot .mdl[data-sel] polyline { stroke: var(--accent); stroke-width: 1.75; }
-.chart-plot .mdl[data-sel] .dot { fill: var(--accent); transform: scale(1); }
+.chart-plot :is(.axis, .ticks) { fill: none; stroke: var(--line-2); }
+.chart-plot .plus { fill: none; stroke: var(--ink-4); }
+.chart-plot .ax { fill: var(--ink-3); font-family: var(--mono); }
+.chart-plot .cap text { fill: var(--ink-3); }
+.chart-plot :is(.cap, .nowm) text { font-size: var(--cap-plot); font-weight: 500; letter-spacing: var(--track); text-transform: uppercase; }
+.chart-plot .cap path { fill: none; stroke: var(--ink-3); stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+.chart-plot .mdl polyline { fill: none; stroke: var(--mdl); stroke-width: 1; transition: stroke var(--mod) var(--ease); }
+.chart-plot .mdl .dot { r: 2px; fill: var(--mdl-dot); transition: fill var(--mod) var(--ease), r var(--mod) var(--ease); }
+.chart-plot .mdl[data-lab] polyline { stroke: var(--mdl-lab); stroke-width: 1.25; }
+.chart-plot .mdl[data-lab] .dot { r: 3px; fill: var(--mdl-lab-dot); }
+.chart-plot .mdl[data-hov] polyline { stroke: var(--ink-2); }
+.chart-plot .mdl[data-hov] .dot { fill: var(--ink-2); }
+.chart-plot .mdl[data-sel] polyline { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chart-plot .mdl[data-sel] .glow { stroke-width: 10; stroke-opacity: .15; transition: none; animation: chart-glow var(--slow) var(--ease); }
+.chart-plot .mdl[data-sel] .dot { r: 4px; fill: var(--accent); stroke: var(--bg); stroke-width: 4; paint-order: stroke; }
 .chart-plot .hit { fill: transparent; cursor: pointer; }
 .chart-plot .lbl { fill: var(--ink-2); }
-.chart-plot .lbl[data-sel] { fill: var(--ink); }
-.chart-plot .cross { stroke: var(--ink-3); stroke-dasharray: 2 4; }
-.chart-plot .course { stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 5 5; }
-.chart-plot .ret .br { fill: none; stroke: var(--ink); stroke-width: 1.5; }
-.chart-plot .ret .core { fill: var(--ink); }
-.chart-plot .ret[data-ghost] .br { stroke-dasharray: 2 3; }
-.chart-plot .ret[data-ghost] .core { fill: var(--bg); stroke: var(--ink); }
+.chart-plot :is(.lbl, .nowm text) { stroke: var(--bg); stroke-width: 3; stroke-linejoin: round; paint-order: stroke; }
+.chart-plot .lbl[data-sel] { fill: var(--ink); font-weight: 500; }
+.chart-plot .none { fill: var(--ink-3); }
+.chart-plot .cross { stroke: color-mix(in srgb, var(--accent) 38%, var(--line-2)); }
+.chart-plot .course { stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 2 5; stroke-linecap: round; stroke-opacity: .75; }
+.chart-plot .ret .halo { fill: var(--accent); fill-opacity: .13; }
+.chart-plot .ret .ring { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.chart-plot .ret .core { fill: var(--ink); stroke: var(--bg); stroke-width: 2; }
+.chart-plot .ret[data-ghost] .ring { stroke-dasharray: 3 3; }
+.chart-plot .ret[data-ghost] .core { fill: var(--bg); stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 3 2; }
 .chart-plot .flag rect { fill: var(--ink); }
-.chart-plot .flag text { fill: var(--on-ink); font-weight: 600; }
-.chart-plot .nowm path { fill: var(--bg); stroke: var(--ink-2); stroke-width: 1.25; }
-.chart-plot .nowm text { fill: var(--ink-2); font-size: 9px; letter-spacing: .2em; }
-.chart-plot .tip rect { fill: var(--tip); stroke: var(--line-2); }
-.chart-plot .tip text { fill: var(--ink); }
-.chart-plot :is(.tip, .ret, .nowm, .course, .cross, .flag, .lbl, .ax, .cap) { pointer-events: none; }
+.chart-plot .flag text { fill: var(--bg); font: 600 1em var(--mono); }
+.chart-plot .nowm path { fill: var(--bg); stroke: var(--ink-2); stroke-width: 1.5; }
+.chart-plot .nowm text { fill: var(--ink-2); }
+.chart-plot .tip rect { fill: var(--tip); stroke: var(--edge); }
+.chart-plot .tip circle { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.chart-plot .tip text { fill: var(--ink-2); }
+.chart-plot .tip .name { fill: var(--ink); font-weight: 500; }
+.chart-plot .ping { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-opacity: 0; animation: chart-ping 360ms var(--ease) both; }
+.chart-plot :is(.tip, .ret, .nowm, .course, .cross, .flag, .lbl, .ax, .cap, .none, .ping, .glow) { pointer-events: none; }
+
+@keyframes chart-glow { from { stroke-opacity: 0; } }
+@keyframes chart-ping { 0% { stroke-opacity: 0; } 12% { stroke-opacity: .6; } 100% { r: 27px; stroke-opacity: 0; } }
 
 .model-chart[data-mid] { grid-template-columns: 320px minmax(0, 1fr); gap: 24px 40px; padding: 28px 32px 32px; }
 .model-chart[data-mid] .chart-readout { grid-template: "who" auto "delta" auto "stats" auto / minmax(0, 1fr); row-gap: 0; }
@@ -159,35 +188,36 @@ svg.chart-tier { color: var(--ink-3); }
 .model-chart[data-mid] .chart-top { padding-right: 196px; }
 
 /* Phone: chart on top, then the readout, then lab, model, effort and pick. */
-.model-chart[data-phone] { display: flex; flex-direction: column; gap: 12px; padding: calc(14px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+.model-chart[data-phone] { --cap: 9px; --cap-plot: 8.5px; display: flex; flex-direction: column; gap: 12px; padding: calc(14px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
 .model-chart[data-phone] .chart-top { height: 26px; padding-right: 128px; }
 .model-chart[data-phone] .chart-title { display: none; }
-.model-chart[data-phone] .chart-now { height: 26px; gap: 7px; padding: 0 8px; font-size: 10px; }
+.model-chart[data-phone] .chart-now { height: 26px; gap: 7px; padding: 0 9px; font-size: 11px; }
 .model-chart[data-phone] .chart-stage { order: 1; flex: 1; gap: 8px; }
 .model-chart[data-phone] .chart-controls { order: 2; flex: none; gap: 12px; overflow: visible; }
 .model-chart[data-phone] .chart-plot { order: 1; }
 .model-chart[data-phone] .chart-readout { order: 2; grid-template: "stats" auto "delta" auto / minmax(0, 1fr); padding: 0; border: 0; }
 .model-chart[data-phone] .chart-who { display: none; }
 .model-chart[data-phone] .chart-stats { justify-content: space-between; gap: 0; }
-.model-chart[data-phone] .chart-stats dt { font-size: 8.5px; }
 .model-chart[data-phone] .chart-stats dd { margin-top: 5px; font-size: 20px; }
-.model-chart[data-phone] .chart-delta { height: 12px; margin-top: 8px; font-size: 9.5px; }
-.model-chart[data-phone] .chart-controls h3 { margin-bottom: 6px; font-size: 9px; }
+.model-chart[data-phone] .chart-delta { height: 14px; margin-top: 8px; font-size: 11px; }
+.model-chart[data-phone] .chart-controls h3 { margin-bottom: 6px; }
 .model-chart[data-phone] .chart-lab { height: 52px; gap: 5px; font-size: 10px; }
 .model-chart[data-phone] .chart-lab .chart-mk { height: 20px; }
 .model-chart[data-phone] .chart-lab .chart-mk svg { width: auto; height: 20px; }
 .model-chart[data-phone] .chart-models { min-height: 191px; }
 .model-chart[data-phone] .chart-mrow { height: 38px; padding: 0 12px; font-size: 14px; }
-.model-chart[data-phone] .chart-eff { height: 46px; gap: 4px; font-size: 10.5px; }
-.model-chart[data-phone] .chart-eff span { font-size: 9.5px; }
+.model-chart[data-phone] .chart-eff { height: 46px; gap: 4px; font-size: 11px; }
+.model-chart[data-phone] .chart-eff span { font-size: 10px; }
 .model-chart[data-phone] .chart-pick { height: 50px; }
 .model-chart[data-phone] .chart-keys { display: none; }
-.model-chart[data-phone] .chart-plot svg { font-size: 9.5px; }
-.model-chart[data-phone] .chart-plot .cap { font-size: 8.5px; }
+.model-chart[data-phone] .chart-plot svg { font-size: 10px; }
+/* Hangul reads cramped that small and gappy that widely tracked. */
+.model-chart:lang(ko) { --cap: 11.5px; --cap-plot: 10.5px; --track: .04em; }
+.model-chart[data-phone]:lang(ko) { --cap: 10.5px; --cap-plot: 9.5px; }
 .model-cross-backdrop:has(.model-chart[data-phone]) .model-cross-header { top: calc(12px + env(safe-area-inset-top, 0px)); right: 4px; height: 30px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .model-chart *, .model-chart *::before { transition: none !important; }
+  .model-chart *, .model-chart *::before { transition: none !important; animation: none !important; }
 }
 
 /* Light and Atelier looks: the same chart in the borrowed skin's tokens. */
@@ -196,14 +226,13 @@ svg.chart-tier { color: var(--ink-3); }
   .model-chart {
     --bg: var(--color-app);
     --raise: var(--color-card);
-    --line: color-mix(in srgb, var(--color-ink) 10%, transparent);
-    --line-2: color-mix(in srgb, var(--color-ink) 20%, transparent);
+    --line: color-mix(in srgb, var(--color-ink) 9%, transparent);
+    --line-2: color-mix(in srgb, var(--color-ink) 19%, transparent);
     --ink: var(--color-ink);
     --ink-2: color-mix(in srgb, var(--color-ink) 45%, var(--color-ink-secondary));
     --ink-3: var(--color-ink-secondary);
     --ink-4: color-mix(in srgb, var(--color-ink-secondary) 55%, transparent);
-    --accent: var(--color-accent);
-    --on-ink: var(--color-app);
+    --accent: oklch(from var(--picker-accent, #8b929c) min(l, .56) c h);
     --mdl: color-mix(in srgb, var(--color-ink) 12%, transparent);
     --mdl-dot: color-mix(in srgb, var(--color-ink) 22%, transparent);
     --mdl-lab: color-mix(in srgb, var(--color-ink) 34%, transparent);

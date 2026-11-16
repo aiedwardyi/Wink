@@ -13,6 +13,7 @@ export function completedTool(
     ...(summary ? { summary } : {}),
     ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
     ...(event.detail ? { detail: event.detail } : {}),
+    ...(event.ok && event.writes?.length ? { writes: event.writes } : {}),
   };
   if (existing?.verb) tool.verb = existing.verb;
   return tool;

@@ -198,12 +198,13 @@ describe("lists", () => {
     expect([...SKINS]).toEqual([...SKIN_IDS, "other"]);
     expect([...EFFORTS]).toEqual([...EFFORT_LEVELS, "auto"]);
     expect(ENGINES).toEqual(expect.arrayContaining(BUILT_IN_DRIVERS.map((driver) => driver.driverKind)));
-    // Hydrogen and Carbon wait for a relay deploy: the live relay drops events with a model it does not list, the app sends "custom".
+    // New relay model ids need a coordinated deploy; until then the app sends "custom".
     // TODO: when they join MODELS, ship the relay with them and drop `pending` and the not.toContain below.
-    const pending = new Set(["gemini-4-hydrogen", "gemini-4-carbon"]);
+    const pending = new Set(["gemini-4-hydrogen", "gemini-4-carbon", "muse-ember-1.0"]);
     expect(MODELS).toEqual(expect.arrayContaining([...PICKER_MODEL_IDS, ...MODEL_INDEX_ENTRIES.map((entry) => entry.model)].filter((id) => !pending.has(id))));
     expect(MODELS).not.toContain("gemini-4-hydrogen");
     expect(MODELS).not.toContain("gemini-4-carbon");
+    expect(MODELS).not.toContain("muse-ember-1.0");
     for (const site of Object.keys(ERROR_SITES)) expect(statsEventSchema.safeParse({ ...SAMPLES.error, site }).success, site).toBe(true);
     for (const code of ERROR_CODES) expect(statsEventSchema.safeParse({ ...SAMPLES.error, code }).success, code).toBe(true);
   });

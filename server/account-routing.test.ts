@@ -314,6 +314,17 @@ describe("engine default account routing", () => {
     expect(f.accounts.defaultFor("claude")).toBeUndefined();
   });
 
+  it("does not let a hidden bot block a Main switch or removal, and refuses its send once un-hidden", async () => {
+    const f = await fixture();
+    const hidden = f.store.createBot({ name: "Momo" });
+    f.store.patchBot(hidden.id, { hidden: true, modelSelection: { ...hidden.modelSelection, model: "claudeAgent-retired" } });
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    expect(f.accounts.isDefault(f.added[2].id)).toBe(true);
+    f.store.patchBot(hidden.id, { hidden: false });
+    expect(() => f.controller.bots!.resolve(f.store.bot(hidden.id)!)).toThrow("does not offer the selected model");
+  });
+
   it("validates HTTP model picks against the default catalog and keeps portable ids", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[2].id)).status).toBe(200);
@@ -492,6 +503,37 @@ describe("account removal drain", () => {
     expect(f.resolve).toThrow("This account is signed out. Sign in again, then send your message.");
     expect(commit).not.toHaveBeenCalled();
     expect(f.registry.accountAvailable(f.added[0].id)).toBe(true);
+  });
+
+  it("holds a Main whose sign-in check could not answer as unconfirmed, not signed out", async () => {
+    const f = await fixture();
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    await f.controller.observe(main.id, { state: "unavailable", reason: "auth status timed out" });
+    expect(f.accounts.get(main.id)?.state).toBe("ready");
+    expect(f.registry.accountBlocked(main.id)).toBe(true);
+    expect(f.resolve).toThrow(/^This account's sign-in isn't confirmed yet\.$/);
+  });
+
+  it("tells a Main whose Claude CLI is missing that Claude isn't installed, not signed out", async () => {
+    const f = await fixture();
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.registry.get("claude")!.snapshot = async () => ({ state: "unavailable", reason: "`claude` CLI not found", cliMissing: true });
+    await f.registry.describe({ refresh: true });
+    await f.controller.observe(main.id, { state: "unavailable", reason: "`claude` CLI not found", cliMissing: true });
+    expect(f.registry.accountBlocked(main.id)).toBe(true);
+    expect(f.resolve).toThrow(/^Claude isn't installed or isn't answering on this PC\.$/);
+  });
+
+  it("names Codex when a Codex Main's CLI is missing", async () => {
+    const f = await fixture(false, "codex");
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.registry.get("codex")!.snapshot = async () => ({ state: "unavailable", reason: "`codex` CLI not found", cliMissing: true });
+    await f.registry.describe({ refresh: true });
+    await f.controller.observe(main.id, { state: "unavailable", reason: "`codex` CLI not found", cliMissing: true });
+    expect(f.resolve).toThrow(/^Codex isn't installed or isn't answering on this PC\.$/);
   });
 
   it("keeps last-account sign-out available without changing portable selections", async () => {

@@ -376,14 +376,22 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return "written";
   }
 
+  function publish(threadId: string): Promise<"running" | "written" | "skipped"> {
+    return serial(() => flush(threadId)).then((result) => {
+      if (result === "running") schedule(threadId);
+      else if (result === "written") retry.delete(threadId);
+      return result;
+    }, () => {
+      retry.add(threadId);
+      return "skipped" as const;
+    });
+  }
+
   function schedule(threadId: string): void {
     if (timers.has(threadId)) return;
     const timer = setTimeout(() => {
       timers.delete(threadId);
-      void serial(() => flush(threadId)).then((result) => {
-        if (result === "running") schedule(threadId);
-        else if (result === "written") retry.delete(threadId);
-      }).catch(() => { retry.add(threadId); });
+      void publish(threadId);
     }, FLUSH_DELAY_MS);
     timer.unref?.();
     timers.set(threadId, timer);
@@ -655,6 +663,12 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     schedule,
     migrationStatus,
     flush: (threadId: string) => serial(() => flush(threadId)),
+    /** A settled turn publishes now instead of on the three-second timer. */
+    settle(threadId: string): Promise<"running" | "written" | "skipped"> {
+      clearTimeout(timers.get(threadId));
+      timers.delete(threadId);
+      return publish(threadId);
+    },
     pull: (threadId: string) => serial(() => pull(threadId)),
     poll: () => serial(poll),
     /** Sends every sealed segment and fresh picture again; files the folder already holds are kept. */

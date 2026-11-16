@@ -13,6 +13,7 @@ import type { StatsEvent } from "../shared/usage-stats.ts";
 import { loadAnalyticsConsent } from "./analytics-consent.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { classifyError } from "./drivers/retry.ts";
+import { onLoopStall } from "./loop-stalls.ts";
 
 type Schema = typeof import("../shared/usage-stats.ts");
 type Row = Record<string, unknown>;
@@ -146,7 +147,7 @@ export function createUsageStats(options: UsageStatsOptions) {
   let previous: { clean: boolean; min: number; cold: boolean } | undefined;
   let spans: Record<string, number> | undefined;
   let flushTimer: ReturnType<typeof setInterval> | undefined;
-  let lagTimer: ReturnType<typeof setInterval> | undefined;
+  let stopStalls: (() => void) | undefined;
   let uploadTimer: ReturnType<typeof setTimeout> | undefined;
   const turns = new Map<string, { first?: number; tools: number; toolFails: number; asks: number; asksAuto: number; denied: number; retries: number; stop?: "usage-limit" | "signed-out" | "timeout" }>();
   const senders = new Map<string, { agent: string; local: boolean }>();
@@ -362,21 +363,16 @@ export function createUsageStats(options: UsageStatsOptions) {
       void flush();
     }, MIN);
     flushTimer.unref();
-    let tick = performance.now();
-    lagTimer = setInterval(() => {
-      const late = performance.now() - tick - 1000;
-      tick += late + 1000;
-      // A gap of minutes is the PC waking from sleep, not a stall.
-      if (late >= 1000 && late < 2 * MIN) capture({ e: "stall", where: "server", ms: late });
-    }, 1000);
-    lagTimer.unref();
+    stopStalls?.();
+    stopStalls = onLoopStall((stall) => capture({ e: "stall", where: "server", ms: stall.ms }));
     plan(FIRST_UPLOAD_MS);
   };
 
   const halt = () => {
     generation++;
     clearInterval(flushTimer);
-    clearInterval(lagTimer);
+    stopStalls?.();
+    stopStalls = undefined;
     clearTimeout(uploadTimer);
     active?.abort();
     session = undefined;

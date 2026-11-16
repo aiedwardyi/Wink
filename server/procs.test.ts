@@ -119,6 +119,17 @@ describe("execCli env", () => {
     writeFileSync(script, "console.log(process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? \"unset\");\n");
     expect(await run(["-p", "/usage"])).toBe(process.platform === "win32" ? "true" : "unset");
   });
+
+  it.runIf(process.platform === "win32")("gives a start with no PATHEXT the default one, so PowerShell launchers run an .exe in place", async () => {
+    writeFileSync(script, "console.log(process.env.PATHEXT ?? \"unset\");\n");
+    expect(await run(["-p", "/usage"])).toBe(".COM;.EXE;.BAT;.CMD");
+    expect(await run(["-p", "/usage"], { PATH: process.env.PATH, PathExt: ".EXE" })).toBe(".EXE");
+    const child = spawnCli(cli, [], { env: { PATH: process.env.PATH }, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += chunk));
+    await new Promise((resolve) => child.once("close", resolve));
+    expect(out.trim()).toBe(".COM;.EXE;.BAT;.CMD");
+  });
 });
 
 describe("spawnCli direct start", () => {

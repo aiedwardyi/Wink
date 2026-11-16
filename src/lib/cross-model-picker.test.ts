@@ -141,7 +141,7 @@ describe("picker catalogs", () => {
     expect(JSON.stringify(instance.models)).toBe(before);
   });
 
-  it("serves exactly the two Meta Muse models with the required labels", () => {
+  it("serves exactly the three Meta Muse models with the required labels", () => {
     const instance: InstanceInfo = {
       instanceId: "muse", driverKind: "museAgent", displayName: "Meta Muse", snapshot: { state: "available" },
       models: {
@@ -149,6 +149,7 @@ describe("picker catalogs", () => {
         options: [
           { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
           { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+          { id: "muse-ember-1.0", label: "Meta Muse Ember" },
           { id: "other-model", label: "Other" },
         ],
       },
@@ -159,10 +160,12 @@ describe("picker catalogs", () => {
     expect(rows[0]!.cells.map((cell) => cell.options[0]!.id)).toEqual([
       "muse-spark-1.3",
       "muse-spark-1.3-contributor",
+      "muse-ember-1.0",
     ]);
     expect(rows[0]!.cells.map((cell) => cell.options[0]!.label)).toEqual([
       "Meta Muse 1.3",
       "Meta Muse 1.3 Contributor",
+      "Meta Muse Ember",
     ]);
   });
 
@@ -452,7 +455,7 @@ describe("picker catalogs", () => {
     ]);
   });
 
-  it("offers Max above Extra High for Meta Muse and Contributor", () => {
+  it("offers the six CLI efforts for Meta Muse, Contributor and Ember", () => {
     const instance: InstanceInfo = {
       instanceId: "muse", driverKind: "museAgent", displayName: "Meta Muse", snapshot: { state: "available" },
       models: {
@@ -460,16 +463,17 @@ describe("picker catalogs", () => {
         options: [
           { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
           { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+          { id: "muse-ember-1.0", label: "Meta Muse Ember" },
         ],
       },
-      capabilities: { effortLevels: ["low", "medium", "high", "xhigh", "max"] },
+      capabilities: { effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"] },
     };
     const rows = pickerRows([instance], { instanceId: "muse", model: "muse-spark-1.3" });
     const row = rows[0]!;
     for (const cell of row.cells) {
-      expect(pickerEfforts(row, cell).map((option) => option.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(pickerEfforts(row, cell).map((option) => option.id)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     }
-    for (const model of ["muse-spark-1.3", "muse-spark-1.3-contributor"] as const) {
+    for (const model of ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-ember-1.0"] as const) {
       const current = { instanceId: "muse", model, mode: "pinned" as const, effort: "xhigh" as const };
       expect(movePicker(rows, current, "ArrowRight")).toEqual({ ...current, effort: "max" });
     }

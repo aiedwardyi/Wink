@@ -25,7 +25,7 @@ export function claudeAccountAdmission(status: { loggedIn: boolean; email?: unkn
   };
 }
 
-const SELECTOR = /^(?:ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_|CODEX_|OPENAI_|AZURE_|AWS_|BEDROCK_|VERTEX_|GOOGLE_APPLICATION_CREDENTIALS$|GOOGLE_CLOUD_|GOOGLE_GENAI_|CLOUD_ML_|CLAUDE_CONFIG_DIR$|CLAUDE_PROFILE$|CLAUDECODE$|CLAUDE_CODE_ENTRYPOINT$|OMB_|OGB_|ORBIT_|COMMS_)/;
+const SELECTOR = /^(?:ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_|CODEX_|OPENAI_|AZURE_|AWS_|BEDROCK_|VERTEX_|GOOGLE_APPLICATION_CREDENTIALS$|GOOGLE_CLOUD_|GOOGLE_GENAI_|CLOUD_ML_|CLAUDE_CONFIG_DIR$|CLAUDE_PROFILE$|CLAUDECODE$|CLAUDE_CODE_ENTRYPOINT$|GROK_HOME$|GROK_AUTH|XAI_|OMB_|OGB_|ORBIT_|COMMS_)/;
 
 export function accountLaunch(
   account: AccountContext | undefined,
@@ -36,12 +36,16 @@ export function accountLaunch(
   creditKey?: string,
 ): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!account) return { args, env: source };
-  if (driver !== "claudeAgent" && driver !== "codex") throw new Error("Unsupported account engine");
+  if (driver !== "claudeAgent" && driver !== "codex" && driver !== "grokAgent") throw new Error("Unsupported account engine");
   if (args.some((arg) => /^(?:--profile(?:=|$)|--with-api-key$|--api-key(?:=|$)|--oss$|--local-provider(?:=|$))/.test(arg) || (driver === "codex" && arg === "-p"))) throw new Error("Conflicting account launch selector");
   const env = { ...source };
   const grants = Object.keys(env).filter((key) => /^WINK_MCP_[A-Z0-9_]+$/.test(key));
   applyCredentialAllowlist(env, grants);
   for (const key of Object.keys(env)) if (SELECTOR.test(key.toUpperCase())) delete env[key];
+  if (driver === "grokAgent") {
+    env.GROK_HOME = account.home;
+    return { env, args };
+  }
   if (driver === "claudeAgent") {
     for (let i = 0; i < args.length; i++) {
       const settings = args[i] === "--settings" ? args[++i] : args[i].startsWith("--settings=") ? args[i].slice(11) : undefined;

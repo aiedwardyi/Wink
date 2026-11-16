@@ -24,9 +24,11 @@ import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView, warmCallViews } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { BoardView } from "@/components/BoardView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
 import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
+import { isForumSelection } from "@/lib/board";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
@@ -47,8 +49,10 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushSupported, webPushTarget } from "@/lib/web-push";
+import { answerOnThread } from "@/lib/live-call/active";
+import { webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
+import { isPhone, swipeBotIds } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -122,11 +126,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // cancelling them with md:, which would still emit a translate value and
   // turn the aside into a containing block for its fixed descendants (see
   // Sidebar.tsx's className comment).
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerWanted, setDrawerOpen] = useState(false);
   // The button is md:hidden: at desktop width its animation never runs, so an
   // ungated glow would sit flagged until a later resize replays it. Gating on
   // visibility consumes the arrival instead.
   const phoneMenuVisible = useIsPhone();
+  // rotating to the wide layout hides the drawer, so it must not keep a Back entry or a scrim there
+  const drawerOpen = phoneMenuVisible && drawerWanted;
   const menuArrival = useArrivalGlow(
     [...state.bots.filter((bot) => !bot.hidden), ...listedGroups(state.groups)]
       .filter((chat) => chat.id !== state.selectedId)
@@ -153,7 +159,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const joinedId = joinedRoomIdOf(state.selectedId);
-  const bot = group || joinedId ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
+  const forum = isForumSelection(state.selectedId);
+  const bot = group || joinedId || forum ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id]);
   const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
@@ -462,6 +469,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
 
   // A tapped push notification: its /?bot=&thread= url on a cold open, or a worker message when already open.
   const pushOpenTarget = useRef(webPushTarget(window.location.search));
+  const pushOpenCall = useRef(webPushCall(window.location.search));
   const hydratedBots = state.bots.length > 0;
   useEffect(() => {
     const target = pushOpenTarget.current;
@@ -469,7 +477,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
+    answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
   }, [dispatch, hydratedBots]);
+  useEffect(() => void answerOnThread(state.bots), [state.bots]);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
@@ -484,6 +494,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
+      answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
@@ -544,7 +555,18 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // asked for, and leaving the list up would hide it.
   useEffect(() => {
     setDrawerOpen(false);
-  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
+  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen, state.revealed]);
+
+  // A tapped notification shows its chat: the palette, model picker and message menu cover it everywhere,
+  // and on a phone the pane and Bot Details are sheets over it too.
+  useEffect(() => {
+    if (!state.revealed) return;
+    for (const cover of ["orbit:close-palette", "orbit:close-model-picker", "orbit:close-message-menu"]) window.dispatchEvent(new Event(cover));
+    if (!isPhone()) return;
+    closePane();
+    dispatch({ type: "toggleSettings", open: false });
+    dispatch({ type: "toggleInspector", open: false });
+  }, [state.revealed, dispatch]);
 
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
@@ -567,7 +589,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     Boolean(bot && state.inspectorOpen);
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
-  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
+  const swipeOrder = () => swipeBotIds(state.bots, state.groups, loadSidebarOrder(), bot?.id);
+  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef, swipeOrder);
   const closeDrawer = () => {
     setDrawerOpen(false);
     menuButtonRef.current?.focus();
@@ -656,6 +679,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
     add(Boolean(sidebarOverlay), `sidebar:${sidebarOverlay}`, () => window.dispatchEvent(new Event("orbit:close-sidebar-overlay")));
     add(state.settingsOpen, "settings", () => dispatch({ type: "toggleSettings", open: false }));
+    add(slotPanels.includes("show"), "pane", closePane);
     add(state.inspectorOpen, "inspector", () => dispatch({ type: "toggleInspector", open: false }));
     add(state.appSettingsOpen, "app-settings", () => dispatch({ type: "toggleAppSettings", open: false }));
     add(state.pluginsOpen, "plugins", () => dispatch({ type: "togglePlugins", open: false }));
@@ -759,21 +783,23 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
+      ) : forum ? (
+        <BoardView hidden={nativeViewOverlayOpen} />
       ) : joinedId ? (
-        <JoinedRoomView key={joinedId} roomId={joinedId} />
+        <JoinedRoomView key={joinedId} roomId={joinedId} hidden={nativeViewOverlayOpen} />
       ) : group && isTeamRoom(group) ? (
         <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-          <TeamRoomView key={group.id} group={group} />
+          <TeamRoomView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
           {watchPanel(nativeViewOverlayOpen)}
         </div>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-            <GroupView key={group.id} group={group} />
+            <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
             {watchPanel(nativeViewOverlayOpen)}
           </div>
         ) : (
-          <GroupView key={group.id} group={group} />
+          <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
         )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">

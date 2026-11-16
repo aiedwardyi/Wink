@@ -6,9 +6,9 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
-import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL } from "../shared/live-call.ts";
+import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, VOICE_SAID } from "../shared/live-call.ts";
 import type { AppConfig } from "./config.ts";
-import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
+import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -26,7 +26,8 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
-  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
+  const answered = vi.fn();
+  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered });
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -35,7 +36,7 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
-  return { dir, cfg, store, bot, fetch, post, sent };
+  return { dir, cfg, store, bot, fetch, post, sent, answered };
 }
 
 describe("call token", () => {
@@ -60,7 +61,7 @@ describe("call token", () => {
     const setup = h.sent().bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
-    expect(setup.systemInstruction.parts[0].text).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak only Korean, whatever language they use, never one word of another; match their politeness.");
     expect(setup.systemInstruction.parts[0].text).not.toContain("Switch only when");
     expect(setup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
@@ -71,7 +72,7 @@ describe("call token", () => {
     const setup = h.sent().bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Aoede");
     const brief = setup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(brief).toContain("Speak only Korean, whatever language they use, never one word of another; match their politeness.");
     expect(brief).not.toContain("Switch only when");
   });
 
@@ -109,7 +110,7 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" }), expect.objectContaining({ name: "hush" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
@@ -158,7 +159,7 @@ describe("call token", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
     expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
-    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; \"hey\" or your name wakes you.");
+    expect(brief).toContain("Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -217,7 +218,7 @@ describe("call token", () => {
   });
 
   it("order is the user's request to the voice, never its offer", () => {
-    const order = LIVE_TOOLS[0]!.parameters.properties.order!.description;
+    const order = LIVE_TOOLS[0]!.parameters!.properties.order!.description;
     expect(order).toContain("as they would say it to you");
     expect(order).toContain("never your offer or reply");
   });
@@ -232,18 +233,19 @@ describe("call token", () => {
     expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
   });
 
-  it("brief answers English or Korean in kind, any other language in the app language", async () => {
+  it("brief speaks only the app language, and any other language is a mis-hear", async () => {
     const h = harness();
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("When they speak English or Korean, answer in that language");
-    expect(brief).toContain("Any other language, Japanese too, gets English, never a third language.");
+    expect(brief).toContain("Speak only English, whatever language they use, never one word of another.");
+    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again. Only a [Wink] line changes the language you speak.");
+    expect(brief).not.toContain("answer in that language");
     expect(brief).not.toContain("Switch only when the person clearly asks");
   });
 
   it("brief never names the app Orbit", async () => {
     const h = harness();
-    const bot = h.store.createBot({ name: "Teacher", description: "your project teacher for Orbit. Vault: C:\Orbit-extras\notes" }, { seedMessages: false });
+    const bot = h.store.createBot({ name: "Teacher", description: "your project teacher for Orbit. Vault: C:\Orbit-docs\notes" }, { seedMessages: false });
     h.store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "is OpenMaus or MausBot in the Orbit build?" });
     await h.post("token", {}, bot.id);
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
@@ -273,6 +275,16 @@ describe("call token", () => {
     expect(cards[0]!.secret).toMatchObject({ target: "geminiApiKey", helpUrl: "https://aistudio.google.com/apikey" });
     expect(isCallKeyCard(cards[0]!.secret!)).toBe(true);
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a minted token", {}, true],
+    ["no key", { key: undefined }, false],
+    ["Google's refusal", { reply: () => Response.json({ error: { message: "quota" } }, { status: 429 }) }, false],
+  ])("stops a ringing bot call only on %s", async (_case, opts, stops) => {
+    const h = harness(opts);
+    await h.post("token");
+    expect(h.answered.mock.calls).toEqual(stops ? [[h.bot.id]] : []);
   });
 
   it("passes Google's quota 429 through", async () => {
@@ -309,6 +321,12 @@ describe("brief caps", () => {
     expect(estimateContextTokens([{ text: tail }])).toBeLessThanOrEqual(CHAT_TAIL_TOKENS + 10);
     expect(tail.endsWith(`You: line 299 ${"word ".repeat(20)}`)).toBe(true);
     expect(tail).not.toContain("line 0 ");
+  });
+
+  it("T3 one reply longer than the budget is clipped, not dropped", () => {
+    const tail = chatTail([{ role: "user", text: "what did you do" }, { role: "assistant", text: `Fixed the login bug. ${"word ".repeat(4_000)}` }], "Ed");
+    expect(tail.startsWith("You: Fixed the login bug. word")).toBe(true);
+    expect(estimateContextTokens([{ text: tail }])).toBeLessThanOrEqual(CHAT_TAIL_TOKENS + 10);
   });
 
   it("puts capped MEMORY.md in the brief", async () => {
@@ -360,6 +378,52 @@ describe("brief STATUS", () => {
   });
 });
 
+describe("brief model line", () => {
+  it("names the chip's model even when the chat says another", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "what model r u" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "My setup says I'm Claude Haiku 5.5." });
+    const bot = { ...h.bot, busy: true, modelSelection: { instanceId: "claude", model: "claude-haiku-5-5" }, pendingModelSelection: { instanceId: "codex", model: "gpt-6.1-sol" } };
+    const catalog = { claude: [{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" }], codex: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] } as Record<string, { id: string; label: string }[]>;
+    const brief = await buildBrief(bot, h.store.activePath(bot.threadId), "User", 0, "en", undefined, (id) => ({ models: { options: catalog[id] ?? [] } }));
+    const [chat, status] = brief.split("STATUS:");
+    expect(chat).toContain("I'm Claude Haiku 5.5");
+    expect(status).toContain("GPT-6.1 Sol");
+    expect(status).not.toContain("Haiku");
+    expect(brief).toContain("Never mention Gemini, a helper or a voice model.");
+  });
+});
+
+describe("T2 the voice's own words are never facts", () => {
+  it("the next call's brief marks them unverified, and only them", async () => {
+    const h = harness();
+    const call = { id: "c-0123456789ab" };
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Did the deploy go out?", call });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, we confirmed it.", engine: "geminiAgent", call: { ...call, voice: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "and the tests?" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "All 40 pass." });
+    const brief = await buildBrief(h.bot, h.store.activePath(h.bot.threadId), "Ed", 0);
+    const chat = brief.split("RECENT CHAT:\n")[1]!.split("\n\nSTATUS:")[0]!;
+    expect(chat).toContain(`You: ${VOICE_SAID} Yes, we confirmed it.`);
+    expect(chat).toContain("Ed: Did the deploy go out?");
+    expect(chat).toContain("You: All 40 pass.");
+    expect(brief).toContain("A RECENT CHAT line marked unverified was only said on a call: never proof.");
+  });
+
+  it("the bot's next turn reads them as the voice's, not its own", () => {
+    const call = { id: "c-0123456789ab" };
+    const rows = [
+      { id: "l1", role: "user", kind: "text", text: "Did the deploy go out?", call, at: 1 },
+      { id: "l2", role: "bot", kind: "text", text: "Yes, we confirmed it.", call: { ...call, voice: true }, at: 1 },
+    ] as Parameters<typeof callLinesSinceLastUserTurn>[0];
+    const [block] = callLinesSinceLastUserTurn(rows, new Set());
+    expect(block).toContain("Voice: Yes, we confirmed it.");
+    expect(block).toContain("unverified and never proof");
+    expect(block).not.toContain("Treat them as part of this chat");
+    expect(block).not.toContain("You: ");
+  });
+});
+
 describe("call context on sends", () => {
   it("a call turn reads the lines said before it, skipping its own row and a line written after it", () => {
     const call = { id: "c-0123456789ab" };
@@ -372,7 +436,7 @@ describe("call context on sends", () => {
       { id: "l3", role: "user", kind: "text", text: "Yes.", call, at },
     ] as Parameters<typeof callLinesSinceLastUserTurn>[0];
     const [block] = callLinesSinceLastUserTurn(rows, new Set(["o"]));
-    expect(block!.split("\n").slice(1)).toEqual(["Person: Can you check the build?", "You: Want me to check it?", "Person: Yes."]);
+    expect(block!.split("\n").slice(1)).toEqual(["Person: Can you check the build?", "Voice: Want me to check it?", "Person: Yes."]);
     expect(block).not.toContain("typed before the call");
   });
 });
@@ -391,6 +455,20 @@ describe("call lines and end", () => {
     ]);
   });
 
+  it("K1 an app notice keeps the voice's look but never reaches the bot or the next brief", async () => {
+    const h = harness();
+    const callId = "c-0123456789ab";
+    await h.post("lines", { callId, lines: [{ who: "user", text: "Deploy it." }, { who: "voice", text: "Okay, want me to deploy?" }, { who: "notice", text: "보내지 않음: 배포해 줘 (시간 초과)" }] });
+    const rows = h.store.activePath(h.bot.threadId);
+    expect(rows.at(-1)).toMatchObject({ role: "bot", kind: "text", engine: "geminiAgent", call: { id: callId, voice: true, notice: true } });
+    const [block] = callLinesSinceLastUserTurn(rows, new Set());
+    expect(block).toContain("Voice: Okay, want me to deploy?");
+    expect(block).not.toContain("배포해 줘");
+    const brief = await buildBrief(h.bot, rows, "Ed", 0);
+    expect(brief).toContain("Okay, want me to deploy?");
+    expect(brief).not.toContain("배포해 줘");
+  });
+
   it("400s a bad call id", async () => {
     expect((await harness().post("lines", { callId: "nope", lines: [{ who: "user", text: "hi" }] })).status).toBe(400);
   });
@@ -403,6 +481,13 @@ describe("call lines and end", () => {
     expect((await h.post("end", { callId: "c-0123456789ab", stats: full })).data).toEqual({ ok: true });
     const lines = readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
+  });
+
+  it("the stats line names the voice the call used", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { callId } = (await h.post("token")).data;
+    await h.post("end", { callId, stats: { ms: 1_000 } });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim())).toMatchObject({ callId, voice: "Alnilam" });
   });
 });
 

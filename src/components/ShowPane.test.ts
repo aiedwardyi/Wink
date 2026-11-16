@@ -61,6 +61,29 @@ it("fits an image in the pane", async () => {
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("signups.png");
 });
 
+it("shows a text file as text", async () => {
+  vi.mocked(fetch).mockResolvedValue(new Response("test4\n<b>line two</b>", { status: 200 }));
+  await render({ item: item("C:\\w\\test.txt", "text"), hidden: false });
+  await until(() => Boolean(host.querySelector(".show-stage[data-ready] pre")));
+  const pre = host.querySelector(".show-stage[data-ready] pre")!;
+  expect(pre.textContent).toBe("test4\n<b>line two</b>");
+  expect(pre.children).toHaveLength(0);
+  expect(fetch).toHaveBeenCalledWith(src("C:\\w\\test.txt"));
+  expect(host.querySelector(".show-frame")!.getAttribute("data-kind")).toBe("text");
+  expect(host.querySelector(".show-frame-name")?.textContent).toBe("test.txt");
+});
+
+it.each([
+  ["an announced size", () => new Response("x", { status: 200, headers: { "content-length": "1000001" } })],
+  ["no announced size", () => new Response("x".repeat(1_000_001), { status: 200 })],
+])("offers Open for a text file too big for the pane, with %s", async (_, reply) => {
+  vi.mocked(fetch).mockResolvedValue(reply());
+  await render({ item: item("C:\\w\\huge.txt", "text"), hidden: false });
+  await until(() => Boolean(host.querySelector("[data-show-fallback]")));
+  expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
+  expect(host.querySelector("pre")).toBeNull();
+});
+
 it("pages a PDF one page at a time", async () => {
   await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("1 / 8"));
@@ -205,13 +228,13 @@ const probe = async (read: () => void) => {
 };
 
 it("has no Check tab without a check", async () => {
-  await render({ item: item("C:\\w\\a.png", "image"), source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
   expect(tabs()).toEqual(["Show", "Media", "Map"]);
 });
 
 it("renders the Map tab in Korean with the surrounding labels", async () => {
   await act(async () => applyLocale("ko"));
-  await render({ item: item("C:\\w\\a.png", "image"), source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
   expect(tabs()).toEqual(["보기", "미디어", "맵"]);
 });
 
@@ -222,7 +245,7 @@ it("the checker opens on Check, and Show keeps its file", async () => {
   let check: string | null = null;
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
-  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
   expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
@@ -235,7 +258,7 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
   const shown = item("C:\\w\\a.png", "image");
   await act(async () => showItem(shown));
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
-  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
   const img = host.querySelector("img")!;
   const checker = host.querySelector(".verify-watch-frame:not(.show-frame)")!;
   await act(async () => tab("Show").click());
@@ -244,13 +267,13 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
   await probe(() => { check = useCheckThread(); watching = Boolean(useVerifyWatch()); });
   expect(check).toBeNull();
   expect(watching).toBe(true);
-  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, hidden: false });
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
   expect(selected()).toBe("Show");
   expect(host.querySelector("aside")!.dataset.tab).toBe("show");
   expect(host.querySelector("img")).toBe(img);
   expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
   await act(async () => tab("Check").click());
-  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
   expect(selected()).toBe("Check");
   expect(host.querySelector("img")).toBe(img);
   expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
@@ -258,7 +281,7 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
-  await render({ item: item("C:\\w\\a.png", "image"), card: done, source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), card: done, source, botId: "b1", hidden: false });
   expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
@@ -295,9 +318,9 @@ it("hides only Show and Check behind the other tabs, never the Media list", () =
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
-  await render({ item: item("C:\\w\\a.png", "image"), card: running, source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), card: running, source, botId: "b1", hidden: false });
   expect(tabs()).toEqual(["Show", "Media", "Map"]);
-  await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, botId: "b1", hidden: false });
   expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
 });
 

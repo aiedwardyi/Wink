@@ -347,7 +347,7 @@ it("moves Main after confirmation and clears the soft highlight after 600ms with
   expect(q('[data-account-row="claude"] [data-main-check]')).toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(601); });
   expect(q("[data-usage-switched]")).toBeNull();
-  expect(css).toContain("usage-main-in 200ms");
+  expect(css).toContain("usage-main-in var(--motion-moderate) var(--ease-standard)");
   expect(css).toContain("usage-switch-highlight 600ms");
   expect(rule(".usage-control[data-use]")).toContain("-webkit-tap-highlight-color: transparent");
   expect(rule(".usage-control[data-use]")).toContain("animation: none");

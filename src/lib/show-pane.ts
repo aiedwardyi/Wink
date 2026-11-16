@@ -1,13 +1,19 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { z } from "zod";
 import type { Message } from "@/state/store";
 import { localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
+export type PaneKind = ShowKind | "text";
+
+/** What a click shows in the pane: the kinds that open on their own, and plain text. */
+export const paneKind = (path: string): PaneKind | null => showKind(path) ?? (/[^\\/]\.txt$/i.test(path) ? "text" : null);
+
 export interface ShowItem {
   threadId: string;
   path: string;
-  kind: ShowKind;
+  kind: PaneKind;
   /** a room file's own URL; a bot's file goes through linked-file */
   src?: string;
 }
@@ -31,7 +37,29 @@ const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
-export function showItem(next: ShowItem) {
+export const PANE_TAB_KEY = "omb-pane-tab";
+const paneTab = z.union([z.enum(["media", "map"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text"]), src: z.string().optional() })]);
+type PaneTab = z.infer<typeof paneTab>;
+const picked = new Map<string, PaneTab>();
+
+function picks(): Record<string, PaneTab> {
+  try {
+    return z.record(z.string(), paneTab).catch({}).parse(JSON.parse(globalThis.localStorage?.getItem(PANE_TAB_KEY) ?? "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function pick(threadId: string, tab: PaneTab) {
+  picked.set(threadId, tab);
+  try {
+    globalThis.localStorage?.setItem(PANE_TAB_KEY, JSON.stringify({ ...picks(), [threadId]: tab }));
+  } catch {
+    // Storage blocked: the pick lasts until the app closes.
+  }
+}
+
+function openItem(next: ShowItem) {
   last.set(next.threadId, next);
   if (!media && !checking && !mapping && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
   showing = next;
@@ -41,12 +69,22 @@ export function showItem(next: ShowItem) {
   emit();
 }
 
-export function showMedia(threadId: string) {
+export function showItem(next: ShowItem) {
+  pick(next.threadId, next);
+  openItem(next);
+}
+
+function openMedia(threadId: string) {
   if (media === threadId) return;
   media = threadId;
   checking = null;
   mapping = null;
   emit();
+}
+
+export function showMedia(threadId: string) {
+  pick(threadId, "media");
+  openMedia(threadId);
 }
 
 /** Fronts the Check tab; the checker itself lives in verify-watch. */
@@ -71,12 +109,14 @@ export function closeShow() {
 
 export const lastShown = (threadId: string) => last.get(threadId);
 
-/** The header button: shuts this chat's pane, or opens what it last showed, else Media. */
-export function togglePane(threadId: string) {
+/** The header button: shuts this chat's pane, or opens the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map`; a room's runs on each person's own PC. */
+export function togglePane(threadId: string, map?: "idle" | "live") {
   if (showing?.threadId === threadId || media === threadId || mapping === threadId) return closeShow();
-  const was = last.get(threadId);
-  if (was) showItem(was);
-  else showMedia(threadId);
+  const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
+  if (tab === "map" && map) openMap(threadId);
+  else if (tab === "map") openMedia(threadId);
+  else if (tab === "media") openMedia(threadId);
+  else openItem(last.get(threadId) ?? tab);
 }
 
 export function useShowItem(): ShowItem | null {
@@ -93,7 +133,7 @@ export function useCheckThread(): string | null {
   return useSyncExternalStore(subscribe, () => checking, () => null);
 }
 
-export function showMap(threadId: string) {
+function openMap(threadId: string) {
   if (mapping === threadId) return;
   mapping = threadId;
   checking = null;
@@ -101,11 +141,35 @@ export function showMap(threadId: string) {
   emit();
 }
 
+export function showMap(threadId: string) {
+  pick(threadId, "map");
+  openMap(threadId);
+}
+
 export function useMapThread(): string | null {
   return useSyncExternalStore(subscribe, () => mapping, () => null);
 }
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
+
+/** Replies in a turn whose bot already put a picture in the chat, so their file links don't draw it again. */
+export function picturedReplies(messages: readonly Message[]): Set<string> {
+  const pictured = new Set<string>();
+  let shown = new Set<string>();
+  let replies: Message[] = [];
+  const close = () => {
+    for (const reply of replies) if (shown.has(reply.from?.botId ?? "")) pictured.add(reply.id);
+    shown = new Set();
+    replies = [];
+  };
+  for (const message of messages) {
+    if (message.role === "user") close();
+    else if (message.kind === "screen" && message.image) shown.add(message.from?.botId ?? "");
+    else if (message.kind === "text") replies.push(message);
+  }
+  close();
+  return pictured;
+}
 
 export interface AutoShow {
   threadId?: string;
@@ -122,7 +186,7 @@ export interface AutoShowStep {
 
 const turnOf = (messages: readonly Message[]) => messages.findLast(message => message.role === "user")?.id ?? "";
 
-/** Which file opens on its own: the newest one a bot hands over in this chat while it is open, unless closed this turn. */
+/** Which file opens on its own: the newest page or PDF a bot hands over in this chat while it is open, unless closed this turn. Pictures open on a click. */
 export function autoShowStep(state: AutoShow, threadId: string, messages: readonly Message[], closed: boolean): AutoShowStep {
   if (state.threadId !== threadId) state = { threadId, seen: null };
   if (closed) state = { ...state, closedTurn: turnOf(messages) };
@@ -133,7 +197,7 @@ export function autoShowStep(state: AutoShow, threadId: string, messages: readon
   for (let i = messages.length - 1; i >= 0 && !state.seen.has(messages[i]!.id); i--) {
     const message = messages[i]!;
     seen.add(message.id);
-    if (!path && message.role === "bot" && message.kind === "text" && message.text) path = showableLinks(message.text).at(-1);
+    if (!path && message.role === "bot" && message.kind === "text" && message.text) path = showableLinks(message.text).findLast((link) => showKind(link) !== "image");
   }
   const next = { ...state, seen };
   return { state: next, item: path && state.closedTurn !== turnOf(messages) ? { threadId, path, kind: showKind(path)! } : null };
@@ -152,6 +216,6 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
     if (!threadId) return;
     const step = autoShowStep(state.current, threadId, messages, closed);
     state.current = step.state;
-    if (step.item && free && !onMedia && !onMap) showItem(step.item);
+    if (step.item && free && !onMedia && !onMap) openItem(step.item);
   }, [threadId, messages, shown, free, onMedia, onMap]);
 }

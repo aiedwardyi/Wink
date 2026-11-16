@@ -12,6 +12,8 @@ export default defineConfig({
     target: "chrome140",
     modulePreload: { polyfill: false },
   },
+  // iife workers inline their dynamic imports: the Map highlighter would carry every shiki grammar
+  worker: { format: "es" },
   test: {
     environment: "node",
     include: [

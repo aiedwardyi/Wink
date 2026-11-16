@@ -15,7 +15,9 @@ import "./ShowPane.css";
 
 const ShowPdf = lazy(() => import("./ShowPdf"));
 const MapPane = lazy(() => import("./MapPane").then(module => ({ default: module.MapPane })));
-const ICON = { image: ImageIcon, pdf: FileText, page: Globe };
+const ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText };
+// Past this a text file is a log to open in an editor, not something to read in the pane.
+const TEXT_MAX = 1_000_000;
 
 interface ShowPaneProps {
   item?: ShowItem;
@@ -72,7 +74,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
           <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
           {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
-          {source && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
+          {source && botId && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
@@ -83,7 +85,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
         ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
         : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
       {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
-      {tab === "map" && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
+      {tab === "map" && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons.
@@ -99,6 +101,26 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const [pageSrc, setPageSrc] = useState<string>();
+  const [text, setText] = useState<string>();
+
+  useEffect(() => {
+    if (item.kind !== "text") return;
+    let alive = true;
+    fetch(src)
+      .then(async (res) => {
+        if (!res.ok || Number(res.headers.get("content-length")) > TEXT_MAX) {
+          void res.body?.cancel();
+          throw new Error("unshowable");
+        }
+        const body = await res.text();
+        if (body.length > TEXT_MAX) throw new Error("unshowable");
+        if (!alive) return;
+        setText(body);
+        setReady(true);
+      })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [item.kind, src]);
 
   // Resolve the page's grant in the app; the opaque frame cannot authenticate itself.
   useEffect(() => {
@@ -136,7 +158,9 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
             ? <img src={src} alt={name} onLoad={() => setReady(true)} onError={() => setFailed(true)} />
             : item.kind === "pdf"
               ? <Suspense fallback={null}><ShowPdf src={src} onReady={() => setReady(true)} onFail={() => setFailed(true)} /></Suspense>
-              : pageSrc && <iframe key={loads} src={pageSrc} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
+              : item.kind === "text"
+                ? text !== undefined && <pre>{text}</pre>
+                : pageSrc && <iframe key={loads} src={pageSrc} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
       </div>
     </div>
   );

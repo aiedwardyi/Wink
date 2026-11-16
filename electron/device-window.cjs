@@ -71,10 +71,11 @@ function teamRelayBase(raw) {
 }
 
 // Only the baked team base: this PC's own relay base is a bearer-writable setting. No trim or case folding.
+// /pair?g=1 goes straight to the Google sign-in page, or to the app when this browser is already signed in.
 function relayDeviceUrl(rawHost, teamRelay) {
   const base = teamRelayBase(teamRelay);
   if (!base || Object.prototype.toString.call(rawHost) !== "[object String]" || !rawHost.endsWith(`.${base}`)) return "";
-  return RELAY_LABEL_RE.test(rawHost.slice(0, -base.length - 1)) ? `https://${rawHost}/` : "";
+  return RELAY_LABEL_RE.test(rawHost.slice(0, -base.length - 1)) ? `https://${rawHost}/pair?g=1` : "";
 }
 
 function deviceWindowTitle(rawName, host) {
@@ -266,6 +267,8 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
     }
     // not a load: main routes the 403 to refused(), and this commit can land on either side of it
     if (code === 403 && !String(target).startsWith("data:")) return;
+    // Tailscale Serve answers an empty 502 while Wink is closed on that PC, and it commits as a blank page; 401 belongs to the link page
+    if (code >= 400 && code !== 401 && !String(target).startsWith("data:")) return fail(`answered ${code}`);
     showingFailure = false;
     cancel();
     retries = 0;

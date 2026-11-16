@@ -24,7 +24,7 @@ import { probeLocalInjects } from "./drivers/local-inject.ts";
 import { PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import type { Message } from "./store.ts";
 import { lastUserInstruction } from "./task-recovery-flush.ts";
-import { REPLY_MARKER, buildResumeFallback, buildTurnContext } from "./turn-context.ts";
+import { REPLY_MARKER, buildResumeFallback, buildTurnContext, replayMessageText } from "./turn-context.ts";
 import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import { readContextCompaction, type ContextCompactionV1 } from "../shared/context-compaction.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
@@ -181,6 +181,25 @@ describe("provider-neutral context compaction", () => {
     expect(summarize.mock.calls.map(([text]) => text).join("\n")).toContain(
       `\nAssistant: ${engineSummary}Checking the logs.`,
     );
+  });
+
+  it("leaves a restated row out of the replay", async () => {
+    const ready = await prepareModelContext({
+      messages: [
+        message("u1", "morning summary"),
+        message("b1", "Cleanup is live.", { role: "bot", summarized: true, restated: true }),
+        message("b2", "Cleanup is live. Your question is in your box.", { role: "bot" }),
+      ],
+      contextWindow: 8_192,
+      taskRecordText: "Goal: summary",
+    });
+    expect(ready).toMatchObject({
+      status: "ready",
+      transcript: [
+        { role: "user", text: "morning summary" },
+        { role: "assistant", text: "Cleanup is live. Your question is in your box." },
+      ],
+    });
   });
 
   it("prefixes a summarized note in the room replay and compaction prompt", async () => {
@@ -2388,6 +2407,33 @@ describe("planCompaction", () => {
     if (fits.needed || fits.status !== "fits") throw new Error("expected a fitting plan");
     expect(fits.transcript).toHaveLength(6);
   });
+
+  it("buys many turns with one summary once the token budget binds", async () => {
+    const messages: Message[] = [];
+    const push = (patch: Partial<Message> & { text?: string }) => {
+      const row = message(`m${messages.length + 1}`, patch.text ?? "", { parentId: messages.at(-1)?.id ?? null, ...patch });
+      messages.push(row);
+    };
+    const summarizedAt: number[] = [];
+    for (let turn = 1; turn <= 60; turn++) {
+      push({ text: `question ${turn} ${"word ".repeat(40)}` });
+      const prepared = await prepareModelContext({
+        messages,
+        contextWindow: 128_000,
+        taskRecordText: "Goal: long answers",
+        summarize: async () => `SUMMARY\n${"fact ".repeat(4_000)}`,
+      });
+      if (prepared.status !== "ready") throw new Error(prepared.status);
+      if (prepared.compaction) {
+        summarizedAt.push(turn);
+        push({ role: "bot", kind: "compaction", compaction: prepared.compaction });
+      }
+      push({ role: "bot", text: `answer ${turn} ${"x ".repeat(6_000)}` });
+    }
+    const gaps = summarizedAt.slice(1).map((turn, index) => turn - summarizedAt[index]!);
+    expect(gaps.length).toBeGreaterThan(0);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(8);
+  });
 });
 
 describe("summary grace context", () => {
@@ -2746,19 +2792,20 @@ describe("typed values block", () => {
 
   it("takes the block's room from the tail only when the chat has typed values", () => {
     const chat = (text: string) => Array.from({ length: 40 }, (_, index) => [
-      message(`m${index * 2}`, `${text}\n\n${"detail ".repeat(1_200)}`),
-      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(1_200)}`, { role: "bot" }),
+      message(`m${index * 2}`, `${text}\n\n${"detail ".repeat(350)}`),
+      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(350)}`, { role: "bot" }),
     ]).flat();
-    const valued = planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 200_000 });
-    const plain = planCompaction({ messages: chat("the budget is unset"), contextWindow: 200_000 });
+    const valued = planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 128_000 });
+    const plain = planCompaction({ messages: chat("the budget is unset"), contextWindow: 128_000 });
 
     if (!valued.needed || !plain.needed) throw new Error("expected plans");
     expect(plain).toMatchObject({ valuesRoom: 0, typedLines: [] });
     expect(valued.valuesRoom).toBe(2_400);
     expect(valued.typedLines.length).toBeGreaterThan(0);
-    expect(estimateContextTokens(plain.tail)).toBeGreaterThan(plain.budgetTokens - plain.summaryBudget - 2_400);
-    expect(estimateContextTokens(valued.tail)).toBeLessThanOrEqual(valued.budgetTokens - valued.summaryBudget - 2_400);
-    expect(plain.tail.length - valued.tail.length).toBe(2);
+    const tailRoom = (plan: typeof plain) => Math.floor((plan.budgetTokens - plan.summaryBudget - 2_400) * 0.4);
+    expect(estimateContextTokens(plain.tail)).toBeGreaterThan(tailRoom(plain));
+    expect(estimateContextTokens(valued.tail)).toBeLessThanOrEqual(tailRoom(valued));
+    expect(plain.tail.length).toBeGreaterThan(valued.tail.length);
     expect(planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 16_384 })).toMatchObject({ needed: true, valuesRoom: 327 });
   });
 
@@ -2776,5 +2823,75 @@ describe("typed values block", () => {
     expect(summarize.mock.calls[0]![0]).toContain("<previous_summary>\ngood summary G\n</previous_summary>");
     expect(summarize.mock.calls[0]![0]).not.toContain(TYPED_VALUES_HEADER);
     expect(result.status === "ready" && result.compaction.summary).toBe(`repaired text\n\n${BLOCK}`);
+  });
+});
+
+describe("replay engine metadata", () => {
+  it.each([false, true])("keeps the engine without changing prepared text (speakers %s)", async (includeSpeakers) => {
+    const from = { botId: "alpha", name: "Alpha", color: "blue" };
+    const messages = [message("u1", "Make a dog image"), message("b2", "Generated a dog image", { role: "bot", engine: "antigravityAgent", from })];
+    const input = { messages, contextWindow: 200_000, taskRecordText: "", includeSpeakers };
+    const ready = await prepareModelContext(input);
+    const plain = await prepareModelContext({ ...input, messages: messages.map(({ engine: _engine, ...row }) => row) });
+    expect(ready.status).toBe("ready");
+    expect(plain.status).toBe("ready");
+    if (ready.status !== "ready" || plain.status !== "ready") return;
+    expect(ready.transcript.map((row) => row.text)).toEqual(plain.transcript.map((row) => row.text));
+    expect(ready.estimatedTokens).toBe(plain.estimatedTokens);
+    expect(ready.transcript[1]).toMatchObject({ engine: "antigravityAgent" });
+    const turn = buildTurnContext({ text: "Who made it?", transcript: ready.transcript, rewound: false, fresh: true, replaysNatively: false, driverKind: "museAgent" });
+    expect(turn.turnText).toContain("Assistant (on Gemini):");
+  });
+
+  it("tags only the reading bot's earlier-engine group lines", async () => {
+    const alpha = { botId: "alpha", name: "Alpha", color: "blue" };
+    const other = { ...alpha, botId: "other", name: "Other" };
+    const ready = await prepareModelContext({
+      messages: [
+        message("u1", "Make a dog image"),
+        message("b2", "Generated a dog image", { role: "bot", from: alpha, engine: "antigravityAgent" }),
+        message("b3", "Other reply", { role: "bot", from: other, engine: "antigravityAgent" }),
+        message("b4", "Current reply", { role: "bot", from: alpha, engine: "museAgent" }),
+        message("b5", "Legacy reply", { role: "bot", from: alpha }),
+      ],
+      contextWindow: 200_000, taskRecordText: "", includeSpeakers: true, userName: "Edward",
+    });
+    expect(ready.status).toBe("ready");
+    if (ready.status !== "ready") return;
+    const render = (driverKind: string) => ready.transcript.map((row) => replayMessageText(row, driverKind, "alpha")).join("\n");
+    expect(render("museAgent")).toBe("Edward: Make a dog image\nAlpha (on Gemini): Generated a dog image\nOther: Other reply\nAlpha: Current reply\nAlpha: Legacy reply");
+    const before = structuredClone(ready.transcript);
+    expect(ready.transcript.map((row) => replayMessageText(row, row.engine ?? "museAgent", "alpha"))).toEqual(ready.transcript.map((row) => row.text));
+    expect(ready.transcript).toEqual(before);
+  });
+
+  it("keeps summary prompts and records unchanged while preserving tail engines", async () => {
+    const messages = longHistory(205).map((row) => row.role === "bot" ? { ...row, engine: "antigravityAgent" } : row);
+    const prepare = async (rows: Message[]) => {
+      const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nEarlier work retained.");
+      const ready = await prepareModelContext({ messages: rows, contextWindow: 2_048, taskRecordText: "Goal: release", summarize });
+      return { ready, summarize };
+    };
+    const tagged = await prepare(messages);
+    const plain = await prepare(messages.map(({ engine: _engine, ...row }) => row));
+    expect(tagged.summarize).toHaveBeenCalled();
+    expect(tagged.summarize.mock.calls).toEqual(plain.summarize.mock.calls);
+    expect(tagged.ready.status).toBe("ready");
+    expect(plain.ready.status).toBe("ready");
+    if (tagged.ready.status !== "ready" || plain.ready.status !== "ready") return;
+    expect(tagged.ready.compaction).toEqual(plain.ready.compaction);
+    expect(tagged.ready.transcript.map((row) => row.text)).toEqual(plain.ready.transcript.map((row) => row.text));
+    expect(tagged.ready.transcript[0]?.engine).toBeUndefined();
+    expect(tagged.ready.transcript.slice(1).filter((row) => row.role === "assistant").every((row) => row.engine === "antigravityAgent")).toBe(true);
+    expect(tagged.ready.transcript.some((row) => row.engine === "antigravityAgent")).toBe(true);
+    const reused = await prepareModelContext({
+      messages: [...messages, compactionMessage("c206", "m204", tagged.ready.compaction!)],
+      contextWindow: 2_048, taskRecordText: "Goal: release",
+    });
+    expect(reused.status).toBe("ready");
+    if (reused.status === "ready") {
+      expect(reused.transcript).toEqual(tagged.ready.transcript);
+      expect(reused.compaction).toBeUndefined();
+    }
   });
 });

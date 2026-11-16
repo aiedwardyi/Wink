@@ -6,6 +6,8 @@ import type { ProviderRegistry } from "./harness/registry.ts";
 import type { BotRecord, Store } from "./store.ts";
 
 export const SIGNED_OUT = "This account is signed out. Sign in again, then send your message.";
+export const SIGN_IN_UNCONFIRMED = "This account's sign-in isn't confirmed yet.";
+export const cliMissing = (engine: string) => `${engine} isn't installed or isn't answering on this PC.`;
 
 export class BotAccounts {
   private readonly accounts: AccountService;
@@ -28,7 +30,7 @@ export class BotAccounts {
     if (!accountId) {
       if (this.accounts.drains[selection.instanceId]) throw new AccountError("This account is draining. Use Set as Main on the Usage page");
       if (this.accounts.get(selection.instanceId)) throw new AccountError("Use Set as Main on the Usage page before starting this engine");
-      if (this.registry.accountBlocked(selection.instanceId)) throw new AccountError(SIGNED_OUT);
+      if (this.registry.accountBlocked(selection.instanceId)) throw new AccountError(this.blocked(selection.instanceId));
       return selection;
     }
     const instance = this.validate(accountId, selection);
@@ -94,7 +96,7 @@ export class BotAccounts {
     const account = this.accounts.list().find((row) => row.id === id);
     if (!account) throw new AccountError("Unknown account", 404);
     if (!this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections", 409, "main-unavailable");
-    for (const bot of this.store.bots) {
+    for (const bot of this.visibleBots()) {
       for (const selection of this.selections(bot)) if (selection.instanceId === account.of) this.validate(id, selection, bot);
     }
     return this.accounts.setDefault(account.of, id);
@@ -125,12 +127,17 @@ export class BotAccounts {
     const destination = this.accounts.list().find((row) => row.id === destinationId);
     if (!source || !destination || id === destinationId || source.of !== destination.of) throw new AccountError("Choose a different account of this profile by id", 400);
     if (!this.available(destinationId)) throw new AccountError("The destination account is unavailable or draining");
-    for (const bot of this.store.bots) {
+    for (const bot of this.visibleBots()) {
       for (const selection of this.selections(bot)) {
         if ((this.accounts.defaultFor(selection.instanceId) ?? selection.instanceId) === id) this.validate(destinationId, selection);
       }
     }
     return { of: destination.of, accountId: destinationId };
+  }
+
+  // Hidden bots never block Main: the user cannot see them, and resolve() refuses one un-hidden on a missing model.
+  private visibleBots() {
+    return this.store.bots.filter((bot) => !bot.hidden);
   }
 
   private selections(bot: BotRecord) {
@@ -148,10 +155,18 @@ export class BotAccounts {
     return !this.accounts.drains[id] && (!account || account.state === "ready") && this.registry.accountAvailable(id);
   }
 
+  // Same order as the Usage board: a blocked account is only signed out once its CLI answers and its sign-in was checked.
+  private blocked(id: string) {
+    const account = this.accounts.get(id);
+    const of = account?.of ?? id;
+    if (this.registry.cliMissing(id) || this.registry.cliMissing(of)) return cliMissing(this.registry.get(of)?.driverKind === "codex" ? "Codex" : "Claude");
+    return account?.state === "ready" ? SIGN_IN_UNCONFIRMED : SIGNED_OUT;
+  }
+
   private validate(id: string, selection: ModelSelection, bot?: BotRecord) {
     const instance = this.registry.get(id);
     if (!instance || !this.available(id)) {
-      throw new AccountError(!this.accounts.drains[id] && this.registry.accountBlocked(id) ? SIGNED_OUT : "This account is unavailable or draining. Sign in again in Settings > Connections");
+      throw new AccountError(!this.accounts.drains[id] && this.registry.accountBlocked(id) ? this.blocked(id) : "This account is unavailable or draining. Sign in again in Settings > Connections");
     }
     if (selection.model !== instance.models.default && !instance.models.options.some((option) => option.id === selection.model)) {
       throw new AccountError("This account does not offer the selected model; choose a model first", 400, bot && "main-model", bot?.name);

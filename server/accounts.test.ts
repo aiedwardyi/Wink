@@ -40,16 +40,25 @@ describe("PC-local accounts", () => {
     expect(service.list().filter((row) => row.of === "claude").map((row) => row.id)).toEqual(["claude", added[0].id, added[2].id]);
   });
 
-  it("counts the existing sign-in in the engine cap", async () => {
-    const { service } = fixture();
-    for (let i = 1; i < core!.MAX_ENGINE_ACCOUNTS; i++) await service.add("claude");
-    await expect(service.add("claude")).rejects.toThrow(/8 accounts/);
-    expect(service.snapshot).toHaveLength(7);
-    await expect(service.add("codex")).resolves.toMatchObject({ of: "codex" });
+  it("adds a ninth sign-in to one engine and keeps it after a restart", async () => {
+    const { dir, service } = fixture();
+    for (let i = 0; i < 8; i++) await service.add("claude");
+    await expect(service.add("claude")).resolves.toMatchObject({ of: "claude" });
+    expect(service.snapshot).toHaveLength(9);
+    expect(new core!.AccountService(dir, () => bases).snapshot).toHaveLength(9);
   });
 
-  it.each(["grok", "missing", "__proto__", "../claude", "constructor"])("refuses an unsupported base %s", async (of) => {
+  it.each(["missing", "__proto__", "../claude", "constructor"])("refuses an unsupported base %s", async (of) => {
     await expect(fixture().service.add(of)).rejects.toThrow();
+  });
+
+  it("adds a second Grok sign-in in its own home and keeps the existing one as account 1", async () => {
+    const { dir, service } = fixture();
+    const added = await service.add("grok");
+    expect(service.list().filter((row) => row.of === "grok").map((row) => [row.id, row.existing])).toEqual([["grok", true], [added.id, false]]);
+    expect(added.home).toBe(join(dir, "accounts", added.id));
+    expect(instanceConfigs({}, service.snapshot)[added.id]).toMatchObject({ driver: "grokAgent", account: { of: "grok", home: added.home } });
+    expect(new core!.AccountService(dir, () => bases).snapshot).toEqual([added]);
   });
 
   it("serializes concurrent writes and restores the ordered snapshot once", async () => {
@@ -146,6 +155,6 @@ describe("PC-local accounts", () => {
     expect(new core!.AccountService(dir, () => ({ ...bases, [added.id]: { driver: "codex" } })).list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
     const other = join(dir, "disabled");
     const disabled = new core!.AccountService(other, () => ({ claude: { driver: "claudeAgent", enabled: false } }));
-    await expect(disabled.add("claude")).rejects.toThrow("enabled Claude or Codex");
+    await expect(disabled.add("claude")).rejects.toThrow("enabled Claude, Codex or Grok");
   });
 });

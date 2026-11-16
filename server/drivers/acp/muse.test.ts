@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import type { execFile } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,12 @@ const temps = createTempDirs();
 afterAll(() => temps.remove());
 
 describe("Meta Muse driver catalog", () => {
+  it("includes Ember from the recorded CLI model list", () => {
+    const { reply } = JSON.parse(readFileSync(new URL("../../../test/fixtures/recorded/muse/model-list.json", import.meta.url), "utf8"));
+    const ember = reply.models.find((model: { modelId: string }) => model.modelId === "muse-ember-1.0");
+    expect(ember).toBeDefined();
+    expect(STATIC_MUSE_MODELS.options).toContainEqual({ id: ember.modelId, label: "Meta Muse Ember" });
+  });
   it("rejects empty credentials and honors MUSE_AUTH_PATH", () => {
     const home = temps.make(join(tmpdir(), "omb-muse-auth-shape-"));
     const auth = join(home, "auth.json");
@@ -31,11 +37,12 @@ describe("Meta Muse driver catalog", () => {
     expect(museIsAuthenticated(env, undefined, { platform: "darwin" })).toBe(true);
   });
 
-  it("serves exactly the two Meta Muse models with the required labels", () => {
+  it("serves exactly the three Meta Muse models with the required labels", () => {
     expect(STATIC_MUSE_MODELS.default).toBe("muse-spark-1.3");
     expect(STATIC_MUSE_MODELS.options).toEqual([
       { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
       { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+      { id: "muse-ember-1.0", label: "Meta Muse Ember" },
     ]);
   });
 

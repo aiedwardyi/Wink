@@ -11,6 +11,7 @@ import { EXTENDED_REACTIONS } from "../../shared/reactions";
 
 import { ChatView } from "./ChatView";
 import { GroupView } from "./GroupView";
+import { ReactionChips } from "./Reactions";
 import {
   QUICK_REACTIONS,
   contextClickKind,
@@ -421,7 +422,7 @@ describe("message menu in 1:1 chats", () => {
   it("leaves a file card to its own menu", async () => {
     window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
     try {
-      const host = await mountChat(bot([botMsg("b1", "here [clip.mp4](C:/clips/clip.mp4)")]));
+      const host = await mountChat(bot([botMsg("b1", "here\n[clip.mp4](C:/clips/clip.mp4)")]));
       await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
       expect(document.querySelector("[data-file-menu]")).not.toBeNull();
       expect(messageMenu()).toBeNull();
@@ -596,7 +597,7 @@ describe("message menu in rooms", () => {
   it("leaves a file card to its own menu", async () => {
     window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
     try {
-      const host = await mountRoom(members, room([roomBot("b1", "here [clip.mp4](C:/clips/clip.mp4)")]));
+      const host = await mountRoom(members, room([roomBot("b1", "here\n[clip.mp4](C:/clips/clip.mp4)")]));
       await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
       expect(document.querySelector("[data-file-menu]")).not.toBeNull();
       expect(messageMenu()).toBeNull();
@@ -641,6 +642,23 @@ describe("message menu in rooms", () => {
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
     await act(async () => { document.querySelector("[data-menu-copy]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     expect(writeText).toHaveBeenCalledWith("room hello");
+  });
+
+  it("keeps read-only reaction chips out of reach of clicks and keys", async () => {
+    await mountRoom(members, room([]));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const message = botMsg("b1", "room hello", { reactions: [{ emoji: "👍", by: "user" }] });
+    await act(async () => root.render(createElement(I18nProvider, null,
+      createElement(StoreProvider, null, createElement(ReactionChips, { threadId: "thread-g", message, corner: "left", readOnly: true })),
+    )));
+    const chip = host.querySelector<HTMLButtonElement>("[data-message-reactions] button")!;
+    expect(chip.disabled).toBe(true);
+    await act(async () => { chip.click(); });
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/reactions"))).toBe(false);
+    await act(async () => root.unmount());
+    host.remove();
   });
 
   it("reacts to a room message", async () => {
@@ -747,6 +765,51 @@ describe("message menu on touch", () => {
     await act(async () => { document.querySelector("[data-menu-pin]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     expect(pinnedChatId()).toBe("b1");
     expect(messageMenu()).toBeNull();
+  });
+
+  const botToBot = (id: string, text: string, from?: Message["from"]): Message => ({
+    id, at: 3, role: "bot", kind: "activity", text, from, tool: { name: "Message to @Bo" },
+    comm: { groupId: "pair", withBotId: "m2", withName: "Bo", withColor: "pink", peer: "message" },
+  });
+  const peerBody = (host: Element, id: string) => host.querySelector(`[data-mid="${id}"] [data-peer-body]`)!;
+
+  it("opens the menu on a bot-to-bot message in a room and a chat", async () => {
+    const writeText = stubClipboard();
+    const host = await mountRoom(members, room([botToBot("c1", "room handoff", { botId: "m1", name: "Ada", color: "blue" })]));
+    stubTouchScreen();
+    await hold(peerBody(host, "c1"));
+    expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Copy", "Select text"]);
+    await act(async () => { document.querySelector("[data-menu-copy]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    expect(writeText).toHaveBeenCalledWith("room handoff");
+    await unmount?.();
+
+    const chat = await mountChat(bot([botToBot("c2", "chat handoff")]));
+    await hold(peerBody(chat, "c2"));
+    expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Copy", "Select text"]);
+  });
+
+  it("selects only a long bot-to-bot message's text, not its fold button", async () => {
+    const text = "handoff words ".repeat(60).trim();
+    const host = await mountRoom(members, room([botToBot("c1", text, { botId: "m1", name: "Ada", color: "blue" })]));
+    stubTouchScreen();
+    stubCaret(() => null);
+    expect(peerBody(host, "c1").querySelector("button")?.textContent).toBe("Show full message");
+    await hold(peerBody(host, "c1"));
+    await selectText();
+    expect(window.getSelection()?.toString()).toBe(text);
+  });
+
+  it("gives every message row with text the hold menu", async () => {
+    const roomBot: Message = { ...botMsg("b1", "room hello"), from: { botId: "m1", name: "Ada", color: "blue" } };
+    const rows = [userMsg("u1", "hi all"), roomBot, botToBot("c1", "room handoff", roomBot.from)];
+    const bodies = (host: Element) => Array.from(host.querySelectorAll("[data-orbit-message-content], [data-peer-body]"));
+    const room_ = await mountRoom(members, room(rows));
+    expect(bodies(room_)).toHaveLength(3);
+    for (const body of bodies(room_)) expect(body.closest("[data-hold-menu]")).not.toBeNull();
+    await unmount?.();
+    const chat = await mountChat(bot([userMsg("u1", "hi"), botMsg("b1", "hello"), botToBot("c1", "chat handoff")]));
+    expect(bodies(chat)).toHaveLength(3);
+    for (const body of bodies(chat)) expect(body.closest("[data-hold-menu]")).not.toBeNull();
   });
 
   it("opens after a hold in a room", async () => {

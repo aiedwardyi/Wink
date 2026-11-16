@@ -6,6 +6,7 @@
 import { useSyncExternalStore } from "react";
 import monoHudCss from "@/skins/mono-hud.css?inline";
 import toolSkinsCss from "@/skins/tool-skins.css?inline";
+import type { MessageKey } from "./i18n-catalog";
 import { trackSetting } from "./usage-stats";
 
 export const SKIN_IDS = [
@@ -75,6 +76,14 @@ export const SKIN_IDS = [
   "precision-dimmed",
   "bronze",
   "dim-sand",
+  "lagoon-night",
+  "snow",
+  "snow-night",
+  "neon-grid",
+  "samurai-ink",
+  "night-rain",
+  "warp",
+  "circuit",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -82,6 +91,9 @@ export type Skin = {
   id: SkinId;
   name: string;
   /** One line, shown under the name in the picker. */
+  nameKey?: MessageKey;
+  /** Has a motion layer (ChatScene); the picker groups these under Animated. */
+  animated?: true;
 };
 
 export const SKINS: readonly Skin[] = [
@@ -93,7 +105,7 @@ export const SKINS: readonly Skin[] = [
   { id: "midnight", name: "Midnight" },
   { id: "atelier", name: "Atelier" },
   { id: "foundry", name: "Foundry" },
-  { id: "lagoon", name: "Lagoon" },
+  { id: "lagoon", name: "Lagoon", nameKey: "settings.skin.lagoon", animated: true },
   { id: "ledger", name: "Ledger" },
   { id: "catppuccin-frappe", name: "Catppuccin Frappe" },
   { id: "tokyo-night", name: "Tokyo Night" },
@@ -151,6 +163,14 @@ export const SKINS: readonly Skin[] = [
   { id: "precision-dimmed", name: "Precision Dimmed" },
   { id: "bronze", name: "Bronze" },
   { id: "dim-sand", name: "Dim Sand" },
+  { id: "lagoon-night", name: "Lagoon Night", nameKey: "settings.skin.lagoonNight", animated: true },
+  { id: "snow", name: "Snow", nameKey: "settings.skin.snow", animated: true },
+  { id: "snow-night", name: "Snow Night", nameKey: "settings.skin.snowNight", animated: true },
+  { id: "neon-grid", name: "Neon Grid", nameKey: "settings.skin.neonGrid", animated: true },
+  { id: "samurai-ink", name: "Samurai Ink", nameKey: "settings.skin.samuraiInk", animated: true },
+  { id: "night-rain", name: "Night Rain", nameKey: "settings.skin.nightRain", animated: true },
+  { id: "warp", name: "Warp", nameKey: "settings.skin.warp", animated: true },
+  { id: "circuit", name: "Circuit", nameKey: "settings.skin.circuit", animated: true },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */
@@ -166,6 +186,7 @@ export const LIGHT_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>([
   "wink-day",
   "paper-tape",
   "dim-sand",
+  "snow",
 ]);
 
 const TERMINAL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal"]);
@@ -258,6 +279,10 @@ export function applySkin(id: SkinId, via?: "hotkey"): void {
     style.textContent = kind === "tool" ? toolSkinsCss : monoHudCss;
     document.head.append(style);
   }
+  // A phone paints its status bar from this tag, not from the page.
+  const bar = document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  const app = bar && getComputedStyle(document.documentElement).getPropertyValue("--color-app").trim();
+  if (bar && app) bar.content = app;
   try {
     getStore()?.setItem(KEY, id);
     const tried = readTriedSkins();
@@ -268,7 +293,7 @@ export function applySkin(id: SkinId, via?: "hotkey"): void {
   // The one surface CSS cannot reach: on Windows the caption buttons sit in a
   // native overlay the main process paints. Left at the default it stays
   // Midnight-black on a light skin — the "black block in the top-right
-  // corner" of issue #454. Best-effort: a browser tab or an older desktop
+  // corner". Best-effort: a browser tab or an older desktop
   // build has no bridge, and the skin still applies without it.
   try {
     void window.ogb?.applySkin?.(id)?.catch(() => undefined);

@@ -96,6 +96,21 @@ describe("PhoneAccessSettings", () => {
     await act(async () => root.unmount());
   });
 
+  it("with no relay, never asks a signed-out user to sign in to turn it on", async () => {
+    const onNoRelay = vi.fn();
+    vi.stubGlobal("ogb", { googleAccount: { signIn: vi.fn(), cancel: vi.fn(), signOut: vi.fn() } });
+    serve({
+      "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }),
+      "GET /api/google-account": () => ({ state: "signed-out" }),
+    });
+    const { host, root } = await renderView({ onNoRelay });
+    expect(host.textContent).not.toContain("Sign in with Google to turn this on.");
+    expect(host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
+    await act(async () => click(host.querySelector<HTMLButtonElement>('[role="switch"]')!));
+    expect(onNoRelay).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
   it("says not available when the relay is forced off", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }) });
     const off = await renderView();
@@ -295,7 +310,7 @@ describe("PhoneAccessSettings", () => {
 });
 
 describe("This PC", () => {
-  const EMAIL = "rocknblock.official@gmail.com";
+  const EMAIL = "person@example.test";
   const signedIn = () => ({ state: "signed-in", email: EMAIL });
   const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 
@@ -439,6 +454,22 @@ describe("This PC", () => {
     expect(host.textContent).toContain("Sign in with Google to turn this on.");
     await act(async () => click(button(host, "Sign In")));
     expect(signIn).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  });
+
+  it("signing in waits for Google, then says why it failed in plain words", async () => {
+    let finish: (value: { ok: false; error: string }) => void = () => {};
+    const signIn = vi.fn(() => new Promise<{ ok: false; error: string }>((resolve) => (finish = resolve)));
+    vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+    serve({ "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }), "GET /api/google-account": () => ({ state: "signed-out" }) });
+    const { host, root } = await renderView();
+    await act(async () => click(button(host, "Sign In")));
+    expect(host.textContent).toContain("Waiting for Google…");
+    expect(button(host, "Sign In").disabled).toBe(false);
+    await act(async () => finish({ ok: false, error: "drive-permission-missing" }));
+    expect(host.textContent).not.toContain("Waiting for Google…");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tick the Google Drive box on Google's page, then sign in again.");
     await act(async () => root.unmount());
     vi.unstubAllGlobals();
   });

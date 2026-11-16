@@ -3,19 +3,22 @@
 // Nothing extra is stored: the state is derived from the transcript, so the
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
-import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion, type AskState } from "../../shared/open-question";
+import { isShownMessage } from "./shown-message";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, lineSettles, typedReply, type AskState } from "../../shared/open-question";
 
 export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
 
 export interface NeedsYou {
-  /** The chat's open ask_user card, if any. */
+  /** The chat's newest open ask_user card, if any. */
   question: Message | null;
+  /** Every ask_user card still waiting, oldest first. */
+  questions: readonly Message[];
   /** An approval or engine question card is still open. */
   request: boolean;
 }
 
-const NONE: NeedsYou = { question: null, request: false };
+const NONE: NeedsYou = { question: null, questions: [], request: false };
 const cache = new WeakMap<readonly Message[], NeedsYou>();
 
 /** What in this chat is waiting on the person, memoized per message array. */
@@ -23,15 +26,28 @@ export function needsYou(messages: readonly Message[]): NeedsYou {
   if (!messages.length) return NONE;
   const cached = cache.get(messages);
   if (cached) return cached;
-  const question = scanQuestion(messages);
+  const questions = [...askStates(messages)].flatMap(([card, status]) => (status.state === "waiting" ? [card] : []));
+  const question = questions.at(-1) ?? null;
   const request = messages.some(isOpenRequest);
-  const result = question || request ? { question, request } : NONE;
+  const result = question || request ? { question, questions, request } : NONE;
   cache.set(messages, result);
   return result;
 }
 
 export function openQuestion(messages: readonly Message[]): Message | null {
   return needsYou(messages).question;
+}
+
+export function openQuestions(messages: readonly Message[]): readonly Message[] {
+  return needsYou(messages).questions;
+}
+
+/** The open question a typed `text` settles at once, what with, and whether the line alone settles it once it lands. */
+export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string; byLine: boolean } | null {
+  const question = openQuestion(messages);
+  if (!question) return null;
+  const answered = typedReply(question, text);
+  return answered === null ? null : { question, answered, byLine: lineSettles(messages, question, text) };
 }
 
 /** An open permission ask: it takes the composer over, so it hides the pin. */
@@ -43,6 +59,16 @@ function isOpenApproval(message: Message): boolean {
  * where an approval waits; the question comes from the whole chat. */
 export function pinnedQuestion(messages: readonly Message[], visible: readonly Message[] = messages): Message | null {
   return visible.some(isOpenApproval) ? null : openQuestion(messages);
+}
+
+/** The chat moved on from `question`: the person sent a message after it (a queued line landing by itself is not one), or its asker replied. */
+export function chatMovedOn(messages: readonly Message[], question: Message): boolean {
+  const at = messages.indexOf(question);
+  const asker = question.from?.botId;
+  return at >= 0 && messages.slice(at + 1).some((message) =>
+    message.role === "bot"
+      ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
+      : isSentByPerson(message) && !message.queueId);
 }
 
 /** True when a sidebar row for this chat should glow. */

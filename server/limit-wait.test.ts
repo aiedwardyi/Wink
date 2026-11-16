@@ -26,7 +26,7 @@ it("resumes an ordinary Claude chat once on its original thread and selection af
   let waits = await open();
   waits?.track("bot", "chat", selection);
   waits?.bind("chat", "failed-turn");
-  waits?.failed("chat", "failed-turn", reset, "limit-row", ["five_hour", "seven_day"]);
+  waits?.failed("chat", "failed-turn", { resetsAt: reset }, "limit-row", ["five_hour", "seven_day"]);
   waits?.settled("chat", "failed-turn", false);
   waits = await open();
   now = reset + 30_000;

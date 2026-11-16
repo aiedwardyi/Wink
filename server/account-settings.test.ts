@@ -25,7 +25,7 @@ describe("account settings recovery", () => {
     const deps = { cfg, accounts, patch: { instances: { claude: { enabled: false } } }, externalSecretStorage,
       saveConfig, loadConfig, syncCredentialEnv() {}, validateAccountSettings: settings?.validateAccountSettings };
     const run = new Function(...Object.keys(deps), `${save}\nreturn save;`)(...Object.values(deps));
-    await expect(run()).rejects.toThrow("Account base must be an enabled Claude or Codex instance");
+    await expect(run()).rejects.toThrow("Account base must be an enabled Claude, Codex or Grok instance");
     expect(readFileSync(join(DATA_DIR, "config.json"), "utf8")).toBe(before);
     expect(cfg.instances?.claude.enabled).toBeUndefined();
   });

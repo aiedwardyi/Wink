@@ -14,6 +14,8 @@ const KEEP_RE = /^(?:rel-|nm-)|^(?:relay-deploy|release-gate)$/i;
 const BACKUP_RE = /^\.pane-cleanup-/i;
 const RECHECK = new Set(["dirty", "unpushed"]);
 const SETTLE_MS = 50;
+// Past this many waiting changes of its own a busy folder is walked again instead of remembered change by change.
+const FLOOD = 1_000;
 // `walk` caps the ignored-file walk per worktree; past it the worktree is kept, never deleted on a partial look.
 export const SWEEP_BUDGET = { dirs: 500_000, ms: 10 * 60_000, walk: 100_000 };
 // Only Windows watches recursively without a startup walk or delivery lag.
@@ -34,6 +36,7 @@ const normalize = (file) => {
   }
   return current.toLowerCase();
 };
+const shut = (index) => { for (const watcher of [...index.watchers, ...index.sections.values()]) watcher.close(); };
 const contains = (root, file) => file === root || file.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
 const canonical = (file) => process.platform === "win32" ? file.toLowerCase() : file;
 async function normalizeAsync(file, parents = null) {
@@ -64,8 +67,8 @@ const scope = () => {
     if (!names.has(key)) names.set(key, normalizeAsync(key, parents));
     return names.get(key);
   };
-  const context = { norm, cache: new Map(), resolved: new Map(), pins: null, stats: { calls: 0, dirs: 0, links: 0, builds: 0, ms: 0 }, index: null, close: () => {
-    for (const watcher of [...context.index?.watchers ?? [], ...context.index?.sections.values() ?? []]) watcher.close();
+  const context = { norm, cache: new Map(), resolved: new Map(), pins: null, stats: { calls: 0, dirs: 0, links: 0, builds: 0, ms: 0 }, built: { dirs: 0, ms: 0 }, index: null, close: () => {
+    if (context.index) shut(context.index);
     context.index = null;
   } };
   return context;
@@ -275,12 +278,18 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   let closing = null;
   const retries = new Set();
   const live = new Set();
+  let linkIndex = null;
   const fresh = async (run) => {
     const context = scope();
+    // Its watchers keep the link index current between runs; every other lookup is made again.
+    context.index = linkIndex;
+    linkIndex = null;
+    if (context.index?.doubt) context.close();
     live.add(context);
     try { return await run(context); } finally {
       live.delete(context);
-      context.close();
+      if (stopped || !context.index || context.index.stale || context.index.doubt) context.close();
+      else linkIndex = context.index;
     }
   };
   const save = () => {
@@ -454,6 +463,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const base = path.relative(root.file, dir);
     const note = (rel, deep) => {
       const file = path.join(root.file, rel);
+      if (!index.changes.has(file)) index.waiting.set(base, (index.waiting.get(base) ?? 0) + 1);
       index.changes.set(file, { root, rel, deep: deep || !!index.changes.get(file)?.deep });
     };
     const lost = () => { if (base) note(base, true); else index.doubt = true; };
@@ -461,10 +471,13 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const watcher = fs.watch(dir, { recursive: !!base }, (type, rel) => {
       if (!["rename", "change"].includes(type)) index.doubt = true;
       else if (rel == null) lost();
+      // A deleted folder's watcher names its own path without end.
+      else if (path.isAbsolute(rel)) { watcher.close(); lost(); }
       else {
         const parts = path.join(base, rel).split(path.sep);
         if (parts.some((part) => BACKUP_RE.test(part))) return;
-        if (!root.temp || parts[0].startsWith("wink-") || parts[0].includes("~")) note(path.join(base, rel), type === "rename");
+        if (base && index.waiting.get(base) >= FLOOD && !index.changes.has(path.join(dir, rel))) lost();
+        else if (!root.temp || parts[0].startsWith("wink-") || parts[0].includes("~")) note(path.join(base, rel), type === "rename");
       }
     });
     watcher.on("error", lost);
@@ -485,14 +498,21 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   const watched = (index, file) => index.roots.some((root) => contains(root.normalized, file) && (!root.temp || path.relative(root.normalized, file).startsWith("wink-")));
   const build = async (context, roots, key, skip) => {
-    const index = { key, roots: [], links: new Map(), changes: new Map(), parents: new Map(), stale: !WATCH, doubt: false, touched: false, relinked: false, watchers: [], sections: new Map(), skip };
+    const index = { key, roots: [], links: new Map(), changes: new Map(), waiting: new Map(), parents: new Map(), stale: !WATCH, doubt: false, touched: false, relinked: false, watchers: [], sections: new Map(), skip };
     context.index = index;
     context.stats.builds++;
+    const { dirs } = context.stats;
+    const begun = performance.now();
     for (const root of roots) index.roots.push({ ...root, normalized: await normalizeAsync(root.file, index.parents), id: await rootId(root.file) });
     if (WATCH) {
       try { for (const root of index.roots) index.watchers.push(watch(index, root)); } catch { index.doubt = true; }
     }
     for (const root of index.roots) await inspect(context, root.file, root.normalized, root);
+    // A watched index is walked once and kept, so that walk is outside the sweep's budget.
+    if (!index.stale) {
+      context.built.dirs += context.stats.dirs - dirs;
+      context.built.ms += performance.now() - begun;
+    }
   };
   const refresh = async (context, normalized, links) => {
     const { index } = context;
@@ -515,6 +535,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (!index.changes.size && !index.touched) return;
       const changes = [...index.changes.values()].sort((a, b) => a.rel.length - b.rel.length);
       index.changes.clear();
+      index.waiting.clear();
       const walked = new Set();
       for (const { root, rel, deep } of changes) {
         const file = path.join(root.file, rel);
@@ -674,7 +695,21 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       return false;
     };
     const dirty = () => git(target, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
-    const unpushed = async () => await git(target, ["rev-list", "HEAD", "--not", "--remotes"]) !== "";
+    // A squash merge lands the changes without the commits: merging HEAD into a remote base that holds them leaves its tree as it was.
+    const landed = async () => {
+      const bases = new Set();
+      for (const cwd of [target, await git(target, ["rev-parse", "--path-format=absolute", "--git-common-dir"])]) {
+        try { bases.add(await git(cwd, ["rev-parse", "--symbolic-full-name", "@{upstream}"])); } catch {}
+      }
+      for (const base of bases) {
+        if (!base.startsWith("refs/remotes/")) continue;
+        try {
+          if (await git(target, ["merge-tree", "--write-tree", "--no-messages", base, "HEAD"]) === await git(target, ["rev-parse", `${base}^{tree}`])) return true;
+        } catch {}
+      }
+      return false;
+    };
+    const unpushed = async () => await git(target, ["rev-list", "HEAD", "--not", "--remotes"]) !== "" && !await landed();
     if (await busy(false) || !await directory(worktreeRoot)) return hold();
     if (await git(target, ["status", "--porcelain"])) return keep("dirty");
     if (await unpushed()) return keep("unpushed");
@@ -756,7 +791,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     let processed = 0;
     cursor = null;
     for (const entry of [...entries.slice(start), ...entries.slice(0, start)]) {
-      if (processed && (context.stats.dirs > budget.dirs || performance.now() - begun > budget.ms)) {
+      if (processed && (context.stats.dirs - context.built.dirs > budget.dirs || performance.now() - begun - context.built.ms > budget.ms)) {
         cursor = entry;
         break;
       }
@@ -838,6 +873,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       for (const handle of retries) cancel(handle);
       retries.clear();
       for (const context of live) context.close();
+      if (linkIndex) shut(linkIndex);
+      linkIndex = null;
     },
   };
 }

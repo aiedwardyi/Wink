@@ -132,7 +132,7 @@ beforeAll(async () => {
     peopleRoute, hostFileRoute, joinedRoute, joinedFileRoute, commsCallers: { resolve: (value: string) => value === BOT },
     traceOpenBots: () => {}, pageSize: () => undefined, OPEN_CHAT_HEADER: "x-open-chat", offscreenLimit: () => 0,
     publicBotRecord: (bot: unknown) => bot, messagePage: (id: string) => ({ messages: store.messagesFor(id) }), publicGroupState: (group: unknown) => group,
-    computerControl: { snapshot: () => ({ held: false }) }, STREAM_ID: "s", lastSeq: 0,
+    computerControl: { snapshot: () => ({ held: false }) }, waitingSends: () => ({}), STREAM_ID: "s", lastSeq: 0,
     groupRoutes: createGroupRoutes({ store, publicGroupState: (group: GroupRecord) => group } as unknown as Parameters<typeof createGroupRoutes>[0]),
     threadRoutes: createThreadRoutes({ store, dataDir: DATA_DIR, threadSyncGate: { enabled: false }, pullSyncedThread: () => {}, DEFAULT_PAGE: 200,
       pageSize: () => undefined, messagePage: (id: string) => ({ messages: store.messagesFor(id) }),
@@ -221,12 +221,12 @@ describe("rooms through the fake phone relay", () => {
     }
   });
 
-  it("serves People codes and Remove to the phone while refusing bot invites and the off-relay door", async () => {
+  it("serves People codes and Remove to the phone and the user's own bots, while refusing bot posts as the host and the off-relay door", async () => {
     const base = `/api/rooms/${group.hosted.roomId}`;
     const invite = await call(`${base}/invites`, { method: "POST" });
     expect(invite.status).toBe(200);
     expect(invite.body.code).toMatch(/^wkr1:/);
-    expect((await call(`${base}/invites`, { relay: false, method: "POST", authorization: BOT })).status).toBe(403);
+    expect((await call(`${base}/invites`, { relay: false, method: "POST", authorization: BOT })).status).toBe(200);
     expect((await call(`${base}/send`, { relay: false, method: "POST", authorization: BOT, body: { text: "as the host" } })).status).toBe(403);
     expect((await call("/room/rooms", { relay: false })).status).toBe(404);
     const code = roomCode(group.hosted.roomId);

@@ -300,8 +300,8 @@ describe("imageSupportForTargets", () => {
     expect(imageSupportForTargets(instances, [imageBot, textBot])).toBe("unsupported");
   });
 
-  it("reports unsupported when no responder is selected", () => {
-    expect(imageSupportForTargets([], [])).toBe("unsupported");
+  it("lets a picture no bot answers through", () => {
+    expect(imageSupportForTargets([], [])).toBe("supported");
   });
 });
 
@@ -362,12 +362,9 @@ describe("big file intake", () => {
       t,
       allowImages: true,
       getPath: () => "",
-      uploadImage: async () => {
-        throw new Error("must not upload as an image");
-      },
     });
 
-  it("turns pathless big files into upload chips and refuses over 10 GB", async () => {
+  it("turns pathless big files into upload chips, past 10 GB too", async () => {
     const meeting = fake("meeting.mp4", 1.6e9, "video/mp4");
     const docx = fake("plan.docx", 30 * 1024 * 1024);
     const huge = fake("huge.iso", 10 * 1024 ** 3 + 1);
@@ -375,10 +372,11 @@ describe("big file intake", () => {
     expect(out.attachments).toEqual([
       expect.objectContaining({ kind: "upload", name: "meeting.mp4", size: 1.6e9, type: "video/mp4", lastModified: 7, state: "uploading" }),
       expect.objectContaining({ kind: "upload", name: "plan.docx" }),
+      expect.objectContaining({ kind: "upload", name: "huge.iso", size: 10 * 1024 ** 3 + 1 }),
     ]);
-    expect(out.uploads.map((upload) => upload.file)).toEqual([meeting, docx]);
+    expect(out.uploads.map((upload) => upload.file)).toEqual([meeting, docx, huge]);
     expect(out.uploads.map((upload) => upload.id)).toEqual(out.attachments.map((a) => a.id));
-    expect(out.notice).toBe(t("composer.uploadTooBig", { name: "huge.iso" }));
+    expect(out.notice).toBeNull();
   });
 
   it("keeps an oversized image with a path as a file chip", async () => {
@@ -386,9 +384,6 @@ describe("big file intake", () => {
       t,
       allowImages: true,
       getPath: (file) => `C:\\pics\\${file.name}`,
-      uploadImage: async () => {
-        throw new Error("must not upload");
-      },
     });
     expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", path: "C:\\pics\\big.png", type: "image/png" })]);
     expect(out.uploads).toEqual([]);
@@ -399,9 +394,6 @@ describe("big file intake", () => {
       t,
       allowImages: true,
       getPath: (file) => `C:\\pics\\${file.name}`,
-      uploadImage: async () => {
-        throw new Error("must not upload");
-      },
       shrunkPath: async () => "C:\\data\\attachments\\small.webp",
     });
     expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", path: "C:\\pics\\big.png", preview: "C:\\data\\attachments\\small.webp" })]);
@@ -421,7 +413,7 @@ describe("big file intake", () => {
       expect.objectContaining({ kind: "upload", name: "camera.jpg", shrink: true }),
       expect.not.objectContaining({ shrink: true }),
     ]);
-    const plain = await intakeFiles([png], { t, allowImages: false, getPath: () => "", uploadImage: async () => null });
+    const plain = await intakeFiles([png], { t, allowImages: false, getPath: () => "" });
     expect(plain.attachments).toEqual([expect.not.objectContaining({ shrink: true })]);
   });
 });

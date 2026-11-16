@@ -223,7 +223,7 @@ describe("waiting sends across restart", () => {
     const sendId = "restart-send-000004";
     const receipt = queue.queueSteeredMessage(bot.id, bot.threadId, "cancel", { after: true, sendId });
     expect(savedQueue()).toHaveLength(1);
-    expect(queue.cancelSteeredMessage(bot.id, identity === "queueId" ? receipt.id : sendId)).toEqual({ cancelled: true });
+    expect(queue.cancelSteeredMessage(bot.id, identity === "queueId" ? receipt.id : sendId)).toMatchObject({ cancelled: true });
     const restarted = await boot();
     expect(restarted.queue._queuedCount(bot.threadId)).toBe(0);
     expect(savedQueue()).toEqual([]);
