@@ -160,6 +160,8 @@ export interface Message {
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
+    /** files a successful call wrote, as the engine named them */
+    writes?: string[];
     setup?: boolean;
     signIn?: boolean;
     accountId?: string;
