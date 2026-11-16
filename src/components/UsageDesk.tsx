@@ -238,7 +238,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
       className={cn(ACCOUNT_ROW, !reorder && "outline-none")}>
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
-          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex"].includes(engine.engine)} />}
+          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex", "grok"].includes(engine.engine)} />}
           {email && <span data-account-email="" className="usage-email">{email}</span>}
         </div>
         {control}

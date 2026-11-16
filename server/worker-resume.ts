@@ -25,9 +25,9 @@ export interface WorkerResume {
 }
 
 export function baseAccount(id: string, driver: string, environment: NodeJS.ProcessEnv): AccountContext {
-  const selector = driver === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+  const [selector, folder] = driver === "codex" ? ["CODEX_HOME", ".codex"] : driver === "grokAgent" ? ["GROK_HOME", ".grok"] : ["CLAUDE_CONFIG_DIR", ".claude"];
   const home = Object.entries(environment).find(([key]) => key.toUpperCase() === selector)?.[1]
-    || join(driver === "codex" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(), driver === "codex" ? ".codex" : ".claude");
+    || join(driver === "codex" || driver === "grokAgent" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(), folder);
   return Object.freeze({ id, of: id, generation: 0, home });
 }
 

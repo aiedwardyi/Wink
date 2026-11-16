@@ -6,6 +6,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly —
 // resolveCliSpawn turns it into `node <script>`, so these run everywhere.
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -2038,6 +2039,32 @@ describe("ACP turns (fake CLI)", () => {
     const err = recorder.events.find((e) => e.type === "runtime.error")!;
     expect(err.message).toBe("Internal error");
     expect(err.usageLimit).toBeUndefined();
+  });
+
+  it("keeps an added Grok account on its own GROK_HOME, apart from the existing sign-in", async () => {
+    const baseHome = join(scratch, "base", ".grok");
+    const accountHome = join(scratch, "account");
+    mkdirSync(baseHome, { recursive: true });
+    mkdirSync(accountHome, { recursive: true });
+    const baseAuth = JSON.stringify({ "https://auth.x.ai::1": { key: "k", email: "one@example.test" } });
+    writeFileSync(join(baseHome, "auth.json"), baseAuth);
+    instance = await GrokAgentDriver.create({
+      instanceId: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775",
+      displayName: "Grok",
+      environment: { GROK_HOME: baseHome, GROK_AUTH_PATH: join(baseHome, "auth.json") },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+      account: { id: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775", of: "grok", home: accountHome, generation: 1 },
+    });
+    expect(instance.account?.home).toBe(accountHome);
+    expect(instance.loginConfig!().env).toMatchObject({ GROK_HOME: accountHome });
+    expect(instance.loginConfig!().env.GROK_AUTH_PATH).toBeUndefined();
+    expect(await instance.snapshot()).toMatchObject({ authenticated: false, accountAuthenticated: false, accountIdentity: undefined });
+    await expect(instance.adapter.sendTurn({ threadId: "t-account", text: "go" })).rejects.toThrow("Sign in to this Grok account");
+    writeFileSync(join(accountHome, "auth.json"), JSON.stringify({ "https://auth.x.ai::1": { key: "k", email: "Two@example.test" } }));
+    expect(await instance.snapshot()).toMatchObject({ authenticated: true, account: "Two@example.test", accountAuthenticated: true,
+      accountIdentity: createHash("sha256").update("two@example.test").digest("hex") });
+    expect(readFileSync(join(baseHome, "auth.json"), "utf8")).toBe(baseAuth);
   });
 
   it("grok fails closed when the CLI advertises no cached_token (needs login)", async () => {

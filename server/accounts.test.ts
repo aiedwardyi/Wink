@@ -48,8 +48,17 @@ describe("PC-local accounts", () => {
     expect(new core!.AccountService(dir, () => bases).snapshot).toHaveLength(9);
   });
 
-  it.each(["grok", "missing", "__proto__", "../claude", "constructor"])("refuses an unsupported base %s", async (of) => {
+  it.each(["missing", "__proto__", "../claude", "constructor"])("refuses an unsupported base %s", async (of) => {
     await expect(fixture().service.add(of)).rejects.toThrow();
+  });
+
+  it("adds a second Grok sign-in in its own home and keeps the existing one as account 1", async () => {
+    const { dir, service } = fixture();
+    const added = await service.add("grok");
+    expect(service.list().filter((row) => row.of === "grok").map((row) => [row.id, row.existing])).toEqual([["grok", true], [added.id, false]]);
+    expect(added.home).toBe(join(dir, "accounts", added.id));
+    expect(instanceConfigs({}, service.snapshot)[added.id]).toMatchObject({ driver: "grokAgent", account: { of: "grok", home: added.home } });
+    expect(new core!.AccountService(dir, () => bases).snapshot).toEqual([added]);
   });
 
   it("serializes concurrent writes and restores the ordered snapshot once", async () => {
@@ -146,6 +155,6 @@ describe("PC-local accounts", () => {
     expect(new core!.AccountService(dir, () => ({ ...bases, [added.id]: { driver: "codex" } })).list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
     const other = join(dir, "disabled");
     const disabled = new core!.AccountService(other, () => ({ claude: { driver: "claudeAgent", enabled: false } }));
-    await expect(disabled.add("claude")).rejects.toThrow("enabled Claude or Codex");
+    await expect(disabled.add("claude")).rejects.toThrow("enabled Claude, Codex or Grok");
   });
 });

@@ -5,7 +5,8 @@ import { z } from "zod";
 import { isInstanceId, type AccountService } from "./accounts.ts";
 import { writeFileAtomic } from "./atomic.ts";
 
-type Engine = "claude" | "codex";
+type Engine = "claude" | "codex" | "grok";
+const ENGINE_OF: Record<string, Engine> = { claudeAgent: "claude", codex: "codex", grokAgent: "grok" };
 type AccountRow = ReturnType<AccountService["list"]>[number];
 export type AccountName = { id: string; engine: Engine; number: number; nickname: string | null; name: string };
 type NameCode = "too-long" | "invalid-character" | "taken" | "reserved" | "unknown-account";
@@ -14,7 +15,7 @@ type Resolution = { kind: "account"; id: string } | { kind: "ambiguous" } | { ki
 const LABELS: Record<string, string> = { claude: "Claude", claudeagent: "Claude", codex: "Codex", grok: "Grok", grokagent: "Grok", gemini: "Gemini", antigravity: "Gemini", antigravityagent: "Gemini", muse: "Muse", museagent: "Muse" };
 const RESERVED = /^(?:claude|codex|grok|gemini|muse)\s+\d+$/i;
 const recordSchema = z.object({
-  engine: z.enum(["claude", "codex"]), number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  engine: z.enum(["claude", "codex", "grok"]), number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), nickname: z.string().optional(),
 }).strict();
 const stateSchema = z.object({ version: z.literal(1), accounts: z.record(z.string().refine(isInstanceId), recordSchema) }).strict();
@@ -86,9 +87,9 @@ export function createAccountNames(dataDir: string): AccountNames {
   return {
     sync(list) {
       if (list.some((row) => row.error)) return;
-      const supported = list.filter((row) => row.driverKind === "claudeAgent" || row.driverKind === "codex");
+      const supported = list.filter((row) => Object.hasOwn(ENGINE_OF, row.driverKind));
       const ordered = [...supported.filter((row) => row.id === row.of), ...supported.filter((row) => row.id !== row.of)];
-      const engineOf = (row: AccountRow): Engine => row.driverKind === "claudeAgent" ? "claude" : "codex";
+      const engineOf = (row: AccountRow): Engine => ENGINE_OF[row.driverKind];
       const accounts = { ...state.accounts };
       for (const id of Object.keys(accounts)) if (!supported.some((row) => row.id === id && engineOf(row) === accounts[id].engine)) delete accounts[id];
       for (const row of ordered) {
@@ -110,7 +111,7 @@ export function createAccountNames(dataDir: string): AccountNames {
     get,
     nameOf(id, engine) {
       const label = LABELS[engine.toLowerCase()] ?? "Account";
-      if (["Grok", "Gemini", "Muse"].includes(label)) return label;
+      if (["Gemini", "Muse"].includes(label)) return label;
       return get(id)?.name ?? `${label} (removed)`;
     },
     setNickname(id, value) {
@@ -127,13 +128,13 @@ export function createAccountNames(dataDir: string): AccountNames {
     selectorOf,
     resolve(engine, text) {
       const label = LABELS[engine.toLowerCase()];
-      if (label !== "Claude" && label !== "Codex") return { kind: "unknown" };
+      if (label !== "Claude" && label !== "Codex" && label !== "Grok") return { kind: "unknown" };
       const input = text.trim().normalize("NFC");
       const eligible = Object.keys(state.accounts).filter((id) => LABELS[state.accounts[id].engine] === label);
       const result = (ids: string[]): Resolution => ids.length > 1 ? { kind: "ambiguous" } : ids.length ? { kind: "account", id: ids[0] } : { kind: "unknown" };
       const selectors = eligible.filter((id) => selectorOf(id) === input);
       if (selectors.length) return result(selectors);
-      const number = /^(claude|codex) +([0-9]+)$/i.exec(input);
+      const number = /^(claude|codex|grok) +([0-9]+)$/i.exec(input);
       if (number) return result(eligible.filter((id) => number[1].toLowerCase() === state.accounts[id].engine && Number(number[2]) === state.accounts[id].number));
       return result(eligible.filter((id) => state.accounts[id].nickname?.toLowerCase() === input.toLowerCase()));
     },

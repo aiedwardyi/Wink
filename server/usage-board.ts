@@ -19,7 +19,7 @@ type WorkerRun = {
 };
 type Runs = { known: true; runs: WorkerRun[] } | { known: false; reason: "no-host" | "old-host" | "error" | "timeout" };
 type MainChange = {
-  base: string; engine: "claude" | "codex"; from: { id: string; generation: number }; to: { id: string; generation: number }; seq: number;
+  base: string; engine: "claude" | "codex" | "grok"; from: { id: string; generation: number }; to: { id: string; generation: number }; seq: number;
 };
 type Turn = { turnId: string; botId: string; accountId: string; generation: number };
 type History = Pick<ReturnType<typeof createUsageHistory>, "record" | "event" | "purge" | "since" | "snapshot">;
@@ -35,7 +35,7 @@ type Deps = {
   now?: () => number;
 };
 type Cursor = { boot: string; revision: number; counter: number; accounts: string; epoch: number };
-const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grok", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
+const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grokAgent", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
 const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" } satisfies Record<UsageBoardEngineId, string>;
 
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
@@ -213,7 +213,7 @@ export function createUsageBoard(deps: Deps) {
       }
       const named = deps.names.get(row.id);
       const number = row.credit ? Math.max(0, ...group.accounts.map((account) => account.number)) + 1 : named?.number ?? 1;
-      const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" ? `${titles[engine]} ${number}` : titles[engine];
+      const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" || engine === "grok" ? `${titles[engine]} ${number}` : titles[engine];
       // Validated user labels may match the provider's sign-in name.
       const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
       const report = deps.rateLimits.get(row.id);

@@ -3084,7 +3084,7 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 // not per turn, so it lives here and rides /api/instances rather than being
 // banked on a task. Persisted so a restart keeps the last report until a turn or refresh replaces it.
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
-const boardEngines = new Map([["grokAgent", "grok"], ["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
+const boardEngines = new Map([["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
 const usageBoard = createUsageBoard({
   codexPromo: codexPromoStatus,
   accounts: {

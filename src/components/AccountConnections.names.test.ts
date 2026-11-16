@@ -230,15 +230,15 @@ it("clears a nickname with an empty name", async () => {
   expect(row()?.textContent).toContain("Claude 1");
 });
 
-it("renames a Codex account through its own route", async () => {
-  accounts = [{ ...accounts[0]!, instanceId: "codex", accountOf: "codex", driverKind: "codex", displayName: "Codex" }];
-  reply = async () => Response.json({ id: "codex", number: 1, nickname: "Studio", name: "Studio" });
+it.each([["codex", "codex", "Codex"], ["grok", "grokAgent", "Grok"]])("renames a %s account through its own route", async (id, driverKind, displayName) => {
+  accounts = [{ ...accounts[0]!, instanceId: id, accountOf: id, driverKind, displayName }];
+  reply = async () => Response.json({ id, number: 1, nickname: "Studio", name: "Studio" });
   await mount();
   await click(host.querySelector<HTMLElement>("[data-edit-name]"));
   await input("Studio");
   await click(button("Save"));
-  expect(calls.find(({ path }) => path.endsWith("/name"))?.path).toBe("/api/accounts/codex/name");
-  expect(host.querySelector('[data-connection-account="codex"]')?.textContent).toContain("Studio");
+  expect(calls.find(({ path }) => path.endsWith("/name"))?.path).toBe(`/api/accounts/${id}/name`);
+  expect(host.querySelector(`[data-connection-account="${id}"]`)?.textContent).toContain("Studio");
 });
 
 it("holds update reload while a name save is pending", async () => {
@@ -257,7 +257,7 @@ it("holds update reload while a name save is pending", async () => {
   expect(reloadHeld()).toBe(false);
 });
 
-it.each([["grok", "grokAgent"], ["gemini", "geminiAgent"], ["muse", "museAgent"]])("offers no Name control for %s even with a board row", async (id, driverKind) => {
+it.each([["gemini", "geminiAgent"], ["muse", "museAgent"]])("offers no Name control for %s even with a board row", async (id, driverKind) => {
   if (id === "muse") board.engines.push({ engine: "muse", base: id!, mainId: id!, events: [],
     accounts: [{ ...board.engines[0]!.accounts[0]!, id: id!, nickname: null, name: "Muse" }] });
   accounts = [{ ...accounts[0]!, instanceId: id!, accountOf: id!, driverKind: driverKind!, displayName: id! }];

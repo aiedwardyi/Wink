@@ -50,7 +50,7 @@ async function wired(main = "claude") {
   const scope = {
     createUsageBoard, createUsageHistory: (path: string) => createUsageHistory(path, { schedule: () => {} }), DATA_DIR: dir,
     accounts, accountNames, registry: { accountBlocked: () => false }, providerSnapshots: new Map(),
-    instanceConfigs: () => ({ claude: { driver: "claudeAgent" }, grok: { driver: "grokAgent" } }), cfg: {},
+    instanceConfigs: () => ({ claude: { driver: "claudeAgent" }, muse: { driver: "museAgent" } }), cfg: {},
     rateLimitsByInstance: new Map(), liveWorkerRuns: async () => ({ known: false, reason: "no-host" }), terminalBridgeAccess: null,
     store: { bots: [{ id: "atlas", name: "Atlas", modelSelection: { instanceId: "claude" } }] }, broadcast,
     providerReload: { current: (): { instanceId: string; account?: { generation: number } } | null => null },
@@ -72,7 +72,7 @@ it("serves the usage board with a committed revision", async () => {
   const answer = await serve({ method: "GET", path: "/api/usage/board", url: new URL("http://127.0.0.1/api/usage/board"), res: {}, json, usageBoard: s.usageBoard });
   expect(answer.status).toBe(200);
   expect(answer.body).toMatchObject({ version: 1, revision, full: true });
-  expect(answer.body.engines.map((group: { base: string }) => group.base)).toEqual(["claude", "grok"]);
+  expect(answer.body.engines.map((group: { base: string }) => group.base)).toEqual(["claude", "muse"]);
   await vi.advanceTimersByTimeAsync(2_000);
   expect(s.broadcast).toHaveBeenCalledWith({ kind: "usage.board", revision });
 });
