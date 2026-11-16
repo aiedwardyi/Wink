@@ -2203,7 +2203,22 @@ app.whenReady().then(async () => {
     const mailboxUrl = `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`;
     if (serverReady && terminalBridgeAccess) await publishTerminalDiscovery(app.getPath("userData"), terminalBridgeAccess, mailboxUrl).catch(slog);
     const reports = serverReady ? deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns).catch(slog) : Promise.resolve();
-    void reports.then(() => recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog })).catch(slog);
+    void reports.then(async (result) => {
+      const held = new Set();
+      for (const panes of paneRuns.restarted().values()) {
+        for (const run of panes) {
+          if ((serverReady && !result) || result?.unreadable || result?.pendingReports.some(report => report.pane === run.id && report.bot === run.botId && report.teacher === (run.teacher ?? run.botId))) held.add(run.id);
+        }
+      }
+      const runs = {
+        ...paneRuns,
+        restarted: () => paneRuns.restarted(held),
+        forget: botId => paneRuns.forget(botId, held),
+        missed: botId => paneRuns.missed(botId, held),
+      };
+      await recoverWorkers({ runs, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog });
+      if (serverReady) await deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns);
+    }).catch(slog);
   }
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the

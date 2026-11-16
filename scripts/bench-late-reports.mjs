@@ -91,7 +91,7 @@ try {
   if (!result.pass) process.exitCode = 1;
 } finally {
   for (const child of children) {
-    if (child.exitCode !== null) continue;
+    if (child.exitCode !== null || child.signalCode !== null) continue;
     const exited = new Promise(resolve => child.once("exit", resolve));
     child.kill("SIGTERM");
     await exited;

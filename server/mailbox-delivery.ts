@@ -27,8 +27,9 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
   if (!body.ok) return { status: body.status, body: { error: body.error } };
   const parsed = mailboxPostSchema.safeParse(body.value);
   if (!parsed.success) return { status: 400, body: { error: "invalid mailbox message" } };
-  const source = mailboxRecipient(deps.store.bots, scope);
-  if (!source) return { status: 404, body: { error: "no such bot" } };
+  const recipient = mailboxRecipient(deps.store.bots, scope);
+  if (!recipient) return { status: 404, body: { error: "no such bot" } };
+  const source = { ...recipient };
   const input = parsed.data;
   let kind = input.kind;
   let accepted = false;

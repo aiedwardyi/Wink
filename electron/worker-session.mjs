@@ -69,7 +69,7 @@ export function createWorkerSession(worker, pane, cwd, bridgeUrl) {
   if (launch.engine === "claude" && !worker.workerSettings && !claudeSettings(worker.args)) return null;
   const auth = randomBytes(24).toString("hex");
   const run = { pane, launchGeneration: launch.launchGeneration, engine: launch.engine, nativeId: launch.nativeId,
-    cwd, accountId: worker.account.id, accountGeneration: worker.account.generation, model: launch.model, effort: launch.effort, lifecycle: "running" };
+    cwd, accountId: worker.account.id, accountGeneration: worker.account.generation, model: launch.model, effort: launch.effort, lifecycle: "running", authHash: createHash("sha256").update(`Bearer ${auth}`).digest("hex") };
   if (launch.template) run.template = launch.template;
   if (launch.recoveredFrom) run.recoveredFrom = launch.recoveredFrom;
   if (worker.kind === "unrouted") run.unrouted = true;
@@ -82,6 +82,10 @@ export function createWorkerSession(worker, pane, cwd, bridgeUrl) {
 
 export function captureWorkerSession(sessions, runs, authorization, input) {
   const session = sessions.get(input?.pane);
+  if (!session) {
+    const prior = [...(runs?.restarted().values() ?? [])].flat().find(run => run.id === input?.pane);
+    return workerSessionAuthorized(prior?.session?.authHash, authorization) && runs.capture(input, authorization);
+  }
   const capture = session?.workerSession;
   if (!capture || session.retired || session.workerFinished || session.exitCode !== null || !runs) return false;
   const received = Buffer.from(typeof authorization === "string" ? authorization : "");
@@ -90,6 +94,12 @@ export function captureWorkerSession(sessions, runs, authorization, input) {
   if (!runs.capture(input)) return false;
   capture.confirmed = input.source;
   return true;
+}
+
+export function workerSessionAuthorized(hash, authorization) {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The hash comes from the ledger and authorization comes from HTTP.
+  if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) || typeof authorization !== "string") return false;
+  return timingSafeEqual(Buffer.from(hash, "hex"), createHash("sha256").update(authorization).digest());
 }
 
 export function resumeSessionReason(run) {

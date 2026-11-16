@@ -43,6 +43,20 @@ async function restart(file) {
   return notes;
 }
 
+test("a failed retirement write preserves the prior worker in memory and on disk", (t) => {
+  const file = runFile(t);
+  const run = { id: "pane", botId: "bot", teacher: "bot", state: "running" };
+  fs.writeFileSync(file, JSON.stringify([run]));
+  const runs = createPaneRuns(file);
+  const rename = t.mock.method(fs, "renameSync", () => { throw new Error("locked"); });
+  assert.equal(runs.closed("pane"), false);
+  assert.deepEqual(runs.restarted().get("bot"), [run]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), [run]);
+  rename.mock.restore();
+  assert.equal(runs.closed("pane"), true);
+  assert.equal(createPaneRuns(file).restarted().size, 0);
+});
+
 test("a restart sends one note naming only the panes left mid-run", async (t) => {
   const file = runFile(t);
   const app = launch(file);

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,9 @@ import { expect, it } from "vitest";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { loadTerminalBridgeToken, publishTerminalDiscovery } from "./terminal-discovery.mjs";
+import { createTerminalHost } from "./terminal-host.mjs";
+import { createPaneRuns } from "./pane-runs.mjs";
+import { createWorkerSession } from "./worker-session.mjs";
 
 it("loads one complete identity under concurrent starts", async () => {
   const profile = await fs.mkdtemp(path.join(os.homedir(), "bridge-identity-"));
@@ -19,12 +23,16 @@ it.skipIf(process.platform !== "win32")("persists bridge identity and the old-en
   const root = await fs.mkdtemp(path.join(os.homedir(), "bridge-discovery-"));
   const profile = path.join(root, "프로필");
   const bin = await installOrbitMsg(path.join(root, ".orbit", "bin"), "win32", profile);
-  const posts = [];
-  const host = { readBot() {}, sendBot() {}, captureWorkerSession(auth, input) { posts.push({ auth, input }); return auth === "Bearer old-pane-auth"; } };
+  const file = path.join(profile, "pane-runs.json");
+  const capture = createWorkerSession({ kind: "managed", args: [], account: { id: "fixture", generation: 1 }, session: { engine: "codex", launchGeneration: randomUUID(), nativeId: null } }, "old-pane", root, null);
+  const runs = createPaneRuns(file);
+  runs.started({ id: "old-pane", botId: "bot", teacher: "bot", cwd: root, session: capture.run });
+  const host = createTerminalHost({ authorize() {}, resolveCwd: async () => root, paneRuns: runs });
   const first = createTerminalBridge({ host, profile });
   const old = await first.start();
   await first.close();
-  const second = createTerminalBridge({ host });
+  const restartedHost = createTerminalHost({ authorize() {}, resolveCwd: async () => root, paneRuns: createPaneRuns(file) });
+  const second = createTerminalBridge({ host: restartedHost });
   try {
     const current = await second.start(profile);
     expect(current.token).toBe(old.token);
@@ -33,14 +41,15 @@ it.skipIf(process.platform !== "win32")("persists bridge identity and the old-en
     expect(discovery.url).toBe(current.url);
     expect(discovery).not.toHaveProperty("token");
     if (process.platform !== "win32") expect((await fs.stat(path.join(profile, "terminal-discovery.json"))).mode & 0o777).toBe(0o600);
-    const hook = { hook_event_name: "SessionStart", source: "resume", session_id: "native-id", transcript_path: null, cwd: root };
+    const hook = { hook_event_name: "SessionStart", source: "resume", session_id: randomUUID(), transcript_path: null, cwd: root };
     const result = await new Promise(resolve => {
       const child = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(bin, "orbit-session.ps1")], {
-        windowsHide: true, env: { ...process.env, HOME: root, USERPROFILE: root, ORBIT_PANE: "old-pane", ORBIT_SESSION_URL: `${old.url}/v1/terminal/session`, ORBIT_SESSION_AUTH: "old-pane-auth", ORBIT_SESSION_GENERATION: "old-generation" },
+        windowsHide: true, env: { ...process.env, HOME: root, USERPROFILE: root, ORBIT_PANE: "old-pane", ORBIT_SESSION_URL: `${old.url}/v1/terminal/session`, ORBIT_SESSION_AUTH: capture.auth, ORBIT_SESSION_GENERATION: capture.run.launchGeneration },
       }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }));
       child.stdin.end(JSON.stringify(hook));
     });
     expect(result.code, result.stderr).toBe(0);
-    expect(posts).toEqual([{ auth: "Bearer old-pane-auth", input: { pane: "old-pane", launchGeneration: "old-generation", session_id: "native-id", transcript_path: null, cwd: root, source: "resume" } }]);
-  } finally { await second.close(); }
+    expect(createPaneRuns(file).restarted().get("bot")[0].session).toMatchObject({ nativeId: hook.session_id, source: "resume", transcriptPath: null });
+    expect(await fs.readFile(file, "utf8")).not.toContain(capture.auth);
+  } finally { await second.close(); await host.dispose(); await restartedHost.dispose(); }
 });
