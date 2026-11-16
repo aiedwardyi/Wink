@@ -146,6 +146,7 @@ describe("POST /v1/enroll/google", () => {
     home.socket.write(encodeFrame({ type: "active" }));
     const journal = () => readFile(join(h.dataDir, "team-sessions"), "utf8").catch(() => "");
     await vi.waitFor(async () => expect(await journal()).toMatch(new RegExp(`^act ${mate.label} `, "m")));
+    // Label-only `pc` connection spans stay: they carry no name or use time.
     expect((await journal()).split("\n").filter((line) => line.includes(stranger.label) && !line.startsWith("pc "))).toEqual([]);
     expect(h.relay.hub.pcsFor(googleSubHash("stranger-sub"))).toEqual([{ label: stranger.label, name: "Stranger PC" }]);
     away.socket.destroy();

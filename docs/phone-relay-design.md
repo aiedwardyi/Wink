@@ -50,7 +50,7 @@ PC: Wink Node server (harness) <-- tls.Server (PC cert) <-- unwrap <------------
 
 Control: relay `hello {v:1, nonce}`; PC `auth {label, pk, ticket, sig}` where `sig = Ed25519("wink-relay-auth/1" | nonce | label)`; relay `ready {session, poolToken, pool:{min, max}, ticket?}` (a refreshed ticket when the old one is past half life); relay `want {n}` when a phone waits on an empty pool; `ping`/`pong` every 30 s both ways, 2 missed means dead; relay `notice {code}` for `superseded`, `draining`, `revoked`.
 
-A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines and note times, scrubbed; never chats, files or terminal text), and they follow each PC's error-report setting. A team relay adds `snags: true` to `ready`; only then does the PC send `snag {data}` frames (8 KiB max, answered by `snagged {id}`), and the owner's Wink claims them from `POST /v1/team/snags/claim` and acks them.
+A team relay also takes stuck-worker reports from teammates' PCs for its owner (Wink version, engines, note times and the stuck pane's last 30 lines, scrubbed; never chats or attached files), and they follow each PC's error-report setting. A team relay adds `snags: true` to `ready`; only then does the PC send `snag {data}` frames (8 KiB max, answered by `snagged {id}`), and the owner's Wink claims them from `POST /v1/team/snags/claim` and acks them.
 
 Data: PC sends `join {session, poolToken}` once (token compared with `timingSafeEqual`); relay parks it. When a phone arrives the relay sends `go {peer}` (phone IP, used by the PC only for rate limits, never for trust), writes the buffered ClientHello, then splices both ways. After `go` neither side frames again.
 
