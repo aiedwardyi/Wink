@@ -167,7 +167,7 @@ export function createMapPane(deps: MapPaneDeps) {
               if (!name) return schedule(record);
               const path = name.toString().replaceAll("\\", "/");
               // A folder without git yet still hears its .git: that is how it becomes a repo.
-              if (path.split("/").some(part => part === ".git" && record.base || part === "node_modules")) return;
+              if (path.split("/").some(part => (part === ".git" && record.base) || part === "node_modules")) return;
               schedule(record, path);
             });
             record.watcher.on("error", () => { fail(record); send(); });
