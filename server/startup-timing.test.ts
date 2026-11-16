@@ -82,6 +82,9 @@ describe("startup timing", () => {
     expect(startup.beforeRequest("PUT", "/api/internal/google-account")).toBeUndefined();
     expect(startup.beforeRequest("PUT", "/api/internal/terminal-bridge")).toBeUndefined();
     expect(startup.beforeRequest("POST", "/api/attachments")).toBeUndefined();
+    expect(startup.beforeRequest("PATCH", "/api/bots/b1")).toBeUndefined();
+    expect(startup.beforeRequest("PATCH", "/api/bots/b1/tasks/t1")).toBeDefined();
+    expect(startup.beforeRequest("POST", "/api/accounts/acct_1/default")).toBeDefined();
     const action = vi.fn();
     const pending = startup.beforeRequest("POST", "/api/bots/b1/send")!.then(action);
     startup.paint();
@@ -264,10 +267,10 @@ describe("startup timing", () => {
       if (accounts === "failed") throw new Error("restore failed");
     });
     startupTiming.afterPaint("probes", () => new Promise<void>((resolve) => { release = resolve; }));
-    const describeInstances = vi.fn(async () => []);
+    const describeInstances = vi.fn(async (_probe: string) => []);
     const pending = runInNewContext(`(async () => { ${statement} })()`, {
       method: "GET", path: "/api/instances", startupTiming, url: new URL("http://localhost/api/instances"),
-      describeInstances, resetPathCache() {}, withRateLimits: (value: unknown) => value,
+      describeInstances, instanceChecks: { describe: () => describeInstances("cached") }, resetPathCache() {}, withRateLimits: (value: unknown) => value,
       rememberAutomaticAvailability() {}, json() {}, res: {},
       botAccounts: { pickerInstances: (value: unknown) => value, accountInstances: (value: unknown) => value },
     }) as Promise<void>;

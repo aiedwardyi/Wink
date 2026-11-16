@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
-import { LIVE_LANGUAGES, LIVE_VOICES, type LiveLanguage, type LiveVoice } from "../shared/live-call.ts";
+import { LIVE_VOICES, type LiveVoice } from "../shared/live-call.ts";
 import {
   CREDENTIAL_BROKER,
   credentialValue,
@@ -32,7 +32,6 @@ export const MAX_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const DEFAULT_LOCAL_VM_MODE = "shared" as const;
 export const DEFAULT_LOCAL_VM_MAX_INSTANCES = 2;
 export const MIN_LOCAL_VM_MAX_INSTANCES = 1;
-export const MAX_LOCAL_VM_MAX_INSTANCES = 4;
 
 export function isValidSshAlias(value: unknown): value is string {
   return typeof value === "string" && SSH_ALIAS.test(value);
@@ -70,7 +69,6 @@ const localVmConfigSchema = z.object({
     .number()
     .int()
     .min(MIN_LOCAL_VM_MAX_INSTANCES)
-    .max(MAX_LOCAL_VM_MAX_INSTANCES)
     .optional(),
 });
 const featureConfigSchema = z.object({
@@ -114,7 +112,7 @@ const appConfigSchema = z.object({
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   gemini: z.object({ apiKey: optionalText }).optional(),
   // A voice dropped from the list later falls back to the default, not a config that fails to load.
-  liveCall: z.object({ voice: z.preprocess((voice) => OLD_VOICES[voice as string] ?? voice, z.enum(LIVE_VOICES)).optional().catch(undefined), language: z.enum(LIVE_LANGUAGES).optional().catch(undefined) }).optional(),
+  liveCall: z.object({ voice: z.preprocess((voice) => OLD_VOICES[voice as string] ?? voice, z.enum(LIVE_VOICES)).optional().catch(undefined) }).optional(),
   /** `model` seeds the default selection; `provider` pins an OpenRouter
    * upstream (e.g. "fireworks"). Both are non-secret and optional. */
   openaiCompat: z
@@ -176,7 +174,7 @@ const jsonObjectSchema = z.record(z.string(), z.json());
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   gemini?: { apiKey?: string };
-  liveCall?: { voice?: LiveVoice; language?: LiveLanguage };
+  liveCall?: { voice?: LiveVoice };
   openaiCompat?: { key?: string; url?: string; model?: string; provider?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };

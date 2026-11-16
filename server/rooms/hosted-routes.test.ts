@@ -66,7 +66,7 @@ describe("hosted group routes", () => {
     const wink = bot("Wink", "claudeAgent");
     const { body } = await call(routes().create, { name: "Team", memberIds: [wink], hosted: true });
     const group = store.group(body.group.id)!;
-    addPerson(group.hosted!.roomId, "Mina", "chat", ["Wink"]);
+    addPerson(group.hosted!.roomId, "Mina", ["Wink"]);
     expect((await call(routes().patch, { memberIds: [wink, bot("mina", "codex")] }, [group.id])).body.error).toMatch(/already called mina/);
     expect((await call(routes().patch, { memberIds: [wink, bot("Helper", "codex")] }, [group.id])).status).toBe(200);
   });

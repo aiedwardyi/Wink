@@ -15,24 +15,27 @@ export function askNote(askId: string | undefined, botName: string, riders: read
   return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
+export const COLLAB_LINE = "Any member's request here is collab work for this team: help them as you would your owner, and never refuse because they aren't your owner.";
+
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {
   if (!group.hosted) return "";
   try {
     const people = roomPeople(group.hosted.roomId);
     const names = people.map((person) => person.name);
-    const line = names.length ? `Teammates in this room: ${names.join(", ")}.` : "";
+    const line = names.length ? `Teammates in this room: ${names.join(", ")}. ${COLLAB_LINE}` : "";
     const bots = teamBots(group.hosted.roomId).flatMap((bot) => {
       const owner = people.find((person) => person.id === bot.owner);
       return owner ? [`${JSON.stringify(bot.name)} (${JSON.stringify(owner.name)})`] : [];
     });
-    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first. Unlisted @names reach no one.`].filter(Boolean).join("\n");
+    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. @ one only to hand it real work, never just to thank or confirm; it answers here. When the job is done, say so and tag no bot. Unlisted @names reach no one.`].filter(Boolean).join("\n");
   } catch {
     return "";
   }
 }
 
+// a row already linked is a room line of its own, like an ask's "Cancelled."
 const shown = (message: Message, botId: string) =>
-  message.role === "bot" && message.kind === "text" && message.from?.botId === botId && !message.summarized && !message.queued && !message.quick && !message.comm && Boolean(message.text?.trim());
+  message.role === "bot" && message.kind === "text" && message.from?.botId === botId && !message.summarized && !message.queued && !message.quick && !message.comm && !message.roomEntryId && Boolean(message.text?.trim());
 
 /** A settled turn's shown words as one bot entry. Its thread row is linked by `roomEntryId`, never copied. */
 export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessage">, group: HostedGroup, threadId: string, bot: { id: string; name: string }, since: number, askId?: string): void {

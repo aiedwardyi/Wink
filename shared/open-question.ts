@@ -10,6 +10,7 @@ interface Row {
   from?: { botId?: string };
   author?: { kind: string };
   call?: CallTag;
+  answersCard?: string;
   card?: { subtitle?: string; options?: string[]; askUser?: true; staysOpen?: true; requestId?: string; answered?: string; dismissed?: boolean };
 }
 
@@ -44,7 +45,7 @@ export function isOpenRequest(message: Row): boolean {
   return message.kind === "options" && Boolean(message.card?.requestId) && !message.card?.answered && !message.card?.dismissed;
 }
 
-function answerPrefix(card: Row): string {
+export function answerPrefix(card: Row): string {
   const question = (card.card?.subtitle ?? "").replace(/\s+/g, " ").trim();
   return `Re: “${question.length > QUOTE_CHARS ? `${question.slice(0, QUOTE_CHARS - 1).trimEnd()}…` : question}”\n`;
 }
@@ -58,27 +59,31 @@ export function answerText(messages: readonly Row[], card: Row, answer: string):
 const sameAsker = (left: Row, right: Row) => left.from?.botId === right.from?.botId;
 
 /** Every ask_user card's state. A staysOpen card waits until answered, dismissed or asked again word for word;
- * an older card closes as the person types past it or a newer card arrives. */
+ * an older card closes as the person types past it or a newer card arrives. An answered card takes the person's
+ * next line, the one that settled it, so it never answers an older card too. */
 export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskState> {
   const states = new Map<T, AskState>();
   const asked: T[] = [];
   let open: T[] = [];
   const answer = (card: T, text: string, by: T) => {
-    states.set(card, { state: "answered", reply: firstLine(text), by });
+    if (states.get(card)?.state === "waiting") states.set(card, { state: "answered", reply: firstLine(text), by });
     open = open.filter((entry) => entry !== card);
   };
   for (const message of messages) {
     if (isAskUserCard(message)) {
       const subtitle = message.card!.subtitle?.trim();
       for (const older of open) {
+        if (states.get(older)?.state !== "waiting") continue;
         if (!older.card!.staysOpen) states.set(older, { state: "superseded" });
         else if (older.card!.subtitle?.trim() === subtitle && sameAsker(older, message)) states.set(older, { state: "askedAgain" });
       }
       open = open.filter((older) => states.get(older)?.state === "waiting");
       asked.push(message);
       const card = message.card!;
-      if (card.answered) states.set(message, { state: "answered", reply: firstLine(card.answered) });
-      else if (card.dismissed) states.set(message, { state: "dismissed" });
+      if (card.answered) {
+        states.set(message, { state: "answered", reply: firstLine(card.answered) });
+        open.push(message);
+      } else if (card.dismissed) states.set(message, { state: "dismissed" });
       else {
         states.set(message, { state: "waiting" });
         open.push(message);
@@ -87,6 +92,11 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
     }
     if (!answersQuestion(message)) continue;
     const text = message.text ?? "";
+    const tapped = message.answersCard ? asked.find((card) => card.id === message.answersCard) : undefined;
+    if (tapped) {
+      if (open.includes(tapped)) answer(tapped, text.startsWith(answerPrefix(tapped)) ? text.slice(answerPrefix(tapped).length) : text, message);
+      continue;
+    }
     const quoted = text.startsWith("Re: “") ? asked.findLast((card) => text.startsWith(answerPrefix(card))) : undefined;
     if (quoted) {
       if (open.includes(quoted)) answer(quoted, text.slice(answerPrefix(quoted).length), message);
@@ -99,9 +109,20 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
       continue;
     }
     const top = open.at(-1);
-    if (top && (!top.card!.staysOpen || !top.card!.options?.length)) answer(top, text, message);
+    if (top && (states.get(top)?.state !== "waiting" || !top.card!.staysOpen || !top.card!.options?.length)) answer(top, text, message);
   }
   return states;
+}
+
+/** What the person's typed `text` answers `card` with: their own words, or "Answered in chat" past its choices. */
+export function typedReply(card: Row, text: string): string {
+  const { staysOpen, options } = card.card!;
+  return !staysOpen || !options?.length || options.includes(text.trim()) ? firstLine(text) : ANSWERED_IN_CHAT;
+}
+
+/** True when the person's line `text`, landing next, settles `card` by itself: the server then takes no second answer for it. */
+export function lineSettles(messages: readonly Row[], card: Row, text: string): boolean {
+  return askStates([...messages, { role: "user", kind: "text", text }]).get(card)?.state === "answered";
 }
 
 /** The chat's newest waiting ask_user card, if any. */

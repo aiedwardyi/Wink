@@ -11,7 +11,8 @@ import { contextMenuTemplate } from "./context-menu.mjs";
 import { saveImageCopy } from "./open-file.mjs";
 
 const require = createRequire(import.meta.url);
-const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 
 function openDeviceWindowSource(main) {
   const start = main.indexOf("function openDeviceWindow");
@@ -303,6 +304,31 @@ test("ignores a 403 from another origin", () => {
   assert.deepEqual(logs, []);
 });
 
+test("an error answer shows the unreachable page and keeps retrying, as a closed Wink behind Tailscale Serve gives", () => {
+  for (const code of [502, 500, 404]) {
+    const { webContents, logs, timers } = watched();
+    webContents.emit("did-navigate", {}, URL_, code);
+    webContents.emit("did-navigate", {}, "data:failure", -1);
+    assert.deepEqual(webContents.loads, ["data:failure"]);
+    assert.deepEqual(logs, [`device window home.tail1234.ts.net: answered ${code}`]);
+    timers.tick();
+    webContents.emit("did-navigate", {}, URL_, code);
+    webContents.emit("did-navigate", {}, "data:failure", -1);
+    assert.ok(timers.tick);
+    assert.equal(logs.length, 1);
+    timers.tick();
+    webContents.emit("did-navigate", {}, URL_, 200);
+    assert.equal(timers.tick, null);
+  }
+});
+
+test("a 401 answer is left to the link page", () => {
+  const { webContents, logs } = watched();
+  webContents.emit("did-navigate", {}, URL_, 401);
+  assert.deepEqual(webContents.loads, []);
+  assert.deepEqual(logs, []);
+});
+
 test("retries every 10 s for 2 min, then stops", () => {
   const { webContents, timers } = watched();
   webContents.emit("did-fail-load", {}, -118, "ERR_CONNECTION_TIMED_OUT", URL_, true);
@@ -434,13 +460,20 @@ async function assertRefused(hosts) {
 test("openDeviceWindow opens a team relay host in the default browser with no tailnet", async () => {
   const device = openDevice();
   assert.equal(await device.open(RELAY_PC, "Home"), true);
-  assert.deepEqual(device.external, [`https://${RELAY_PC}/`]);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
+  assert.deepEqual(device.windows, []);
+});
+
+test("one open of a relay PC is one browser tab, straight to its Google sign-in, and no PC window", async () => {
+  const device = openDevice({ tailnet: "tail1234.ts.net" });
+  assert.equal(await device.open(RELAY_PC, "Home"), true);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
   assert.deepEqual(device.windows, []);
 });
 
 test("reads the team base from a baked base or relay origin", () => {
   for (const baked of ["wink.test", "relay.wink.test", "https://relay.wink.test", "https://relay.wink.test/"]) {
-    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/`, baked);
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/pair?g=1`, baked);
   }
   for (const baked of [undefined, "", "http://relay.wink.test", "relay.", "wink test", 42]) {
     assert.equal(relayDeviceUrl(RELAY_PC, baked), "", String(baked));
@@ -489,6 +522,85 @@ test("reads the tailnet from tailscale status", () => {
   for (const bad of [status(undefined), status({}), status({ DNSName: 42 }), status({ DNSName: "home.example.com." }), status({ DNSName: "home." }), "null", "{not json", "", undefined]) {
     assert.equal(tailnetFromStatus(bad), "");
   }
+});
+
+test("this PC's host from ORBIT_REMOTE_HOST is normalized like the tailscale status path", async () => {
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  const start = main.indexOf("async function localTailnet()");
+  const end = main.indexOf("\n}", start) + 2;
+  assert.ok(start >= 0 && end > start, "localTailnet slice bounds not found");
+  const normalized = [];
+  const context = {
+    process: { env: { ORBIT_REMOTE_HOST: " Work.tail1234.ts.net " }, platform: "win32" },
+    deviceTailnet,
+    normalizedHost: (raw) => { normalized.push(raw); return normalizedHost(raw); },
+    cachedTailnet: "",
+    cachedSelfHost: "",
+  };
+  const localTailnet = vm.runInNewContext(`(${main.slice(start, end)})`, context);
+  assert.equal(await localTailnet(), "tail1234.ts.net");
+  assert.equal(context.cachedSelfHost, "work.tail1234.ts.net");
+  assert.deepEqual(normalized, [" Work.tail1234.ts.net "]);
+});
+
+test("reads this PC's own host from tailscale status", () => {
+  assert.equal(selfHostFromStatus(JSON.stringify({ Self: { DNSName: "Work.tail1234.ts.net." } })), "work.tail1234.ts.net");
+  for (const bad of [JSON.stringify({ Self: { DNSName: "work.example.com." } }), "{not json", undefined]) assert.equal(selfHostFromStatus(bad), "");
+});
+
+// Runs main's real will-navigate handler for Home's window on Work.
+function homeWindowOnWork() {
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  const start = main.indexOf('win.webContents.on("will-navigate"');
+  const end = main.indexOf('win.webContents.on("will-redirect"', start);
+  assert.ok(start >= 0 && end > start, "will-navigate slice bounds not found");
+  const calls = { external: [], opened: [], focused: 0 };
+  let navigate;
+  vm.runInNewContext(main.slice(start, end), {
+    win: { webContents: { on: (_name, listener) => { navigate = listener; } } },
+    url: new URL("https://home.tail1234.ts.net/"),
+    tailnet: "tail1234.ts.net",
+    cachedSelfHost: "work.tail1234.ts.net",
+    linkedFile: () => false,
+    sameDesktopViewerOrigin,
+    devicePickTarget,
+    safeExternalUrl: (target) => target,
+    shell: { openExternal: async (target) => void calls.external.push(target) },
+    activateMainWindow: () => void calls.focused++,
+    openDeviceWindow: async (host, name) => void calls.opened.push([host, name]),
+  });
+  const go = (target) => {
+    let prevented = false;
+    navigate({ preventDefault: () => { prevented = true; } }, target);
+    return prevented;
+  };
+  return { calls, go };
+}
+
+test("picking this PC in another PC's window focuses the main window, never the browser", () => {
+  const { calls, go } = homeWindowOnWork();
+  assert.equal(go("https://work.tail1234.ts.net/"), true);
+  assert.equal(calls.focused, 1);
+  assert.deepEqual(calls.external, []);
+  assert.deepEqual(calls.opened, []);
+});
+
+test("picking a third PC in another PC's window opens its own window", () => {
+  const { calls, go } = homeWindowOnWork();
+  assert.equal(go("https://laptop.tail1234.ts.net/"), true);
+  assert.deepEqual(calls.opened, [["laptop.tail1234.ts.net", "laptop"]]);
+  assert.deepEqual(calls.external, []);
+  assert.equal(calls.focused, 0);
+});
+
+test("other links from a PC window still open in the browser", () => {
+  const { calls, go } = homeWindowOnWork();
+  assert.equal(go("https://home.tail1234.ts.net/threads"), false);
+  const links = ["https://example.com/", "https://laptop.tail1234.ts.net/docs", "https://laptop.tail1234.ts.net/?key=1", "https://laptop.tail1234.ts.net:8443/", "http://laptop.tail1234.ts.net/", "https://evil.other.ts.net/", "https://:secret@laptop.tail1234.ts.net/", "https://user@laptop.tail1234.ts.net/"];
+  for (const link of links) assert.equal(go(link), true);
+  assert.deepEqual(calls.external, links);
+  assert.deepEqual(calls.opened, []);
+  assert.equal(calls.focused, 0);
 });
 
 test("titles the window with the PC name", () => {

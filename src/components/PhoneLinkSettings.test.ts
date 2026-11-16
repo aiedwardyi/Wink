@@ -9,9 +9,9 @@ const store = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => store);
 const relay = vi.hoisted(() => ({ on: true }));
 vi.mock("./PhoneAccessSettings", () => ({
-  PhoneAccessSettings: ({ onEnabled }: { onEnabled?: (on: boolean) => void }) => {
+  PhoneAccessSettings: ({ onEnabled, onNoRelay }: { onEnabled?: (on: boolean) => void; onNoRelay?: () => void }) => {
     useEffect(() => onEnabled?.(relay.on), [onEnabled]);
-    return createElement("div", { "data-this-pc": true });
+    return createElement("div", { "data-this-pc": true }, createElement("button", { type: "button", "data-no-relay": "", onClick: onNoRelay }));
   },
 }));
 vi.mock("./DeviceRows", async (original) => ({ ...await original<typeof import("./DeviceRows")>(), YourPcs: () => null }));
@@ -370,6 +370,24 @@ describe("Phone setup steps", () => {
     expect((button("Get Code") as HTMLButtonElement).disabled).toBe(true);
     expect((button("Set Up") as HTMLButtonElement).disabled).toBe(false);
     expect(store.api.mock.calls.some(([path]) => path === "/api/phone/pairing")).toBe(false);
+  });
+
+  it.each([
+    ["en", "Other ways to connect"],
+    ["ko", "다른 연결 방법"],
+  ])("with no relay, Connect from my devices opens the other ways and the Tailscale QR in %s", async (locale, label) => {
+    localStorage.setItem("omb-locale", locale);
+    relay.on = false;
+    const scroll = vi.fn();
+    vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(scroll);
+    store.api.mockResolvedValue({ url, setup: { state: "ready" } });
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+    expect(button(label).getAttribute("aria-expanded")).toBe("false");
+    await act(async () => host.querySelector<HTMLElement>("[data-no-relay]")!.click());
+    expect(button(label).getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById("devices-tailscale")?.querySelector("[data-phone-link-qr]")).not.toBeNull();
+    expect(scroll.mock.contexts).toContain(host.querySelector("[data-other-ways]"));
   });
 
   it("keeps the Tailscale page on a remote device, with no relay parts", async () => {

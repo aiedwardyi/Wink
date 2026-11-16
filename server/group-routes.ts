@@ -10,16 +10,22 @@ import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { laneKey } from "./room-lane.ts";
+import { steerRoomSend } from "./room-steer.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
-import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
+import { finishEnd, stopRoomAsks, type HostedGroup } from "./rooms/asks.ts";
 import { createRoom, noticeText, roomEntry, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
 import { roomFile } from "./rooms/files.ts";
 import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/people-only.ts";
+import { hostRoomFiles, stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
+import { scanQuestion } from "../shared/open-question.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
+
+const GROUP_BUSY = "this group is working or waiting on you - finish that turn first";
+const GROUP_WORKING = "this group is working - stop that turn first";
 
 type GroupRouteDeps = {
   store: Store;
@@ -28,7 +34,7 @@ type GroupRouteDeps = {
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   roomLaneThread?: (botId: string) => string | undefined;
   createGroupTaskRequestSchema: z.ZodType<{ title?: string }>;
-  checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  checkedMemberIds: (value: unknown, roster?: readonly string[]) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
   publicGroupState: (group: GroupRecord) => Record<string, unknown>;
   groupIsWorking: (group: GroupRecord) => boolean;
@@ -37,7 +43,10 @@ type GroupRouteDeps = {
   lastReply: Map<string, { text: string; messageId: string }>;
   sendSequencer: SendSequencer;
   resolveReplyTarget: (threadId: string, value: unknown) => Message | undefined;
-  startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string) => Message;
+  startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds?: readonly string[]) => Message;
+  /** A bot's own call: its line keeps file names, never the host's files, as on the host's room file routes. */
+  botCaller?: (req: IncomingMessage) => boolean;
+  userName: () => string;
   cancelGroupTurnOperations: (groupId: string, threadId: string) => void;
   taskResumes: TaskResumeScheduler;
   bumpTurnEpoch: (botId: string) => number;
@@ -86,6 +95,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     releaseInterruptedBot,
     rooms,
   } = deps;
+  // a Stop that lands while a room send awaits its steer
+  const roomStops = new Map<string, number>();
   const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => store.bot(id)!), people);
   /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
   const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
@@ -220,7 +231,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
       if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const body = await readBody(req);
       if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -245,7 +256,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         return json(res, 200, { group: url.searchParams.get("messages") === "0" ? publicGroupState(view) : groupWithThread(view) });
       }
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const switched = store.switchGroupTask(group.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such channel task" });
@@ -262,7 +273,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
       if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const body = await readBody(req);
       if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -278,7 +289,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
       if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       if (!store.groupTaskByThread(group.id, m[2])) return json(res, 404, { error: "no such channel task" });
       lastReply.delete(m[2]);
@@ -295,11 +306,9 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const existing = store.group(m[1]);
       if (!existing) return json(res, 404, { error: "no such room" });
-      if (
-        channelTaskBlocked(existing) &&
-        (body.memberIds !== undefined || body.defaultResponder !== undefined || body.bulletin !== undefined)
-      ) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+      // who answers and who is in are read when a message starts, so they may change mid-turn
+      if (channelTaskBlocked(existing) && body.bulletin !== undefined) {
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const patch: Record<string, unknown> = {};
       if (body.name !== undefined) {
@@ -327,8 +336,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.memberIds !== undefined) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
-        const empty = existing.hosted ? peopleOnlyRoster(body.memberIds) : null;
-        const roster = empty?.ok ? empty : checkedMemberIds(body.memberIds);
+        const empty = peopleOnlyRoster(body.memberIds);
+        const roster = empty.ok ? empty : checkedMemberIds(body.memberIds, existing.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
         const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
         if (refusal) return json(res, 400, { error: refusal });
@@ -385,6 +394,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         if (typeof body.pinned !== "boolean") return json(res, 400, { error: "pinned must be a boolean" });
         patch.pinned = body.pinned;
       }
+      const leaving = existing.busyBotId;
+      if (leaving && Array.isArray(patch.memberIds) && !patch.memberIds.includes(leaving)) await stopMember(existing.threadId, leaving);
       if (body.cwd !== undefined) repinRoomCwd(store, existing, patch.cwd as string | undefined);
       if (existing.hosted && Array.isArray(patch.memberIds)) setPeopleOnly(existing.hosted.roomId, !patch.memberIds.length);
       rooms?.edited(existing, patch);
@@ -402,7 +413,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
       if (groupIsWorking(group)) {
-        return json(res, 409, { error: "this channel is working - stop that turn first" });
+        return json(res, 409, { error: GROUP_WORKING });
       }
       const threadIds = new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
       for (const threadId of threadIds) lastReply.delete(threadId);
@@ -436,6 +447,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const sendId = parseSendId(body.sendId);
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
+      // a tapped question card is answered by the member that asked, whatever the room's rule
+      const asked = typeof body.cardId === "string" ? store.messagesFor(threadId).find((message) => message.id === body.cardId) : undefined;
+      const askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
+      const answersCard = asked?.card?.askUser ? asked.id : undefined;
+      // nobody was asked to answer: no busy patch will come to end the sender's Thinking
+      const idle = () => !groupIsWorking(store.group(group.id) ?? group);
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
@@ -446,9 +463,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               throw Object.assign(new Error("sendId already belongs to another message"), { status: 409 });
             }
             if (accepted.kind === "match") {
-              return { ok: true as const, threadId, message: accepted.message };
+              return { ok: true as const, threadId, message: accepted.message, idle: idle() };
             }
           }
+          const stops = roomStops.get(group.id);
+          const roomFileIds = group.hosted && !deps.botCaller?.(req) ? await hostRoomFiles(group as HostedGroup, text, sendId) : [];
           const current = store.group(group.id);
           if (!current) throw Object.assign(new Error("no such group"), { status: 404 });
           if (current.threadId !== threadId) {
@@ -456,11 +475,19 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          const message = startGroupTurn(current.id, text, replyTo, sendId);
-          return { ok: true as const, threadId, message };
+          const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard, roomFileIds);
+          // a Stop during the steer await hands the line back, as a 1:1 Send now
+          if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
+          // a typed line answers the open question, so its asker takes it; a mention still wins
+          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard, roomFileIds);
+          return { ok: true as const, threadId, message, idle: idle() };
         },
-      );
-      return json(res, 202, receipt);
+      ).catch((error: Error & { status?: number; code?: string; file?: string }) => {
+        // a teammate's upload names its refused file the same way; the generic 5xx body would hide a full room
+        if (error.code !== "ROOM_FILE") throw error;
+        return { status: error.status ?? 500, body: { error: error.message, code: error.code, ...(error.file === undefined ? {} : { file: error.file }) } };
+      });
+      return "body" in receipt ? json(res, receipt.status, receipt.body) : json(res, 202, receipt);
     },
     interrupt: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const group = store.group(m[1]);
@@ -479,9 +506,15 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       // Mark the whole room operation cancelled before awaiting the provider.
       // This covers setup-before-busy and responder handoffs, and makes every
       // queued responder observe cancellation before it can start.
+      roomStops.set(group.id, (roomStops.get(group.id) ?? 0) + 1);
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
+      if (group.hosted) {
+        stopBotChain(group.hosted.roomId);
+        // hides the strip even when no host bot was working
+        broadcast({ kind: "group", group: publicGroupState(group) });
+      }
       const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;

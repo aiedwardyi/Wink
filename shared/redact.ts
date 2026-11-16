@@ -74,9 +74,11 @@ const PEM_END = /-----END [A-Z ]*PRIVATE KEY-----/;
  * ("password: leave blank…") has spaces and does not match. */
 const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)(?:[_-]?key)?s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=!@#$%^*?-]{8,})\3/gi;
-const PROSE_NAMES = ["wifi password", "password", "passcode", "pin", "code", "passphrase", "비밀번호"];
-const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|pin|code|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
-const ROOM_CODE = /(?<![\p{L}\p{N}_])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
+/** Room memory only: chat says "the code is ready", "my pin is on the fridge" and "#3B82F6". */
+const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
+/** 4+ chars with a digit or symbol; plain words ("stored", "opensesame") stay prose. */
+const PROSE_VALUE = /^(?=.{4}).*[\d!@#$%^*?~+=]/;
+const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
 
 const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;
@@ -118,10 +120,10 @@ const STREAM_HOLD = 96;
 /** Enough of an open block's tail to still match an END split across chunks. */
 const PEM_TAIL_HOLD = 96;
 
-const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD, PROSE_SECRET];
+const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD];
 
 /** A literal every content pattern above needs; text with none has nothing to mask. */
-const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|passcode|pin|code|passphrase|비밀번호|[2-9A-HJ-NP-Z]{6}|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
+const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
 
 const WORD_CHAR = /[A-Za-z0-9_]/;
 const JWT_SEG_CHAR = /[A-Za-z0-9_-]/;
@@ -297,24 +299,13 @@ function couldBeKeyValue(s: string): boolean {
   return i >= s.length || (i === s.length - 1 && s[i] === ":");
 }
 
-function couldBeProseSecret(text: string): boolean {
-  const lower = text.toLowerCase().replace(/[ \t]+/g, " ");
-  return PROSE_NAMES.some((name) => {
-    if (name.startsWith(lower)) return true;
-    if (!lower.startsWith(name)) return false;
-    const tail = lower.slice(name.length).replace(/^[는가]/, "");
-    return /^ *(?:i|is)?$/.test(tail) || /^ *(?:[:=] *|is +)?["']?[a-z0-9._~+/=!@#$%^*?-]*$/.test(tail);
-  });
-}
-
 /** Leftmost index of a suffix that could still complete into a secret match. */
-function secretPrefixStart(text: string, start: number): number {
+function secretPrefixStart(text: string): number {
   for (let i = 0; i < text.length; i++) {
     const suffix = text.slice(i);
     if (couldBePemBegin(suffix) || couldBeConfigKey(suffix)) return i;
-    if ((suffix.startsWith("비") || i === 0 || !WORD_CHAR.test(text[i - 1]!)) && couldBeProseSecret(suffix)) return i;
     if (!atWordBoundary(text, i)) continue;
-    if (couldBeKeyPrefix(suffix) || couldBeBearer(suffix) || couldBeKeyValue(suffix) || (i >= start && /^[2-9A-HJ-NP-Z]{1,6}$/.test(suffix))) return i;
+    if (couldBeKeyPrefix(suffix) || couldBeBearer(suffix) || couldBeKeyValue(suffix)) return i;
   }
   return text.length;
 }
@@ -323,12 +314,11 @@ function secretPrefixStart(text: string, start: number): number {
  * unsettled tail can still grow, and masking it strands the rest of the secret
  * in a later chunk with no prefix left to match — so it stays whole in the hold
  * until a non-matching character or flush() ends it. */
-function safeCut(text: string, start: number): number {
-  let cut = secretPrefixStart(text, start);
+function safeCut(text: string): number {
+  let cut = secretPrefixStart(text);
   const spans = STREAM_MATCHERS.flatMap((re) =>
     [...text.matchAll(re)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length] as const),
   );
-  for (const match of text.matchAll(ROOM_CODE)) if (match.index >= start) spans.push([match.index, match.index + match[0].length]);
   const open = CONFIG_KEY_OPEN.exec(text);
   if (open) spans.push([open.index, text.length] as const);
   const openPem = PEM_OPEN.exec(text);
@@ -411,12 +401,12 @@ export class StreamSecretMasker {
     const lead = this.prevChar ?? "";
     const offset = lead.length;
     const buffered = this.hold + chunk;
-    const cutWin = safeCut(lead + buffered, offset);
+    const cutWin = safeCut(lead + buffered);
     const cut = Math.max(0, cutWin - offset);
     this.hold = buffered.slice(cut);
     let out = "";
     if (cut > 0) {
-      const redacted = redactText(lead + buffered.slice(0, cut), offset);
+      const redacted = redactSecretsInText(lead + buffered.slice(0, cut));
       out = offset === 0 ? redacted : redacted.slice(offset);
       this.prevChar = buffered[cut - 1]!;
     }
@@ -431,7 +421,7 @@ export class StreamSecretMasker {
       return out;
     }
     const lead = this.prevChar ?? "";
-    const redacted = redactText(lead + this.hold, lead.length);
+    const redacted = redactSecretsInText(lead + this.hold);
     const out = lead ? redacted.slice(lead.length) : redacted;
     this.hold = "";
     this.prevChar = null;
@@ -449,7 +439,7 @@ export class StreamSecretMasker {
     this.countBody(open[2]);
     if (!head) return "";
     const lead = this.prevChar ?? "";
-    const redacted = redactText(lead + head, lead.length);
+    const redacted = redactSecretsInText(lead + head);
     const out = lead ? redacted.slice(lead.length) : redacted;
     this.prevChar = head[head.length - 1]!;
     return out;
@@ -485,28 +475,28 @@ export class StreamSecretMasker {
 
 
 export function redactSecretsInText(text: string): string {
-  return redactText(text, 0);
-}
-
-function redactText(text: string, start: number): string {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Only strings take the hint exit; anything else still fails in replace below.
-  if (!text || text.length < 5 || (typeof text === "string" && !SECRET_HINT.test(text))) return text;
+  if (!text || text.length < 8 || (typeof text === "string" && !SECRET_HINT.test(text))) return text;
   let out = text;
   out = out.replace(PEM_BLOCK, (_m, open: string, body: string, close: string) => `${open}\n${pemMask(body)}\n${close}`);
   out = out.replace(PEM_OPEN, (_m, open: string, body: string) => {
     const trimmed = body.trim();
     return trimmed ? `${open}\n${pemMask(body)}` : open;
   });
-  // wkr1: is a public URI prefix; its wki_ credential is masked separately.
-  out = out.replace(PROSE_SECRET, (m: string, lead: string, quote: string, value: string, at: number, all: string) =>
-    (!quote && /^(?:in|leave)$/i.test(value)) || (value === "wkr1" && all[at + m.length] === ":") || isCodeValue(quote, value, all, at + m.length) ? m : `${lead}${quote}${mask(value)}${quote}`);
   for (const re of KEY_PREFIXES) out = out.replace(re, (m) => mask(m));
   out = out.replace(BEARER, (_m, lead: string, tok: string) => `${lead}${mask(tok)}`);
   out = out.replace(KEY_VALUE, (m: string, key: string, sep: string, quote: string, value: string, at: number, all: string) =>
     isCodeValue(quote, value, all, at + m.length) ? m : `${key}${sep}${quote}${mask(value)}${quote}`);
   out = out.replace(CONFIG_KEY_FIELD, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${mask(value)}${quote}`);
-  out = out.replace(ROOM_CODE, (value: string, at: number) => at >= start && /[2-9]/.test(value) && /[A-Z]/.test(value) ? mask(value) : value);
   return out;
+}
+
+/** Private room memory: the shared masks plus prose credentials and invite codes. */
+export function redactRoomMemory(text: string): string {
+  // wkr1: is a public URI prefix; its wki_ credential is masked separately.
+  const prose = text.replace(PROSE_SECRET, (m: string, lead: string, quote: string, value: string, at: number, all: string) =>
+    !PROSE_VALUE.test(value) || (value === "wkr1" && all[at + m.length] === ":") || isCodeValue(quote, value, all, at + m.length) ? m : `${lead}${quote}${mask(value)}${quote}`);
+  return redactSecretsInText(prose).replace(ROOM_CODE, (value: string) => /[2-9]/.test(value) && /[A-Z]/.test(value) ? mask(value) : value);
 }
 
 /** Deep copy with credential VALUES replaced. Handles the two shapes that

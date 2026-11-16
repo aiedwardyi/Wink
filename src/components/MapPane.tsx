@@ -1,40 +1,38 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
-import type { MapDiff, MapRepo, MapSnapshot } from "../../shared/map-pane";
+import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
+import type { MapDiff, MapDiffLine, MapRepo, MapSnapshot } from "../../shared/map-pane";
 import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
 import { mapFollow, type MapSelection } from "@/lib/map-follow";
-import { mapSquares, squareTarget, type SquareGroup, type SquareMap } from "@/lib/map-squares";
+import { useLineTokens, useMapTokens, type MapTokens } from "@/lib/map-highlight";
+import { EASE_STANDARD, MOTION_MODERATE_MS } from "@/lib/motion";
+import { mapClashes, treeIndex, treeOrder } from "@/lib/map-tree";
+import { mapWorkerSlots } from "@/lib/map-worker-colors";
+import { MapExample } from "./MapExample";
+import { MapGitFlow } from "./MapGitFlow";
+import { MapSplit } from "./MapSplit";
+import { MapTree } from "./MapTree";
+import { Segmented } from "./Segmented";
 import "./MapPane.css";
 
 const copy = {
-  en: { empty: "No live workers", notGit: "Not a git folder", none: "No files changed", workers: "Choose worker", all: "Follow all workers", changed: (n: number) => `${n} ${n === 1 ? "file" : "files"} changed`, of: (n: ReactNode, total: number) => <>{n} of {total.toLocaleString("en-US")} files changed</>, files: "Changed files", legend: "One square, one file. Lit ones changed.", more: (n: number) => `${n} more folders`, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", loading: "Loading changes", retry: "Retry" },
-  ko: { empty: "실행 중인 작업자가 없어요", notGit: "Git 폴더가 아니에요", none: "변경된 파일이 없어요", workers: "작업자 선택", all: "모든 작업자 따라가기", changed: (n: number) => `파일 ${n}개 변경`, of: (n: ReactNode, total: number) => <>파일 {total.toLocaleString("ko-KR")}개 중 {n}개 변경</>, files: "변경된 파일", legend: "네모 하나가 파일 하나예요. 밝은 건 바뀐 파일이에요.", more: (n: number) => `폴더 ${n}개 더`, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도" },
+  en: { empty: "No live workers", walk: (total: number) => `${total.toLocaleString("en-US")} files · Not a git folder`, plain: "Not a git folder", more: (n: number) => `+${n.toLocaleString("en-US")} more ${n === 1 ? "file" : "files"}`, workers: "Choose worker", all: "Follow all workers", changed: (n: number) => `${n} ${n === 1 ? "file" : "files"} changed`, of: (n: ReactNode, total: number) => <>Changed {n} of {total.toLocaleString("en-US")} files</>,
+    team: (workers: number, n: number, total: number, clashes: number) => <><b>{workers}</b> workers · <b>{n}</b> of {total.toLocaleString("en-US")} files changed{clashes > 0 && <> · <b>{clashes}</b> {clashes === 1 ? "clash" : "clashes"}</>}</>, crew: (n: number) => `${n} workers`,
+    tree: { folders: (n: number) => `+${n} ${n === 1 ? "folder" : "folders"}`, files: (n: number) => `+${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`, count: (n: number, shown: string) => `${shown} ${n === 1 ? "file" : "files"}`, more: (n: number) => `+${n} more`, same: "same lines", different: "different lines" }, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", lost: "Could not load all files", loading: "Loading changes", retry: "Retry", whole: "Whole file", changes: "Changes only", expand: "Expand file", showTree: "Show tree" },
+  ko: { empty: "실행 중인 작업자가 없어요", walk: (total: number) => `파일 ${total.toLocaleString("ko-KR")}개 · Git 폴더가 아니에요`, plain: "Git 폴더가 아니에요", more: (n: number) => `외 파일 ${n.toLocaleString("ko-KR")}개`, workers: "작업자 선택", all: "모든 작업자 따라가기", changed: (n: number) => `파일 ${n}개 변경`, of: (n: ReactNode, total: number) => <>파일 {total.toLocaleString("ko-KR")}개 중 {n}개 변경</>,
+    team: (workers: number, n: number, total: number, clashes: number) => <>작업자 <b>{workers}</b>명 · 파일 {total.toLocaleString("ko-KR")}개 중 <b>{n}</b>개 변경{clashes > 0 && <> · 겹침 <b>{clashes}</b>개</>}</>, crew: (n: number) => `작업자 ${n}명`,
+    tree: { folders: (n: number) => `폴더 +${n}`, files: (n: number) => `파일 +${n.toLocaleString("ko-KR")}`, count: (_n: number, shown: string) => `파일 ${shown}개`, more: (n: number) => `외 ${n}개`, same: "같은 줄", different: "다른 줄" }, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", lost: "전체 파일을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도", whole: "전체 파일", changes: "변경만", expand: "파일 펼치기", showTree: "트리 보기" },
 };
 const EMPTY: MapSnapshot = { workers: [] };
 const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: null };
-const TRAIL = 6;
-const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
-const folder = (path: string) => path.includes("/") ? name(path.slice(0, path.lastIndexOf("/"))) : "";
+const RECONNECT = 5_000;
+type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
-
-const Cells = ({ group }: { group: SquareGroup }) => {
-  const lit = new Set(group.lit);
-  return <div className="map-cells" data-group={group.key}>{group.cells.map((path, index) => lit.has(index) ? <i key={path} data-on data-square={path} title={path} /> : <i key={path} title={path} />)}</div>;
-};
-
-const Squares = memo(function Squares({ map, repo, more }: { map: SquareMap; repo: string; more: (n: number) => string }) {
-  const head = (group: SquareGroup, label: string) => <header><span>{label}</span><span>{group.count.toLocaleString("en-US")}</span></header>;
-  return <>
-    {map.near.length > 0 && <div className="map-near">{map.near.map(group => <section key={group.key} className="map-d">
-      {head(group, group.key || repo)}
-      {group.subs ? group.subs.map(sub => <div key={sub.key} className="map-sub" data-quiet={sub.quiet || undefined}>{sub.name && head(sub, sub.name)}<Cells group={sub} /></div>) : <Cells group={group} />}
-    </section>)}</div>}
-    <div className="map-far">{map.far.map(group => <section key={group.key} className="map-d" data-far>
-      {head(group, group.more ? more(group.more) : group.key || repo)}
-      <Cells group={group} />
-    </section>)}</div>
-  </>;
+const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
+const fade = (part?: Element | null) => ease(part, [{ opacity: 0.5 }, { opacity: 1 }]);
+const CodeRow = memo(function CodeRow({ line, source }: { line: MapDiffLine; source: MapTokens }) {
+  const tokens = useLineTokens(source, line);
+  return <div className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{tokens?.length ? tokens.map((token, i) => token.color ? <span key={i} style={{ color: token.color }}>{token.content}</span> : token.content) : line.text || " "}</code></div>;
 });
 
 export function MapPane({ botId, maximized = false, active = true }: { botId?: string; maximized?: boolean; active?: boolean }) {
@@ -43,72 +41,122 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [snapshot, setSnapshot] = useState<MapSnapshot>(EMPTY);
   const [selection, setSelection] = useState<MapSelection>(INITIAL);
   const [menu, setMenu] = useState(false);
-  const [diff, setDiff] = useState<MapDiff | null>(null);
-  const [repo, setRepo] = useState<(MapRepo & { worker: string }) | null>(null);
+  const [diff, setDiff] = useState<{ worker: string; path: string; whole: boolean; data: MapDiff; step?: Step; full?: MapDiff; opened?: number[] } | null>(null);
+  const [whole, setWhole] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const cache = useRef({ key: "", diffs: new Map<string, MapDiff>() });
+  const [repo, setRepo] = useState<(MapRepo & { worker: string; held?: boolean }) | null>(null);
+  const [repoFailed, setRepoFailed] = useState<string | null>(null);
+  const [repoRetry, setRepoRetry] = useState(0);
   const [failed, setFailed] = useState(false);
   const [connectionFailed, setConnectionFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const [connection, setConnection] = useState(0);
-  const [hops, setHops] = useState<{ worker?: string; paths: string[]; count: number }>({ paths: [], count: 0 });
-  const [trail, setTrail] = useState<{ x: number; y: number }[]>([]);
-  const [pin, setPin] = useState<{ x: number; y: number } | null>(null);
+  const [link, setLink] = useState(0);
   const liveReady = useRef(false);
-  const [ready, setReady] = useState(!botId);
-  const squaresRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const [live, setReady] = useState(!botId);
+  const ready = live || snapshot.workers.length > 0;
+  const topRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const slots = useRef<ReadonlyMap<string, number>>(new Map());
+  slots.current = mapWorkerSlots(slots.current, snapshot.workers.map(worker => worker.id));
+  const codeRef = useRef<HTMLDivElement>(null);
+  const scrolled = useRef<{ code: HTMLElement | null; key: string }>({ code: null, key: "" });
   const chosen = mapFollow(selection, snapshot.workers);
   const worker = snapshot.workers.find(worker => worker.id === chosen.worker);
-  const files = useMemo(() => (worker?.files ?? []).toSorted((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), [worker?.files]);
-  const changedKey = files.map(file => file.path).join("\0");
-  const paths = repo?.worker === worker?.id ? repo?.paths : undefined;
-  const squares = useMemo(() => paths && mapSquares(paths, changedKey ? changedKey.split("\0") : []), [paths, changedKey]);
+  const files = worker?.files ?? [];
+  const team = !chosen.pinned && snapshot.workers.length > 1;
+  const onTree = useMemo(() => team ? snapshot.workers : worker ? [worker] : [], [team, snapshot.workers, worker]);
+  const changed = useMemo(() => new Set(onTree.flatMap(worker => worker.files.map(file => file.path))), [onTree]);
+  const changedKey = [...changed].join("\0");
+  const clashes = useMemo(() => team ? mapClashes(snapshot.workers) : [], [team, snapshot.workers]);
+  // A team's tree never hangs off a folder without git.
+  const source = team ? snapshot.workers.find(item => item.git) ?? worker : worker;
+  const repoWorker = source?.id;
+  // A git tree takes new files from the snapshot; a folder without git is listed again whenever it changes.
+  const walked = source?.git ? 0 : source?.editedAt;
+  const more = onTree.reduce((sum, item) => sum + (item.more ?? 0), 0);
+  const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
+  const lost = !paths && !!repoWorker && repoFailed === repoWorker;
+  // A worker switch keeps the last tree up until the new one lands.
+  if (repo && repoWorker && (repoFailed === repoWorker ? repo.held : repo.worker !== repoWorker)) setRepo(repoFailed === repoWorker ? null : { ...repo, worker: repoWorker, held: true });
+  const known = useMemo(() => new Set(paths), [paths]);
+  const extra = changedKey ? changedKey.split("\0").filter(path => !known.has(path)) : [];
+  const extraKey = extra.join("\0");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const index = useMemo(() => paths ? treeIndex(repo?.name ?? "", extra.length ? [...paths, ...extra] : paths) : lost ? treeIndex("", changed) : undefined, [paths, extraKey, lost && changedKey]);
+  const order = useMemo(() => index ? treeOrder(index, new Set(changedKey.split("\0"))) : [], [index, changedKey]);
+  const current = useMemo(() => worker?.path ? { path: worker.path, worker: worker.id, at: worker.editedAt } : undefined, [worker?.path, worker?.id, worker?.editedAt]);
   const base = botId && `/api/bots/${encodeURIComponent(botId)}/map`;
   const openRef = useRef((_path: string) => {});
-  openRef.current = path => setSelection({ ...chosen, follow: false, path });
+  openRef.current = path => {
+    const owners = snapshot.workers.filter(item => item.files.some(file => file.path === path));
+    const owner = owners.find(item => item.id === worker?.id) ?? owners.reduce<typeof owners[number] | undefined>((last, item) => !last || item.editedAt > last.editedAt ? item : last, undefined);
+    setSelection({ ...chosen, follow: false, worker: owner?.id ?? chosen.worker, path });
+  };
   const open = useCallback((path: string) => openRef.current(path), []);
+  const cached = (key: string) => {
+    if (cache.current.key !== key) cache.current = { key, diffs: new Map() };
+    return cache.current.diffs;
+  };
 
   useEffect(() => {
     liveReady.current = false;
     if (!base || !active) return;
     setReady(false);
-    const stream = new EventSource(`${base}/live`);
-    stream.onmessage = event => {
-      try {
-        const data: MapSnapshot = JSON.parse(event.data);
-        if (!liveReady.current) setConnection(value => value + 1);
-        liveReady.current = true;
-        setSnapshot(data);
-        setConnectionFailed(false);
-        setReady(true);
-      } catch { setConnectionFailed(true); }
+    let stream: EventSource;
+    let reopen: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      stream = new EventSource(`${base}/live`);
+      stream.onmessage = event => {
+        try {
+          const data: MapSnapshot = JSON.parse(event.data);
+          if (!liveReady.current) setConnection(value => value + 1);
+          liveReady.current = true;
+          setSnapshot(data);
+          setConnectionFailed(false);
+          setReady(true);
+        } catch { setConnectionFailed(true); }
+      };
+      stream.onerror = () => {
+        liveReady.current = false; setConnectionFailed(true); setReady(true);
+        // A refused stream stays closed: only a dropped one reconnects by itself.
+        if (stream.readyState === 2) reopen = setTimeout(connect, RECONNECT);
+      };
     };
-    stream.onerror = () => { liveReady.current = false; setConnectionFailed(true); setReady(true); };
-    return () => { liveReady.current = false; stream.close(); };
-  }, [base, active]);
+    connect();
+    return () => { liveReady.current = false; clearTimeout(reopen); stream.close(); };
+  }, [base, active, link]);
 
   useEffect(() => {
-    if (!active || !liveReady.current || !base || !worker?.git) return;
+    if (!active || !liveReady.current || !base || !repoWorker) return;
     const controller = new AbortController();
-    const id = worker.id;
+    const id = repoWorker;
     request(`${base}/repo?${new URLSearchParams({ worker: id })}`, { signal: controller.signal }).then((data: MapRepo) => {
-      if (!controller.signal.aborted && Array.isArray(data?.paths)) setRepo({ worker: id, name: String(data.name ?? ""), paths: data.paths });
-    }, () => {});
+      if (!controller.signal.aborted && Array.isArray(data?.paths)) { setRepo({ worker: id, name: String(data.name ?? ""), paths: data.paths }); setRepoFailed(null); }
+    }, () => { if (!controller.signal.aborted) setRepoFailed(id); });
     return () => controller.abort();
-  }, [base, worker?.id, worker?.git, active, connection]);
+  }, [base, repoWorker, walked, active, connection, repoRetry]);
 
   useEffect(() => {
     if (!active || !liveReady.current) return;
     if (!base || !worker?.git || !chosen.path) { setDiff(null); return; }
     const controller = new AbortController();
-    setDiff(null);
     setFailed(false);
-    const query = new URLSearchParams({ worker: worker.id, path: chosen.path });
-    request(`${base}/file?${query}`, { signal: controller.signal }).then(data => {
-      if (!controller.signal.aborted) setDiff(data);
+    const id = worker.id;
+    const path = chosen.path;
+    const step = path === worker.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
+    const diffs = cached(`${id}\0${worker.editedAt}\0${connection}`);
+    const hit = diffs.get(`${whole}\0${path}`);
+    if (hit) { setDiff({ worker: id, path, whole, data: hit, step }); return; }
+    const get = (all: boolean): Promise<MapDiff> => request(`${base}/file?${new URLSearchParams({ worker: id, path, ...all && { whole: "1" } })}`, { signal: controller.signal });
+    get(whole).then(async data => whole && data.capped ? { ...await get(false), capped: true } : data).then(data => {
+      if (controller.signal.aborted) return;
+      diffs.set(`${whole}\0${path}`, data);
+      setDiff({ worker: id, path, whole, data, step });
     }, () => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
-  }, [base, worker?.id, worker?.editedAt, worker?.git, chosen.path, retry, active, connection]);
+  }, [base, worker?.id, worker?.editedAt, worker?.path, worker?.reason, worker?.git, chosen.path, whole, retry, active, connection]);
 
   useEffect(() => {
     if (!menu) return;
@@ -119,103 +167,131 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape, true); };
   }, [menu]);
 
-  useEffect(() => {
-    const path = worker?.path;
-    setHops(previous => {
-      if (previous.worker !== worker?.id) return { worker: worker?.id, paths: path ? [path] : [], count: previous.count + 1 };
-      if (!path || previous.paths.at(-1) === path) return previous;
-      return { worker: previous.worker, paths: [...previous.paths, path].slice(-TRAIL), count: previous.count + 1 };
-    });
-  }, [worker?.id, worker?.path]);
-
+  const again = () => connectionFailed || snapshot.error || worker?.error ? setLink(link + 1) : setRetry(retry + 1);
+  const failure = <>{c.failed} <button type="button" onClick={again}>{c.retry}</button></>;
+  // A worker switch keeps the last diff up, still tagged with its own worker, until the new one lands.
+  const held = !!diff && !!worker?.git && !!chosen.path && diff.worker !== worker.id;
+  const loaded = !failed && diff && (held || diff.worker === worker?.id) ? diff : null;
+  const shown = loaded ? loaded.path : chosen.path;
+  const tokens = useMapTokens(loaded?.path, loaded?.data);
+  const fullTokens = useMapTokens(loaded?.path, loaded?.full);
+  const fills = expanded && !!shown && !!worker?.git && files.length > 0;
   useLayoutEffect(() => {
-    if (!active) return;
-    const map = squaresRef.current;
-    const list = listRef.current;
-    const place = () => {
-      if (map && squares) {
-        const box = map.getBoundingClientRect();
-        const groups = new Map([...map.querySelectorAll<HTMLElement>("[data-group]")].map(group => [group.dataset.group, group]));
-        setTrail(hops.paths.flatMap(path => {
-          const target = squareTarget(squares, path);
-          const cell = target && groups.get(target.group)?.children[target.index];
-          if (!cell) return [];
-          const rect = cell.getBoundingClientRect();
-          return [{ x: Math.round(rect.left - box.left + rect.width / 2) + 0.5, y: Math.round(rect.top - box.top + rect.height / 2) + 0.5 }];
-        }));
-      } else setTrail([]);
-      const row = list && [...list.querySelectorAll<HTMLElement>("[data-map-file]")].find(row => row.dataset.mapFile === worker?.path);
-      setPin(row ? { x: row.offsetLeft + 2, y: row.offsetTop + 3 } : null);
-      if (row && chosen.follow) row.scrollIntoView?.({ block: "nearest" });
-    };
-    place();
-    const observer = new ResizeObserver(place);
-    for (const node of [map, list]) if (node) observer.observe(node);
-    return () => observer.disconnect();
-  }, [hops, squares, files, worker?.path, worker?.editedAt, chosen.follow, active]);
-
-  const lines = trail.slice(1).map((point, index) => {
-    const from = trail[index];
-    const age = trail.length - 2 - index;
-    const length = Math.abs(point.x - from.x) + Math.abs(point.y - from.y);
-    return <path key={hops.count - age} d={`M${from.x} ${from.y}H${point.x}V${point.y}`} opacity={Math.max(0.22, 0.95 - age * 0.13)} data-new={age === 0 || undefined} strokeDasharray={length} style={{ "--len": length } as React.CSSProperties} />;
+    const code = codeRef.current;
+    const key = loaded && !held ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
+    if (!code || scrolled.current.code === code && scrolled.current.key === key) return;
+    scrolled.current = { code, key };
+    if (!key) return;
+    fade(code);
+    const row = code.querySelector<HTMLElement>('.map-code-row:not([data-kind="context"])');
+    code.scrollTop = row ? code.scrollTop + row.getBoundingClientRect().top - code.getBoundingClientRect().top - code.clientHeight / 4 : 0;
+  }, [loaded, held]);
+  // The code view slides from where it was (expand, collapse, worker switch) instead of laying out every frame.
+  const barRef = useRef<HTMLDivElement>(null);
+  const slid = useRef<number | null>(null);
+  const scope = !worker ? null : team ? "" : worker.id;
+  const scoped = useRef(scope);
+  const mark = () => { slid.current = barRef.current?.getBoundingClientRect().top ?? null; };
+  useLayoutEffect(() => {
+    const top = topRef.current;
+    if (top && scoped.current !== null && scope !== null && scoped.current !== scope) { fade(top); fade(top.parentElement?.querySelector(":scope > .map-flow-rows")); }
+    scoped.current = scope;
+    const from = slid.current;
+    const to = barRef.current?.getBoundingClientRect().top;
+    if (from === null || to === undefined) return;
+    slid.current = repo?.held || held ? to : null;
+    if (from !== to) for (let part: Element | null = barRef.current; part; part = part.nextElementSibling) ease(part, [{ transform: `translateY(${from - to}px)` }, { transform: "none" }]);
   });
-  const blip = trail.length && hops.paths.at(-1) === worker?.path ? trail.at(-1) : undefined;
-  const crumbs = chosen.path ? [repo?.worker === worker?.id ? repo?.name : "", ...chosen.path.split("/")].filter(Boolean) : [];
+  // Git rows ask after the tree and the code: each row runs git and gh, and asked together they held both back by seconds.
+  const [rows, setRows] = useState(false);
+  if (!rows && worker && (paths || lost || !repoWorker) && (loaded || failed || !worker.git || !chosen.path)) setRows(true);
+  const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
+  const unfold = (line: number) => {
+    if (!base || !loaded || held) return;
+    const { worker: id, path, data } = loaded;
+    const diffs = cache.current.diffs;
+    const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path && current.data === data ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
+    const hit = diffs.get(`full\0${path}`);
+    if (hit) return show(hit);
+    request(`${base}/file?${new URLSearchParams({ worker: id, path, whole: "1" })}`).then((full: MapDiff) => { diffs.set(`full\0${path}`, full); show(full); }, () => {});
+  };
+  const reach = (path: string, focus: boolean) => {
+    const row = [...topRef.current?.querySelectorAll<HTMLElement>("[data-map-file]") ?? []].find(row => row.dataset.mapFile === path);
+    if (focus) row?.focus({ preventScroll: true });
+    row?.scrollIntoView?.({ block: "nearest" });
+    return !!row;
+  };
+  // A file in a folded box has no row until its branch unfolds.
+  const pending = useRef<{ path: string; focus: boolean } | null>(null);
+  useEffect(() => {
+    const want = pending.current;
+    if (want?.path === chosen.path) { pending.current = null; reach(want.path, want.focus); }
+  });
+  const move = (event: React.KeyboardEvent) => {
+    const delta = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    if (!delta || !order.length || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable], .map-worker-menu")) return;
+    event.preventDefault();
+    const at = chosen.path ? order.indexOf(chosen.path) : -1;
+    const next = order[at < 0 ? 0 : at + delta];
+    if (!next) return;
+    open(next);
+    const focus = event.target instanceof Element && event.target.matches("[data-map-file]");
+    pending.current = reach(next, focus) ? null : { path: next, focus };
+  };
+  const codeRow = (line: MapDiffLine, key: React.Key, of = tokens) => <CodeRow key={key} line={line} source={of} />;
+  const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
-  return <section className="verify-watch-frame map-pane" data-maximized={maximized || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
-    {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? c.failed : c.empty}</p> : <>
+  return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
+    {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? failure : c.empty}</p> : <>
       <header className="map-head">
         <div ref={menuRef} className="map-worker-menu">
           <button type="button" className="map-worker" onClick={() => setMenu(!menu)} aria-label={c.workers} aria-haspopup="menu" aria-expanded={menu}><i /><span>{worker.nick}</span><ChevronDown size={12} /></button>
           {menu && <div role="menu" className="map-menu">
-            <button type="button" role="menuitemradio" aria-checked={!chosen.pinned} onClick={() => { setSelection({ ...chosen, follow: true, pinned: null }); setMenu(false); }}>{c.all}</button>
-            {snapshot.workers.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={chosen.pinned === item.id} onClick={() => { setSelection({ ...chosen, worker: item.id, pinned: item.id, follow: true }); setMenu(false); }}>{item.nick}</button>)}
+            <button type="button" role="menuitemradio" aria-checked={!chosen.pinned} onClick={() => { mark(); setSelection({ ...chosen, follow: true, pinned: null }); setMenu(false); }}>{c.all}</button>
+            {snapshot.workers.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={chosen.pinned === item.id} onClick={() => { mark(); setSelection({ ...chosen, worker: item.id, pinned: item.id, follow: true }); setMenu(false); }}>{item.nick}</button>)}
           </div>}
         </div>
-        <div className="map-task" title={worker.task}>{worker.task}</div>
       </header>
-      {!worker.git ? <p className="map-empty" role="status">{c.notGit}</p> : <>
-        <div className="map-top">
-          <div className="map-where">
-            <span>{squares ? c.of(<b>{files.length}</b>, squares.total) : c.changed(files.length)}</span>
-            <span>{[repo?.worker === worker.id && repo.name, worker.nick].filter(Boolean).join(" / ")}</span>
-          </div>
-          {squares && <div ref={squaresRef} className="map-squares" aria-hidden="true" data-near={squares.near.length > 0 || undefined} onClick={event => {
-            const path = event.target instanceof HTMLElement && event.target.dataset.square;
-            if (path) open(path);
-          }}>
-            <Squares map={squares} repo={repo?.name ?? ""} more={c.more} />
-            <svg className="map-trail">{lines}</svg>
-            {blip && <i className="map-blip" style={{ left: blip.x, top: blip.y }} />}
-          </div>}
-          <div className="map-file-label"><span>{c.files}</span><span>{c.legend}</span></div>
-          {!files.length ? <p className="map-empty" role="status">{c.none}</p> : <div ref={listRef} className="map-files" aria-label={c.changed(files.length)}>
-            {files.map(file => <button key={file.path} type="button" className="map-file" data-map-file={file.path} data-hot={worker.path === file.path || undefined} aria-current={chosen.path === file.path} onClick={() => open(file.path)} title={file.path}>
-              <i /><span className="map-file-name">{name(file.path)}</span><span className="map-folder">{folder(file.path)}</span><span className="map-delta">+{file.added}</span>
-            </button>)}
-            {pin && <span className="map-pin" aria-hidden="true" style={{ transform: `translate(${pin.x}px, ${pin.y}px)` }}><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>}
-          </div>}
+      <div ref={topRef} className="map-top">
+        <div className="map-where">
+          <span>{!index || lost || worker.error && !worker.git ? c.changed(files.length) : !source?.git ? index.size ? c.walk(index.size) : c.plain : team ? c.team(snapshot.workers.length, changed.size, index.size, clashes.length) : c.of(<b>{files.length}</b>, index.size)}{more > 0 && <> · {c.more(more)}</>}</span>
+          <span>{[paths && repo?.name, team ? c.crew(snapshot.workers.length) : worker.nick].filter(Boolean).join(" / ")}</span>
         </div>
-        {files.length > 0 && <>
-          <div className="map-crumbs">
-            <span className="map-path" title={chosen.path ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
-            <button type="button" className="map-follow" aria-pressed={chosen.follow} onClick={() => setSelection({ ...chosen, follow: !chosen.follow })}><i />{chosen.follow ? c.following(worker.nick) : c.follow(worker.nick)}</button>
-          </div>
-          {worker.path && <div key={`${worker.path}:${worker.editedAt}`} className="map-step">
-            <i />
-            <h3 title={worker.reason ?? worker.path}>{worker.reason ?? worker.path}</h3>
-            {worker.editedAt > 0 && <time dateTime={new Date(worker.editedAt).toISOString()}>{clock(worker.editedAt)}</time>}
-            {worker.reason && <p>{worker.path}</p>}
-          </div>}
-          <div className="map-code" aria-busy={!diff && !failed}>
-            {failed || connectionFailed || snapshot.error ? <p className="map-empty" role="status">{c.failed} <button type="button" onClick={() => setRetry(retry + 1)}>{c.retry}</button></p> : !diff ? <p className="map-empty" role="status">{c.loading}</p> : diff.binary ? <p className="map-empty">{c.binary}</p> : <>
-              {diff.lines.map((line, index) => line.kind === "fold" ? <div key={index} className="map-gap">{c.unchanged(line.count ?? 0)}</div> : <div key={index} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text || " "}</code></div>)}
-              {diff.capped && <div className="map-gap">{c.capped}</div>}
-            </>}
-          </div>
-        </>}
+        {lost && <p className="map-empty" role="status">{c.lost} <button type="button" onClick={() => setRepoRetry(repoRetry + 1)}>{c.retry}</button></p>}
+        {worker.error && !(worker.git && files.length > 0) && <p className="map-empty" role="status">{failure}</p>}
+        {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
+      </div>
+      <MapSplit target={topRef} rows />
+      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active && rows} />
+      {worker.git && files.length > 0 && <>
+        <MapSplit target={topRef} />
+        <div ref={barRef} className="map-crumbs">
+          <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
+          <Segmented label={`${c.changes} / ${c.whole}`} value={whole ? "whole" : "changes"} options={[{ id: "changes", label: c.changes }, { id: "whole", label: c.whole }]} onChange={id => setWhole(id === "whole")} />
+          <button type="button" className="map-follow" aria-pressed={chosen.follow} onClick={() => setSelection({ ...chosen, follow: !chosen.follow })}><i />{chosen.follow ? c.following(worker.nick) : c.follow(worker.nick)}</button>
+          <button type="button" className="verify-watch-icon map-expand" onClick={() => { mark(); setExpanded(!fills); }} disabled={!shown} aria-label={fills ? c.showTree : c.expand} title={fills ? c.showTree : c.expand}>{fills ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
+        </div>
+        {shown && <div key={`${shown}:${step?.editedAt}`} className="map-step">
+          <i />
+          <h3 title={step?.reason ?? shown}>{step?.reason ?? shown}</h3>
+          {step && step.editedAt > 0 && <time dateTime={new Date(step.editedAt).toISOString()}>{clock(step.editedAt)}</time>}
+          {step?.reason && <p>{shown}</p>}
+        </div>}
+        <div ref={codeRef} className="map-code" aria-busy={!failed && (held || loaded?.path !== chosen.path || loaded.whole !== whole)}>
+          {failed || connectionFailed || snapshot.error || worker.error ? <p className="map-empty" role="status">{failure}</p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
+            {loaded.data.lines.map((line, index) => {
+              if (line.kind !== "fold") return codeRow(line, index);
+              const start = line.line ?? 1;
+              if (!loaded.full || !loaded.opened?.includes(start)) return <button key={index} type="button" className="map-gap" onClick={() => unfold(start)}>{c.unchanged(line.count ?? 0)}</button>;
+              const opened = loaded.full.lines.filter(full => full.kind === "context" && full.line! >= start && full.line! < start + (line.count ?? 0));
+              return [...opened.map(full => codeRow(full, `${index}:${full.line}`, fullTokens)), opened.length < (line.count ?? 0) && <div key={`${index}:capped`} className="map-gap">{c.capped}</div>];
+            })}
+            {loaded.data.capped && <div className="map-gap">{c.capped}</div>}
+          </>}
+        </div>
       </>}
     </>}
+    {base && ready && !worker && !connectionFailed && !snapshot.error && <MapExample labels={c.tree} active={active} />}
   </section>;
 }

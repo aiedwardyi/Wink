@@ -5,6 +5,7 @@ import { AccountService } from "./accounts.ts";
 import type { AccountContext } from "./account-policy.ts";
 import { DATA_DIR } from "./config.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { workerLaunchResponse } from "./worker-panes.ts";
 import { createResumeAccount, RESUME_NUDGE, resumeArgs, type WorkerResume } from "./worker-resume.ts";
 
 const ID = "00000000-0000-4000-8000-000000000001";
@@ -74,6 +75,18 @@ describe("resume argv", () => {
     const args = resumeArgs({ engine: "codex", nativeId: ID, accountId: "codex", accountGeneration: 0,
       template: { executable: "codex", args: ["resume", "old-id", "-c", "shell_environment_policy.set.ORBIT_MSG_AUTH='\u0000ORBIT_MSG_AUTH\u0000'", "old nudge"] } });
     expect(args).toEqual(["resume", ID, "-c", "shell_environment_policy.set.ORBIT_MSG_AUTH='\u0000ORBIT_MSG_AUTH\u0000'", RESUME_NUDGE]);
+  });
+
+  it("tells a worker resumed while BLOCKED to wait instead of continuing the card", async () => {
+    const resume: WorkerResume = { engine: "claude", nativeId: ID, accountId: "claude", accountGeneration: 0, template: { executable: "claude", args: ["task"] } };
+    const line = RESUME_NUDGE.replace("Then continue the card.", "You were BLOCKED on: FIX-B which key? Wait for an answer; do not continue the card.");
+    expect(resumeArgs({ ...resume, blocked: "FIX-B which key?" }).at(-1)).toBe(line);
+    expect(resumeArgs({ ...resume, blocked: "FIX-B\n  no key" }).at(-1)).toContain("You were BLOCKED on: FIX-B no key. Wait for an answer;");
+    let seen: unknown;
+    const access = { url: "http://127.0.0.1:9", token: "t" };
+    await workerLaunchResponse(access, "t", { botId: "bot", command: "", environment: {}, resume: { ...resume, blocked: "FIX-B which key?" } },
+      (async (input: unknown) => { seen = input; return null; }) as unknown as Parameters<typeof workerLaunchResponse>[3]);
+    expect(seen).toMatchObject({ resume: { blocked: "FIX-B which key?" } });
   });
 
   it("rejects invalid identities and unknown flags instead of guessing their arity", () => {

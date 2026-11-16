@@ -88,6 +88,52 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+const CALL_CACHE = "wink-calls-v1";
+const CALL_VIBRATE = [1000, 500, 1000, 500, 1000, 500, 1000];
+const CALL_KEEP_MS = 10 * 60_000;
+const callKey = (id) => `/call/${encodeURIComponent(id)}`;
+
+// The worker sleeps between rings, so a call already picked up or put off is kept in a cache.
+async function callHandled(id) {
+  return Boolean(id && (await (await caches.open(CALL_CACHE)).match(callKey(id))));
+}
+
+async function handleCall(id) {
+  if (!id) return;
+  const cache = await caches.open(CALL_CACHE);
+  const now = Date.now();
+  for (const key of await cache.keys()) {
+    const at = Number((await cache.match(key))?.headers.get("x-handled-at"));
+    if (!(now - at < CALL_KEEP_MS)) await cache.delete(key);
+  }
+  await cache.put(callKey(id), new Response("", { headers: { "x-handled-at": String(now) } }));
+}
+
+async function alertOptions(data) {
+  const options = {
+    body: data.body || "",
+    tag: data.tag,
+    renotify: Boolean(data.tag),
+    vibrate: [200, 100, 200],
+    icon: data.icon || "/app-icon-192.png?v=2",
+    badge: "/app-icon-192.png?v=2",
+    data: { url: data.url || "/", chat: data.chat, at: data.at },
+  };
+  if (!data.call) return options;
+  if (await callHandled(data.call)) {
+    // showNotification throws on a silent alert that vibrates.
+    delete options.vibrate;
+    return { ...options, renotify: false, silent: true };
+  }
+  return {
+    ...options,
+    requireInteraction: true,
+    vibrate: CALL_VIBRATE,
+    actions: [{ action: "answer", title: "Answer" }, { action: "later", title: "Not now" }],
+    data: { ...options.data, call: data.call },
+  };
+}
+
 self.addEventListener("push", (event) => {
   let data = {};
   try {
@@ -96,15 +142,7 @@ self.addEventListener("push", (event) => {
     // Malformed payloads still owe the user a visible notification.
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || "Wink", {
-      body: data.body || "",
-      tag: data.tag,
-      renotify: Boolean(data.tag),
-      vibrate: [200, 100, 200],
-      icon: data.icon || "/app-icon-192.png?v=2",
-      badge: "/app-icon-192.png?v=2",
-      data: { url: data.url || "/", chat: data.chat, at: data.at },
-    }).then(async () => {
+    alertOptions(data).then((options) => self.registration.showNotification(data.title || "Wink", options)).then(async () => {
       for (const client of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
         client.postMessage({ type: "orbit-push" });
       }
@@ -122,9 +160,11 @@ function withClickTime(url, t0) {
 self.addEventListener("notificationclick", (event) => {
   const t0 = Date.now();
   event.notification.close();
+  const call = event.notification.data?.call;
+  if (call && event.action === "later") return event.waitUntil(handleCall(call));
   const url = new URL(event.notification.data?.url || "/", self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (windows) => {
+    Promise.all([handleCall(call), self.clients.matchAll({ type: "window", includeUncontrolled: true })]).then(async ([, windows]) => {
       const open = windows.find((client) => new URL(client.url).origin === self.location.origin);
       if (!open) return self.clients.openWindow(withClickTime(url, t0));
       await open.focus();

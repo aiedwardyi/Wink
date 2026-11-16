@@ -104,13 +104,23 @@ export function parseMeta(html, names) {
     `Usage (Standard|Contributor) mode \\(per 1M tokens\\) (?!\\2)(Standard|Contributor) mode \\(per 1M tokens\\)\\s+` +
     `Cached input (${cell}) (${cell})\\s+Input (${cell}) (${cell})\\s+Output (${cell}) (${cell})`, "g"))];
   if (tiers.length === 0) throw new Unverifiable("Meta pricing tiers not found");
+  const byContext = [...text.matchAll(new RegExp(
+    `Models?:([^\\n]*)\\n(?:(?!Models?:)[\\s\\S]){0,1200}?` +
+    `Usage Up to (\\d+)K input tokens \\(per 1M tokens\\) Over \\2K input tokens \\(per 1M tokens\\)\\s+` +
+    `Cached input (${cell}) (${cell})\\s+Input (${cell}) (${cell})\\s+Output (${cell}) (${cell})`, "g"))];
   const listed = [...text.matchAll(/Models?:([^\n]*)/g)].map((m) => m[1]);
   const num = (value) => (value === "Not available" ? null : Number(value.slice(1)));
   for (const id of names) {
     const onLine = (line) => new RegExp(`(?<![\\w.-])${escape(id)}(?![\\w-]|\\.\\d)`).test(line);
     const found = tiers.filter((t) => onLine(t[1]));
-    if (found.length > 1) throw new Unverifiable(`Meta ${id}: listed in more than one tier`);
-    if (found.length) {
+    const sized = byContext.filter((t) => onLine(t[1]));
+    if (found.length + sized.length > 1) throw new Unverifiable(`Meta ${id}: listed in more than one tier`);
+    if (sized.length) {
+      const [, line, k, ...cells] = sized[0];
+      const [cachedShort, cachedLong, inputShort, inputLong, outputShort, outputLong] = cells.map(num);
+      if (/Contributor mode/.test(line) || cells.includes("Not available")) throw new Unverifiable(`Meta ${id}: row shape changed`);
+      prices[id] = { input: inputShort, cachedInput: cachedShort, output: outputShort, upToTokens: Number(k) * 1000, above: { input: inputLong, cachedInput: cachedLong, output: outputLong } };
+    } else if (found.length) {
       const tier = found[0];
       // The Models line names each mode's ids ("A in Standard mode; B in
       // Contributor mode"); a line with no markers is Standard only.

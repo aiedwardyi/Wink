@@ -291,11 +291,12 @@ describe("RoomToolChip", () => {
       window.ogb = prevOgb;
     }
 
-    // Without onRetry/canSetup (not sole responder or not last activity), no setup action exposed
+    // Like 1:1, an older setup row still shows the fix, only without Retry
     await act(async () => {
       root.render(createElement(RoomToolChip, { message: cliMessage }));
     });
 
-    expect(host.querySelector("button")).toBeNull();
+    expect(host.querySelector("code")?.textContent).toBe(claudeInstance.install?.command?.win32);
+    expect(host.textContent).not.toContain("Retry");
   });
 });

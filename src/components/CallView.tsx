@@ -167,7 +167,7 @@ export function CallTargetButton({
           inert={help.closing}
           role="group"
           aria-label="Call unavailable"
-          className={cn("animate-pop-in absolute right-0 z-30 w-[280px] rounded-xl border border-hairline bg-panel p-3 text-left shadow-2xl", helpAbove ? "bottom-full mb-1.5" : "mt-1.5")}
+          className={cn("animate-pop-in absolute right-0 z-30 w-[280px] rounded-xl border border-hairline/50 bg-card p-3 text-left shadow-2xl", helpAbove ? "bottom-full mb-1.5" : "mt-1.5")}
         >
           <div className="text-[13px] font-medium text-ink">Call unavailable</div>
           <div className="mt-1 text-[12px] leading-[1.45] text-ink-secondary">{reason}</div>

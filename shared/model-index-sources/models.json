@@ -107,6 +107,24 @@
       ]
     }
   },
+  "gemini-4-carbon": {
+    "provider": "google",
+    "label": "Gemini 4 Carbon",
+    "sources": {
+      "vals": [
+        "google/gemini-4-carbon"
+      ],
+      "lmarena": [
+        "Gemini 4 Carbon"
+      ],
+      "list-prices": [
+        "gemini-4-carbon"
+      ],
+      "aa": [
+        "gemini-4-carbon"
+      ]
+    }
+  },
   "gemini-4-argon": {
     "provider": "google",
     "label": "Gemini 4 Argon",
@@ -122,6 +140,24 @@
       ],
       "aa": [
         "gemini-4-argon"
+      ]
+    }
+  },
+  "gemini-4-hydrogen": {
+    "provider": "google",
+    "label": "Gemini 4 Hydrogen",
+    "sources": {
+      "vals": [
+        "google/gemini-4-hydrogen"
+      ],
+      "lmarena": [
+        "Gemini 4 Hydrogen"
+      ],
+      "list-prices": [
+        "gemini-4-hydrogen"
+      ],
+      "aa": [
+        "gemini-4-hydrogen"
       ]
     }
   },
@@ -282,6 +318,24 @@
     "sources": {
       "list-prices": [
         "muse-spark-1.3-contributor"
+      ]
+    }
+  },
+  "muse-ember-1.0": {
+    "provider": "meta",
+    "label": "Muse Ember",
+    "sources": {
+      "vals": [
+        "meta/muse-ember"
+      ],
+      "lmarena": [
+        "Muse Ember"
+      ],
+      "list-prices": [
+        "muse-ember-1.0"
+      ],
+      "aa": [
+        "muse-ember"
       ]
     }
   },

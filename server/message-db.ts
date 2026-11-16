@@ -54,6 +54,7 @@ function open(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS messages_handed ON messages(thread_id) WHERE json_extract(json, '$.comm.read.state') = 'handed';
     CREATE INDEX IF NOT EXISTS messages_parent ON messages(thread_id, json_extract(json, '$.parentId'));
     CREATE INDEX IF NOT EXISTS messages_bot_text_at ON messages(at) WHERE role = 'bot' AND kind = 'text';
+    CREATE INDEX IF NOT EXISTS messages_bot_engine ON messages(thread_id, json_extract(json, '$.from.botId'), json_extract(json, '$.engine')) WHERE role = 'bot' AND kind = 'text';
     CREATE TABLE IF NOT EXISTS thread_state (
       thread_id TEXT PRIMARY KEY,
       active_leaf_id TEXT
@@ -110,6 +111,34 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows {
     return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
   }
   return importLegacy(threadId, legacyFile);
+}
+
+/** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
+export function storedHead(threadId: string): string | null | undefined {
+  // SAFETY: Each subquery selects one TEXT column, or NULL when it finds no row.
+  const row = db().prepare(
+    "SELECT (SELECT active_leaf_id FROM thread_state WHERE thread_id = ?1) AS leaf, " +
+      "(SELECT id FROM messages WHERE thread_id = ?1 ORDER BY rowid DESC LIMIT 1) AS last",
+  ).get(threadId) as { leaf: string | null; last: string | null };
+  return row.last === null ? undefined : row.leaf || row.last;
+}
+
+/** The newest `count` rows in insertion order, the options rows before them, and the stored head. */
+export function readThreadTail(threadId: string, count: number): ThreadRows & { options: Message[] } {
+  // SAFETY: This projection selects SQLite's rowid and the stored message JSON.
+  const rows = db()
+    .prepare("SELECT rowid AS cursor, json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?")
+    .all(threadId, count) as Array<{ cursor: number; json: string }>;
+  const oldest = rows.at(-1)?.cursor ?? 0;
+  // SAFETY: This projection selects the stored message JSON.
+  const options = db()
+    .prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' AND rowid < ? ORDER BY rowid")
+    .all(threadId, oldest) as Array<{ json: string }>;
+  // SAFETY: thread_state.active_leaf_id is a nullable TEXT column.
+  const state = db()
+    .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
+    .get(threadId) as { active_leaf_id: string | null } | undefined;
+  return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
 }
 
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
@@ -265,6 +294,32 @@ export function peerCardRows(): Array<{ threadId: string; id: string }> {
     .all() as Array<{ threadId: string; id: string }>;
 }
 
+/** A quick ask with no answer row, found without loading the thread. */
+export function hasUnansweredQuickAsk(threadId: string): boolean {
+  return Boolean(db().prepare(`SELECT 1 FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
+    AND json_extract(json, '$.quick.state') = 'asked'
+    AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
+      AND json_extract(json, '$.quick.askId') IS NOT NULL) LIMIT 1`).get(threadId, threadId));
+}
+
+/** The active path newest first, one row at a time, or null when the thread has no stored leaf. */
+export function activePathBack(threadId: string): Iterable<Message> | null {
+  const leaf = (db().prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?").get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id;
+  if (!leaf) return null;
+  const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?");
+  return (function* () {
+    const seen = new Set<string>();
+    for (let id: string | null | undefined = leaf; id && !seen.has(id); ) {
+      seen.add(id);
+      const found = row.get(threadId, id) as { json: string } | undefined;
+      if (!found) return;
+      const message = rowToMessage(found);
+      yield message;
+      id = message.parentId;
+    }
+  })();
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;
@@ -287,6 +342,15 @@ export function firstBotReplyAt(): number | null {
   // SAFETY: This SELECT list is one MIN over an INTEGER column.
   const row = db().prepare("SELECT MIN(at) AS at FROM messages WHERE role = 'bot' AND kind = 'text'").get() as { at: number | null } | undefined;
   return row?.at ?? null;
+}
+
+/** Bot text replies grouped by thread, room speaker and engine tag, all time. */
+export function botRepliesByEngine(): Array<{ threadId: string; botId: string | null; engine: string | null; count: number }> {
+  // SAFETY: This SELECT list is three TEXT keys and one COUNT.
+  return db().prepare(
+    "SELECT thread_id AS threadId, json_extract(json, '$.from.botId') AS botId, json_extract(json, '$.engine') AS engine, COUNT(*) AS count " +
+      "FROM messages WHERE role = 'bot' AND kind = 'text' GROUP BY 1, 2, 3",
+  ).all() as Array<{ threadId: string; botId: string | null; engine: string | null; count: number }>;
 }
 
 export function deleteThread(threadId: string): void {

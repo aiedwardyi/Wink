@@ -61,6 +61,29 @@ it("fits an image in the pane", async () => {
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("signups.png");
 });
 
+it("shows a text file as text", async () => {
+  vi.mocked(fetch).mockResolvedValue(new Response("test4\n<b>line two</b>", { status: 200 }));
+  await render({ item: item("C:\\w\\test.txt", "text"), hidden: false });
+  await until(() => Boolean(host.querySelector(".show-stage[data-ready] pre")));
+  const pre = host.querySelector(".show-stage[data-ready] pre")!;
+  expect(pre.textContent).toBe("test4\n<b>line two</b>");
+  expect(pre.children).toHaveLength(0);
+  expect(fetch).toHaveBeenCalledWith(src("C:\\w\\test.txt"));
+  expect(host.querySelector(".show-frame")!.getAttribute("data-kind")).toBe("text");
+  expect(host.querySelector(".show-frame-name")?.textContent).toBe("test.txt");
+});
+
+it.each([
+  ["an announced size", () => new Response("x", { status: 200, headers: { "content-length": "1000001" } })],
+  ["no announced size", () => new Response("x".repeat(1_000_001), { status: 200 })],
+])("offers Open for a text file too big for the pane, with %s", async (_, reply) => {
+  vi.mocked(fetch).mockResolvedValue(reply());
+  await render({ item: item("C:\\w\\huge.txt", "text"), hidden: false });
+  await until(() => Boolean(host.querySelector("[data-show-fallback]")));
+  expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
+  expect(host.querySelector("pre")).toBeNull();
+});
+
 it("pages a PDF one page at a time", async () => {
   await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("1 / 8"));
@@ -146,22 +169,20 @@ it("docks files wide and closes from the header", async () => {
   expect(shown).toBeNull();
 });
 
-it("collapses from the left like Bot details, on desktop only", async () => {
+it.each([false, true])("closes from one X at the far right of the header, phone %s", async (phone) => {
+  vi.stubGlobal("matchMedia", () => ({ matches: phone, addEventListener() {}, removeEventListener() {} }));
   await act(async () => showItem(item("C:\\w\\a.png", "image")));
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
-  const collapse = host.querySelector(".show-pane-head > button")!;
-  expect(collapse.getAttribute("aria-label")).toBe("Collapse Show and Media");
-  expect(collapse.getAttribute("title")).toBe("Collapse Show and Media");
-  expect(button("Close")).not.toBeNull();
-  await act(async () => (collapse as HTMLElement).click());
+  const head = document.querySelector(".show-pane-head")!;
+  const buttons = [...head.querySelectorAll<HTMLButtonElement>(":scope > button")];
+  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Close"]);
+  expect(head.lastElementChild).toBe(buttons.at(-1));
+  expect(head.querySelector(".lucide-chevron-right")).toBeNull();
+  await act(async () => buttons.at(-1)!.click());
   let shown: ShowItem | null = item("x", "image");
   function Probe() { shown = useShowItem(); return null; }
   await act(async () => root.render(createElement(Probe)));
   expect(shown).toBeNull();
-  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
-  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
-  expect(document.querySelector('button[aria-label="Collapse Show and Media"]')).toBeNull();
-  expect(document.querySelector('button[aria-label="Close"]')).not.toBeNull();
 });
 
 it("speaks Korean", async () => {
@@ -170,7 +191,7 @@ it("speaks Korean", async () => {
   expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
   expect(button("새로고침")).not.toBeNull();
   expect(button("닫기")).not.toBeNull();
-  expect(button("보기와 미디어 접기")).not.toBeNull();
+  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(2);
 });
 
 it("shares one pane with the checker, and Bot Details still takes the spot", async () => {

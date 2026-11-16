@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
@@ -22,6 +22,12 @@ const topics = [{ name: "reps-content-preferences.md", bytes: 1135 }, { name: "i
 const sleep = { sleptAt: new Date(2026, 10, 7, 3, 12), kept: 24, merged: 1, forgot: 1, learned: 3, onUndo: vi.fn() };
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
+beforeEach(() => {
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+    matches: query.includes("prefers-reduced-motion"), media: query, onchange: null,
+    addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
+  }));
+});
 async function mount(props: Partial<Parameters<typeof MemoryMap>[0]> = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div"); document.body.append(host);
@@ -31,6 +37,7 @@ async function mount(props: Partial<Parameters<typeof MemoryMap>[0]> = {}) {
 afterEach(async () => {
   await act(async () => root?.unmount()); host?.remove();
   applyLocale("en");
+  vi.restoreAllMocks();
 });
 
 describe("MemoryMap", () => {
@@ -45,7 +52,7 @@ describe("MemoryMap", () => {
     expect(host.querySelector(".mm-live")!.textContent).toContain("Uses VS Code");
   });
 
-  it("opens Muscle Memory to its lessons on a tap", async () => {
+  it("opens Habits to its lessons on a tap", async () => {
     await mount();
     const muscle = host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="muscle"]')!;
     await act(async () => muscle.click());
@@ -75,7 +82,7 @@ describe("MemoryMap", () => {
     for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
   });
 
-  it("tints the Muscle Memory icon the Knowledge violet and keeps its count plain", () => {
+  it("tints the Habits icon the Knowledge violet and keeps its count plain", () => {
     const icon = (kind: string) => css.match(new RegExp(`^\\[data-kind="${kind}"\\] \\.mm-icon \\{([^}]*)\\}`, "m"))?.[1] ?? "";
     expect(icon("muscle")).toContain("color: rgb(var(--mm-violet));");
     expect(icon("muscle")).toBe(icon("knowledge"));
@@ -268,6 +275,7 @@ describe("smooth glow", () => {
   // a browser that reports a map `wide` device pixels across and answers the painter with `reply`
   function browser(reply: unknown, wide: number) {
     const seen: (() => void)[] = [];
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(wide);
     vi.stubGlobal("ResizeObserver", class { constructor(private report: (entries: unknown[]) => void) {} observe(target: Element) { seen.push(() => this.report([{ target, devicePixelContentBoxSize: [{ inlineSize: wide, blockSize: 808 }] }])); } disconnect() {} });
     vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { queueMicrotask(() => this.onmessage?.({ data: reply })); } });
     vi.stubGlobal("getComputedStyle", () => ({ backgroundImage: aura, maskImage: aura, backgroundColor: "rgb(13, 14, 22)", boxShadow: "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px", display: "none", top: "-18px", opacity: "1", getPropertyValue: () => "0.7" }));

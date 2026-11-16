@@ -118,7 +118,7 @@ it("carries a call's spoken lines into a resumed session's next turn once", asyn
   store.appendMessage(threadId, { role: "bot", kind: "text", text: "Good evening. What do you need?", call: { ...call, voice: true } });
   store.appendMessage(threadId, { role: "user", kind: "text", text: "Is the password reset email fixed?", call });
   const { turnText } = await send("what did we just say?");
-  expect(turnText).toContain("You: Good evening. What do you need?\nPerson: Is the password reset email fixed?");
+  expect(turnText).toContain("Voice: Good evening. What do you need?\nPerson: Is the password reset email fixed?");
   expect(turnText.endsWith("Current message:\n\nwhat did we just say?")).toBe(true);
   expect(await send("and the fish?")).toEqual({ turnText: "and the fish?", resume: true });
 });

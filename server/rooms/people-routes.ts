@@ -1,6 +1,6 @@
 // The host's People actions in a hosted team room: Invite, which hands back
 // the room's one code; Remove, which also keeps that PC from rejoining with
-// it; Let back in; and taking out a teammate's bot. Local only (/api/rooms/), owner only.
+// it; Let back in; and taking out a teammate's bot. Local only (/api/rooms/): the host and their own bots.
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { json } from "../http-helpers.ts";
@@ -14,8 +14,6 @@ export interface PeopleRouteDeps {
   store: Pick<Store, "groups" | "emit">;
   /** This PC's relay host, null while it has none. */
   relayHost: () => string | null;
-  /** The caller holds a bot's comms token. */
-  botCaller: boolean;
   /** A short code from the relay, null while it can't mint one. */
   mintRoomCode?(): Promise<{ code: string; exp: number } | null>;
 }
@@ -27,7 +25,6 @@ export async function peopleRoute(_req: IncomingMessage, res: ServerResponse, me
   const [, roomId, personId, back, botId] = route as unknown as [string, string, string | undefined, string | undefined, string | undefined];
   const group = deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId);
   if (!group || method !== ((personId && !back) || botId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
-  else if (deps.botCaller) json(res, 403, { error: "forbidden" });
   else if (botId) {
     if (removeRoomTeamBot(roomId, botId)) json(res, 200, { ok: true });
     else json(res, 404, { error: "not found" });

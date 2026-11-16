@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
 import { applyLocale } from "@/lib/i18n";
+import { answerCall } from "@/lib/live-call/active";
 import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
@@ -13,7 +14,7 @@ import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -33,13 +34,15 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture() { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); }
+    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
+    stopMic() {}
     play() {}
     flush() {}
     close() {}
     boop() {}
     heardShare() { return 1; }
     level() { return fakes.level; }
+    micLevel() { return 0; }
   },
 }));
 
@@ -111,6 +114,7 @@ async function type(host: HTMLElement, text: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -119,6 +123,7 @@ afterEach(() => {
   fakes.engines.length = 0;
   fakes.micError = "";
   fakes.capture.mockClear();
+  fakes.frame = undefined;
   fakes.config = undefined;
   fakes.token = undefined;
   fakes.messages = undefined;
@@ -411,6 +416,63 @@ describe("live call in the message box", () => {
     }
   });
 
+  async function silentHint(host: HTMLElement) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await connect(host);
+    vi.setSystemTime(Date.now() + 6_000);
+    fakes.frame!(new ArrayBuffer(320));
+    await vi.waitFor(() => expect(host.querySelector("[data-call-mic-hint]")).not.toBeNull(), { timeout: 3_000 });
+    return host.querySelector<HTMLElement>("[data-call-mic-hint]")!;
+  }
+
+  it.each(["win32", "darwin"])("links sound input in the mic hint to the %s sound settings", async (platform) => {
+    const permOpenSettings = vi.fn();
+    Object.assign(window, { ogb: { platform, permOpenSettings, speechStop: vi.fn() } });
+    const { host, unmount } = await mount();
+    try {
+      const hint = await silentHint(host);
+      expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
+      await act(async () => pick(hint, "sound input").click());
+      expect(permOpenSettings).toHaveBeenCalledWith("sound");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([["the browser", undefined], ["Linux", { platform: "linux", permOpenSettings: vi.fn(), speechStop: vi.fn() }]])("keeps the mic hint plain text in %s", async (_where, ogb) => {
+    if (ogb) Object.assign(window, { ogb });
+    const { host, unmount } = await mount();
+    try {
+      const hint = await silentHint(host);
+      expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
+      expect(hint.querySelector("button, a")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("an answered bot call with no key opens the chat with no call and no token request", async () => {
+    const { host, unmount } = await mount();
+    try {
+      expect(answerCall(atlas, "Sign in to Claude on Home.")).not.toBeNull();
+      await act(() => new Promise((done) => setTimeout(done, 300)));
+      expect(tokens()).toBe(0);
+      expect(host.querySelector("[data-live-call]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("an answered bot call with a key still opens the call", async () => {
+    const { unmount } = await mount(true);
+    try {
+      await act(async () => void answerCall(atlas, "Sign in to Claude on Home."));
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
   it("saving the key does not start the call", async () => {
     fakes.token = () => Response.json({ error: "Add a Gemini key to call." }, { status: 409 });
     const { host, unmount } = await mount();
@@ -477,10 +539,11 @@ describe("live call in the message box", () => {
       expect(start).toHaveBeenCalledTimes(1);
       expect(confirm.disabled).toBe(true);
       expect(tokens()).toBe(2);
-      expect(fakes.capture).not.toHaveBeenCalled();
+      // The mic opens on each tap, beside the token: once for the keyless try, once for this start.
+      expect(fakes.capture).toHaveBeenCalledTimes(2);
       await act(async () => finish(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" })));
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
-      expect(fakes.capture).toHaveBeenCalledTimes(1);
+      expect(fakes.capture).toHaveBeenCalledTimes(2);
     } finally {
       finish?.(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" }));
       await unmount();

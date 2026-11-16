@@ -47,12 +47,16 @@ export function DeviceRow({ name, sub, control, ready, children }: { name: strin
   );
 }
 
+/** A blank row the height of a device row, held until a list first answers. */
+export const PendingRow = ({ sub }: { sub?: boolean }) => <DeviceRow name={"\u00a0"} sub={sub ? "\u00a0" : undefined} control={<span />} />;
+
 /** The picker's other PCs; this one leads the page as This PC. */
 export function YourPcs() {
   const { t } = useI18n();
-  const [devices, reload] = useDevices(true, true);
+  const [devices, reload, known] = useDevices(true, true, true);
   const [opening, setOpening] = useState<string | null>(null);
   const others = devices.filter((device) => !device.current);
+  if (!known) return <DevicesSection title={t("chrome.devices")} data-your-pcs=""><PendingRow /></DevicesSection>;
   if (!others.length) return null;
   const deviceWindow = window.ogb?.deviceWindow;
   const open = (host: string, name: string) => {

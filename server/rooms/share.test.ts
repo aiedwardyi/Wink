@@ -1,13 +1,18 @@
-import { existsSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { getOrCreateChannel, mirrorExchange, mirrorReply } from "../comms-visibility.ts";
 import { DATA_DIR } from "../config.ts";
+import type { DelegationReceipt } from "../delegations.ts";
+import { publishPeerReply, replyDestinations } from "../peer-reply-publication.ts";
 import { Store, type GroupRecord, type Message } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
 import { closeRoomsDb, recentRoomEntries } from "./db.ts";
+import { goLive, openDoorStream } from "./door-streams.ts";
 import { hostedRoomView, linkedFilesClosed } from "./guards.ts";
 import { closeInvitesDb, roomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
@@ -96,7 +101,7 @@ describe("sharing a bot group", () => {
     expect(peopleOnlyRoom(first.roomId)).toBe(false);
   });
 
-  it("publishes no room or code while phone access is off, a member works, or for a bot-to-bot channel", () => {
+  it("publishes no room or code while phone access is off or a member works", () => {
     const group = crew();
     say(group, "hello");
     relay = null;
@@ -105,13 +110,55 @@ describe("sharing a bot group", () => {
     working = true;
     expect(statusOf(() => shareGroup(deps(), group.id))?.[0]).toBe(409);
     working = false;
-    const other = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
-    const dm = store.createGroup("Wink & Pip", [wink, other], true);
-    expect(statusOf(() => shareGroup(deps(), dm.id))?.[0]).toBe(400);
     expect(statusOf(() => shareGroup(deps(), "nope"))?.[0]).toBe(404);
     expect(roomCount()).toBe(0);
     expect(store.group(group.id)!.hosted).toBeUndefined();
     expect(shareGroup(deps(), group.id).carried).toBe(1);
+  });
+
+  it("shares a bot-to-bot channel as a team room", () => {
+    const other = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
+    const dm = store.createGroup("Wink & Pip", [wink, other], true);
+    answer(dm, "over to you, Pip");
+    const shared = shareGroup(deps(), dm.id);
+    expect(shared).toMatchObject({ code: expect.stringMatching(/^wkr1:/), carried: 1 });
+    expect(store.group(dm.id)!.hosted).toEqual({ roomId: shared.roomId });
+    expect(rows(shared.roomId).map((entry) => entry.text)).toEqual(["over to you, Pip"]);
+    expect(peopleOnlyRoom(shared.roomId)).toBe(false);
+  });
+
+  it("commits a shared channel's later peer exchange and sends it to joiners", () => {
+    const from = store.bot(wink)!;
+    const pip = store.patchBot(store.createBot().id, { name: "Pip" })!;
+    const { roomId } = shareGroup(deps(), getOrCreateChannel(store, from, pip).id);
+    const res = Object.assign(new EventEmitter(), { written: [] as string[], writableLength: 0, write(chunk: string) { this.written.push(chunk); return true; } });
+    goLive(openDoorStream(roomId, "p", res as unknown as ServerResponse), 0);
+    const bus = { store, broadcast: () => {} };
+    const channel = getOrCreateChannel(store, from, pip);
+    mirrorExchange(bus, from, pip, "check the build", channel);
+    mirrorReply(bus, pip, "build is green", channel);
+    expect(rows(roomId).map((entry) => [entry.author.name, entry.text])).toEqual([["Wink", "check the build"], ["Pip", "build is green"]]);
+    expect(res.written.map((chunk) => JSON.parse(chunk.slice(6)).entry.text)).toEqual(["check the build", "build is green"]);
+    expect(store.messagesFor(channel.threadId).map((message) => [message.text, Boolean(message.roomEntryId)])).toEqual([["check the build", true], ["build is green", true]]);
+    res.emit("close");
+  });
+
+  it("commits a shared channel's later task reply once, keeping its mail row", () => {
+    const from = store.bot(wink)!;
+    const pip = store.patchBot(store.createBot().id, { name: "Pip" })!;
+    const channel = getOrCreateChannel(store, from, pip);
+    const { roomId } = shareGroup(deps(), channel.id);
+    const bus = { store, broadcast: () => {} };
+    const receipt: DelegationReceipt = {
+      id: "task-1", sourceThreadId: from.threadId, toBotId: pip.id, toBotName: "Pip", status: "done", state: "done", result: "build is green",
+      finishedAt: 1, kind: "delegation", deliver: "queued", source: { botId: from.id, threadId: from.threadId, turnId: "" },
+    };
+    receipt.publish = replyDestinations(bus, receipt);
+    publishPeerReply(bus, receipt);
+    publishPeerReply(bus, receipt, true);
+    expect(rows(roomId).map((entry) => [entry.author.name, entry.text])).toEqual([["Pip", "build is green"]]);
+    const line = store.messagesFor(channel.threadId).filter((message) => message.text === "build is green");
+    expect(line).toEqual([expect.objectContaining({ roomEntryId: rows(roomId)[0].id, comm: expect.objectContaining({ peer: "reply", mailKey: "task-1:reply:" + channel.threadId }) })]);
   });
 
   it("carries only settled visible text, with attachment tags removed whole", () => {
@@ -148,7 +195,7 @@ describe("sharing a bot group", () => {
     expect(shared.carried).toBe(200);
     expect(entries).toHaveLength(200);
     expect(entries[0]!.text).toBe("line 5");
-    expect(entries.find((entry) => entry.text.startsWith("h"))!.text).toHaveLength(4_000);
+    expect(entries.find((entry) => entry.text.startsWith("h"))!.text).toHaveLength(5_000);
     expect(entries.find((entry) => entry.text.startsWith("b"))!.text).toHaveLength(20_000);
     expect(entries.some((entry) => entry.text === "the other task")).toBe(false);
   });
@@ -202,21 +249,27 @@ describe("sharing a bot group", () => {
 });
 
 describe("the share route", () => {
-  async function post(path: string, botCaller = false, method = "POST") {
+  async function post(path: string, method = "POST") {
     const res = { writeHead: vi.fn(), end: vi.fn() };
-    const handled = await shareRoute({} as IncomingMessage, res as unknown as ServerResponse, method, path, { ...deps(), botCaller, publicGroupState: (group) => ({ id: group.id, hosted: group.hosted }) });
+    const handled = await shareRoute({} as IncomingMessage, res as unknown as ServerResponse, method, path, { ...deps(), publicGroupState: (group) => ({ id: group.id, hosted: group.hosted }) });
     return handled ? { status: res.writeHead.mock.calls[0]![0] as number, body: JSON.parse(res.end.mock.calls[0]![0]) } : null;
   }
 
-  it("shares for the owner only, and leaves other paths alone", async () => {
+  it("shares, and leaves other paths alone", async () => {
     const group = crew();
     say(group, "hello");
-    expect(await post(`/api/groups/${group.id}/share`, true)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect((await post(`/api/groups/${group.id}/share`, false, "GET"))?.status).toBe(404);
+    expect((await post(`/api/groups/${group.id}/share`, "GET"))?.status).toBe(404);
     expect(await post(`/api/groups/${group.id}/sharex`)).toBeNull();
     const shared = await post(`/api/groups/${group.id}/share`);
     expect(shared).toEqual({ status: 200, body: { roomId: expect.any(String), code: expect.any(String), carried: 1, group: { id: group.id, hosted: { roomId: shared!.body.roomId } } } });
     relay = null;
     expect(await post(`/api/groups/${group.id}/share`)).toEqual({ status: 409, body: { error: "phone access is off" } });
+  });
+
+  it("is mounted for the user's own bots too", () => {
+    const index = readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8");
+    const start = index.indexOf("await shareRoute(");
+    expect(start).toBeGreaterThan(0);
+    expect(index.slice(start, index.indexOf("\n", start))).not.toContain("botCaller");
   });
 });

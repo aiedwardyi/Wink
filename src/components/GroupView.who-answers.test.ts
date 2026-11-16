@@ -25,7 +25,7 @@ describe("room pin banner", () => {
     expect(pinPreview("user", "**Done**\n  now")).toBe("**Done** now");
   });
 
-  it("uses the shared preview", () => {
-    expect(groupView).toContain("pinPreview(");
+  it("uses the 1:1 banner", () => {
+    expect(groupView).toContain("<PinnedBanner");
   });
 });

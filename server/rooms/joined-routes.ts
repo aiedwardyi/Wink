@@ -2,7 +2,7 @@
 // LOCAL_ONLY_PREFIXES), so no relay caller reaches them; no reply carries the guest key.
 import type { GuestClient, GuestResult } from "./guest-client.ts";
 
-const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read|notice|older))?$/;
+const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read|notice|older|stop))?$/;
 const REACT = /^\/api\/joined\/rooms\/([\w-]{1,64})\/entries\/([\w-]{1,64})\/reactions$/;
 const BOTS = /^\/api\/joined\/rooms\/([\w-]{1,64})\/bots(?:\/([\w-]{1,64}))?$/;
 
@@ -21,7 +21,8 @@ const field = (body: unknown, name: string): unknown =>
 export async function joinedRoute(
   method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice" | "older" | "addBot" | "removeBot">, body: () => Promise<unknown>,
   query = new URLSearchParams(),
-  localBot: (botId: string) => { id: string; name: string; color: string } | null = () => null,
+  localBot: (botId: string) => { id: string; name: string; color: string; mascotStyle?: string | null } | null = () => null,
+  stopMine: (roomId: string) => Promise<void> = async () => {},
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
   client.start();
@@ -39,17 +40,21 @@ export async function joinedRoute(
     if (method !== "POST") return notFound;
     const botId = field(await body(), "botId");
     const bot = typeof botId === "string" ? localBot(botId) : null;
-    return bot ? reply(await client.addBot(bots[1]!, bot.id, bot.name, bot.color), "bot") : { status: 404, body: { error: "no such bot" } };
+    return bot ? reply(await client.addBot(bots[1]!, bot.id, bot.name, bot.color, bot.mascotStyle), "bot") : { status: 404, body: { error: "no such bot" } };
   }
   const route = ROOM.exec(path);
   if (!route) return notFound;
-  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | "notice" | "older" | undefined];
+  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | "notice" | "older" | "stop" | undefined];
   if (!action) {
     if (method === "DELETE") return reply(await client.remove(roomId), "removed");
     const room = method === "GET" ? client.room(roomId, Number(query.get("limit")) || undefined) : null;
     return room ? { status: 200, body: { room } } : notFound;
   }
   if (method !== "POST") return notFound;
+  if (action === "stop") {
+    await stopMine(roomId);
+    return { status: 200, body: { ok: true } };
+  }
   if (action === "leave") return reply(await client.leave(roomId), "room");
   if (action === "rejoin") return reply(await client.rejoin(roomId, field(await body(), "code")), "room");
   const fields = await body();

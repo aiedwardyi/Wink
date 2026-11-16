@@ -4,7 +4,7 @@ import { trackSetting } from "./usage-stats";
 export type ReplyStyle = "paragraphs" | "live";
 export const REPLY_STYLE_KEY = "omb-reply-style";
 const CHANGE_EVENT = "orbit-reply-style";
-let fallback: ReplyStyle = "paragraphs";
+let fallback: ReplyStyle = "live";
 let sessionFallback: ReplyStyle | null = null;
 
 export function loadReplyStyle(): ReplyStyle {
@@ -13,7 +13,7 @@ export function loadReplyStyle(): ReplyStyle {
     const storage = globalThis.localStorage;
     if (!storage) return fallback;
     const value = storage.getItem(REPLY_STYLE_KEY);
-    return value === "live" ? "live" : "paragraphs";
+    return value === "paragraphs" ? "paragraphs" : "live";
   } catch {
     return fallback;
   }

@@ -70,7 +70,7 @@ function frames(path: string, key: string, count: number): Promise<unknown[]> {
 }
 
 async function join(name: string): Promise<{ key: string; id: string }> {
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward", "Wink"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward", "Wink"]);
   const res = await call("/room/v1/join", "POST", undefined, { code: `wkr1:${HOST}:${invite.id}.${secret}` });
   expect(res.status).toBe(200);
   return { key: res.body.key, id: res.body.person.id };
@@ -121,10 +121,21 @@ describe("teammates' own bots", () => {
     expect((await call(room("bots"), "POST", peter.key, { name: "Peter", color: "teal" })).status).toBe(409);
     const snapshot = await call(room("snapshot?with=bots"), "GET", peter.key);
     expect(snapshot.body.state.teamBots).toEqual([{ id: added.body.bot.id, name: "Pete-Coder", color: "teal", owner: peter.id }]);
-    expect(snapshot.body.state.bots).toEqual([{ id: wink, name: "Wink", color: "purple" }]);
+    expect(snapshot.body.state.bots).toEqual([{ id: wink, name: "Wink", color: "purple", mascotStyle: store.bot(wink)!.mascotStyle }]);
     // A later joiner can't take the bot's name.
-    const { invite, secret } = createInvite(group.hosted.roomId, "Pete-Coder", "chat", ["Edward", "Wink"]);
+    const { invite, secret } = createInvite(group.hosted.roomId, "Pete-Coder", ["Edward", "Wink"]);
     expect((await call("/room/v1/join", "POST", undefined, { code: `wkr1:${HOST}:${invite.id}.${secret}` })).status).toBe(409);
+  });
+
+  it("carries each bot's own pick to every PC, and drops one it can't read", async () => {
+    store.patchBot(wink, { mascotStyle: "icon-21" });
+    const peter = await join("Peter");
+    const added = await call(room("bots"), "POST", peter.key, { name: "포키", color: "", mascotStyle: "icon-11" });
+    expect(added.body.bot).toMatchObject({ name: "포키", mascotStyle: "icon-11" });
+    expect((await call(room("bots"), "POST", peter.key, { name: "Junk", color: "teal", mascotStyle: "<img>" })).body.bot).not.toHaveProperty("mascotStyle");
+    const { state } = (await call(room("snapshot?with=bots"), "GET", peter.key)).body;
+    expect(state.teamBots.map((bot: { mascotStyle?: string }) => bot.mascotStyle)).toEqual(["icon-11", undefined]);
+    expect(state.bots).toEqual([{ id: wink, name: "Wink", color: "purple", mascotStyle: "icon-21" }]);
   });
 
   it("caps each person at five bots", async () => {
@@ -155,6 +166,15 @@ describe("teammates' own bots", () => {
     expect(recentRoomEntries(group.hosted.roomId, 10)).toHaveLength(2);
     expect(roomAsks(group.hosted.roomId, ["held", "queued", "running"])).toEqual([]);
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ role: "bot", from: { botId: bot.id, name: "Pete-Coder", color: "teal" } });
+  });
+
+  it("wakes a host bot once for a bot line that @'s it, even when the post is retried", async () => {
+    const peter = await join("Peter");
+    const bot = (await call(room("bots"), "POST", peter.key, { name: "Pete-Coder" })).body.bot;
+    const body = { botId: bot.id, text: "@Wink Peter is free Sat after 7. What works for Edward?", sendId: "t".repeat(24) };
+    const posted = await call(room("bot-send"), "POST", peter.key, body);
+    expect((await call(room("bot-send"), "POST", peter.key, body)).body.entry.id).toBe(posted.body.entry.id);
+    expect(roomAsks(group.hosted.roomId, ["held", "queued", "running"])).toEqual([expect.objectContaining({ botId: wink, asker: { kind: "person", id: peter.id }, entryId: posted.body.entry.id })]);
   });
 
   it("never wakes the host's only bot for a teammate's bot name or a reply to its line", async () => {

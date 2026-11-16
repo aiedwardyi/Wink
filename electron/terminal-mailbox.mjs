@@ -474,11 +474,9 @@ function claudeWorkerSettings(dir) {
   }, null, 2)}\n`;
 }
 
-/** Writes orbit-msg and the Claude worker hook settings into `dir`; Windows only, returns null elsewhere. */
-export async function installOrbitMsg(dir, platform = process.platform) {
-  if (platform !== "win32") return null;
-  await fs.mkdir(dir, { recursive: true });
-  const files = [
+/** orbit-msg and the Claude worker hook settings rendered for `dir`, as [name, content] pairs. */
+export function orbitBinFiles(dir) {
+  return [
     ["orbit-msg.ps1", ORBIT_MSG_PS1.replace(/\r?\n/g, "\r\n")],
     ["orbit-msg.cmd", ORBIT_MSG_CMD.replace(/\r?\n/g, "\r\n")],
     ["orbit-msg", ORBIT_MSG_SH],
@@ -490,7 +488,13 @@ export async function installOrbitMsg(dir, platform = process.platform) {
     ["orbit-session.ps1", WORKER_SESSION_PS1.replace(/\r?\n/g, "\r\n")],
     ["claude-worker.json", claudeWorkerSettings(dir)],
   ];
-  for (const [name, content] of files) {
+}
+
+/** Writes orbit-msg and the Claude worker hook settings into `dir`; Windows only, returns null elsewhere. */
+export async function installOrbitMsg(dir, platform = process.platform) {
+  if (platform !== "win32") return null;
+  await fs.mkdir(dir, { recursive: true });
+  for (const [name, content] of orbitBinFiles(dir)) {
     const target = path.join(dir, name);
     if ((await fs.readFile(target, "utf8").catch(() => null)) !== content) {
       const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;

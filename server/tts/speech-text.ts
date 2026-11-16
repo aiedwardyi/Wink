@@ -79,8 +79,9 @@ export function speakable(input: string): string {
   text = text.replace(/\bhttps?:\/\/\S+/g, " a link ");
 
   // tables: a grid is hopeless aloud, and the separator row is pure noise
-  text = text.replace(/^\s*\|?[\s:-]*\|[\s|:-]*$/gm, "");
-  text = text.replace(/^\s*\|(.+)\|\s*$/gm, (_m, row: string) =>
+  // [ \t], never \s: a newline eaten here glues one row onto the next
+  text = text.replace(/^[ \t]*\|?[ \t:-]*\|[ \t|:-]*$/gm, "");
+  text = text.replace(/^[ \t]*\|(.+)\|[ \t]*$/gm, (_m, row: string) =>
     row
       .split("|")
       .map((cell) => cell.trim())

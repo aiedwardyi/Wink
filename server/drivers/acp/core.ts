@@ -20,7 +20,7 @@ import { canServeTurn, warmFingerprint, warmToolsKey, type WarmEligibilityInput 
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmPool, type WarmSession } from "../warm-pool.ts";
 
 import { applyCredentialAllowlist } from "../../config.ts";
-import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../procs.ts";
+import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
@@ -241,6 +241,7 @@ export interface AcpSupport {
   resolveTurnModel?(
     model: string | undefined,
     env: Record<string, string | undefined>,
+    config: AcpConfig,
   ): string | undefined;
   /** Apply per-session settings between session/new (or session/load) and the
    * first session/prompt. Some CLIs ignore argv and take the model/mode over
@@ -433,7 +434,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         asks: Map<string, (behavior: string, source?: "user" | "timeout" | "system") => string | null>;
       }
       const active = new Map<string, Turn>();
-      const systemHeld = systemLedger();
+      const systemHeld = systemLedger(false, instanceId);
       const billingStops = new Set<() => void>();
       const pool = support.warmPool ?? sharedWarmPool;
       const incarnation = input.incarnation ?? newId();
@@ -572,7 +573,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const context = (turn: SendTurnInput, captured: Captured) => {
         const cwd = turn.cwd ?? config.workspace ?? homedir();
         const env = childEnv(LOCAL_HOST_KEY_ENVS);
-        const resolvedModel = support.resolveTurnModel?.(turn.model, env);
+        const resolvedModel = support.resolveTurnModel?.(turn.model, env, config);
         const allowed = new Set(support.credentialEnv ?? []);
         for (const key of LOCAL_HOST_KEY_ENVS) if (!allowed.has(key)) delete env[key];
         const cliTurn = resolvedModel !== undefined && resolvedModel !== turn.model ? { ...turn, model: resolvedModel } : turn;
@@ -701,6 +702,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             check();
             entry = spawnEntry(ctx.cliTurn, ctx.env, ctx.cwd, lease);
+            if (!shape) setCliPriority(entry.connection.child, "low");
             entry.ready = holder.ready;
             await setup(entry, ctx.cliTurn, ctx.paths, lease.signal, () => check(entry), !shape,
               skipSubscriptionAuthForLocalInject(turn.model));
@@ -903,6 +905,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           check();
           entry ??= spawnCold();
+          setCliPriority(entry.connection.child, "normal");
           reused = !!entry.sessionId;
           handshakeReuse = !reused && !!entry.init;
           check(entry);
@@ -1000,6 +1003,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (quietEnd && ok) stopReason = null;
           if (sessionId && compacted) systemHeld.forget(sessionId);
           else if (sessionId && systemSent && state.promptAccepted) systemHeld.record(sessionId, systemSent);
+          else if (sessionId) systemHeld.keep(sessionId);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const finish of [...asks.values()]) finish("cancel", "system");
           for (const finish of interjectionWaiters.values()) finish(false);
@@ -1367,7 +1371,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             if (system) {
               systemHeld.forget(activeSessionId);
               systemSent = system;
-            }
+            } else systemHeld.begin(activeSessionId);
             const promptTurn = { ...fallbackTurn, system };
             const text = support.buildPromptText
               ? support.buildPromptText(promptTurn)

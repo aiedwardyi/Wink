@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { modelFamilyAccent } from "@/lib/model-chip";
-import { savePickerLook } from "@/lib/picker-look";
 import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
 import type { Bot, InstanceInfo } from "@/state/store";
 
@@ -267,9 +266,15 @@ describe("ModelPicker friends chip", () => {
       models: {
         default: "gemini-4-argon-high",
         options: [
+          { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)" },
+          { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)" },
+          { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)" },
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
           { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
+          { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)" },
+          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
+          { id: "gemini-4-hydrogen-low", label: "Gemini 4 Hydrogen (Low)" },
           ...antigravityTiered.models.options,
         ],
       },
@@ -292,11 +297,17 @@ describe("ModelPicker friends chip", () => {
     expect(chipText(html)).toContain("Gemini 4 Argon Low");
     const list = html.slice(html.indexOf("data-model-picker-content"));
     expect(list).toContain('model-cross-name">Gemini 4 Argon<');
-    expect(list.indexOf("Gemini 4 Argon")).toBeLessThan(list.indexOf("Gemini 3.8 Flash"));
+    expect(list).toContain('model-cross-name">Gemini 4 Hydrogen<');
+    expect(list).toContain('model-cross-name">Gemini 4 Carbon<');
+    expect(list.indexOf("Gemini 4 Carbon")).toBeLessThan(list.indexOf("Gemini 4 Argon"));
+    expect(list.indexOf("Gemini 4 Argon")).toBeLessThan(list.indexOf("Gemini 4 Hydrogen"));
+    expect(list.indexOf("Gemini 4 Hydrogen")).toBeLessThan(list.indexOf("Gemini 3.8 Flash"));
     expect(list).not.toContain("model-cross-note");
     for (const tier of ["low", "medium", "high"]) {
       expect(list).toContain(`data-model-tier="gemini-4-argon-${tier}"`);
     }
+    expect(list).toContain('data-model-cell="gemini-4-hydrogen-high"');
+    expect(list).toContain('data-model-cell="gemini-4-carbon-high"');
   });
 
   it.each([
@@ -312,8 +323,8 @@ describe("ModelPicker friends chip", () => {
     expect(html).toContain("whitespace-nowrap");
   });
 
-  it("shortens the contributor card with the full name in aria/title", () => {
-    const museTwo: InstanceInfo = {
+  it("keeps three Muse cells and shortens only the contributor card", () => {
+    const muse: InstanceInfo = {
       instanceId: "muse",
       driverKind: "museAgent",
       displayName: "Meta Muse",
@@ -323,6 +334,7 @@ describe("ModelPicker friends chip", () => {
         options: [
           { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
           { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+          { id: "muse-ember-1.0", label: "Meta Muse Ember" },
         ],
       },
       capabilities: {},
@@ -334,7 +346,7 @@ describe("ModelPicker friends chip", () => {
         createElement(ModelPickerControl, {
           bot: { ...bot, modelSelection: { instanceId: "muse", model: "muse-spark-1.3-contributor", mode: "pinned" } },
           store: {
-            state: { instances: [museTwo], selectedId: "bot-1" },
+            state: { instances: [muse], selectedId: "bot-1" },
             dispatch: () => undefined,
             refreshInstances: async () => undefined,
           },
@@ -343,6 +355,9 @@ describe("ModelPicker friends chip", () => {
       ),
     );
     const list = html.slice(html.indexOf("data-model-picker-content"));
+    expect(list.match(/data-model-cell=/g)).toHaveLength(3);
+    expect(list).toContain('data-model-cell="muse-ember-1.0"');
+    expect(list).toContain("model-cross-name\">Meta Muse Ember<");
     expect(list).toContain('data-model-cell="muse-spark-1.3-contributor" aria-pressed="true"');
     expect(list).toContain("model-cross-name\">Meta Muse 1.3<");
     expect(list).toContain(">Contrib<");
@@ -695,26 +710,17 @@ describe("ModelPicker light skins", () => {
   });
 });
 
-describe("ModelPicker picked look", () => {
+describe("ModelPicker look", () => {
   it.each([
-    ["precision", "light", "wink-day"],
-    ["precision", "atelier", "atelier"],
-    ["precision", "dark", undefined],
-    ["mono-hud", "light", "wink-day"],
-    ["mono-hud", "dark", "precision"],
-    ["notebook", "light", undefined],
-    ["notebook", "dark", undefined],
-    ["notebook", "atelier", "atelier"],
-    ["atelier", "light", "wink-day"],
-    ["atelier", "atelier", undefined],
-    ["atelier", "dark", undefined],
-  ] as const)("on the %s skin draws the %s look", (skin, look, colors) => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null), setItem: () => undefined });
+    ["precision", undefined],
+    ["mono-hud", "precision"],
+    ["wink-day", undefined],
+    ["atelier", undefined],
+  ] as const)("on the %s skin borrows %s colors", (skin, colors) => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null) });
     try {
-      savePickerLook(look);
       const backdrop = markup(bot.modelSelection, true).match(/<div [^>]*class="model-cross-backdrop[^>]*>/)?.[0] ?? "";
       expect(backdrop.match(/ data-skin="([^"]+)"/)?.[1]).toBe(colors);
-      expect(backdrop.includes(' data-light="true"')).toBe(look !== "dark");
     } finally {
       vi.unstubAllGlobals();
     }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, ImageOff, LoaderCircle, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
@@ -47,6 +47,16 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   const [attempt, setAttempt] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const src = attempt ? `${image.src}${image.src.includes("?") ? "&" : "?"}retry=${attempt}` : image.src;
+
+  // a removed video keeps its decoder and connection until collected, so let go of both now
+  const play = useCallback((video: HTMLVideoElement) => {
+    video.setAttribute("src", src);
+    return () => {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [src]);
 
   const close = () => {
     if (closed.current || callbacks.current.closing) return;
@@ -158,7 +168,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
     root.focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
       const target = event.target;
-      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"], audio, video')) return;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"], audio, video') && event.key !== "Escape") return;
       const action = zoomKeyAction(event);
       if (action && !(window.ogb?.imageZoom && (event.ctrlKey || event.metaKey))) {
         event.preventDefault();
@@ -175,7 +185,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
         wake();
       } else if (event.key === "Tab") {
         wake();
-        const controls = [...root.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')].filter((el) => getComputedStyle(el).display !== "none");
+        const controls = [...root.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), video')].filter((el) => getComputedStyle(el).display !== "none");
         const index = controls.indexOf(document.activeElement as HTMLElement);
         if (index < 0 || (event.shiftKey ? index === 0 : index === controls.length - 1)) {
           event.preventDefault();
@@ -227,7 +237,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   const point = (event: ReactPointerEvent) => ({ x: event.clientX - rect.current.left, y: event.clientY - rect.current.top });
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (callbacks.current.closing || (event.target instanceof Element && event.target.closest("button")) || (event.pointerType === "mouse" && event.button !== 0)) return;
+    if (callbacks.current.closing || (event.target instanceof Element && event.target.closest("button, video")) || (event.pointerType === "mouse" && event.button !== 0)) return;
     event.preventDefault();
     const p = point(event);
     pointers.current.set(event.pointerId, p);
@@ -356,14 +366,16 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
           <ImageOff size={34} /><p>{t("viewer.unavailable")}</p>
           {image.caption && <p className="max-w-prose px-4 text-center text-[13px]">{image.caption}</p>}
           <button className="rounded-lg bg-white/15 px-4 py-3 text-white hover:bg-white/25" onClick={() => { setFailed(false); setLoading(true); setAttempt((n) => n + 1); }}>{t("viewer.retry")}</button>
-        </div> : <img ref={imgRef} key={image.src} src={src} alt={image.name} draggable={false}
+        </div> : image.video ? <video ref={play} key={image.src} controls autoPlay playsInline data-viewer-video=""
+          className="absolute inset-0 size-full object-contain" onLoadedData={() => setLoading(false)} onError={() => setFailed(true)} />
+        : <img ref={imgRef} key={image.src} src={src} alt={image.name} draggable={false}
           className="absolute left-0 top-0 h-full w-full max-w-none object-contain" style={{ transformOrigin: "0 0", maxWidth: "none" }}
           onLoad={(event) => { setLoading(false); natural.current = { w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight }; measure(); }}
           onError={() => setFailed(true)} />}
       </div>
       {previous && <button data-viewer-controls="" data-viewer-previous="" className="media-viewer-button absolute left-4 top-1/2 rounded-full border border-white/15 max-md:hidden" onClick={() => navigate(-1)} aria-label={t("viewer.previous")} title={t("viewer.previous")}><ChevronLeft size={22} /></button>}
       {next && <button data-viewer-controls="" data-viewer-next="" className="media-viewer-button absolute right-4 top-1/2 rounded-full border border-white/15 max-md:hidden" onClick={() => navigate(1)} aria-label={t("viewer.next")} title={t("viewer.next")}><ChevronRight size={22} /></button>}
-      {!failed && <div data-viewer-controls="" className="media-viewer-zoom absolute left-1/2 flex -translate-x-1/2 rounded-full border border-white/15 bg-black/65 px-1 shadow-sm">
+      {!failed && !image.video && <div data-viewer-controls="" className="media-viewer-zoom absolute left-1/2 flex -translate-x-1/2 rounded-full border border-white/15 bg-black/65 px-1 shadow-sm">
         <button className="media-viewer-button px-3 text-[13px]" title={t("viewer.fitShortcut")} aria-label={t("viewer.fitShortcut")} onClick={() => shortcut("reset")}>{t("viewer.fit")}</button>
         <button className="media-viewer-button px-3 text-[13px]" title={t("viewer.nativeShortcut")} aria-label={t("viewer.nativeShortcut")} onClick={() => { if (frame.current) apply(zoomAround(view.current, center(), frame.current, (frame.current.fit === 1 ? 2 : 1) / view.current.scale)); setAnnouncement(t("viewer.native")); }}>{t("viewer.native")}</button>
       </div>}

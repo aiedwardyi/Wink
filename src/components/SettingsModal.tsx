@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
@@ -13,7 +13,6 @@ import { ProfileFields } from "./ProfileFields";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 import { SegmentedRow } from "./Segmented";
 import { RainbowRing } from "./RainbowRing";
-import { useModelDialFits } from "./ModelDial";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
 import { TeamSection, type TeamView } from "./TeamSection";
@@ -32,11 +31,7 @@ import { PhoneLinkSettings } from "./PhoneLinkSettings";
 import { PhoneNotificationSettings } from "./PhoneNotificationSettings";
 import { loadSidebarSide, saveSidebarSide, type SidebarSide } from "@/lib/sidebar-preferences";
 import { isPhone, saveVibration, vibrationEnabled } from "@/lib/phone-swipe";
-import { modelDialEnabled } from "@/lib/feature-flags";
-import { saveModelPickerView, useModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
-import { savePickerLook, usePickerLook, type PickerLook } from "@/lib/picker-look";
 import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-box";
-import { useSkin } from "@/lib/skins";
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
@@ -81,6 +76,9 @@ const SECTION_KEY = {
   "models-index": "settings.section.modelsIndex",
   sync: "settings.section.sync",
 } as const;
+
+// a 26 px X; the touch area grows to 44 px without moving the header
+const CLOSE_X = "relative rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:after:absolute pointer-coarse:after:-inset-[9px]";
 
 function sectionNavVisible(
   section: (typeof SECTIONS)[number],
@@ -344,38 +342,6 @@ function RainbowBoxRow() {
   );
 }
 
-function PickerLookRow() {
-  const { t } = useI18n();
-  const look = usePickerLook(useSkin());
-  return (
-    <Card>
-      <SegmentedRow<PickerLook>
-        label={t("settings.pickerLook.title")}
-        value={look}
-        options={(["dark", "light", "atelier"] as const).map((id) => ({ id, label: t(`settings.pickerLook.${id}`) }))}
-        onChange={savePickerLook}
-      />
-    </Card>
-  );
-}
-
-function PickerStyleRow() {
-  const { t } = useI18n();
-  const { state } = useStore();
-  const view = useModelPickerView();
-  if (!useModelDialFits(modelDialEnabled(state.config))) return null;
-  return (
-    <Card>
-      <SegmentedRow<ModelPickerView>
-        label={t("settings.pickerStyle.title")}
-        value={view}
-        options={(["dial", "list", "chart"] as const).map((id) => ({ id, label: t(`settings.pickerStyle.${id}`) }))}
-        onChange={saveModelPickerView}
-      />
-    </Card>
-  );
-}
-
 const cnSwitch = (on: boolean) =>
   `relative h-6 w-11 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-control"}`;
 const cnKnob = (on: boolean) =>
@@ -571,7 +537,7 @@ export function SettingsModal({
         // hands the excess to the content pane, which is the only thing that scrolls.
         className={cn(
           "animate-pop-in flex max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col",
-          "h-[560px]",
+          phone && section === "account" ? "h-auto" : "h-[560px]",
         )}
       >
         {phone && (
@@ -579,7 +545,7 @@ export function SettingsModal({
           <nav data-settings-list aria-hidden={page || undefined} inert={page} className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center justify-between px-5 py-3">
               <span id={!page ? "app-settings-title" : undefined} className="text-[17px] font-semibold text-ink">{t("settings.title")}</span>
-              <button onClick={() => dispatch({ type: "toggleAppSettings", open: false })} aria-label={!page ? t("settings.close") : undefined} className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink">
+              <button onClick={() => dispatch({ type: "toggleAppSettings", open: false })} aria-label={!page ? t("settings.close") : undefined} className={CLOSE_X}>
                 <X size={18} />
               </button>
             </div>
@@ -641,7 +607,7 @@ export function SettingsModal({
               <button
                 onClick={() => dispatch({ type: "toggleAppSettings", open: false })}
                 aria-label={t("settings.close")}
-                className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+                className={CLOSE_X}
               >
                 <X size={18} />
               </button>
@@ -718,8 +684,6 @@ export function SettingsModal({
             {section === "themes" && (
               <>
                 <RainbowBoxRow />
-                <PickerLookRow />
-                <PickerStyleRow />
                 <Card>
                   <SkinPicker />
                 </Card>
@@ -735,7 +699,7 @@ export function SettingsModal({
               </>
             )}
             {section === "models-index" && <ModelIndexSection />}
-            {section === "shortcuts" && <KeyboardShortcuts />}
+            {section === "shortcuts" && <KeyboardShortcuts pickerStyle={modelDialEnabled(state.config)} />}
           </div>
         </div>
         )}

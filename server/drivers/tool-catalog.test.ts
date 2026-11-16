@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CATALOG_TOOLS, createToolCatalog, experimentalAgents, originalCatalogCall, slimStaticText } from "./tool-catalog.ts";
 
 const core = ["update_task_state", "ask_user", "list_bots", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "set_keep_going", "react", "show_image", "list_routines", "propose_routine", "propose_routine_action"];
-const optional = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential"];
+const optional = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status"];
 const tools = [...core, ...optional, "report_issue", "verify_site"].map((name) => ({ name, description: `${name} requirements`, inputSchema: { type: "object", properties: {} } }));
 
 afterEach(() => vi.unstubAllEnvs());

@@ -123,6 +123,15 @@ describe("room codes", () => {
     expect((await joinedRoute("POST", "/api/joined/rooms/missing/read", c, async () => ({ seq: 0 })))?.status).toBe(404);
   });
 
+  it("hands the owner's Stop to this PC's own room turns", async () => {
+    const stop = vi.fn(async () => {});
+    const c = guest();
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    expect(await joinedRoute("POST", "/api/joined/rooms/r1/stop", c, async () => ({}), undefined, undefined, stop)).toEqual({ status: 200, body: { ok: true } });
+    expect(stop).toHaveBeenCalledWith("r1");
+    expect((await joinedRoute("GET", "/api/joined/rooms/r1/stop", c, async () => ({}), undefined, undefined, stop))?.status).toBe(404);
+  });
+
   it("keeps delayed teammate lines unread when an own-send reply leads the stream", async () => {
     saveJoined("r1", HOST, STATE.me, KEY);
     const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });
@@ -415,14 +424,14 @@ describe("races and floods", () => {
     expect(urls("/snapshot")).toHaveLength(2);
   });
 
-  it("refuses sends past a small queue instead of waiting on a silent host", async () => {
+  it("queues every send behind a silent host, each waiting its turn", async () => {
     const held: ServerResponse[] = [];
     route = (req, res) => (req.url?.endsWith("/send") ? void held.push(res) : quietDoor(req, res));
     const c = guest();
     await c.join(CODE);
-    const queued = Array.from({ length: 20 }, (_, i) => c.send("r1", `m${i}`));
-    const extra = await Promise.race([c.send("r1", "one too many"), new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
-    expect(extra).toEqual({ ok: false, status: 429, error: "too many messages waiting to send" });
+    const queued = Array.from({ length: 21 }, (_, i) => c.send("r1", `m${i}`));
+    const last = await Promise.race([queued[20], new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
+    expect(last).toBe("waiting");
     route = (req, res) => (req.url?.endsWith("/send") ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res));
     for (const res of held) reply(res, 503, { error: "phone access is off" });
     await until(() => held.every((res) => res.writableEnded));
@@ -478,6 +487,21 @@ describe("room alerts on a teammate", () => {
     await until(() => c.room("r1")?.entries.length === 2);
     await sleep(300);
     expect(alert.mock.calls).toEqual([ping("second")]);
+  });
+
+  it("stays quiet for a bot handing off to a bot and pings the closing line", async () => {
+    const state = { ...STATE, people: [...STATE.people, { id: "p2", name: "JJ" }], bots: [{ id: "b1", name: "Rando", color: "blue" }], teamBots: [{ id: "tb-AAAAAAAAAAAAAAAA", name: "스타줌", color: "", owner: "p2" }] };
+    const rando = { kind: "bot" as const, id: "b1", name: "Rando" };
+    const star = { kind: "bot" as const, id: "tb-AAAAAAAAAAAAAAAA", name: "스타줌", owner: "p2" };
+    route = stream([[0, `data: ${JSON.stringify({ kind: "state", state })}
+
+`], [100, entry(1, rando, "@스타줌 what works for JJ?")], [250, entry(2, star, "@Rando Sat after 7")], [400, entry(3, star, "Done: Sat 7:30. @Edward @JJ")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 50 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 3);
+    await sleep(200);
+    expect(alert.mock.calls).toEqual([[{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "스타줌", text: "Done: Sat 7:30. @Edward @JJ" }]]);
   });
 
   it("pings a reconnect replay once with its latest line, then live lines again", async () => {
@@ -697,6 +721,34 @@ describe("bot lines", () => {
     expect(c.room("r1")!.entries.map((entry) => entry.author)).toEqual([bot, bot]);
     expect(c.room("r1")!.state!.bots).toEqual([WINK]);
     expect(c.room("r1")!.unread).toBe(2);
+  });
+
+  it("hands on each new line once, never a backfill, and a Stop", async () => {
+    const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
+    const frame = (body: unknown) => `data: ${JSON.stringify(body)}
+
+`;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 1, entries: [line(1, "@Pete old")], state: STATE });
+      if (req.url?.includes("/bot-send")) return reply(res, 200, { entry: { seq: 4, id: "e4", at: 4, author: mine, text: "@Wink yours" } });
+      if (req.url?.includes("/stream")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(frame({ kind: "entry", entry: line(2, "@Pete new") }) + frame({ kind: "entry", entry: line(2, "@Pete new") }));
+        res.write(frame({ kind: "entry", entry: { seq: 3, id: "e3", at: 3, author: { kind: "person", ...STATE.me }, text: "@Pete hi" } }) + frame({ kind: "stop" }));
+        return;
+      }
+      reply(res, 404, { error: "not found" });
+    };
+    const onLine = vi.fn();
+    const onStop = vi.fn();
+    const c = guest({ onLine, onStop });
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => onStop.mock.calls.length === 1);
+    expect(c.room("r1")!.entries).toHaveLength(3);
+    await c.botSend("r1", "tb-pete", "@Wink yours");
+    expect(onLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e3"], ["r1", "e4"]]);
+    expect(onStop).toHaveBeenCalledWith("r1");
   });
 
   it("reads an older host's state with no bots as none", async () => {

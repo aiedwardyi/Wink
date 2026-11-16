@@ -68,6 +68,7 @@ describe("phone drawer menu button", () => {
       groups: [],
       selectedId: "b1",
     }));
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
     vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
@@ -86,6 +87,7 @@ describe("phone drawer menu button", () => {
     } finally {
       await act(async () => root.unmount());
       host.remove();
+      vi.restoreAllMocks();
       vi.unstubAllGlobals();
       localStorage.clear();
     }
@@ -162,7 +164,7 @@ describe("worker list shortcut", () => {
       expect(list.textContent).toContain(group ? "Team's workers" : "Scout's workers");
       expect(list.getAttribute("aria-modal")).toBe(phone ? "true" : null);
       await press();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -186,7 +188,7 @@ describe("worker list shortcut", () => {
     try {
       expect(host.querySelector("[data-worker-strip]")).toBeNull();
       expect((await press()).defaultPrevented).toBe(true);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -199,7 +201,7 @@ describe("worker list shortcut", () => {
       await press();
       for (const init of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }, { repeat: true }, { isComposing: true }, { altKey: false }]) {
         expect((await press(init)).defaultPrevented).toBe(false);
-        expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+        expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       }
     } finally {
       await unmount();
@@ -213,7 +215,7 @@ describe("worker list shortcut", () => {
       await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
       const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
       expect(overlay).not.toBeNull();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       await vi.waitFor(async () => {
         await act(async () => {});
         expect(overlay.querySelector("[data-worker-strip]")).not.toBeNull();
@@ -221,11 +223,11 @@ describe("worker list shortcut", () => {
       const event = await press();
       expect(event.defaultPrevented).toBe(true);
       expect(event.cancelBubble).toBe(true);
-      expect(document.body.querySelectorAll("[data-worker-list]")).toHaveLength(1);
+      expect(document.body.querySelectorAll("[data-worker-list]:not([data-closing])")).toHaveLength(1);
       expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
       expect(overlay.querySelector("[data-worker-strip]")?.getAttribute("aria-expanded")).toBe("true");
       await press();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -236,7 +238,7 @@ describe("worker list shortcut", () => {
     try {
       await press({ code: "KeyT", key: "t" });
       expect((await press()).defaultPrevented).toBe(false);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -251,7 +253,7 @@ describe("worker list shortcut", () => {
       inside.focus();
       expect(document.activeElement).toBe(inside);
       await press();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(document.activeElement).toBe(host.querySelector("[data-worker-strip]"));
     } finally {
       await unmount();
@@ -297,6 +299,14 @@ describe("theme cycle shortcut", () => {
     expect(handler()).toContain("nextSkin(current)");
     expect(handler()).toContain('applySkin(next, "hotkey")');
     expect(handler()).toContain("setThemeToast(");
+  });
+
+  it("shows the theme toast above an open model picker", () => {
+    const picker = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "components", "ModelPicker.css"), "utf8");
+    const backdrop = Number(picker.match(/\.model-cross-backdrop \{[^}]*z-index: (\d+)/)?.[1]);
+    const toast = Number(app.match(/\{themeToast && \([\s\S]*?z-\[(\d+)\]/)?.[1]);
+    expect(backdrop).toBeGreaterThan(0);
+    expect(toast).toBeGreaterThan(backdrop);
   });
 
   it("keeps the shortcut comment in App-wide shortcuts up to date", () => {
@@ -587,5 +597,64 @@ describe("conversation layout", () => {
   it("clips the hidden terminal overlay instead of making the chat scrollable", () => {
     // overflow-hidden is still programmatically scrollable: a terminal tab scrollIntoView shifted the chat under the sidebar.
     expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"');
+  });
+});
+
+describe("model picker owns Alt+T", () => {
+  const mount = async () => {
+    localStorage.setItem("omb-onboarding-done", "true");
+    localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+      bots: [{ id: "b1", threadId: "t1", name: "Scout", messages: [], modelSelection: { instanceId: "inst", model: "m" } }],
+      groups: [],
+      selectedId: "b1",
+    }));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(App)));
+    return {
+      press: async (shiftKey: boolean) => {
+        const event = new KeyboardEvent("keydown", { code: "KeyT", key: "t", altKey: true, shiftKey, bubbles: true, cancelable: true });
+        await act(async () => { window.dispatchEvent(event); });
+        return event;
+      },
+      unmount: async () => {
+        await act(async () => root.unmount());
+        host.remove();
+        document.querySelector("[data-model-picker-content]")?.remove();
+        document.documentElement.removeAttribute("data-skin");
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+        localStorage.clear();
+      },
+    };
+  };
+
+  it("leaves the theme and Settings alone while the picker is open", async () => {
+    const { press, unmount } = await mount();
+    try {
+      const picker = document.body.appendChild(document.createElement("div"));
+      picker.setAttribute("data-model-picker-content", "");
+      const before = document.documentElement.dataset.skin;
+      expect((await press(true)).defaultPrevented).toBe(false);
+      expect((await press(false)).defaultPrevented).toBe(false);
+      expect(document.documentElement.dataset.skin).toBe(before);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("still cycles the theme and opens Themes with no picker open", async () => {
+    const { press, unmount } = await mount();
+    try {
+      const before = document.documentElement.dataset.skin;
+      expect((await press(true)).defaultPrevented).toBe(true);
+      expect(document.documentElement.dataset.skin).not.toBe(before);
+      expect((await press(false)).defaultPrevented).toBe(true);
+    } finally {
+      await unmount();
+    }
   });
 });

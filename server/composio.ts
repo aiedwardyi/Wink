@@ -104,9 +104,10 @@ const removalResponseSchema = z.object({ removed: z.number() });
 const authUrlResponseSchema = z.object({ url: z.string().optional() });
 const linkResponseSchema = z.object({ redirect_url: z.string().optional() });
 
+// Composio accepts 2-10 accounts per toolkit; ask for its ceiling.
 const MULTI_ACCOUNT_CONFIG = {
   enable: true,
-  max_accounts_per_toolkit: 5,
+  max_accounts_per_toolkit: 10,
   require_explicit_selection: true,
 } as const;
 
@@ -372,7 +373,7 @@ export async function prepareProjectSession(
 
   // The project's own auth configs must be named at creation — a Session
   // cannot be edited later — so they are read before deciding whether the
-  // current Session is still the right one (issue #509: a twitter auth
+  // current Session is still the right one (a twitter auth
   // config created after the Session existed was never used).
   const authConfigs = knownAuthConfigs
     ?? await listCustomAuthConfigs(trimmed).catch((): AuthConfigMap => ({}));
@@ -542,7 +543,7 @@ async function listConnectedAccounts(
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
 
-  // Five accounts per toolkit can exceed one provider page when a user has
+  // Ten accounts per toolkit can exceed one provider page when a user has
   // many apps. Follow Composio's cursor instead of silently dropping entries.
   for (let page = 0; page < MAX_CONNECTED_ACCOUNT_PAGES; page += 1) {
     const params = new URLSearchParams({
@@ -800,9 +801,6 @@ export async function authorizeService(cfg: AppConfig, slug: string, requestedAl
   const accounts = await listConnectedAccounts(cfg.composio.apiKey, userId, [slug]).catch(() => []);
   const serviceAccounts = accounts.filter((account) => account.toolkit?.slug?.toLowerCase() === slug.toLowerCase());
   const usableAccounts = serviceAccounts.filter((account) => /^(active|initiated|initializing|pending)$/i.test(account.status ?? ""));
-  if (usableAccounts.length >= MULTI_ACCOUNT_CONFIG.max_accounts_per_toolkit) {
-    throw inputError(`${slug} already has the maximum of ${MULTI_ACCOUNT_CONFIG.max_accounts_per_toolkit} accounts`, 409);
-  }
   if (usableAccounts.length > 0 && !alias) {
     throw inputError("Add an account alias so the existing connection is not replaced");
   }

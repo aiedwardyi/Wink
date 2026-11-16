@@ -17,7 +17,7 @@ async function until<T extends Element>(found: () => T | null) {
   return found();
 }
 const key = (init: KeyboardEventInit) => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
-const menu = () => document.querySelector("[data-worker-list]");
+const menu = () => document.querySelector("[data-worker-list]:not([data-closing])");
 const strip = () => document.querySelector<HTMLButtonElement>("main [data-worker-strip]");
 
 const launch = (botId: string, label: string, session: string) => ({

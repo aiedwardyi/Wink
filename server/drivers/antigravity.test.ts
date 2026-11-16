@@ -55,9 +55,14 @@ const FOREIGN_CREDENTIALS = [
 ];
 
 describe("readAntigravityModelCatalog", () => {
-  it("lists the three Gemini 4 Argon tiers first, then 3.8 Flash ahead of older Flash entries", () => {
+  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of the legacy entries", () => {
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(0, 3)).toEqual([
+      { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
+      { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
+      { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
+    ]);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 6)).toEqual([
       { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
@@ -72,35 +77,31 @@ describe("readAntigravityModelCatalog", () => {
     }
     // agy has no bare gemini-3.8-flash: a tier-less id is a bad request
     expect(ids).not.toContain("gemini-3.8-flash");
-    expect(ids).toEqual(expect.arrayContaining([
-      "gemini-3.7-flash-high",
-      "gemini-3.7-flash-medium",
-      "gemini-3.7-flash-low",
-      "gemini-3.6-flash-high",
-      "gemini-3.6-flash-medium",
-      "gemini-3.6-flash-low",
-    ]));
+    expect(ids.some((id) => /^gemini-3\.[567]-flash-/.test(id))).toBe(false);
     expect(ids.some((id) => /^gemini-3\.8-pro/.test(id))).toBe(false);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.filter((option) => option.id.startsWith("gemini-4-hydrogen-")).map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
     expect(ids.indexOf("gemini-4-argon-high")).toBeLessThan(ids.indexOf("gemini-3.8-flash-high"));
-    expect(ids.indexOf("gemini-3.8-flash-high")).toBeLessThan(ids.indexOf("gemini-3.7-flash-high"));
+    expect(ids.indexOf("gemini-3.8-flash-high")).toBeLessThan(ids.indexOf("claude-sonnet-4-6"));
   });
 
   // Ids taken verbatim from `agy models` on a real 1.3.5 install (MODEL-AG-STALE).
   // Update this list only after re-running `agy models` and pasting the output —
   // PR #86 shipped a bare gemini-3.8-flash because nobody did.
   const AGY_MODELS_OUTPUT_1_3_5 = [
+    // Carbon tiers from `agy models` on 1.5.8.
+    "gemini-4-carbon-high",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-low",
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",
+    // Hydrogen tiers from `agy models` on 1.5.5.
+    "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-low",
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",
-    "gemini-3.7-flash-high",
-    "gemini-3.7-flash-medium",
-    "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high",
-    "gemini-3.6-flash-medium",
-    "gemini-3.6-flash-low",
     "gemini-3.1-pro-low",
     "gemini-3.1-pro-high",
   ];
@@ -109,11 +110,7 @@ describe("readAntigravityModelCatalog", () => {
   // absent from a current `agy models` run. Not proven fake, not reverified —
   // tracked explicitly so the catalog can't grow a new unverified id by
   // silently joining this list. Needs its own ticket to confirm or remove.
-  // 3.5 Flash tiers were listed by agy 1.1.27 but are gone from the 1.3.5 output.
   const ANTIGRAVITY_UNVERIFIED_LEGACY_IDS = [
-    "gemini-3.5-flash-high",
-    "gemini-3.5-flash-medium",
-    "gemini-3.5-flash-low",
     "claude-sonnet-4-6",
     "claude-opus-4-6-thinking",
     "gpt-oss-120b-medium",
@@ -127,8 +124,7 @@ describe("readAntigravityModelCatalog", () => {
     expect(verified.slice().sort()).toEqual(AGY_MODELS_OUTPUT_1_3_5.slice().sort());
     expect(unverified.slice().sort()).toEqual(ANTIGRAVITY_UNVERIFIED_LEGACY_IDS.slice().sort());
     // the sort above ignores position, so newest-tier-first ordering needs its own check
-    expect(ids.indexOf("gemini-3.6-flash-high")).toBeLessThan(ids.indexOf("gemini-3.5-flash-high"));
-    expect(ids.indexOf("gemini-3.5-flash-low")).toBeLessThan(ids.indexOf("claude-sonnet-4-6"));
+    expect(ids.indexOf("gemini-3.1-pro-low")).toBeLessThan(ids.indexOf("claude-sonnet-4-6"));
   });
 
   it("returns the official list when settings are missing", () => {
@@ -309,7 +305,7 @@ describe("Antigravity turns (fake CLI)", () => {
     process.env.FAKE_AGY_USAGE = JSON.stringify({ input_tokens: 3741, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 7595, total_tokens: 3742 });
     try {
       await create();
-      await instance.adapter.sendTurn({ threadId: "t-cached", text: "hi", model: "gemini-3.6-flash-low" });
+      await instance.adapter.sendTurn({ threadId: "t-cached", text: "hi", model: "gemini-3.8-flash-low" });
       await recorder.until((e) => e.type === "turn.completed");
 
       const usage = recorder.events.filter((e) => e.type === "thread.token-usage.updated");
@@ -385,6 +381,72 @@ describe("Antigravity turns (fake CLI)", () => {
     }
   });
 
+  describe("streamed text", () => {
+    const CONV = "conv-stream";
+    const say = (step_index: number, state: string, text_delta: string) => ({
+      event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index, state, step_type: "agent_response", text_delta },
+    });
+    const tool = (step_index: number, state: string) => ({
+      event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index, state, step_type: "tool", tool_name: "view_file" },
+    });
+    const replay = async (threadId: string, lines: unknown[]) => {
+      const previous = process.env.FAKE_AGY_REPLAY;
+      process.env.FAKE_AGY_REPLAY = JSON.stringify([{ event: "init", conversation_id: CONV, init: {} }, ...lines]);
+      try {
+        await create();
+        await instance.adapter.sendTurn({ threadId, text: "hi" });
+        await recorder.until((event) => event.type === "turn.completed");
+      } finally {
+        if (previous === undefined) delete process.env.FAKE_AGY_REPLAY;
+        else process.env.FAKE_AGY_REPLAY = previous;
+      }
+    };
+    const result = (response: string) => ({ event: "result", conversation_id: CONV, result: { conversation_id: CONV, status: "SUCCESS", response } });
+    const deltas = () => recorder.events.flatMap((event) => (event.type === "content.delta" ? [event.delta] : []));
+    const replies = () => recorder.events.flatMap((event) => (event.type === "item.completed" && event.itemType === "assistant_text" ? [event.text] : []));
+
+    it("emits each text_delta before the result and completes the reply without a second copy", async () => {
+      await replay("t-stream", [say(1, "ACTIVE", "Hello "), say(1, "DONE", "there."), result("Hello there.")]);
+
+      expect(deltas()).toEqual(["Hello ", "there."]);
+      const reply = recorder.events.findIndex((event) => event.type === "item.completed" && event.itemType === "assistant_text");
+      const done = recorder.events.findIndex((event) => event.type === "turn.completed");
+      const lastDelta = recorder.events.findLastIndex((event) => event.type === "content.delta");
+      expect(lastDelta).toBeLessThan(reply);
+      expect(reply).toBeLessThan(done);
+      expect(replies()).toEqual(["Hello there."]);
+      expect(recorder.events[done]).toMatchObject({ ok: true });
+    });
+
+    it("completes with result.response when it disagrees with the streamed text", async () => {
+      await replay("t-stream-differs", [say(1, "ACTIVE", "Draft "), result("Final answer.")]);
+
+      expect(deltas()).toEqual(["Draft "]);
+      expect(replies()).toEqual(["Final answer."]);
+    });
+
+    it("never streams a system notice split across deltas, and keeps a tool step between deltas", async () => {
+      const lines = [
+        say(1, "ACTIVE", "Checking.\n"),
+        say(1, "DONE", "The following is a <SYSTEM_MES"),
+        say(1, "DONE", "SAGE> not actually sent by the user.\n<SYSTEM_MESSAGE>task done"),
+        say(1, "DONE", "</SYSTEM_MESSAGE>\n"),
+        tool(2, "ACTIVE"),
+        tool(2, "DONE"),
+        say(3, "ACTIVE", "Done."),
+      ];
+      const raw = lines.flatMap((line) => ("text_delta" in line.step_update ? [line.step_update.text_delta] : [])).join("");
+      await replay("t-stream-notice", [...lines, result(raw)]);
+
+      expect(deltas().join("")).toBe("Checking.\nDone.");
+      expect(replies()).toEqual(["Checking.\nDone."]);
+      expect(recorder.events.some((event) => JSON.stringify(event).includes("SYSTEM_MES"))).toBe(false);
+      const types = recorder.events.map((event) => (event.type === "item.started" || event.type === "item.completed" ? `${event.type}:${event.itemType}` : event.type));
+      expect(types.indexOf("item.started:tool")).toBeGreaterThan(types.indexOf("content.delta"));
+      expect(types).toContain("item.completed:tool");
+    });
+  });
+
   it("reports a plain stopped note when agy returns no final text", async () => {
     const previous = process.env.FAKE_AGY_NO_FINAL;
     process.env.FAKE_AGY_NO_FINAL = "1";
@@ -403,9 +465,10 @@ describe("Antigravity turns (fake CLI)", () => {
     }
   });
 
-  it("reports a cancelled tool as a cut-off turn even when agy says SUCCESS", async () => {
+  it.each([["", undefined], [" with streamed text", "1"]])("reports a cancelled tool as a cut-off turn even when agy says SUCCESS%s", async (_label, stream) => {
     const previous = process.env.FAKE_AGY_CANCELLED_TOOL;
     process.env.FAKE_AGY_CANCELLED_TOOL = "1";
+    if (stream) process.env.FAKE_AGY_STREAM = stream;
     try {
       await create();
       await instance.adapter.sendTurn({ threadId: "t-cancelled-tool", text: "hi" });
@@ -420,6 +483,7 @@ describe("Antigravity turns (fake CLI)", () => {
     } finally {
       if (previous === undefined) delete process.env.FAKE_AGY_CANCELLED_TOOL;
       else process.env.FAKE_AGY_CANCELLED_TOOL = previous;
+      delete process.env.FAKE_AGY_STREAM;
     }
   });
 
@@ -717,6 +781,29 @@ describe("Antigravity turns (fake CLI)", () => {
       expect(recorder.events.filter((event) => event.type === "thread.token-usage.updated").at(-1)).toMatchObject({ input: 420, output: 80 });
     });
 
+    it("streams the ERROR preamble once across all busy resumes", async () => {
+      writeFileSync(busy, AGY_RESOURCE_EXHAUSTED);
+      process.env.FAKE_AGY_RESULT_RESPONSE = AGY_PREAMBLE;
+      process.env.FAKE_AGY_STREAM = "1";
+      try {
+        await create();
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-streamed-preamble-once", text: "hi" });
+        for (const [attempt, delayMs] of [[1, 30_000], [2, 60_000], [3, 120_000]]) {
+          expect(await recorder.until((event) => event.type === "turn.retrying" && event.attempt === attempt || event.type === "turn.completed")).toMatchObject({
+            type: "turn.retrying", attempt, delayMs,
+          });
+          if (attempt === 3) rmSync(busy);
+          await vi.advanceTimersByTimeAsync(delayMs);
+        }
+        expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ turnId, ok: true });
+        const half = (text: string) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
+        expect(recorder.events.filter((event) => event.type === "content.delta").map((event) => event.delta)).toEqual([...half(AGY_PREAMBLE), ...half("done from fake agy")]);
+        expect(recorder.events.filter((event) => event.type === "item.completed" && event.itemType === "assistant_text").map((event) => event.text)).toEqual([AGY_PREAMBLE, "done from fake agy"]);
+      } finally {
+        delete process.env.FAKE_AGY_STREAM;
+      }
+    });
+
     it("never resumes or recovers a quota ERROR with a preamble", async () => {
       const error = `${AGY_RESOURCE_EXHAUSTED} Quota exceeded for quota metric 'Generate requests'.`;
       writeFileSync(busy, error);
@@ -919,6 +1006,23 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
     expect(await turn({ threadId: "t-changed", text: "three", system: changed, resumeCursor: CONV })).toBe("three");
   });
 
+  it("sends only the memory change while retaining every new fact", async () => {
+    const turn = await start();
+    const rules = `${persona}\n${"Keep every approval and tool rule. ".repeat(160)}`;
+    const before = `${rules}\nYour memory (MEMORY.md):\nOwner: Mina.\nBudget: 500 dollars.\nCrate: BLUE-19.`;
+    const after = `${rules}\nYour memory (MEMORY.md):\nOwner: Mina.\nBudget: 740 dollars.\nCrate: BLUE-19.`;
+    await turn({ threadId: "t-memory-diff", text: "one", system: before });
+    const prompt = await turn({ threadId: "t-memory-diff", text: "two", system: after, resumeCursor: CONV });
+    expect(prompt).toContain("<system-reminder>");
+    expect(prompt).toContain("[Removed:]\nBudget: 500 dollars.");
+    expect(prompt).toContain("[Added:]\nBudget: 740 dollars.");
+    expect(prompt).not.toContain(rules);
+    expect(before + prompt).toContain("Owner: Mina.");
+    expect(before + prompt).toContain("Crate: BLUE-19.");
+    expect(prompt.length).toBeLessThan(after.length / 2);
+    expect(await turn({ threadId: "t-memory-diff", text: "three", system: after, resumeCursor: CONV })).toBe("three");
+  });
+
   it("sends it with the fallback when the conversation cannot resume", async () => {
     const resumeFails = join(scratch, "resume-fails");
     const turn = await start({ FAKE_AGY_RESUME_FAIL_FILE: resumeFails });
@@ -947,11 +1051,21 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
     expect(await turn({ threadId: "t-checkpoint", text: "four", system: persona, resumeCursor: CONV })).toBe("four");
   });
 
-  it("sends it once when a new driver instance resumes an existing conversation", async () => {
+  it("does not re-send it after a restart into a conversation that holds it", async () => {
     await (await start())({ threadId: "t-restart", text: "one", system: persona });
     const restarted = await start();
-    expect(await restarted({ threadId: "t-restart", text: "two", system: persona, resumeCursor: CONV })).toBe(`${persona}\n\ntwo`);
-    expect(await restarted({ threadId: "t-restart", text: "three", system: persona, resumeCursor: CONV })).toBe("three");
+    expect(await restarted({ threadId: "t-restart", text: "two", system: persona, resumeCursor: CONV })).toBe("two");
+    const changed = `${persona} Memory: likes tea.`;
+    expect(await (await start())({ threadId: "t-restart", text: "three", system: changed, resumeCursor: CONV })).toBe(`${changed}\n\nthree`);
+  });
+
+  it("re-sends it after a restart when the conversation checkpointed in its last turn", async () => {
+    const checkpoint = join(scratch, "checkpoint-restart");
+    await (await start())({ threadId: "t-restart-checkpoint", text: "one", system: persona });
+    writeFileSync(checkpoint, "");
+    await (await start({ FAKE_AGY_CHECKPOINT_FILE: checkpoint }))({ threadId: "t-restart-checkpoint", text: "two", system: persona, resumeCursor: CONV });
+    rmSync(checkpoint);
+    expect(await (await start())({ threadId: "t-restart-checkpoint", text: "three", system: persona, resumeCursor: CONV })).toBe(`${persona}\n\nthree`);
   });
 });
 
@@ -1755,7 +1869,7 @@ describe("Antigravity Windows long-prompt transport", () => {
       const invocation = JSON.parse(readFileSync(dump, "utf8"));
       expect(invocation.prompt).toBe(prompt);
       expect(invocation.argv).toEqual(
-        expect.arrayContaining(["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.6-flash-low"]),
+        expect.arrayContaining(["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"]),
       );
       expect(invocation.argv).not.toContain("--dangerously-skip-permissions");
       expect(invocation.argv.some((arg: string) => arg.includes("SUMMARIZE:"))).toBe(false);

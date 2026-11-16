@@ -18,6 +18,7 @@ export const STATIC_MUSE_MODELS: ModelCatalog = {
   options: [
     { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
     { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+    { id: "muse-ember-1.0", label: "Meta Muse Ember" },
   ],
 };
 
