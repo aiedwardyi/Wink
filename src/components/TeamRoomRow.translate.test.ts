@@ -151,6 +151,17 @@ describe("teammate translation", () => {
     expect(translated.textContent).not.toContain("**");
   });
 
+  it("renders HTML in a bot line's translation as text", async () => {
+    const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando" }, text: "All set.", files: [] };
+    generate = async () => new Response(JSON.stringify({ text: '<img src=x onerror="alert(1)">준비됐어요' }));
+    applyLocale("ko");
+    await render([bot]);
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect(translated.querySelector("img, script")).toBeNull();
+    expect(translated.textContent).toContain("준비됐어요");
+  });
+
   it("keeps a person line's translation as linked plain text", async () => {
     generate = async () => new Response(JSON.stringify({ text: "- **not bold**\nhttps://example.com" }));
     await render();
