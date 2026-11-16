@@ -23,7 +23,7 @@ describe("prewarm route", () => {
 
     await routes.prewarm(res, ["", "b1"] as unknown as RegExpMatchArray);
     expect(res.writeHead).toHaveBeenCalledWith(200, expect.anything());
-    expect(JSON.parse(vi.mocked(res.end).mock.calls[0]![0] as string)).toEqual({ ok: true, prepared: false, reason: "driver has no prepare" });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ ok: true, prepared: false, reason: "driver has no prepare" }));
     expect(firstTurnLaunch).not.toHaveBeenCalled();
   });
 });
