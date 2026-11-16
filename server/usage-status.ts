@@ -34,7 +34,9 @@ function windowText(window: UsageBoardWindow, now: number, clock: Intl.DateTimeF
 function unavailable(account: UsageBoardAccount) {
   if (account.codexPromo) return "unavailable: API credit promo";
   if (account.signIn === "signed-out") return "unavailable: signed out";
+  if (account.signIn === "cli-missing") return "unavailable: engine CLI not installed or not answering";
   if (account.signIn === "signing-in") return "unavailable: signing in";
+  if (account.signIn === "unknown") return "unavailable: sign-in not confirmed yet";
   if (account.signIn === "draining") return "unavailable: signing out";
   return null;
 }
