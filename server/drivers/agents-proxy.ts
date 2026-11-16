@@ -57,6 +57,9 @@ const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
+// A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
+export const READ_ONLY_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
+const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
@@ -1150,7 +1153,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
+const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => (DEPTH === 0 || PEER_TOOLS.has(tool.name)) && (!READ_ONLY || READ_ONLY_TOOLS.has(tool.name))) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
 const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
@@ -1196,6 +1199,7 @@ export async function handle(msg: Json) {
       }
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
       if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
+      if (READ_ONLY && !READ_ONLY_TOOLS.has(name)) return textResult(id, `${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`, true);
       const verify = name === VERIFY_SITE_TOOL.name ? new AbortController() : null;
       if (verify) verifyCalls.set(id, verify);
       const deadline = verify ? setTimeout(() => verify.abort("deadline"), VERIFY_LIMITS.toolMs) : undefined;
