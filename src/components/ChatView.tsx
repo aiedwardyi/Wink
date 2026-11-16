@@ -1208,13 +1208,14 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     [canonicalMessages],
   );
   // The selected leaf, or the prompt behind a long tool run, can sit on an
-  // older page. Page back until the leaf lands; the prompt gets a few pages.
+  // older page. Page back until the leaf lands; the prompt gets a few pages in
+  // one request, since a later page lands as a long frame under a reader.
   const leafPaging = Boolean(bot.hasMore) && canonicalMessages.length === 0 && !jump.messages && !jump.pending;
   const promptPaging = Boolean(bot.hasMore) && Boolean(canonicalMessages[0]?.parentId) && !lastUserMessage;
   const joinPaging = editJoin?.key === transcriptKey && Boolean(bot.hasMore) && !bot.messages.some((message) => message.id === editJoin.parentId);
   // another view's join is kept; it resumes when its conversation is shown again
   if (editJoin?.key === transcriptKey && !joinPaging) setEditJoin(null);
-  const promptPages = useRef({ key: transcriptKey, cursors: new Set<string>() });
+  const promptHunt = useRef<{ key: string; cursor: string } | null>(null);
   const cursor = bot.messages[0]?.id;
   useEffect(() => {
     if (leafPaging) {
@@ -1231,11 +1232,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       return;
     }
     if (!promptPaging || !cursor) return;
-    if (promptPages.current.key !== transcriptKey) promptPages.current = { key: transcriptKey, cursors: new Set() };
-    const { cursors } = promptPages.current;
-    if (!cursors.has(cursor) && cursors.size >= PROMPT_PAGES) return;
-    cursors.add(cursor);
-    loadOlder();
+    if (promptHunt.current?.key === transcriptKey && promptHunt.current.cursor !== cursor) return;
+    promptHunt.current = { key: transcriptKey, cursor };
+    loadOlder(undefined, undefined, PROMPT_PAGES);
   }, [leafPaging, joinPaging, joinRetry, promptPaging, loadOlder, cursor, transcriptKey]);
 
   // Stream buffers belong to the canonical tail, never an optimistic send.

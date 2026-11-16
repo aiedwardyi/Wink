@@ -802,7 +802,7 @@ describe("paged transcripts", () => {
     await mount("chat");
     await vi.waitFor(() => expect(store.state.bots[0]!.messages).toHaveLength(800));
     await act(async () => vi.advanceTimersByTimeAsync(50));
-    expect(calls.filter((call) => call.includes("before="))).toHaveLength(3);
+    expect(calls.filter((call) => call.includes("before="))).toEqual(["/api/threads/thread-a/messages?limit=200&before=m1800&pages=3"]);
     expect(store.state.bots[0]!.messages).toHaveLength(800);
   });
 
