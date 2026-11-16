@@ -8,9 +8,10 @@ import * as scrollRule from "./verify-rules/phone-scroll.mjs";
 import * as menuRule from "./verify-rules/phone-menu.mjs";
 import * as copyRule from "./verify-rules/leftovers.mjs";
 import * as detailsRule from "./verify-rules/details.mjs";
+import * as wrapsRule from "./verify-rules/label-wraps.mjs";
 import { blockedGuard } from "./verify-rules/blocked.mjs";
 
-const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule, detailsRule];
+const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule, detailsRule, wrapsRule];
 const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeout"]);
 const SHOT_MS = 2000;
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
@@ -213,7 +214,7 @@ export function runHiddenVerify(input) {
       let lastY = 0;
       for (const rule of rules) {
         if (tile === "desktop" && rule === scrollRule) continue;
-        if (guard.layout && (rule === detailsRule || tile === "phone" && (rule === scrollRule || rule === menuRule))) { notChecked.add(`phone layout (${guard.layout})`); continue; }
+        if (guard.layout && (rule === detailsRule || rule === wrapsRule || tile === "phone" && (rule === scrollRule || rule === menuRule))) { notChecked.add(`phone layout (${guard.layout})`); continue; }
         if (lastY) {
           await race(cdp.ev('(() => { scrollTo({ top: 0, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()'));
           emit({ kind: "scroll", tile, y: 0 }); lastY = 0;
@@ -226,7 +227,7 @@ export function runHiddenVerify(input) {
           if (rule === menuRule) nav[tile] = data;
           const checked = rule === menuRule ? tile === "phone" && nav.desktop ? rule.check(data, nav.desktop) : { problems: [], notChecked: [] } : rule.check(data);
           if (rule === menuRule && tile === "phone" && !nav.desktop) notChecked.add("phone menu (desktop navigation unavailable)");
-          const candidates = rule === errorsRule ? [...data.images, ...data.errors, ...data.loads] : rule === linksRule ? data.links : rule === copyRule ? checked.checks.map(row => ({ ...data.texts.find(item => item.where === row.where), ...row })) : rule === menuRule ? data.links : rule === detailsRule ? data.rows : [data];
+          const candidates = rule === errorsRule ? [...data.images, ...data.errors, ...data.loads] : rule === linksRule ? data.links : rule === copyRule ? checked.checks.map(row => ({ ...data.texts.find(item => item.where === row.where), ...row })) : rule === menuRule ? data.links : rule === detailsRule || rule === wrapsRule ? data.rows : [data];
           tally(rule.id, tile)[1] += candidates.length;
           const decorate = row => {
             const element = candidates.find(item => item.where === row.where) ?? (rule === menuRule ? data : null);
