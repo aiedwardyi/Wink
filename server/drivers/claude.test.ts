@@ -7,11 +7,11 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { spawn as spawnChild } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeMessage, fileAttachment } from "../../src/lib/composer-attachments.ts";
@@ -19,6 +19,7 @@ import { saveImage } from "../attachments.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, saveConfig, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
+import { resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ClaudeDriver, claudeToolSummary, claudeUserContent, permissionSocketPath, type ClaudeConfig } from "./claude.ts";
@@ -4033,6 +4034,90 @@ describe("ClaudeDriver snapshot auth (fake CLI)", () => {
     process.env.FAKE_CLAUDE_AUTH = "inherited-api-key";
     process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
     expect(await instance.snapshot({ rescan: true })).toMatchObject({ state: "available", authenticated: false });
+  });
+});
+
+// npm blocked Claude's postinstall, so %APPDATA%\npm\claude.cmd runs a placeholder claude.exe
+// that can't start, and it sits ahead of the native install in ~/.local/bin.
+describe.skipIf(process.platform !== "win32")("ClaudeDriver behind npm's placeholder claude.exe", () => {
+  const PLACEHOLDER = `echo "Error: claude native binary not installed." >&2
+echo "" >&2
+echo "Either postinstall did not run (--ignore-scripts, some pnpm configs)" >&2
+echo "or the platform-native optional dependency was not downloaded" >&2
+echo "(--omit=optional)." >&2
+exit 1
+`;
+  const NPM_SHIM = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*
+`;
+  const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA };
+  let root: string;
+  let instance: ProviderInstance | undefined;
+
+  const install = (native: boolean) => {
+    const npm = join(root, "AppData", "Roaming", "npm");
+    mkdirSync(join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin"), { recursive: true });
+    writeFileSync(join(npm, "claude.cmd"), NPM_SHIM);
+    writeFileSync(join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), PLACEHOLDER);
+    if (!native) return;
+    const bin = join(root, ".local", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "claude.cmd"), `@ECHO off\r\n"%~dp0claude.js" %*\r\n`);
+    writeFileSync(join(bin, "claude.js"), `import(${JSON.stringify(pathToFileURL(FAKE_CLI).href)});\n`);
+  };
+  const create = async () => {
+    instance = await ClaudeDriver.create({
+      instanceId: "claude-npm-placeholder",
+      displayName: undefined,
+      environment: { CLAUDE_CONFIG_DIR: join(root, "claude-config") },
+      enabled: true,
+      config: { cli: "claude", permissionMode: "acceptEdits" },
+    });
+    return instance;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "omb-claude-placeholder-"));
+    Object.assign(process.env, { PATH: join(process.env.SystemRoot ?? "C:\\Windows", "System32"), USERPROFILE: root,
+      APPDATA: join(root, "AppData", "Roaming"), LOCALAPPDATA: join(root, "AppData", "Local") });
+    resetPathCacheForTests();
+  });
+
+  afterEach(async () => {
+    await instance?.dispose();
+    instance = undefined;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetPathCacheForTests();
+    await removeTempDir(root);
+  });
+
+  it("runs the native install when the npm claude ahead of it can't start", async () => {
+    install(true);
+    expect(await (await create()).snapshot()).toMatchObject({ state: "available", version: "2.1.232 (Claude Code)", authenticated: true });
+    expect(procs.resolveCli("claude").args[0]).toBe(join(root, ".local", "bin", "claude.js"));
+  });
+
+  it("runs the native install when a broken npm claude also runs through node.exe", async () => {
+    install(true);
+    const npm = join(root, "AppData", "Roaming", "npm");
+    writeFileSync(join(npm, "claude.cmd"), `@ECHO off\r\n"%~dp0broken-claude.js" %*\r\n`);
+    writeFileSync(join(npm, "broken-claude.js"), "process.exit(1);\n");
+    expect(await (await create()).snapshot()).toMatchObject({ state: "available", version: "2.1.232 (Claude Code)" });
+  });
+
+  it("reads Not installed, not signed out, when the placeholder is the only claude", async () => {
+    install(false);
+    expect(await (await create()).snapshot()).toMatchObject({ state: "unavailable", cliMissing: true });
   });
 });
 

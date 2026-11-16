@@ -87,6 +87,13 @@ let diskLoaded = false;
 let scanGeneration = 0;
 const candidates = new Map<string, string[]>();
 const windowsFiles = new Map<string, string | null>();
+// A later PATH hit that answered --version after the first one could not; held until a rescan.
+const preferred = new Map<string, string>();
+
+export function preferCli(name: string, file: string | null): void {
+  if (file) preferred.set(name, file);
+  else preferred.delete(name);
+}
 
 function pathCacheFile(): string {
   return join(process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit"), "path-cache.json");
@@ -169,6 +176,7 @@ export async function refreshPathCache(names: readonly string[]): Promise<void> 
 /** A rescan must re-probe the login shell without losing its last usable PATH. */
 export function resetPathCache(): void {
   cached = null;
+  preferred.clear();
   probed = false;
   diskLoaded = true;
   scanGeneration += 1;
@@ -233,6 +241,7 @@ function probeLoginShellPath(): void {
 /** Test hook — the cache is process-wide otherwise. */
 export function resetPathCacheForTests(): void {
   cached = null;
+  preferred.clear();
   probed = false;
   loginShellPath = null;
   diskLoaded = false;
@@ -318,6 +327,7 @@ function isFile(p: string): boolean {
 /** PATHEXT-aware `which`. A path-ish cli is probed where it points. */
 function whichWin(cli: string): string | null {
   augmentedPath();
+  if (preferred.has(cli)) return preferred.get(cli)!;
   if (windowsFiles.has(cli)) return windowsFiles.get(cli)!;
   const exts = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   // an extensionless name is not runnable on Windows, so PATHEXT wins over
@@ -410,7 +420,7 @@ function parseNodeShebang(file: string): ResolvedSpawn | null {
  */
 /** Resolve a single command word (no tokenizer) — the platform spawn rules. */
 function resolveWord(cli: string, args: string[]): ResolvedSpawn {
-  if (process.platform !== "win32") return { command: cli, args };
+  if (process.platform !== "win32") return { command: preferred.get(cli) ?? cli, args };
   const file = whichWin(cli);
   // not found: hand back the name so spawn reports its own ENOENT
   if (!file) return { command: cli, args };
