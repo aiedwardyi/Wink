@@ -48,12 +48,16 @@ main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"][data-live]
 [data-skin="snow-night"] > [data-mini-thread] { background: url("./tiles/snow-night.jpg") center / cover; }
 [data-skin="snow"] > [data-mini-thread] { background: url("./tiles/snow.jpg") center / cover; }
 [data-skin="neon-grid"] > [data-mini-thread] { background: url("./tiles/neon-grid.jpg") center / cover; }
+[data-skin="samurai-ink"] > [data-mini-thread] { background: url("./tiles/samurai-ink.jpg") center / cover; }
+[data-skin="night-rain"] > [data-mini-thread] { background: url("./tiles/night-rain.jpg") center / cover; }
+[data-skin="warp"] > [data-mini-thread] { background: url("./tiles/warp.jpg") center / cover; }
+[data-skin="circuit"] > [data-mini-thread] { background: url("./tiles/circuit.jpg") center / cover; }
 
 /* While the theme picker is open the scene itself runs over that still: laid out at chat scale, shrunk to the tile. */
 [data-mini-scene] { position: absolute; top: 0; left: 0; z-index: -1; width: calc(100% / var(--mini-scale)); height: calc(100% / var(--mini-scale)); transform: scale(var(--mini-scale)); transform-origin: 0 0; overflow: hidden; contain: strict; pointer-events: none; }
 /* Without WebGL the tile keeps its still, not Lagoon's plain fallback. */
 [data-mini-scene="lagoon"] { --mini-scale: 0.45; background: none !important; }
-[data-mini-scene="neon-grid"] { --mini-scale: 0.45; background: none !important; }
+[data-mini-scene="neon-grid"], [data-mini-scene="samurai-ink"], [data-mini-scene="night-rain"], [data-mini-scene="warp"], [data-mini-scene="circuit"] { --mini-scale: 0.45; background: none !important; }
 [data-mini-scene="snow"] { --mini-scale: 0.3; }
 /* Snow's flakes are see-through, so its running tile covers the still's own flakes. */
 [data-mini-scene="snow"][data-live] { background-color: var(--color-app); }

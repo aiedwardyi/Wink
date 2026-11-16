@@ -34,10 +34,11 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
-const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Neon Grid", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
-const darkCount = 11;
-const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", Lagoon: "라군", Snow: "스노우" };
-const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Lagoon", "Snow"];
+const featured = ["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
+const darkCount = 15;
+const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", "Samurai Ink": "사무라이 잉크", "Night Rain": "나이트 레인", Warp: "워프", Circuit: "서킷", Lagoon: "라군", Snow: "스노우" };
+const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Lagoon", "Snow"];
+const animated = ["circuit", "lagoon", "lagoon-night", "neon-grid", "night-rain", "samurai-ink", "snow", "snow-night", "warp"];
 const taggedOld = () => tagged().filter((name) => !scene.includes(name!));
 const kept = ["Wink Violet", "Wink Black", "Pewter", "Precision Dimmed"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
@@ -73,7 +74,7 @@ afterEach(async () => {
 });
 
 describe("featured themes", () => {
-  it.each(["en", "ko"] as const)("starts folded with sixteen featured themes in %s and reveals every offered theme", async (locale) => {
+  it.each(["en", "ko"] as const)("starts folded with twenty featured themes in %s and reveals every offered theme", async (locale) => {
     await mount("precision", locale);
     const shown = locale === "en" ? featured : featured.map((name) => koScene[name] ?? name);
     expect(names()).toEqual(shown);
@@ -161,12 +162,12 @@ describe("featured themes", () => {
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
     await mount("precision", "en");
-    expect(tagged()).toEqual(["Bronze", "Lagoon Night", "Snow Night", "Neon Grid", "Dim Sand", "Lagoon", "Snow"]);
+    expect(tagged()).toEqual(["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow"]);
     await act(async () => root.unmount());
     await mount("precision", locale);
     expect(document.querySelector("[data-skin-new]")?.textContent).toBe(locale === "en" ? "New" : "신규");
     await act(async () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
-    expect(tagged()).toHaveLength(8);
+    expect(tagged()).toHaveLength(12);
     expect(tagged().at(-1)).toBe("Precision Dimmed");
   });
 
@@ -229,15 +230,25 @@ describe("Moving tiles", () => {
   // One frame, then the timer queued behind it.
   const painted = async () => {
     flush();
-    await act(async () => { await new Promise((done) => setTimeout(done, 0)); });
+    await act(async () => {
+      if (vi.isFakeTimers()) vi.advanceTimersByTime(0);
+      else await new Promise((done) => setTimeout(done, 0));
+    });
   };
-  afterEach(() => void vi.restoreAllMocks());
+  const tile = (skin: string) => document.querySelector(`button [data-skin="${skin}"]`)!.closest("button")!;
+  const point = (skin: string, type: "pointerover" | "pointerout", pointerType: string) =>
+    act(async () => void tile(skin).dispatchEvent(Object.assign(new MouseEvent(type, { bubbles: true, relatedTarget: document.body }), { pointerType })));
+  const live = () => running.filter((run) => !run.stopped);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("starts the tiles only after the picker has painted", async () => {
     await open();
     expect(running).toHaveLength(0);
     await painted();
-    expect(running).toHaveLength(5);
+    expect(running).toHaveLength(animated.length);
   });
 
   it("starts nothing when the picker closes before its first paint", async () => {
@@ -251,16 +262,16 @@ describe("Moving tiles", () => {
     broken.on = true;
     await open();
     await painted();
-    expect(running).toHaveLength(5);
+    expect(running).toHaveLength(animated.length);
     expect(running.every((run) => run.stopped)).toBe(true);
     expect(document.querySelectorAll("[data-mini-scene][data-live]")).toHaveLength(0);
   });
 
-  it("keeps the Lagoon, Snow and Neon Grid tiles moving while the picker is open, each in its own skin, and stops them when it closes", async () => {
+  it("plays every animated tile when Themes opens, each in its own skin, and stops them when it closes", async () => {
     await open();
     await painted();
-    expect(running.map((run) => run.skin).sort()).toEqual(["lagoon", "lagoon-night", "neon-grid", "snow", "snow-night"]);
-    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(5);
+    expect(running.map((run) => run.skin).sort()).toEqual(animated);
+    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(animated.length);
     for (const run of running) expect(run.events).toEqual(["loop"]);
     flush(5);
     for (const run of running) expect(run.frames).toBe(5);
@@ -273,7 +284,7 @@ describe("Moving tiles", () => {
   it.each(["hidden", "blur"])("rests every tile while the window is idle (%s)", async (idle) => {
     await open();
     await painted();
-    expect(running).toHaveLength(5);
+    expect(running).toHaveLength(animated.length);
     flush(2);
     document.documentElement.setAttribute("data-orbit-idle", idle);
     await Promise.resolve();
@@ -283,6 +294,40 @@ describe("Moving tiles", () => {
     await Promise.resolve();
     flush(1);
     for (const run of running) expect(run.frames).toBe(3);
+  });
+
+  it("stills every tile a few seconds after Themes opens", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await open();
+    await painted();
+    expect(live()).toHaveLength(animated.length);
+    await act(async () => void vi.advanceTimersByTime(2900));
+    expect(live()).toHaveLength(animated.length);
+    await act(async () => void vi.advanceTimersByTime(100));
+    expect(live()).toHaveLength(0);
+    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(0);
+  });
+
+  it.each(["mouse", "touch"])("replays a tile from the start while a %s pointer stays on it, and only that tile", async (pointerType) => {
+    await open();
+    await painted();
+    await point("warp", "pointerover", pointerType);
+    expect(live()).toHaveLength(0);
+    await painted();
+    expect(live().map((run) => run.skin)).toEqual(["warp"]);
+    expect(live()[0].events).toEqual(["loop"]);
+    flush(3);
+    expect(live()[0].frames).toBe(3);
+    await point("warp", "pointerout", pointerType);
+    expect(live()).toHaveLength(0);
+    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(0);
+    await point("warp", "pointerover", pointerType);
+    await painted();
+    expect(live().map((run) => [run.skin, run.frames])).toEqual([["warp", 0]]);
+    await point("warp", "pointerout", pointerType);
+    await point("precision", "pointerover", pointerType);
+    await painted();
+    expect(live()).toHaveLength(0);
   });
 
   it("leaves the still tiles alone under reduced motion", async () => {
@@ -312,14 +357,20 @@ describe("Scene themes", () => {
     expect(snowNight.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it.each([["en", "Neon Grid"], ["ko", "네온 그리드"]] as const)("puts Neon Grid up front among the dark tiles with the New tag in %s", async (locale, name) => {
+  it.each([
+    ["en", "neon-grid", "Neon Grid"], ["ko", "neon-grid", "네온 그리드"],
+    ["en", "samurai-ink", "Samurai Ink"], ["ko", "samurai-ink", "사무라이 잉크"],
+    ["en", "night-rain", "Night Rain"], ["ko", "night-rain", "나이트 레인"],
+    ["en", "warp", "Warp"], ["ko", "warp", "워프"],
+    ["en", "circuit", "Circuit"], ["ko", "circuit", "서킷"],
+  ] as const)("puts the new animated themes first among the dark tiles with the New tag in %s (%s)", async (locale, id, name) => {
     await mount("precision", locale);
-    expect(names().indexOf(name)).toBeLessThan(darkCount);
+    expect(names().indexOf(name)).toBeLessThan(5);
     expect(tagged()).toContain(name);
     const tile = tiles().find((button) => button.querySelector(".font-medium")?.textContent === name)!;
-    expect(tile.querySelector('[data-mini-scene="neon-grid"]')).not.toBeNull();
+    expect(tile.querySelector(`[data-mini-scene="${id}"]`)).not.toBeNull();
     await act(async () => tile.click());
-    expect(document.documentElement.dataset.skin).toBe("neon-grid");
-    expect(LIGHT_SKIN_IDS.has("neon-grid")).toBe(false);
+    expect(document.documentElement.dataset.skin).toBe(id);
+    expect(LIGHT_SKIN_IDS.has(id)).toBe(false);
   });
 });
