@@ -138,6 +138,11 @@ export const syncHold = {
     return !released.has(threadId) && behind(threadId) === true ? Date.now() + HOLD_MS : undefined;
   },
   release,
+  /** Resolves once the thread has the peer heads Drive listed, or when the hold runs out. */
+  async settle(threadId: string): Promise<void> {
+    const until = syncHold.until(threadId);
+    while (until !== undefined && syncHold.waiting(threadId, until)) await new Promise((done) => setTimeout(done, 100));
+  },
   waiting(threadId: string, until?: number): boolean {
     expire();
     return !released.has(threadId) && until !== undefined && until > Date.now() && behind(threadId) !== false;

@@ -6,10 +6,7 @@ import {
   SNAG_DETAIL_CHARS,
   SNAG_EVENTS,
   SNAG_ID_RE,
-  SNAG_MAX_BYTES,
   SNAG_NOTES_MAX,
-  SNAG_TAIL_CHARS,
-  SNAG_TAIL_LINES,
   type PhoneRelayStatus,
   type TeamSnag,
 } from "../shared/relay-protocol.ts";
@@ -71,12 +68,9 @@ export function scrubSnagText(text: string, ctx: ScrubContext): string {
   return out.replace(BASE64, (m) => (/\d/.test(m) && /[a-z]/.test(m) && /[A-Z]/.test(m) ? marker(m.length) : m));
 }
 
-const lastLines = (text: string) => text.split("\n").slice(-SNAG_TAIL_LINES).join("\n").slice(-SNAG_TAIL_CHARS);
-const frameBytes = (snag: TeamSnag) => Buffer.byteLength(JSON.stringify({ type: "snag", data: snag }));
-
 export function buildTeamSnag(raw: SpooledSnag, ctx: ScrubContext & { build: string; os: string; teacher: string }): TeamSnag {
   const scrub = (value: string | undefined) => scrubSnagText(value ?? "", ctx);
-  const snag: TeamSnag = {
+  return {
     id: raw.id,
     at: raw.at,
     event: raw.event,
@@ -89,10 +83,9 @@ export function buildTeamSnag(raw: SpooledSnag, ctx: ScrubContext & { build: str
     minutes: raw.minutes ?? 0,
     notes: (raw.notes ?? []).slice(-SNAG_NOTES_MAX).map(([kind, minutes]) => [kind.slice(0, 20), minutes]),
     detail: scrub(raw.detail).slice(0, SNAG_DETAIL_CHARS),
-    tail: lastLines(scrub(raw.tail)),
+    // "Never chats, files or names": a worker's screen can hold all three.
+    tail: "",
   };
-  while (snag.tail && frameBytes(snag) > SNAG_MAX_BYTES) snag.tail = lastLines(snag.tail.slice(Math.ceil(snag.tail.length / 8)));
-  return snag;
 }
 
 export interface TeamSnagsOptions {

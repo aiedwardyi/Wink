@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
-import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, RoomError, type RoomAuthor } from "./db.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, RoomError, roomPeople, setPersonWorks, type RoomAuthor } from "./db.ts";
 import { writeRoomEntry } from "./mirror.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -115,6 +115,25 @@ describe("room log writer", () => {
       raw.close();
     }
     expect(recentRoomEntries(group.hosted.roomId, 5).map((entry) => entry.text)).toEqual(["kept"]);
+  });
+
+  it("keeps people already in a room able to make bots work, and starts every new one off", () => {
+    const roomId = group.hosted.roomId;
+    addPerson(roomId, "Sora", []);
+    closeRoomsDb();
+    const raw = new DatabaseSync(join(DATA_DIR, "rooms.db"));
+    try {
+      raw.exec("ALTER TABLE people DROP COLUMN works");
+    } finally {
+      raw.close();
+    }
+    expect(roomPeople(roomId)).toMatchObject([{ name: "Sora", works: true }]);
+    const mina = addPerson(roomId, "Mina", []);
+    expect(mina.works).toBe(false);
+    expect(roomPeople(roomId)).toMatchObject([{ name: "Sora", works: true }, { name: "Mina", works: false }]);
+    expect(setPersonWorks(roomId, mina.id, true)).toBe(true);
+    expect(roomPeople(roomId)[1]).toMatchObject({ name: "Mina", works: true });
+    expect(setPersonWorks(roomId, "gone", true)).toBe(false);
   });
 
   it("has one insert into the log and no update or delete path", () => {

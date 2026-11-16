@@ -1,4 +1,5 @@
 import { chatErrorText } from "@/lib/error-text";
+import { lateReportText } from "@/lib/late-report";
 import { ErrorDetails } from "./ErrorDetails";
 import { AppErrorBanner } from "./AppErrorBanner";
 import { Fold } from "./Fold";
@@ -93,6 +94,7 @@ import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
+import { WakeChips } from "./WakeChips";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
@@ -101,6 +103,7 @@ import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, rest
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import {
+  TRANSCRIPT_TAIL_SIZE,
   TRANSCRIPT_WINDOW_SIZE,
   focusWindow,
   followedWindow,
@@ -367,7 +370,7 @@ function NoteReport({ note }: { note: PaneNote }) {
   return (
     <>
       {note.status && <div className="font-medium text-ink">{t(NOTE_STATUS_KEY[note.status])}</div>}
-      {noteText(note, t)}
+      {lateReportText(noteText(note, t), t)}
     </>
   );
 }
@@ -1075,18 +1078,18 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     expanded?: boolean;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders),
+    start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders),
     end: null,
   }));
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
   }
   const [windowTerminal, setWindowTerminal] = useState(terminal);
   if (windowTerminal !== terminal) {
     setWindowTerminal(terminal);
     setTranscriptWindow({
       key: transcriptKey,
-      start: tailWindowStart(shown.length, TRANSCRIPT_WINDOW_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
+      start: tailWindowStart(shown.length, TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
       end: null,
     });
   }
@@ -1109,7 +1112,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const prepended = windowHead ? shown.findIndex((message) => message.id === windowHead) : -1;
     // a window set on an empty branch has no rows to anchor to
     if (!windowHead) {
-      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
@@ -1122,7 +1125,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       else if (rehydrated && id && transcriptWindow.key === transcriptKey && (transcriptWindow.expanded || transcriptWindow.end !== null)) {
         // the reader's row is older than the new snapshot: reopen around it
         setReanchor(id);
-        setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+        setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
       }
     }
   }
@@ -1191,7 +1194,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     if (edited) {
       closeJump();
       setBottomFollow(true);
-      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+      setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
       if (edited.parentId) {
         joinFails.current = 0;
         setEditJoin({ key: transcriptKey, parentId: edited.parentId });
@@ -1349,7 +1352,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const current = requestedFocus.current === focus.nonce
       ? null
       : switching
-        ? { start: tailWindowStart(list.length, TRANSCRIPT_WINDOW_SIZE, listRenders), end: null }
+        ? { start: tailWindowStart(list.length, TRANSCRIPT_TAIL_SIZE, listRenders), end: null }
         : { start: startIndex, end: transcriptWindow.end === null ? null : endIndex };
     const next = focusWindow(current, list.length, targetIndex, TRANSCRIPT_WINDOW_SIZE, listRenders);
     setBottomFollow(false);
@@ -1367,7 +1370,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   }, [follow, jump.messages, messages.length, renders, transcriptWindow]);
   // A plain tail holds at least the newest window of visible rows. Shifting it
   // for an auto-paged older page would leave a tool-heavy tail nearly blank.
-  const tailStart = useMemo(() => tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), [messages.length, renders]);
+  const tailStart = useMemo(() => tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), [messages.length, renders]);
 
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
@@ -1500,7 +1503,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     closeJump();
     setBottomFollow(true);
     cancelEarlier();
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     });
@@ -1933,6 +1936,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onOpenUsage={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
           />
         )}
+        <WakeChips botIds={[bot.id]} threadId={bot.threadId} />
         <Composer
           key={bot.threadId}
           bot={bot}

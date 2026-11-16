@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import * as mailbox from "./mailbox.ts";
@@ -27,21 +26,14 @@ describe("mailbox turn-end delivery", () => {
     expect(await mailbox.deferMailboxAuto(ACCESS, SCOPE, "done", async () => new Response('{"raised":true}', { status: 503 }))).toBe(false);
   });
 
-  it("defers auto posts before storage and acknowledges reports before storage", () => {
-    const server = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const route = server.slice(server.indexOf('path === "/api/mailbox"'), server.indexOf('path.startsWith("/api/")', server.indexOf('path === "/api/mailbox"')));
-    expect(route).toContain('kind === "auto"');
-    expect(route).not.toContain("mailboxAutoDedup.shouldDrop");
-    expect(route.indexOf("deferMailboxAuto(")).toBeLessThan(route.indexOf("store.appendMessage("));
-    expect(route).toContain("{ ok: true, deferred: true }");
-    expect(route.indexOf("await raisePaneAttention(")).toBeLessThan(route.indexOf("store.appendMessage("));
+  it("carries the original identity to the deferred watcher", async () => {
+    const identity = { messageId: "123e4567-e89b-12d3-a456-426614174000", sentAt: Date.now(), queued: true as const };
+    let body;
+    expect(await mailbox.deferMailboxAuto(ACCESS, SCOPE, "done", async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response('{"raised":true}');
+    }, identity)).toBe(true);
+    expect(body).toEqual({ sessionId: "pane-1", kind: "auto", text: "done", identity });
   });
 
-  it("stores an auto note as a plain note when deferral fails", () => {
-    const server = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const route = server.slice(server.indexOf('path === "/api/mailbox"'), server.indexOf('path.startsWith("/api/")', server.indexOf('path === "/api/mailbox"')));
-    expect(route).not.toContain("pane note watcher unavailable");
-    expect(route).not.toContain("503");
-    expect(route).toMatch(/if \(await deferMailboxAuto\([^)]*\)\) return json\(res, 200, \{ ok: true, deferred: true \}\);\s*(\/\/[^\n]*\s*)?kind = undefined;/);
-  });
 });

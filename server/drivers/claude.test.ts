@@ -7,6 +7,7 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { spawn as spawnChild } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -1257,7 +1258,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     child.kill();
     const eager = tools.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] !== false);
     const chars = JSON.stringify(eager.map((tool) => ({ name: `mcp__agents__${tool.name}`, description: tool.description, input_schema: tool.inputSchema }))).length;
-    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix"]);
+    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
     expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_000);
   });
 
@@ -2409,7 +2410,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   });
 
   it("steers a send into a continuation turn so it lands before the replies", async () => {
-    await create("late-wake");
+    const stdinLog = join(scratch, "stdin.log");
+    await create("late-wake", { FAKE_CLAUDE_STDIN_LOG: stdinLog });
     const first = await instance.adapter.sendTurn({ threadId: "t-wake-steer", text: "one" });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
 
@@ -2417,6 +2419,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const opened = await recorder.until((e) => e.type === "request.opened" && e.turnId === started.turnId);
     // true is what lets the route record the user message now, not after the drain
     await expect(instance.adapter.steer!("t-wake-steer", "and also this")).resolves.toBe(true);
+    // stdin and the broker socket are separate pipes; the CLI must read the steer before the answer
+    await vi.waitFor(() => expect(readFileSync(stdinLog, "utf8").trim().split("\n")).toEqual(["user", "user"]));
     const repliesBefore = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text").length;
     await instance.adapter.respondToRequest("t-wake-steer", (opened as { requestId: string }).requestId, { behavior: "allow" });
 
@@ -2651,11 +2655,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
     it("opens no turn from a prepared process's own output", async () => {
       const { spawn, cursor } = await closed(undefined, "2000");
-      const eager = join(scratch, "eager-init");
-      process.env.FAKE_CLAUDE_EAGER_INIT = eager;
+      process.env.FAKE_CLAUDE_EAGER_INIT = join(scratch, "eager-init");
+      const inits = () => readFileSync(join(DATA_DIR, "native", `${focus.threadId}.ndjson`), "utf8").trim().split("\n")
+        .filter((line) => { const { dir, msg } = JSON.parse(line); return dir === "in" && msg?.subtype === "init"; }).length;
+      const before = inits();
       await instance.prepare!(undefined, focus);
-      while (!existsSync(eager)) await new Promise((resolve) => setTimeout(resolve, 25));
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      while (inits() === before) await new Promise((resolve) => setTimeout(resolve, 25));
       expect(recorder.events.filter((e) => e.type === "turn.started" || e.type === "session.started")).toHaveLength(2);
 
       await next(cursor);
@@ -2799,15 +2804,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await create("background-task");
     const dump = join(scratch, `${threadId}.json`);
     process.env.FAKE_CLAUDE_DUMP = dump;
+    const spawn = vi.spyOn(procs, "spawnCli");
     const first = await instance.adapter.sendTurn({ threadId, text: "one" });
+    const closed = once(spawn.mock.results[0]!.value, "close");
+    spawn.mockRestore();
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
     const started = recorder.events.find((e) => e.type === "session.started");
     const cursor = started?.type === "session.started" ? started.sessionId ?? undefined : undefined;
     writeFileSync(gate, "");
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    while (!readFileSync(join(DATA_DIR, "native", `${threadId}.ndjson`), "utf8").includes('"task_notification"')) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     // a later spawn must not finish a task of its own
     process.env.FAKE_CLAUDE_TASK_GATE = join(scratch, `${threadId}-never`);
-    return { first, cursor, pid: JSON.parse(readFileSync(dump, "utf8")).pid, dump };
+    return { first, cursor, pid: JSON.parse(readFileSync(dump, "utf8")).pid, dump, closed };
   };
   const wakeReplies = () =>
     recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text" && e.text === "background task done");
@@ -2824,24 +2834,24 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   });
 
   it("drops a pending wake's late reply when a model switch replaces its session", async () => {
-    const { first, cursor, pid, dump } = await pendingWake("t-wake-switch", "400", "600");
+    const { first, cursor, pid, dump, closed } = await pendingWake("t-wake-switch", "400", "600");
     const second = await instance.adapter.sendTurn({ threadId: "t-wake-switch", text: "two", resumeCursor: cursor, model: "claude-sonnet-5" });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
     expect(JSON.parse(readFileSync(dump, "utf8")).pid).not.toBe(pid);
     expect(await exited(pid)).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await closed;
     expect(wakeReplies()).toEqual([]);
     expect(recorder.events.filter((e) => e.type === "turn.started").map((e) => e.turnId)).toEqual([first.turnId, second.turnId]);
   });
 
   it("lets Stop between turns release a pending wake", async () => {
-    const { first, pid } = await pendingWake("t-wake-stop", "300", "450");
+    const { first, pid, closed } = await pendingWake("t-wake-stop", "300", "450");
     expect(instance.adapter.hasBackgroundWork!("t-wake-stop")).toBe(true);
 
     await instance.adapter.interruptTurn("t-wake-stop");
     expect(instance.adapter.hasBackgroundWork!("t-wake-stop")).toBe(false);
     expect(await exited(pid)).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await closed;
     expect(wakeReplies()).toEqual([]);
     expect(recorder.events.filter((e) => e.type === "turn.started").map((e) => e.turnId)).toEqual([first.turnId]);
   });

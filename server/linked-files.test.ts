@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { linkedFileGrant, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
+import { linkedFileGrant, PC_HOLDER, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import {
   loadThreadSyncLedger,
@@ -213,7 +213,7 @@ describe("linked files", () => {
     mkdirSync(folder);
     mkdirSync(desktop, { recursive: true });
     const refused = [
-      ...["json", "html", "exe", "ts"].map((ext) => join(desktop, `linked.${ext}`)),
+      ...["json", "js", "exe", "ts"].map((ext) => join(desktop, `linked.${ext}`)),
       join(desktop, ".hidden", "linked.png"),
       join(desktop, ".linked.png"),
       join(root, "Users", "someone-else", "aPpDaTa", "Local", "linked.mp4"),
@@ -428,6 +428,68 @@ describe("linked files", () => {
     }
   });
 
+  it("serves a page linked outside the bot's folders with its repo's files and nothing beyond", async () => {
+    const root = temp("linked-outside-page-", process.cwd());
+    const folder = join(root, "Desktop");
+    const repo = join(root, "wt", "site-long");
+    const site = join(repo, "public", "redo", "long");
+    const hidden = join(root, "wt", ".cache", "index.html");
+    const appdata = join(root, "AppData", "Local", "index.html");
+    const files = {
+      ".git/config": "secret",
+      "public/redo/long/index.html": '<link rel="stylesheet" href="style.css"><script src="app.js"></script><img src="../kit/logo.svg">',
+      "public/redo/long/style.css": "body { color: red; }",
+      "public/redo/long/app.js": "document.title = 'ready';",
+      "public/redo/long/img/logo.png": "png-bytes",
+      "public/redo/kit/logo.svg": "<svg/>",
+      "public/img/theme.webp": "webp-bytes",
+      "public/redo/long/.private/keys.json": "secret",
+      "public/redo/long/AppData/Local/token.json": "secret",
+      "public/redo/long/ProgramData/secret.json": "secret",
+      "../secret.css": "secret",
+    };
+    mkdirSync(folder, { recursive: true });
+    for (const [name, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(repo, name)), { recursive: true });
+      writeFileSync(join(repo, name), text);
+    }
+    for (const path of [hidden, appdata]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "<p>private</p>");
+    }
+    vi.stubEnv("ProgramData", join(site, "ProgramData"));
+    const page = join(site, "index.html");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [page, hidden, appdata].map((path) => ({ id: path, role: "bot", text: `Open the [live draft](<${path}>) in your browser.` })),
+      writerDeviceId: () => null, rootsFor: () => [folder],
+    }));
+    try {
+      const shown = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(page)}`, { headers: { Range: "bytes=0-0" } });
+      expect(shown.status).toBe(206);
+      expect(shown.headers.get("content-security-policy")).toMatch(/^sandbox allow-scripts;.*connect-src 'none'/);
+      for (const [asset, type, body] of [["style.css", "text/css", "color: red"], ["app.js", "javascript", "ready"], ["img/logo.png", "image/png", "png-bytes"],
+        ["../kit/logo.svg", "image/svg+xml", "<svg/>"], ["../../img/theme.webp", "image/webp", "webp-bytes"]]) {
+        const res = await fetch(new URL(asset, shown.url));
+        expect(res.status, asset).toBe(200);
+        expect(res.headers.get("content-type"), asset).toContain(type);
+        expect(await res.text(), asset).toContain(body);
+      }
+      for (const asset of [".private/keys.json", "AppData/Local/token.json", "ProgramData/secret.json", "../../../.git/config", "../../../../secret.css", "%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fsecret.css"]) {
+        const res = await fetch(asset.startsWith("%") ? `${shown.url}${asset}` : new URL(asset, shown.url));
+        expect(res.status, asset).toBe(404);
+        expect(await res.text(), asset).not.toContain("secret");
+      }
+      for (const path of [hidden, appdata]) {
+        const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+        expect(await res.json(), path).toEqual({ error: "not found", reason: "outside" });
+      }
+    } finally {
+      await server.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("gives a linked page an opaque origin, away from Wink's storage and session", async () => {
     const { server, open } = await linkedSite({ "index.html": "<script>localStorage.getItem('omb-drafts')</script>" });
     try {
@@ -502,21 +564,37 @@ describe("linked files", () => {
       }
       expect((await fetch(`${scope}${grant}/style.css`)).status).toBe(200);
       const asset = new URL(`${scope}${grant}/style.css`).pathname;
-      expect([linkedFileGrant("GET", asset), linkedFileGrant("POST", asset), linkedFileGrant("GET", asset.replace(grant, foreign))]).toEqual([true, false, false]);
+      const onPc = (holder: string) => holder === PC_HOLDER;
+      expect([linkedFileGrant("GET", asset, onPc), linkedFileGrant("POST", asset, onPc), linkedFileGrant("GET", asset.replace(grant, foreign), onPc)]).toEqual([true, false, false]);
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(Date.now() + 60 * 60_000 + 1);
       expect((await fetch(`${scope}${grant}/style.css`)).status).toBe(404);
-      expect(linkedFileGrant("GET", asset)).toBe(false);
+      expect(linkedFileGrant("GET", asset, onPc)).toBe(false);
     } finally {
       vi.useRealTimers();
       await server.close();
     }
   });
 
+  it("binds a page's grant to the PC or phone that opened it", async () => {
+    const { root, server, open } = await linkedSite({ "index.html": "<p>page</p>", "style.css": "body {}" });
+    const scope = `/api/threads/t1/linked-file/${encodeURIComponent(join(root, "index.html"))}/`;
+    try {
+      const asset = `${new URL((await open("index.html")).url).pathname}style.css`;
+      expect(asset.startsWith(scope)).toBe(true);
+      expect(linkedFileGrant("GET", asset, (holder) => holder === PC_HOLDER)).toBe(true);
+      expect(linkedFileGrant("GET", asset, (holder) => holder !== PC_HOLDER)).toBe(false);
+      const phone = asset.replace(/\/[^/]+\/style\.css$/, `/${asset.split("/").at(-2)!.replace(`.${PC_HOLDER}.`, ".phone-1.")}/style.css`);
+      expect(linkedFileGrant("GET", phone, () => true)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("admits a page's grant at the server's Origin and sign-in gates", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    expect(source.includes('!originAllowedByRemote(origin, REMOTE_HOST) && !(origin === "null" && linkedFileGrant(method, path))'), "Origin gate").toBe(true);
-    expect(source.includes("!apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)"), "sign-in gate").toBe(true);
+    expect(source.includes('!originAllowedByRemote(origin, REMOTE_HOST) && !(origin === "null" && linkedFileGrant(method, path, (holder) => holder === PC_HOLDER))'), "Origin gate").toBe(true);
+    expect(source.includes("!apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)"), "sign-in gate").toBe(true);
   });
 
   it("refuses an unlinked path, escapes, a file outside the roots, and an unauthenticated request", async () => {

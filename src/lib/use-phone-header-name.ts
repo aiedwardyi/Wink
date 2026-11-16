@@ -285,13 +285,15 @@ export function usePhoneHeaderNameFloor(
     });
     if (menu) menuMutations.observe(menu, { attributes: true, attributeFilter: ["class"] });
     window.addEventListener("resize", kick);
-    void document.fonts?.ready.then(() => {
-      if (!alive) return;
+    // Reading fonts.ready forces style and layout on every switch; a load that finishes later reports here.
+    const onFonts = () => {
       measured = false;
       kick();
-    });
+    };
+    document.fonts?.addEventListener?.("loadingdone", onFonts);
     return () => {
       alive = false;
+      document.fonts?.removeEventListener?.("loadingdone", onFonts);
       mutations.disconnect();
       menuMutations.disconnect();
       window.removeEventListener("resize", kick);

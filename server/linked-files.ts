@@ -1,6 +1,6 @@
-// Linked media may leave the bot's output roots, excluding private and system folders.
+// Linked media and pages may leave the bot's output roots, excluding private and system folders.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { createReadStream, existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { basename, dirname, isAbsolute, join, parse, relative } from "node:path";
 import { pipeline } from "node:stream";
@@ -57,6 +57,8 @@ export interface ServeLinkedFileOptions {
   remoteKey: string | undefined;
   /** A valid phone session on a relay request; see requestCredentials. */
   phoneSession?: boolean;
+  /** The phone a page's grant is minted for; this PC when unset. */
+  holder?: string;
   threadId: string;
   messages: readonly LinkedMessage[];
   deviceId: string;
@@ -227,7 +229,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
 }
 
 function outsideMedia(real: string): boolean {
-  if (!(mediaType(real) || cardFile(real)) || /^[\\/]{2}/.test(real)) return false;
+  if (!(mediaType(real) || cardFile(real) || /\.html?$/i.test(real)) || /^[\\/]{2}/.test(real)) return false;
   const normalized = real.replaceAll("\\", "/").toLowerCase();
   if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
   return !systemFolder(real);
@@ -341,24 +343,29 @@ function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, s
   });
 }
 
-function grant(threadId: string, filePath: string, expires = Date.now() + GRANT_MS): string {
-  return `${expires.toString(36)}.${createHmac("sha256", GRANT_KEY).update(`${threadId}\n${filePath}\n${expires}`).digest("base64url")}`;
+/** Who a page's grant was minted for: this PC, or the id of the phone that opened it. */
+export const PC_HOLDER = "pc";
+
+function grant(threadId: string, filePath: string, holder: string, expires = Date.now() + GRANT_MS): string {
+  return `${expires.toString(36)}.${holder}.${createHmac("sha256", GRANT_KEY).update(`${threadId}\n${filePath}\n${holder}\n${expires}`).digest("base64url")}`;
 }
 
 function grantValid(threadId: string, filePath: string, value: string): boolean {
-  const expires = Number.parseInt(value, 36);
-  if (!(expires > Date.now())) return false;
+  const [stamp = "", holder = ""] = value.split(".");
+  const expires = Number.parseInt(stamp, 36);
+  if (!(expires > Date.now()) || !/^[\w-]{1,64}$/.test(holder)) return false;
   const got = Buffer.from(value);
-  const want = Buffer.from(grant(threadId, filePath, expires));
+  const want = Buffer.from(grant(threadId, filePath, holder, expires));
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-/** `path` must be the parsed pathname the router matches, so `..` cannot carry a grant to another route. */
-export function linkedFileGrant(method: string | undefined, path: string): boolean {
+/** `path` must be the parsed pathname the router matches, so `..` cannot carry a grant to another route. `holds` says whether the grant's holder may use it here. */
+export function linkedFileGrant(method: string | undefined, path: string, holds: (holder: string) => boolean): boolean {
   const match = /^\/api\/threads\/([\w-]+)\/linked-file\/([^/]+)\/([^/]+)\//.exec(path);
   if (method !== "GET" || !match) return false;
   try {
-    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!);
+    const [, holder = ""] = match[3]!.split(".");
+    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!) && holds(holder);
   } catch {
     return false;
   }
@@ -382,7 +389,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
       key = parts.shift() ?? "";
       asset = parts.map(decodeURIComponent).join("/");
       if (!/\.html?$/i.test(requested) || !grantValid(options.threadId, requested, key) || asset.split(/[\\/]/).some((part) => part.startsWith(".")) ||
-          /[\\:\0]/.test(asset) || asset.startsWith("/") || (asset !== "" && !(mediaType(asset) ?? assetType(asset)))) {
+          /[\\:\0]/.test(asset) || asset.startsWith("/") || (asset !== "" && !asset.endsWith("/") && !(mediaType(asset) ?? assetType(asset)))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
@@ -441,16 +448,17 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
       sendJson(res, 404, { error: "not found" });
       return;
     }
+    const { base, at } = pageBase(real);
+    if (asset === at) asset = "";
     if (asset) {
-      const folder = dirname(real);
       try {
-        real = realpathSync.native(join(folder, asset));
+        real = realpathSync.native(join(base, asset));
       } catch {
         sendJson(res, 404, { error: "not found" });
         return;
       }
-      if (!insideRoot(real, [folder]) || !insideRoot(real, roots) ||
-          relative(folder, real).split(/[\\/]/).some((part) => part.startsWith(".") && part !== ".pnpm")) {
+      if (!insideRoot(real, [base]) || (inRoot && !insideRoot(real, roots)) ||
+          relative(base, real).split(/[\\/]/).some((part) => (part.startsWith(".") && part !== ".pnpm") || (!inRoot && part.toLowerCase() === "appdata")) || (!inRoot && systemFolder(real))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
@@ -469,7 +477,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   if (html && !scoped) {
-    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested)}/`, "cache-control": "private, no-store" });
+    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested, options.holder ?? PC_HOLDER)}/${pageBase(real).at.split("/").map(encodeURIComponent).join("/")}`, "cache-control": "private, no-store" });
     res.end();
     return;
   }
@@ -506,6 +514,19 @@ export function serveLinkedFolder(req: IncomingMessage, res: ServerResponse, opt
   }
   files.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name));
   sendJson(res, 200, { files: files.slice(0, FOLDER_FILES), more: Math.max(0, files.length - FOLDER_FILES) });
+}
+
+/** A page sits at its path under its nearest repo root, so `../shared/logo.svg` reaches up to that root and no further. */
+function pageBase(page: string): { base: string; at: string } {
+  const folder = dirname(page);
+  for (let dir = folder; dirname(dir) !== dir; dir = dirname(dir)) {
+    if (!existsSync(join(dir, ".git"))) continue;
+    const parts = relative(dir, folder).split(/[\\/]/).filter(Boolean);
+    // A page under a dot folder or AppData keeps to its own folder.
+    if (parts.some((part) => part.startsWith(".") || part.toLowerCase() === "appdata")) break;
+    return { base: dir, at: parts.map((part) => `${part}/`).join("") };
+  }
+  return { base: folder, at: "" };
 }
 
 function htmlPolicy(req: IncomingMessage, scope: string): string {
