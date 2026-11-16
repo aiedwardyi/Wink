@@ -556,8 +556,25 @@ describe("domain move flags", () => {
       expect(plain).not.toHaveProperty("gts");
       await realLocal("/r", dir).writeConfig(parsed.opts);
       const written = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
-      expect(written).toMatchObject({ base: NEW, oldBases: [BASE], gts: { project: "wink-gts-proj" } });
+      expect(written).toMatchObject({ base: NEW, oldBases: [BASE] });
+      expect(written.gts).toEqual({ project: "wink-gts-proj", perHour: 60 });
       expect(configSchema.parse(written).oldBases).toEqual([BASE]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes --gts-per-hour, inside Google's 100 orders an hour and only with --gts-project", async () => {
+    const gts = (extra: string[]) => parseOptions(argv("update", ["--gts-project", "wink-gts-proj", ...extra])).opts;
+    for (const bad of ["0", "101", "1.5", "many"]) expect(() => validate(gts(["--gts-per-hour", bad])), bad).toThrow(/--gts-per-hour is a whole number from 1 to 100/);
+    expect(() => validate(parseOptions(argv("update", ["--gts-per-hour", "80"])).opts)).toThrow(/--gts-per-hour needs --gts-project/);
+    const opts = gts(["--gts-per-hour", "100"]);
+    expect(() => validate(opts)).not.toThrow();
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    try {
+      await realLocal("/r", dir).writeConfig(opts);
+      const written = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));
+      expect(configSchema.parse(written).gts).toMatchObject({ project: "wink-gts-proj", perHour: 100 });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

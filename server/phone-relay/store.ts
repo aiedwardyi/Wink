@@ -294,6 +294,8 @@ export interface AcmeState {
   issued?: [number, number];
   /** The fallback CA's EAB key, bound to this PC's account there. */
   eab?: { kid: string; hmacKey: string };
+  /** Per CA directory: no order there before this time, its own Retry-After. */
+  limitedUntil?: Record<string, number>;
 }
 
 const acmeStateSchema = z.object({
@@ -304,6 +306,7 @@ const acmeStateSchema = z.object({
   retryAt: z.number().optional(),
   issued: z.tuple([z.int().min(0), z.int().min(0)]).optional(),
   eab: z.object({ kid: z.string().min(1), hmacKey: z.string().min(1) }).optional(),
+  limitedUntil: z.record(z.string(), z.number()).optional(),
 });
 
 export function readAcmeState(dataDir: string): Loaded<AcmeState> {

@@ -563,6 +563,43 @@ describe("second CA on a rate limit", () => {
     expect(clock.nextAt).toBe(start + 1800_000);
   });
 
+  it("asks neither CA again before its own Retry-After when both are rate-limited", async () => {
+    const { le, gts, clock, target, certs, run, settled } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 7200;
+    gts.mode = "limited";
+    gts.retryAfterSec = 1800;
+    certs.start();
+    await run();
+    const asked = le.log.length;
+    gts.mode = "ok";
+    const done = settled();
+    clock.advance(1800_000);
+    await done;
+    expect(le.log).toHaveLength(asked);
+    expect(gts.log).toContain("issued");
+    expect(target.cert).not.toBeNull();
+  });
+
+  it("leaves a rate-limited Let's Encrypt alone while the second CA fails another way", async () => {
+    const { dir, le, gts, clock, certs, run, settled } = await setup(async () => EAB);
+    le.mode = "limited";
+    le.retryAfterSec = 7200;
+    gts.mode = "reject";
+    certs.start();
+    const start = clock.now();
+    await run();
+    const asked = le.log.length;
+    const second = gts.log.length;
+    expect(clock.nextAt).toBe(start + 60_000);
+    const done = settled();
+    clock.advance(60_000);
+    await done;
+    expect(le.log).toHaveLength(asked);
+    expect(gts.log.length).toBeGreaterThan(second);
+    expect(readAcmeState(dir)).toMatchObject({ kind: "ok", value: { limitedUntil: { [le.directoryUrl]: start + 7_200_000 } } });
+  });
+
   it("backs off 1 min, 10 min, 100 min while both CAs stay limited with no wait given", async () => {
     const { le, gts, clock, certs, run, settled } = await setup(async () => EAB);
     le.mode = "limited";
@@ -706,7 +743,8 @@ describe("backoff after failures", () => {
     expect(clock.nextAt).toBe(clock.now() + 7_200_000);
   });
 
-  it("renews at the second CA once Let's Encrypt has rate-limited this PC", async () => {
+  /** A PC whose first certificate came from the second CA, Let's Encrypt being rate-limited. */
+  async function onSecondCa() {
     const { dir, cleanup } = tempDataDir();
     cleanups.push(cleanup);
     const ca = await TestCa.create();
@@ -735,6 +773,11 @@ describe("backoff after failures", () => {
     certs.start();
     certs.setConnected(true);
     await vi.waitFor(() => expect(certs.snapshot()).toMatchObject({ issuing: false, valid: true }));
+    return { dir, le, gts, clock, target, certs };
+  }
+
+  it("renews at the second CA once Let's Encrypt has rate-limited this PC", async () => {
+    const { le, gts, clock, target, certs } = await onSecondCa();
     le.mode = "ok";
     for (let i = 0; i < 5 && target.installs.length < 2; i++) {
       clock.advance(RENEW_CHECK_MS);
@@ -743,5 +786,20 @@ describe("backoff after failures", () => {
     expect(target.installs).toHaveLength(2);
     expect(le.log.filter((entry) => entry === "new-order" || entry === "error:rateLimited")).toEqual(["error:rateLimited"]);
     expect(gts.log.filter((entry) => entry === "issued")).toHaveLength(2);
+  });
+
+  it("renews at Let's Encrypt when the second CA is rate-limited, and stays there", async () => {
+    const { dir, le, gts, clock, target, certs } = await onSecondCa();
+    le.mode = "ok";
+    gts.mode = "limited";
+    for (let i = 0; i < 5 && target.installs.length < 2; i++) {
+      clock.advance(RENEW_CHECK_MS);
+      await vi.waitFor(() => expect(certs.snapshot().issuing).toBe(false));
+    }
+    expect(target.installs).toHaveLength(2);
+    expect(le.log).toContain("issued");
+    expect(gts.log.filter((entry) => entry === "issued")).toHaveLength(1);
+    expect(certs.snapshot()).toMatchObject({ valid: true, error: null, fullUntil: null });
+    expect(readAcmeState(dir)).toMatchObject({ kind: "ok", value: { onFallback: false, issued: [1, 1] } });
   });
 });

@@ -280,6 +280,8 @@ export class CertManager {
   /** The last certificate came from the fallback CA, so renewals go there too. */
   private onFallback = false;
   private eab: AcmeExternalAccount | null = null;
+  /** Per CA directory, the time its Retry-After ends. */
+  private limitedUntil: Record<string, number> = {};
   /** Certificates this PC got from the configured CA and from the fallback. */
   private issued: [number, number] = [0, 0];
   private fullUntil: number | null = null;
@@ -331,6 +333,7 @@ export class CertManager {
       this.failures = state.value.failures;
       this.onFallback = state.value.onFallback === true && this.opts.fallback !== undefined;
       this.eab = state.value.eab ?? null;
+      this.limitedUntil = state.value.limitedUntil ?? {};
       this.issued = state.value.issued ?? [0, 0];
       this.retryAt = state.value.retryAt ?? 0;
     } else if (state.kind === "invalid") {
@@ -399,6 +402,7 @@ export class CertManager {
         issued: this.issued,
         retryAt: this.retryAt,
         eab: this.eab ?? undefined,
+        limitedUntil: this.limitedUntil,
       });
     } catch {
       /* the in-memory state still applies until restart */
@@ -435,7 +439,10 @@ export class CertManager {
   }
 
   private current(): string {
-    if (this.onFallback && this.opts.fallback) return this.opts.fallback.directory;
+    return this.onFallback && this.opts.fallback ? this.opts.fallback.directory : this.primary();
+  }
+
+  private primary(): string {
     const directories = this.directories();
     return directories[this.directoryIndex % directories.length];
   }
@@ -518,37 +525,56 @@ export class CertManager {
     return value;
   }
 
-  /** Orders from `directory`; on a rate limit there, from the fallback CA. True when the fallback issued. */
+  /** Orders from `directory`; while it is rate-limited, from the other CA. True when the fallback issued. */
   private async orderOrFallback(directory: string): Promise<boolean> {
     const fallback = this.opts.fallback;
-    try {
-      await this.order(directory, this.opts.accounts[directory]);
-      return directory === fallback?.directory;
-    } catch (cause) {
-      const limited = this.requests.limitedFor;
-      if (limited === null || !fallback) throw cause;
-      if (directory === fallback.directory) throw new FullError(this.until(limited));
+    let cause: unknown;
+    if (!this.limited(directory)) {
+      try {
+        await this.order(directory, this.opts.accounts[directory]);
+        return directory === fallback?.directory;
+      } catch (failed) {
+        const limited = this.requests.limitedFor;
+        if (limited === null || !fallback) throw failed;
+        this.limitedUntil[directory] = this.until(limited);
+        cause = failed;
+      }
+    }
+    const until = this.limitedUntil[directory];
+    if (!fallback) throw new FullError(until);
+    // A PC that renews at the fallback goes back to its own CA while the fallback is the limited one.
+    const other = directory === fallback.directory ? this.primary() : fallback.directory;
+    if (this.limited(other)) throw new FullError(Math.min(until, this.limitedUntil[other]));
+    let account = this.opts.accounts[other];
+    if (other === fallback.directory) {
       let eab: AcmeExternalAccount | null;
       try {
-        eab = this.eab ?? this.opts.accounts[fallback.directory]?.eab ?? (await this.step(fallback.externalAccount()));
+        eab = this.eab ?? account?.eab ?? (await this.step(fallback.externalAccount()));
       } catch (refused) {
-        if (refused instanceof EabFullError) throw new FullError(Math.min(this.until(limited), refused.retryAt));
+        if (refused instanceof EabFullError) throw new FullError(Math.min(until, refused.retryAt));
         throw refused;
       }
-      if (!eab) throw cause;
+      if (!eab) throw cause ?? new FullError(until);
       // One EAB key opens one account; keep it for this PC's account at that CA.
       this.eab = eab;
       this.saveState();
-      this.requests.limitedFor = null;
-      try {
-        await this.order(fallback.directory, { ...this.opts.accounts[fallback.directory], eab });
-      } catch (second) {
-        const again = this.requests.limitedFor;
-        if (again !== null) throw new FullError(Math.min(this.until(limited), this.until(again)));
-        throw second;
-      }
-      return true;
+      account = { ...account, eab };
     }
+    this.requests.limitedFor = null;
+    try {
+      await this.order(other, account);
+    } catch (second) {
+      const again = this.requests.limitedFor;
+      if (again === null) throw second;
+      this.limitedUntil[other] = this.until(again);
+      throw new FullError(Math.min(until, this.until(again)));
+    }
+    return other === fallback.directory;
+  }
+
+  /** Whether `directory` told this PC to wait and that wait is not over. */
+  private limited(directory: string): boolean {
+    return (this.limitedUntil[directory] ?? 0) > this.clock.now();
   }
 
   private until(waitMs: number): number {

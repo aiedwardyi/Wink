@@ -44,7 +44,12 @@ export interface DeployOptions {
   oldBase?: string;
   /** Written as gts.project. */
   gtsProject?: string;
+  /** Written as gts.perHour: PCs an hour that get a Google Trust Services key. */
+  gtsPerHour?: number;
 }
+
+/** Under the 100 new orders an hour Google allows a project, leaving room for retries. */
+export const GTS_PER_HOUR = 60;
 
 export interface AddressState {
   name: string;
@@ -154,6 +159,12 @@ export function validate(opts: DeployOptions): void {
   }
   if (opts.gtsProject !== undefined && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(opts.gtsProject)) {
     throw new PlanError("invalid --gts-project");
+  }
+  if (opts.gtsPerHour !== undefined) {
+    if (opts.gtsProject === undefined) throw new PlanError("--gts-per-hour needs --gts-project");
+    if (!Number.isInteger(opts.gtsPerHour) || opts.gtsPerHour < 1 || opts.gtsPerHour > 100) {
+      throw new PlanError("--gts-per-hour is a whole number from 1 to 100");
+    }
   }
 }
 

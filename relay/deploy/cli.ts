@@ -32,6 +32,7 @@ const USAGE = `usage: wink-relay <provision|update|move|pause> --project P --bas
   [--stats-read-key-sha256 HEX]   (turns on /v1/stats)
   [--old-base B]         (earlier base still served; its resources count as owned)
   [--gts-project P]      (turns on /v1/acme/eab; key via the gts.json credential)
+  [--gts-per-hour N]     (certificates an hour from Google Trust Services, default 60; Google allows 100; needs --gts-project)
   [--from-project OLD]   (move)
   [--offline]            (provision/update: plan without reading cloud state)
   [--apply]              (without it, nothing is changed)
@@ -86,6 +87,7 @@ export function parseOptions(argv: string[]): ParsedArgs {
       "stats-read-key-sha256": { type: "string" },
       "old-base": { type: "string" },
       "gts-project": { type: "string" },
+      "gts-per-hour": { type: "string" },
       "accept-acme-terms": { type: "boolean", default: false },
       offline: { type: "boolean", default: false },
       apply: { type: "boolean", default: false },
@@ -121,6 +123,7 @@ export function parseOptions(argv: string[]): ParsedArgs {
   if (values["stats-read-key-sha256"] !== undefined) opts.statsReadKeySha256 = values["stats-read-key-sha256"];
   if (values["old-base"] !== undefined) opts.oldBase = values["old-base"].toLowerCase();
   if (values["gts-project"] !== undefined) opts.gtsProject = values["gts-project"];
+  if (values["gts-per-hour"] !== undefined) opts.gtsPerHour = Number(values["gts-per-hour"]);
   if (action === "move" && !values["from-project"]) throw new PlanError("move needs --from-project");
   if (values.offline && values.apply) throw new PlanError("--offline cannot be combined with --apply");
   if (values.offline && (action === "move" || action === "pause")) {
