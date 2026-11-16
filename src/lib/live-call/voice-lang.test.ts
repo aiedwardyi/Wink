@@ -1,4 +1,4 @@
-// The 11-15 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039).
+// The 11-15 and 11-16 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039, c-21351ca21949).
 // Silent: a fake engine and a fake audio port, no socket, mic or speaker.
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -668,5 +668,125 @@ describe("S03 words that came with their audio are checked first", () => {
     engine().events.heard("Hello again.");
     route({ serverContent: { modelTurn: { parts: [{ inlineData: { data: "AAAA" } }] }, outputTranscription: { text: "Hi, I'm here." } } }, engine().events, { answering: false });
     expect(audio.played).toBe(1);
+  });
+});
+
+describe("11-16 call c-21351ca21949, in its own order", () => {
+  const HELLO = "Send a hello message in the chat.";
+  const tick = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+  const offer = (engine: FakeEngine, said: string, order: string, id: string) => {
+    engine.events.answering();
+    engine.events.audio(pcm());
+    engine.events.said(said);
+    engine.events.toolCall([{ id, name: "propose_work", args: { order } }]);
+    engine.events.turnDone();
+  };
+
+  it.each(["the voice answers first", "the result lands first"])("15:00:26 a spoken yes gets one On it, though the other turn comes with no words (%s)", async (order) => {
+    const { audio, engine, posts } = await live();
+    const e = engine();
+    e.events.heard("Can you send me hello on chat?");
+    offer(e, "Want me to send a hello message in the chat for you?", HELLO, "p1");
+    await tick(5_000);
+    e.events.heard("Yes.");
+    await tick(1_200);
+    if (order === "the result lands first") await tick(10);
+    speak(e, "On it.");
+    await tick(10);
+    expect(e.results).toEqual([{ id: "p1", result: "sent. They already heard you answer: say nothing more." }]);
+    const played = audio.played;
+    // Google speaks after every tool result and after his yes; one of the two turns had no transcript.
+    e.events.answering();
+    e.events.audio(pcm());
+    e.events.turnDone();
+    await tick(5_000);
+    expect(audio.played).toBe(played);
+    expect(sentToBot(posts)).toEqual([HELLO]);
+  });
+
+  it("a failed send still speaks after the ack", async () => {
+    const { audio, engine } = await live({ messages: { status: 500, data: { error: "down" } } });
+    const e = engine();
+    e.events.heard("Can you send me hello on chat?");
+    offer(e, "Want me to send a hello message in the chat for you?", HELLO, "p1");
+    await tick(5_000);
+    e.events.heard("Yes.");
+    await tick(1_200);
+    speak(e, "On it.");
+    await tick(3_000);
+    expect(e.results).toEqual([{ id: "p1", result: "not confirmed: down" }]);
+    const played = audio.played;
+    speak(e, "Sorry, that didn't go through.");
+    expect(audio.played).toBe(played + 1);
+  });
+
+  it("15:00:52 asked to stay quiet in his own words, it stays quiet when he says \"agent\"", async () => {
+    const { audio, call, engine } = await live({ voice: "Alnilam" });
+    const e = engine();
+    e.events.heard("Let me see if you can stay quiet while I talk to my friend.");
+    e.events.answering();
+    e.events.audio(pcm());
+    e.events.said("Understood. I will remain quiet while you speak.");
+    e.events.toolCall([{ id: "h1", name: "hush", args: {} }]);
+    e.events.turnDone();
+    expect(call.state().hushed).toBe(true);
+    const played = audio.played;
+    e.events.heard("agent");
+    await tick(1_500);
+    speak(e, "Hey, I'm here. What would you like to do?");
+    expect(call.state().hushed).toBe(true);
+    expect(audio.played).toBe(played);
+    e.events.heard("Eddie?");
+    await tick(1_500);
+    speak(e, "I'm here.");
+    expect(audio.played).toBe(played + 1);
+  });
+
+  it.each(["the offer comes with the line", "the offer lands while the line still plays"])("15:01:19 an offer on screen is not asked again, and his yes answers it once (%s)", async (order) => {
+    const { audio, call, engine, posts } = await live();
+    const e = engine();
+    const add = "Add the issue of me speaking when I was supposed to be quiet to the room fixes.";
+    e.events.heard("Record that so we can fix it.");
+    e.events.answering();
+    e.events.audio(pcm());
+    e.events.said("I'll add the issue of me speaking when I was supposed to be quiet to the room fixes.");
+    if (order === "the offer comes with the line") e.events.toolCall([{ id: "p2", name: "propose_work", args: { order: add } }]);
+    audio.playing = true;
+    e.events.turnDone();
+    if (order !== "the offer comes with the line") e.events.toolCall([{ id: "p2", name: "propose_work", args: { order: add } }]);
+    audio.playing = false;
+    audio.onIdle();
+    await tick(2_000);
+    expect(fixes(e).filter((line) => /ask them again|call ask or propose_work/i.test(line))).toEqual([]);
+    expect(call.state().pending?.order).toBe(add);
+    e.events.heard("Yes.");
+    await tick(1_200);
+    speak(e, "On it.");
+    await tick(10);
+    expect(sentToBot(posts)).toEqual([add]);
+    expect(call.state().pending).toBeUndefined();
+  });
+
+  it("15:01:23 an offer said again in other words replaces the first with no \"replaced\" line under it", async () => {
+    const { call, engine } = await live();
+    const e = engine();
+    e.events.heard("Record that so we can fix it.");
+    offer(e, "Want me to add the issue of me speaking when I was supposed to be quiet to the room fixes?", "Add the issue of me speaking when I was supposed to be quiet to the room fixes.", "p2");
+    offer(e, "Should I add the issue of me speaking while quiet to the room fixes?", "Add the issue of me speaking while quiet to the room fixes.", "p3");
+    expect(call.state().pending?.order).toBe("Add the issue of me speaking while quiet to the room fixes.");
+    expect(call.state().notice).toBeUndefined();
+  });
+
+  it("15:01:48 a promise while the offer waits says plainly it waits for a yes, never asks again", async () => {
+    const { engine } = await live();
+    const e = engine();
+    const add = "Add the issue of me speaking while quiet to the room fixes.";
+    e.events.heard("Record that so we can fix it.");
+    offer(e, "Should I add the issue of me speaking while quiet to the room fixes?", add, "p3");
+    await tick(5_000);
+    e.events.heard("And even though I said yes. The card is still up showing the question for yes or no.");
+    speak(e, "I'll add the issue of me speaking while quiet to the room fixes for you now.");
+    await tick(0);
+    expect(fixes(e)).toEqual([`[Wink] Not done: "${add}" starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`]);
   });
 });

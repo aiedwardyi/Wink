@@ -53,6 +53,10 @@ export const LIVE_TOOLS = [
       required: ["question"],
     },
   },
+  {
+    name: "hush",
+    description: "They asked you to be quiet or said they are talking to someone else, in any words. Call it and say nothing: you stay silent until they say your name.",
+  },
 ];
 
 /** Said on the call: never a turn's input, reply or unread. Orders and asks are real sends. */

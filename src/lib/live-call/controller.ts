@@ -70,6 +70,8 @@ type ToolRun = (call: LiveCall, args: Record<string, unknown>, id: string) => vo
 const TOOLS: Record<string, ToolRun> = {
   propose_work: (call, args, id) => call.propose(String(args.order ?? "").trim(), [id]),
   ask: (call, args, id) => call.query(String(args.question ?? "").trim(), [id]),
+  // The model hears "let me see if you can stay quiet" where a phrase match does not.
+  hush: (call, _args, id) => call.quietDown(id),
 };
 
 /** One thing the person said: a request until something real accounts for it. */
@@ -328,6 +330,9 @@ export class LiveCall {
   // The newest bot message in the chat, and the turn already answering a read-back ask from memory, which is thrown away.
   private newest?: string;
   private readNext = false;
+  // A spoken yes or no gets one ack: Google also speaks after its tool result, sometimes with no words to compare.
+  private acked?: "armed" | "spent";
+  private reack = false;
   private closing = false;
   private closeTimer?: ReturnType<typeof setTimeout>;
 
@@ -479,6 +484,10 @@ export class LiveCall {
       audio: (pcm) => {
         if (!mine()) return;
         this.stir();
+        if (this.reack) {
+          this.reack = false;
+          this.stats.repeats += 1;
+        }
         if (this.snapshot.hushed || this.dropping) return;
         if (this.echo) this.echo.push(pcm);
         else this.deps.audio.play(pcm);
@@ -529,7 +538,8 @@ export class LiveCall {
         this.stir();
         this.generating = true;
         this.flushHeard();
-        this.dropping = this.readNext;
+        this.reack = this.acked === "spent" && !this.playing;
+        this.dropping = this.readNext || this.reack;
         this.readNext = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
         this.echo = this.lastLine || this.offTongue || this.checkAsk ? [] : undefined;
@@ -565,6 +575,7 @@ export class LiveCall {
         this.doneTold = false;
         if (this.cutHold === "answering") this.cutHold = undefined;
         if (spoke) {
+          if (this.acked === "armed" && !this.reack) this.acked = "spent";
           this.pause();
           // A plain reply settles his lines; a promise, a refusal or an open offer leaves them for the hang-up.
           if (this.replyTo && !this.pending && !this.req.nudged && !this.req.told && !this.req.failed) this.open.settle(this.replyTo);
@@ -579,6 +590,7 @@ export class LiveCall {
           }
         }
         this.replyTo = 0;
+        this.reack = false;
         if (this.playing) this.playing.ended = true;
         this.playedOut();
         this.release();
@@ -667,7 +679,10 @@ export class LiveCall {
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
   private toolResult(ids: string[], name: string, subject: string, result: string, note?: string, said?: number) {
     // An ask redirected to propose_work shows until its offer replaces it.
-    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
+    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) {
+      this.acked = undefined;
+      this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
+    }
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
@@ -715,7 +730,6 @@ export class LiveCall {
     if (replaced) {
       this.stats.orders.replaced += 1;
       this.clearPending();
-      this.notSent(replaced.order, "replaced");
     }
     if (lookup) return this.query(order, [...(replaced?.toolIds ?? []), ...ids], "propose_work");
     this.stats.orders.proposed += 1;
@@ -745,7 +759,7 @@ export class LiveCall {
     this.pending = pending;
     this.closing = false;
     clearTimeout(this.closeTimer);
-    this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
+    this.set({ pending: { order, expiresAt }, notice: undefined });
     if (yes) void this.answer(true);
   }
 
@@ -777,6 +791,7 @@ export class LiveCall {
   async answer(yes: boolean, spoken = false) {
     const pending = this.pending;
     if (!pending) return;
+    if (spoken) this.acked = "armed";
     const said = this.stats.voiceLines;
     if (!yes) {
       this.stats.orders.declined += 1;
@@ -944,7 +959,8 @@ export class LiveCall {
       return;
     }
     if (this.pending && claim?.claim === "promise") {
-      this.held.push({ text: `[Wink] Not sent yet: they have not said yes to "${this.pending.order}". Ask them again.`, fix: true });
+      // Its question is already on screen: asking again makes a reworded offer that replaces it, and drowns out his yes.
+      this.held.push({ text: `[Wink] Not done: "${this.pending.order}" starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`, fix: true });
       return;
     }
     // An ask stands behind "let me check" only for what it asked: no watch history, no thinking up picks.
@@ -959,7 +975,7 @@ export class LiveCall {
     if (claim && !req.nudged && this.stats.guard.nudges < MAX_NUDGES) {
       req.nudged = true;
       this.stats.guard.nudges += 1;
-      this.held.push({ text: `[Wink] Not done: you said "${claim.sentence}", but nothing was sent, so nothing is running. Call ask or propose_work now${this.busy ? `: ${this.deps.botName} is busy, so it queues after the current work.` : ", or say plainly it was not sent."}`, nudge: true, fix: true });
+      this.held.push({ text: `[Wink] Not done: you said "${claim.sentence}", but nothing was sent, so nothing is running. Call ask or propose_work now${this.busy ? `: ${this.deps.botName} is busy, so it queues after the current work.` : ", or say plainly it was not sent."}`, nudge: true, fix: true, valid: () => !req.accounted });
       return;
     }
     req.told = true;
@@ -993,6 +1009,7 @@ export class LiveCall {
     if (!text) return;
     this.lastLine = "";
     this.readNext = false;
+    this.acked = undefined;
     if (this.cutHold) this.cutHold = "heard";
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -1331,6 +1348,11 @@ export class LiveCall {
       this.engine?.sendContext(text);
       this.riding.push(text);
     }
+  }
+
+  quietDown(id: string) {
+    this.hush();
+    this.engine?.sendToolResult([id], "hush", "quiet: say nothing until they say your name");
   }
 
   // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.
