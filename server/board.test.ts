@@ -33,6 +33,25 @@ describe("board posts", () => {
     });
   });
 
+  it("names a post by its stored ref, however long the event ref was", () => {
+    const { board } = home("pc-a");
+    const long = { ...STUCK, source_ref: `call:t1:0:engine:${"x".repeat(500)}` };
+    const post = board.post(long);
+    expect(post.source_ref).toHaveLength(300);
+    expect(boardPostId(post.source_ref)).toBe(post.id);
+    expect(board.post(long).id).toBe(post.id);
+  });
+
+  it("a fix post solves its parent with one change broadcast", () => {
+    let changes = 0;
+    const board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-")), BOARD_DIR), pcId: () => "pc-a", changed: () => changes++ });
+    const stuck = board.post(STUCK);
+    changes = 0;
+    board.post({ author_bot_id: "user", kind: "fix", parent_id: stuck.id, title: STUCK.title, body: "Use Claude.", fix: "Use Claude.", source_ref: "answer:m1" });
+    expect(changes).toBe(1);
+    expect(board.get(stuck.id)).toMatchObject({ status: "solved", fix: "Use Claude." });
+  });
+
   it("signs the same failure the same across folders, numbers and ids", () => {
     expect(errorSig("ENOENT: no such file C:\\Users\\a\\x.json (code 2) id 9f8e7d6c")).toBe(errorSig("enoent: no such file /home/b/y.json (code 17) id 0a1b2c3d"));
     expect(errorSig("Codex is out of credit")).not.toBe(errorSig("Claude is signed out"));

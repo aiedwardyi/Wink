@@ -40,7 +40,8 @@ export type NewBoardPost = Pick<BoardPost, "author_bot_id" | "kind" | "title" | 
 
 const clean = (text: string, max: number) => redactSecretsInText(text.trim()).slice(0, max);
 
-export const boardPostId = (sourceRef: string) => `p${createHash("sha256").update(sourceRef).digest("hex").slice(0, 24)}`;
+/** Hashes the ref as stored, so a long ref still names its post. */
+export const boardPostId = (sourceRef: string) => `p${createHash("sha256").update(sourceRef.slice(0, LIMITS.ref)).digest("hex").slice(0, 24)}`;
 
 /** Paths, numbers and ids drop out, so the same failure on another folder or day signs the same. */
 export function errorSig(text: string): string {
@@ -139,6 +140,12 @@ export function createBoard(options: BoardOptions) {
     return true;
   };
 
+  const solved = (held: BoardPost, fix: string, at: number): BoardPost => {
+    const next = { ...held, status: "solved" as const, fix: clean(fix, LIMITS.fix), updated_at: at, pc_id: options.pcId() };
+    write(next);
+    return next;
+  };
+
   const board = {
     dir: options.dir,
     list(): BoardPost[] {
@@ -147,7 +154,7 @@ export function createBoard(options: BoardOptions) {
     get(id: string): BoardPost | undefined {
       return posts().get(id);
     },
-    /** Writes the post the event names; the same event again updates that post. */
+    /** Writes the post the event names; the same event again updates that post. A fix also solves its parent. */
     post(input: NewBoardPost): BoardPost {
       const id = boardPostId(input.source_ref);
       const at = now();
@@ -173,14 +180,15 @@ export function createBoard(options: BoardOptions) {
         pc_id: options.pcId(),
       };
       write(next);
+      const parent = next.kind === "fix" && next.parent_id ? posts().get(next.parent_id) : undefined;
+      if (parent) solved(parent, next.fix || next.body, at);
       options.changed?.();
       return next;
     },
     solve(id: string, fix: string): BoardPost | undefined {
       const held = posts().get(id);
       if (!held) return undefined;
-      const next = { ...held, status: "solved" as const, fix: clean(fix, LIMITS.fix), updated_at: now(), pc_id: options.pcId() };
-      write(next);
+      const next = solved(held, fix, now());
       options.changed?.();
       return next;
     },

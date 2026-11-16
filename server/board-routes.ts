@@ -58,7 +58,6 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         fix: kind === "fix" ? text : undefined,
         source_ref: `tool:${from.threadId}:${event}`,
       });
-      if (kind === "fix" && parent) deps.board.solve(parent.id, text);
       return json(res, 200, { id: post.id, text: `Posted to the Board as ${post.id}.` });
     },
     list(res: ServerResponse) {

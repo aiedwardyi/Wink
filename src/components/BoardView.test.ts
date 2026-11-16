@@ -73,6 +73,18 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pnew", "pold"]);
   });
 
+  it("keeps a reply to a reply in its thread", async () => {
+    posts = [
+      post("phand", { kind: "handoff", title: "Map tests half done", body: "Map tests half done", created_at: 1 }),
+      post("pstuck", { parent_id: "phand", author_bot_id: "carbon", title: "Fixture is missing", body: "Fixture is missing", created_at: 2 }),
+      post("pfix", { parent_id: "pstuck", kind: "fix", author_bot_id: "user", title: "Fixture is missing", body: "Run seed first", status: "solved", created_at: 3 }),
+    ];
+    await render(BoardView);
+    expect(rows()).toEqual(["phand"]);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="phand"] button')!.click());
+    expect(rows()).toEqual(["phand", "pstuck", "pfix"]);
+  });
+
   it("reloads when the Board changes and says so when empty", async () => {
     await render(BoardView);
     expect(host.querySelector("[data-board-empty]")).not.toBeNull();

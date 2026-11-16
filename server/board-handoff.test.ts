@@ -126,6 +126,46 @@ describe("board handoff eval", () => {
     expect(board.list().find((post) => post.author_bot_id === "astra")!.helped_bot_ids).toEqual([]);
   });
 
+  it("a solved blocker that comes back gets a fresh post, rings and takes the new answer", async () => {
+    await blockers(BOTS.astra!, [X("14:05")]);
+    say("ta", ANSWER);
+    await blockers(BOTS.astra!, []);
+    boardCalls.turnEnded("ta", true);
+    const [first] = board.list();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    const callsBefore = sent.length;
+    // the old fix is offered once, fails, and the same blocker written again calls
+    expect(await blockers(BOTS.astra!, [X("14:05")])).toContain(ANSWER);
+    await blockers(BOTS.astra!, [X("14:05")]);
+    expect(sent.slice(callsBefore).map((payload) => payload.title)).toEqual(["📞 Astra is calling"]);
+    const stuck = board.list().filter((post) => post.kind === "stuck");
+    expect(stuck).toHaveLength(2);
+    const fresh = stuck.find((post) => post.id !== first!.id)!;
+    expect(fresh).toMatchObject({ status: "open", author_bot_id: "astra" });
+    const NEW = "Codex moved to the team plan; sign in again with the work account.";
+    say("ta", NEW, "m-answer-2");
+    expect(board.get(fresh.id)).toMatchObject({ status: "solved", fix: NEW });
+    expect(board.list().find((post) => post.kind === "fix" && post.parent_id === fresh.id)).toMatchObject({ body: NEW });
+    expect(board.get(first!.id)).toMatchObject({ status: "solved", fix: ANSWER });
+  });
+
+  it("holds only blockers whose fixes fit in the notice; the rest call", async () => {
+    const LOGIN = { kind: "login", note: "Claude: login expired on the work PC, run claude login." };
+    for (const [n, blocker] of [X("14:05"), X("14:05"), LOGIN, LOGIN].entries()) {
+      const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: blocker.note, body: blocker.note, project_id: "wink", source_ref: `seed:${n}` });
+      board.solve(stuck.id, `fix ${n}`);
+    }
+    const notice = await blockers(BOTS.carbon!, [X("14:05"), LOGIN]);
+    expect(sent.map((payload) => payload.title)).toEqual(["📞 Carbon is calling"]);
+    expect(packets.get("tc")!.blockers.map((blocker) => blocker.kind)).toEqual(["login"]);
+    expect(notice).toContain("fix 0");
+    expect(notice).toContain("fix 1");
+    expect(notice).not.toContain("fix 2");
+    expect(notice).not.toContain("fix 3");
+    boardCalls.turnEnded("tc", true);
+    expect(board.list().filter((post) => post.helped_bot_ids.includes("carbon")).map((post) => post.fix).sort()).toEqual(["fix 0", "fix 1"]);
+  });
+
   it("an open post with no answer yet holds nothing back", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
     await blockers(BOTS.carbon!, [X("09:30")]);

@@ -1,6 +1,6 @@
 // Bot calls feed the Board: a call leaves a stuck post, the user's answer becomes its fix,
 // and a later bot with the same blocker gets that fix instead of calling. No model calls.
-import { BOARD_USER, boardLine, errorSig, type Board, type BoardPost } from "./board.ts";
+import { BOARD_USER, boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 
 type Blocker = TaskResumePacket["blockers"][number];
@@ -62,25 +62,31 @@ export function createBoardCalls(deps: BoardCallDeps) {
           kept.push(blocker);
           continue;
         }
+        // Held only with a fix the notice carries; past the budget the blocker calls.
         const posts = hits(threadId, blocker.note);
-        if (!posts.length) {
+        const fresh = posts.filter((post) => !found.some((seen) => seen.id === post.id)).slice(0, BOARD_HITS - found.length);
+        const shown = posts.filter((post) => fresh.includes(post) || found.some((seen) => seen.id === post.id));
+        if (!shown.length) {
           kept.push(blocker);
           continue;
         }
-        offered.push({ botId, key, postIds: posts.map((post) => post.id) });
-        for (const post of posts) if (!found.some((seen) => seen.id === post.id)) found.push(post);
+        offered.push({ botId, key, postIds: shown.map((post) => post.id) });
+        found.push(...fresh);
       }
       if (offered.length) offers.set(threadId, offered);
       else offers.delete(threadId);
       if (!found.length) return { blockers: kept, notice: "" };
-      const lines = found.slice(0, BOARD_HITS).map((post) => boardLine(post, HIT_CHARS));
+      const lines = found.map((post) => boardLine(post, HIT_CHARS));
       return {
         blockers: kept,
         notice: `Not called yet: the Board has a fix for this blocker. Try it once. If it still fails, write the same blocker again to call.\n${lines.join("\n")}`,
       };
     },
-    /** A call went out: the blocker becomes an open stuck post. */
+    /** A call went out: the blocker becomes an open stuck post, a fresh one once the last call was solved. */
     called(botId: string, threadId: string, blocker: Blocker): BoardPost {
+      const ref = (episode: number) => `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
+      let episode = 0;
+      while (deps.board.get(boardPostId(ref(episode)))?.status === "solved") episode++;
       return deps.board.post({
         author_bot_id: botId,
         kind: "stuck",
@@ -88,7 +94,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
         body: blocker.note,
         error_sig: errorSig(blocker.note),
         project_id: deps.projectOf(threadId),
-        source_ref: `${callRef(threadId)}${blocker.kind}:${blocker.note}`,
+        source_ref: ref(episode),
       });
     },
     /** The user's next message on a called thread is the answer: a fix reply, and the post is solved. */
@@ -108,7 +114,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
           project_id: stuck.project_id,
           source_ref: `answer:${message.id}:${stuck.id}`,
         });
-        return deps.board.solve(stuck.id, text)!;
+        return deps.board.get(stuck.id)!;
       });
     },
     /** A turn that held a Board fix and ended without calling: the fix helped. */

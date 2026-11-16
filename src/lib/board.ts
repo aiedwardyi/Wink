@@ -32,13 +32,22 @@ export const isForumSelection = (selectedId: string) => selectedId === FORUM_SEL
 /** Server frames say the Board changed; the open Forum reloads. */
 export const BOARD_CHANGED_EVENT = "orbit:board";
 
-/** Top-level posts newest first, each with its replies oldest first. */
+/** Top-level posts newest first, each with every post under it, replies to replies included, oldest first. */
 export function boardThreads(posts: readonly BoardPost[]): Array<{ post: BoardPost; replies: BoardPost[] }> {
-  const ids = new Set(posts.map((post) => post.id));
-  const roots = posts.filter((post) => !post.parent_id || !ids.has(post.parent_id)).sort((a, b) => b.created_at - a.created_at);
+  const byId = new Map(posts.map((post) => [post.id, post]));
+  const rootOf = (post: BoardPost) => {
+    const seen = new Set<string>();
+    let at = post;
+    for (let up = at.parent_id ? byId.get(at.parent_id) : undefined; up && !seen.has(up.id); up = up.parent_id ? byId.get(up.parent_id) : undefined) {
+      seen.add(at.id);
+      at = up;
+    }
+    return at;
+  };
+  const roots = posts.filter((post) => rootOf(post) === post).sort((a, b) => b.created_at - a.created_at);
   return roots.map((post) => ({
     post,
-    replies: posts.filter((reply) => reply.parent_id === post.id).sort((a, b) => a.created_at - b.created_at),
+    replies: posts.filter((reply) => reply !== post && rootOf(reply) === post).sort((a, b) => a.created_at - b.created_at),
   }));
 }
 
