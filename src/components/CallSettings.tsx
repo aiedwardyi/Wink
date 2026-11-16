@@ -4,7 +4,8 @@ import { ChevronDown, Pause, Play } from "lucide-react";
 
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
-import { useI18n, type Translate } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
+import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
 import { hapticTick } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -28,10 +29,6 @@ const SLIDER = cn(
   "[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-ink/15 [&::-moz-range-progress]:h-2 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-accent [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white",
 );
 const LANGUAGES = [{ id: "en", name: "English" }, { id: "ko", name: "한국어" }] as const;
-
-export function voiceLabel(t: Translate, id: LiveVoice): string {
-  return id === "Aoede" || id === "Alnilam" || id === "Erinome" ? t(`callVoice.${id}`) : id;
-}
 
 function useCallPrefs(bot: Bot) {
   const { state, dispatch } = useStore();

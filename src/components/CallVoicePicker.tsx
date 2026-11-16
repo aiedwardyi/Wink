@@ -4,9 +4,9 @@ import { Play, Square } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
+import { voiceLabel } from "@/lib/live-call/voice-label";
 import { api, useStore } from "@/state/store";
 import { LIVE_VOICE, type LiveVoice } from "../../shared/live-call";
-import { voiceLabel } from "./CallSettings";
 import { Card } from "./SettingsPrimitives";
 
 const PILL = "rounded-[max(0px,calc(var(--radius-lg)_-_3px))]";

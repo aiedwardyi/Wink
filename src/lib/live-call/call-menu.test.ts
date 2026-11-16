@@ -6,13 +6,14 @@ import type { LiveEngine, LiveEvents } from "./engine";
 class FakeEngine implements LiveEngine {
   events!: LiveEvents;
   texts: string[] = [];
+  contexts: string[] = [];
   audio = 0;
   closed = false;
   connect(_session: unknown, events: LiveEvents) { this.events = events; }
   sendAudio() { this.audio += 1; }
   audioPaused() {}
   sendText(text: string) { this.texts.push(text); }
-  sendContext() {}
+  sendContext(text: string) { this.contexts.push(text); }
   sendToolResult() {}
   close() { this.closed = true; }
 }
@@ -82,7 +83,7 @@ describe("call menu picks mid-call", () => {
     const { call, engines, posts } = await started();
     call.retune({ voice: "Alnilam" });
     await flush();
-    expect(posts.at(-1)!.body).toEqual({ locale: "en", callId: "c-0123456789ab", swap: true });
+    expect(posts.at(-1)!.body).toEqual({ locale: "en", callId: "c-0123456789ab", swap: true, call: { voice: "Alnilam" } });
     expect(engines).toHaveLength(2);
     expect(engines[0]!.closed).toBe(false);
     engines[1]!.events.ready();
@@ -106,6 +107,27 @@ describe("call menu picks mid-call", () => {
     audio.playing = false;
     audio.onIdle();
     expect(engines[0]!.closed).toBe(true);
+  });
+
+  it("opens no new session for picks the live one already has", async () => {
+    const { call, posts } = await started();
+    call.retune({ voice: "Aoede" });
+    call.retune({ voice: "Aoede", style: "normal", language: "en" });
+    await flush();
+    expect(posts.filter((post) => post.body.swap)).toHaveLength(0);
+  });
+
+  it("hands the new session what was said while it set up", async () => {
+    const { call, engines } = await started();
+    engines[0]!.events.answering();
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    engines[0]!.events.said("The build is green.");
+    engines[1]!.events.ready();
+    engines[0]!.events.turnDone();
+    expect(engines[0]!.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(engines[1]!.contexts.join(" ")).toContain("Voice: The build is green.");
   });
 
   it("keeps the live session when the new one never sets up", async () => {

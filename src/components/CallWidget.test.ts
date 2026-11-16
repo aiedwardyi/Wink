@@ -35,6 +35,8 @@ vi.mock("@/lib/live-call/audio", () => ({
     async capture() {}
     stopMic() {}
     play() {}
+    endTurn() {}
+    tune() {}
     flush() {}
     close() {}
     boop() {}
@@ -260,13 +262,14 @@ describe("call follows you", () => {
     expect(widget()!.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("Not sent: Fix the login page bug. (declined)");
   });
 
-  it("calls on a plain click and opens nothing on right-click", async () => {
+  it("calls on a plain click and opens the call settings on right-click", async () => {
     await mount(atlas);
     const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
-    expect(right.defaultPrevented).toBe(false);
-    expect(document.querySelector("[role=menu]")).toBeNull();
+    expect(right.defaultPrevented).toBe(true);
+    expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
     expect(fakes.engines).toHaveLength(0);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await call();
   });
 });

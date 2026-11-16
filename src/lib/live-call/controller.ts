@@ -316,8 +316,13 @@ export class LiveCall {
   private voiceAt = 0;
   private draining?: LiveEngine;
   // A new voice, style or language: its session opens beside the live one and takes over in the next quiet.
-  private standby?: { engine: LiveEngine; ready: boolean; app: "en" | "ko" };
+  private standby?: { engine: LiveEngine; ready: boolean; app: "en" | "ko"; picks: string };
+  // Voice, style and language: what the live session speaks with, and what was last asked for.
+  private live?: { voice: string; style: string; language: string };
   private picks?: string;
+  private prefs?: CallPrefs;
+  // Lines posted after a swap's brief was taken; the new session gets them at takeover.
+  private since?: CallLine[];
   private swaps = 0;
   private drained?: () => void;
   private holdTimer?: ReturnType<typeof setTimeout>;
@@ -438,10 +443,16 @@ export class LiveCall {
   /** Picks from the call menu: speed and level reach the next words heard; a new voice, style or language swaps the session. */
   retune(prefs: CallPrefs, volume = 1) {
     this.deps.audio.tune(prefs.speed ?? 1, STYLE_GAIN[prefs.style ?? "normal"] * volume);
-    const picks = [prefs.voice, prefs.style, prefs.language].join();
-    const changed = this.picks !== undefined && picks !== this.picks;
-    this.picks = picks;
-    if (changed) void this.swap();
+    this.prefs = prefs;
+    this.restyle();
+  }
+
+  private restyle() {
+    if (!this.live || !this.prefs) return;
+    const want = [this.prefs.voice ?? this.live.voice, this.prefs.style ?? "normal", this.prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")].join();
+    if (want === (this.picks ?? Object.values(this.live).join())) return;
+    this.picks = want;
+    void this.swap();
   }
 
   private async swap() {
@@ -449,10 +460,12 @@ export class LiveCall {
     this.standby?.engine.close();
     this.standby = undefined;
     if (!this.engine || this.ended) return;
-    const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), callId: this.callId, swap: true }).catch(() => null);
-    if (run !== this.swaps || this.ended || posted?.status !== 200) return;
+    this.since = [];
+    const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), callId: this.callId, swap: true, call: this.prefs }).catch(() => null);
+    if (run !== this.swaps) return;
+    if (this.ended || posted?.status !== 200) return this.dropStandby();
     const engine = this.deps.engine();
-    const standby = { engine, ready: false, app: posted.data.locale === "ko" ? "ko" as const : "en" as const };
+    const standby = { engine, ready: false, app: posted.data.locale === "ko" ? "ko" as const : "en" as const, picks: this.picks ?? "" };
     this.standby = standby;
     const mine = () => this.standby === standby;
     const timer = setTimeout(() => { if (mine()) this.dropStandby(); }, READY_MS);
@@ -475,6 +488,8 @@ export class LiveCall {
   private dropStandby() {
     this.standby?.engine.close();
     this.standby = undefined;
+    this.since = undefined;
+    this.picks = undefined;
   }
 
   // Never mid-word: what the old session is saying or hearing finishes there, then the next words go to the new one.
@@ -487,7 +502,13 @@ export class LiveCall {
     this.connected = true;
     this.handle = undefined;
     this.app = next.app;
+    const [voice = "", style = "", language = ""] = next.picks.split(",");
+    this.live = { voice, style, language };
+    this.picks = undefined;
     this.context.unshift(...this.riding.splice(0));
+    const since = (this.since ?? []).filter((line) => line.who !== "notice").map((line) => `${line.who === "user" ? "Person" : "Voice"}: ${line.text}`);
+    this.since = undefined;
+    if (since.length) this.context.push(`[Wink] Said on this call while your voice changed. Context only, do not read it out.\n${since.join("\n")}`);
     old?.close();
     this.release();
   }
@@ -515,6 +536,8 @@ export class LiveCall {
     this.callId = posted.data.callId;
     this.aliases = posted.data.voice ? liveVoiceNames(posted.data.voice as LiveVoice) : [];
     if (posted.data.locale === "en" || posted.data.locale === "ko") this.app = posted.data.locale;
+    if (posted.data.voice) this.live = { voice: String(posted.data.voice), style: String(posted.data.style ?? "normal"), language: this.app };
+    this.restyle();
     return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(resume && this.handle ? { handle: this.handle } : {}) };
   }
 
@@ -1166,6 +1189,7 @@ export class LiveCall {
   /** Every call row goes through here. */
   private postLines(lines: CallLine[]) {
     if (!this.callId) return;
+    this.since?.push(...lines);
     const write = this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/lines`, { callId: this.callId, lines }).catch(() => {});
     this.writes.add(write);
     void write.finally(() => this.writes.delete(write));

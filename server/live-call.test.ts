@@ -121,11 +121,23 @@ describe("call token", () => {
     expect(h.sent(2).bidiGenerateContentSetup.sessionResumption).toEqual({});
   });
 
+  it("a swap speaks with the picks it carries, before the bot's own save lands", async () => {
+    const h = harness();
+    const first = await h.post("token");
+    const swapped = await h.post("token", { callId: first.data.callId, swap: true, call: { voice: "Erinome", style: "calm" } });
+    const setup = h.sent(1).bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak softly");
+    expect(swapped.data).toMatchObject({ voice: "Erinome", style: "calm" });
+    await h.post("token", { callId: first.data.callId, call: { voice: "Puck" } });
+    expect(h.sent(2).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+  });
+
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
     expect(status).toBe(200);
-    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede", locale: "en" });
+    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede", locale: "en", style: "normal" });
     expect(raw).not.toContain(KEY);
     const [url, init] = h.fetch.mock.calls[0]!;
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");

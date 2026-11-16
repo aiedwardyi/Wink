@@ -192,6 +192,23 @@ describe("CallAudio", () => {
     audio.close();
   });
 
+  it("lets a second speed change remake what the first one queued", async () => {
+    const { audio, ctx, sources } = setup();
+    await audio.capture(() => {});
+    for (let i = 0; i < 4; i++) audio.play(new Int16Array(12_000).fill(1000));
+    ctx.currentTime = 1.2;
+    audio.tune(0.8, 1);
+    const remade = sources.length;
+    ctx.currentTime = 1.9;
+    audio.tune(1.2, 1);
+    const live = (source: (typeof sources)[number]) => source.stop.mock.calls.length === 0;
+    expect(sources.slice(1, remade).filter((source) => live(source) && source.start.mock.calls[0]![0] > 1.9)).toHaveLength(0);
+    audio.endTurn();
+    const seconds = sources.slice(1).filter(live).reduce((sum, source) => sum + (source.buffer as { duration: number }).duration, 0);
+    expect(seconds).toBeLessThan(1.5 / 0.8 - 0.3);
+    audio.close();
+  });
+
   it("plays at speed 1 exactly as it arrives", async () => {
     const { audio, buffers } = setup();
     await audio.capture(() => {});

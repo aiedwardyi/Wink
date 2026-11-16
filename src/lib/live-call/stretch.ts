@@ -53,7 +53,6 @@ export class Stretch {
   }
 
   private run(): Float32Array {
-    const out: number[] = [];
     const input = this.input;
     if (this.speed === 1) {
       const from = this.done;
@@ -61,10 +60,13 @@ export class Stretch {
       this.prev = -1;
       return input.slice(from, this.length);
     }
+    const left = this.length - this.done;
+    const out = new Float32Array(Math.ceil(left / this.speed) + left + HOP);
+    let n = 0;
     for (;;) {
       if (this.prev < 0) {
         if (this.start + WINDOW > this.length) break;
-        for (let i = 0; i < HOP; i++) out.push(input[this.start + i]!);
+        for (let i = 0; i < HOP; i++) out[n++] = input[this.start + i]!;
         for (let i = 0; i < HOP; i++) this.tail[i] = input[this.start + HOP + i]! * FADE[HOP + i]!;
         this.prev = this.start;
         this.pos = this.start + HOP * this.speed;
@@ -84,17 +86,17 @@ export class Stretch {
           best = at;
         }
       }
-      for (let i = 0; i < HOP; i++) out.push(this.tail[i]! + input[best + i]! * FADE[i]!);
+      for (let i = 0; i < HOP; i++) out[n++] = this.tail[i]! + input[best + i]! * FADE[i]!;
       for (let i = 0; i < HOP; i++) this.tail[i] = input[best + HOP + i]! * FADE[HOP + i]!;
       this.prev = best;
       this.pos += HOP * this.speed;
     }
     if (this.ended) {
       const from = this.done;
-      for (let i = from; i < this.length; i++) out.push(input[i]!);
+      for (let i = from; i < this.length; i++) out[n++] = input[i]!;
       this.start = this.length;
       this.prev = -1;
     }
-    return Float32Array.from(out);
+    return out.slice(0, n);
   }
 }

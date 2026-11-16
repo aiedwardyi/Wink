@@ -5,6 +5,7 @@ import { Stretch } from "./stretch";
 
 const VOICE_RATE = 24_000;
 const FADE_SAMPLES = 0.3 * VOICE_RATE;
+const PIECE = VOICE_RATE / 5;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
@@ -194,7 +195,9 @@ export class CallAudio {
     }
     if (first) this.nextAt = first.at;
     const from = first?.from ?? this.stretch.done;
-    this.schedule(this.stretch.restart(from, speed), from);
+    // In pieces, so a later change finds most of it still unstarted.
+    const data = this.stretch.restart(from, speed);
+    for (let at = 0; at < data.length; at += PIECE) this.schedule(data.subarray(at, at + PIECE), from + Math.round(at * speed));
     if (first && !this.sources.size) this.onIdle();
   }
 

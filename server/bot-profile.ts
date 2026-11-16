@@ -6,6 +6,15 @@ import { CALL_SPEED, CALL_STYLES, LIVE_VOICES } from "../shared/live-call.ts";
 
 import type { BotRecord } from "./store.ts";
 
+export const callPrefsSchema = z
+  .object({
+    voice: z.enum(LIVE_VOICES).optional(),
+    speed: z.number().min(CALL_SPEED.min).max(CALL_SPEED.max).optional(),
+    style: z.enum(CALL_STYLES).optional(),
+    language: z.enum(["en", "ko"]).optional(),
+  }, { error: "call must be an object" })
+  .strict();
+
 const profilePatchSchema = z.object({
   name: z
     .string({ error: "name must be a string" })
@@ -29,15 +38,7 @@ const profilePatchSchema = z.object({
     .max(BOT_PROFILE_LIMITS.voice, { error: "voice must be at most 200 characters" })
     .optional(),
   speakReplies: z.boolean({ error: "speakReplies must be true or false" }).optional(),
-  call: z
-    .object({
-      voice: z.enum(LIVE_VOICES).optional(),
-      speed: z.number().min(CALL_SPEED.min).max(CALL_SPEED.max).optional(),
-      style: z.enum(CALL_STYLES).optional(),
-      language: z.enum(["en", "ko"]).optional(),
-    }, { error: "call must be an object" })
-    .strict()
-    .optional(),
+  call: callPrefsSchema.optional(),
 });
 
 export type BotProfilePatchInput = z.input<typeof profilePatchSchema>;

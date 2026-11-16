@@ -9,6 +9,7 @@ import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
 import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, STYLE_LINES, type CallLine, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
+import { callPrefsSchema } from "./bot-profile.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
@@ -223,10 +224,11 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; style: CallStyle; at: number }>();
 
   // A pick changed mid-call opens a new session beside the live one: the call so far rides its brief.
-  const briefFor = async (bot: BotRecord, callId: string, locale: unknown, swap: boolean) => {
-    const app = bot.call?.language ?? (locale === "ko" ? "ko" : "en");
-    const voice = bot.call?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE;
-    const style = bot.call?.style ?? "normal";
+  // A swap carries the picks themselves: the bot's own save may still be in flight.
+  const briefFor = async (bot: BotRecord, callId: string, locale: unknown, swap: boolean, picks = bot.call) => {
+    const app = picks?.language ?? (locale === "ko" ? "ko" : "en");
+    const voice = picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE;
+    const style = picks?.style ?? "normal";
     const cached = briefs.get(callId);
     if (!swap && cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
     const messages = store.activePath(bot.threadId);
@@ -261,7 +263,9 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const { brief, locale, voice, style } = await briefFor(bot, callId, body.locale, body.swap === true && callId === body.callId);
+    const swap = body.swap === true && callId === body.callId;
+    const picks = swap ? callPrefsSchema.safeParse(body.call).data ?? bot.call : bot.call;
+    const { brief, locale, voice, style } = await briefFor(bot, callId, body.locale, swap, picks);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -286,7 +290,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
     deps.answered?.(bot.id);
-    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice, locale });
+    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice, locale, style });
   };
 
   const lines = async (req: IncomingMessage, res: ServerResponse, bot: BotRecord) => {
