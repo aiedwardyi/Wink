@@ -1370,7 +1370,7 @@ describe("agents-proxy catalog", () => {
 
   it("replaces only the five ask-driven definitions with the bounded pair", async () => {
     const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
-    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "react", "ask_user", "show_image", "list_routines", "propose_routine", "propose_routine_action", "wake_me", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "react", "ask_user", "show_image", "list_routines", "propose_routine", "propose_routine_action", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
     expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
   });
 
@@ -1479,10 +1479,10 @@ describe("agents-proxy verify_site", () => {
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 25, true],
     [{ OMB_TEAM_REPORTS: "1" }, 25, false],
     [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 26, true],
-    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, true],
-    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 19, true],
+    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
+    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
     const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);
