@@ -82,7 +82,9 @@ export function showSelectHandles(row: Element, content: Element, copyLabel: str
     const below = last.bottom + GRIP + EDGE;
     const top = above >= ceiling ? Math.min(above, floor - height) : below + height <= floor ? Math.max(below, ceiling) : ceiling;
     const middle = (Math.min(...rects.map((rect) => rect.left)) + Math.max(...rects.map((rect) => rect.right))) / 2;
-    const left = Math.max(EDGE, Math.min(middle - width / 2, window.innerWidth - width - EDGE));
+    const minLeft = (view?.offsetLeft ?? 0) + EDGE;
+    const maxLeft = (view ? view.offsetLeft + view.width : window.innerWidth) - width - EDGE;
+    const left = Math.max(minLeft, Math.min(middle - width / 2, maxLeft));
     copy.style.transform = `translate(${left}px, ${top}px)`;
   };
 

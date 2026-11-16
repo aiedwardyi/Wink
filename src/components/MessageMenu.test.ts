@@ -11,6 +11,7 @@ import { EXTENDED_REACTIONS } from "../../shared/reactions";
 
 import { ChatView } from "./ChatView";
 import { GroupView } from "./GroupView";
+import { ReactionChips } from "./Reactions";
 import {
   QUICK_REACTIONS,
   contextClickKind,
@@ -643,6 +644,23 @@ describe("message menu in rooms", () => {
     expect(writeText).toHaveBeenCalledWith("room hello");
   });
 
+  it("keeps read-only reaction chips out of reach of clicks and keys", async () => {
+    await mountRoom(members, room([]));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const message = botMsg("b1", "room hello", { reactions: [{ emoji: "👍", by: "user" }] });
+    await act(async () => root.render(createElement(I18nProvider, null,
+      createElement(StoreProvider, null, createElement(ReactionChips, { threadId: "thread-g", message, corner: "left", readOnly: true })),
+    )));
+    const chip = host.querySelector<HTMLButtonElement>("[data-message-reactions] button")!;
+    expect(chip.disabled).toBe(true);
+    await act(async () => { chip.click(); });
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/reactions"))).toBe(false);
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
   it("reacts to a room message", async () => {
     const host = await mountRoom(members, room([roomBot("b1", "room hello")]));
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
@@ -768,6 +786,17 @@ describe("message menu on touch", () => {
     const chat = await mountChat(bot([botToBot("c2", "chat handoff")]));
     await hold(peerBody(chat, "c2"));
     expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Copy", "Select text"]);
+  });
+
+  it("selects only a long bot-to-bot message's text, not its fold button", async () => {
+    const text = "handoff words ".repeat(60).trim();
+    const host = await mountRoom(members, room([botToBot("c1", text, { botId: "m1", name: "Ada", color: "blue" })]));
+    stubTouchScreen();
+    stubCaret(() => null);
+    expect(peerBody(host, "c1").querySelector("button")?.textContent).toBe("Show full message");
+    await hold(peerBody(host, "c1"));
+    await selectText();
+    expect(window.getSelection()?.toString()).toBe(text);
   });
 
   it("gives every message row with text the hold menu", async () => {

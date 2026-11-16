@@ -81,6 +81,18 @@ describe("select handles Copy", () => {
     expect(show({ rowTop: 40, contentBottom: 1400, lines: [{ x: 100, y: 70, width: 80 }, { x: 12, y: 820, width: 60 }] }).top).toBe(56 + 8);
   });
 
+  it("stays inside a zoomed, panned visual viewport", () => {
+    const view = Object.assign(new EventTarget(), { offsetLeft: 196, offsetTop: 0, width: 196, height: 844 });
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: view });
+    try {
+      expect(show({ rowTop: 120, contentBottom: 1400, lines: [{ x: 60, y: 500, width: 80 }] }).left).toBe(196 + 8);
+      handles?.remove();
+      expect(show({ rowTop: 120, contentBottom: 1400, lines: [{ x: 372, y: 500, width: 20 }] }).left).toBe(392 - COPY.width - 8);
+    } finally {
+      delete (window as { visualViewport?: unknown }).visualViewport;
+    }
+  });
+
   it("clamps to the screen edges", () => {
     expect(show({ rowTop: 120, contentBottom: 1400, lines: [{ x: 0, y: 500, width: 20 }] }).left).toBe(8);
     handles?.remove();

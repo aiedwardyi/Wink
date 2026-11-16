@@ -103,7 +103,7 @@ export function startSelectMode(row: HTMLElement, held: { x: number; y: number }
   endSelectMode();
   // the row is unselectable until now, and caret hit-testing skips unselectable text
   row.setAttribute("data-select-mode", "");
-  const content = row.querySelector("[data-orbit-message-content], [data-team-room-content], [data-peer-body]") ?? row;
+  const content = row.querySelector("[data-orbit-message-content], [data-team-room-content], [data-peer-text]") ?? row;
   const box = row.getBoundingClientRect();
   const word = wordAt(content, box.left + held.x, box.top + held.y);
   const sel = window.getSelection();

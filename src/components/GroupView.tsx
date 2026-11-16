@@ -160,7 +160,7 @@ export function RoomToolChip({
       <div {...menuProps} tabIndex={-1}>
         {chip}
         <PeerMessageBody text={message.text} />
-        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className={cn("static mt-1 ml-3 max-w-full translate-y-0", !onMessageMenu && "pointer-events-none")} />}
+        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" readOnly={!onMessageMenu} />}
       </div>
     );
   }
@@ -560,7 +560,8 @@ export const Transcript = memo(function Transcript({
                   members={members}
                   names={people}
                   corner={mine ? "left" : "right"}
-                  className={cn("bottom-3.5", readOnly && "pointer-events-none")}
+                  className="bottom-3.5"
+                  readOnly={readOnly}
                 />
               </div>
               )}</RoomLineTranslation>
