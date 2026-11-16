@@ -200,7 +200,7 @@ import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { CommsCallers } from "./comms-caller.ts";
+import { botRoute, CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -658,8 +658,11 @@ googleAccount.onIdToken(googlePhotoChanged);
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
-function authorizedComms(header: string | string[] | undefined): boolean {
-  if (commsCallers.resolve(header)) return true;
+function authorizedComms(header: string | string[] | undefined, path: string): boolean {
+  const caller = commsCallers.resolve(header);
+  return caller ? botRoute(path, caller.botId) : bootToken(header);
+}
+function bootToken(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -7785,7 +7788,7 @@ const verifySite = createVerifySite({
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   logDecision: (row) => appendDecision(DATA_DIR, row),
   deviceId: () => profileSyncSettings.deviceId,
-  appToken: authorizedComms,
+  appToken: bootToken,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
   toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
   docRun: runId => verifyDoc.run(runId),
@@ -7936,7 +7939,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 403, { error: "forbidden: cross-origin request" });
       }
     }
-    const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
+    const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization, path), REMOTE_KEY);
     if (!relay && roomDoorPath(path)) return json(res, 404, { error: "not found" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
