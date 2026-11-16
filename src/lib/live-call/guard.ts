@@ -129,7 +129,8 @@ export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
 }
 
-const READ_BACK = /\bwhat (?:did )?you (?:just |had )?(?:say|said|write|wrote|send|sent)\b|\bread (?:me |out |back )?(?:it|that|this|the|your)(?: last| latest| newest)? (?:message|reply|answer|text)\b|\bread (?:it|that) (?:out|back|to me)\b|\b(?:in|from) (?:the|that|your) (?:last |latest |newest )?(?:message|reply)\b|\bwhat (?:does|did|was) (?:the|that|your) (?:last |latest )?(?:message|reply)\b|(?:메시지|메세지|답장|답변)[^.!?]*(?:읽어|뭐라고|뭐였|뭐야|말해)|(?:방금|아까)\s*(?:뭐라고|뭐라)\s*(?:했|그랬|썼)/i;
+// Only a request to hear it: "fix the bug in the message" or "do what you said" is work.
+const READ_BACK = /\b(?:tell|remind) me what you (?:just |had )?(?:said|wrote|sent)\b|(?:^|[.!?]\s+)(?:(?:sorry|so|wait|and|um|uh)[,\s]+)*what (?:did|was it) you (?:just )?(?:say|write|send)\b|\bread (?:me |out |back )?(?:it|that|this|the|your)(?: last| latest| newest)? (?:message|reply|answer|text)\b|\bread (?:it|that) (?:out|back|to me)\b|(?:^|[.!?]\s+)(?:(?:earlier|before|just now)[,\s]+)*(?:like )?(?:in|from) (?:the|that|your) (?:last |latest |newest )?(?:message|reply)[\s.!?]*$|\bwhat (?:does|did|was) (?:the|that|your) (?:last |latest )?(?:message|reply)\b|(?:메시지|메세지|답장|답변)[^.!?]*(?:읽어\s*(?:줘|줄래|봐|주세요)|뭐라고\s*(?:했|썼|그랬)|뭐였)|(?:방금|아까)\s*(?:뭐라고|뭐라)\s*(?:했|그랬|썼)/i;
 
 /** The person asking to hear what the bot wrote in the chat, which only the message itself answers. */
 export function readsBack(heard: string): boolean {

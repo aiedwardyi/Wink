@@ -1190,7 +1190,7 @@ export class LiveCall {
     }, () => text).then((spoken) => {
       if (this.ended || this.req !== req) return;
       const whole = spoken.length <= READ_CHARS ? spoken : `${spoken.slice(0, READ_CHARS).replace(/\s+\S*$/, "")}...`;
-      this.held.unshift({ text: `[Wink] They asked to hear ${this.deps.botName}'s newest chat message. Read it out in full, word for word, from the start, in its own language: no summary, no intro, nothing after.\n${whole}`, fix: true });
+      this.held.unshift({ text: `[Wink] They asked to hear ${this.deps.botName}'s newest chat message. Read it out in full, word for word, from the start, in its own language: no summary, no intro, nothing after.\n${whole}`, fix: true, valid: () => this.req === req });
       this.release();
     });
     return true;

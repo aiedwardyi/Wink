@@ -2540,6 +2540,22 @@ describe("VOICE-READBACK: what it said in the chat", () => {
     expect(audio.played).toBe(played + 1);
   });
 
+  it("a read-back he talks past before it goes out is never sent", async () => {
+    vi.useFakeTimers();
+    let ready!: (posted: Posted) => void;
+    const { call, engine } = await started({ "/api/tts/prepare": () => new Promise<Posted>((resolve) => { ready = resolve; }) });
+    const e = engine();
+    call.observe({ busy: false, messages: [botRow("r", MESSAGE)] });
+    e.events.heard(ASK);
+    e.events.answering();
+    ready({ status: 200, data: { utterances: SPOKEN } });
+    await flush();
+    e.events.heard("Never mind, what time is it?");
+    e.events.turnDone();
+    await gap();
+    expect(readLines(e)).toEqual([]);
+  });
+
   it("with no bot message in the chat, the voice answers as usual", async () => {
     vi.useFakeTimers();
     const audio = { ...fakeAudio(), played: 0 };
@@ -2556,6 +2572,8 @@ describe("VOICE-READBACK: what it said in the chat", () => {
     [ASK, true], ["Tell me what you just said.", true], ["Earlier, like in the message.", true], ["Read me the last message.", true], ["Read it out.", true], ["What did the message say?", true],
     ["아까 메시지 뭐라고 했어?", true], ["방금 뭐라고 했어?", true],
     ["What did you find?", false], ["Read the logs.", false], ["Did it pass?", false], ["Send the message to Peter.", false], ["다시 말해 줘.", false],
+    ["Fix the bug described in the message.", false], ["Remove the API key from your last reply.", false], ["Is the error shown in the message?", false], ["Copy the code from the reply.", false],
+    ["Save the data in the reply we got.", false], ["Do what you said.", false], ["Did you do what you said?", false], ["피터한테 메시지 보내서 말해 줘.", false],
   ])("readsBack(%s) is %s", (line, want) => {
     expect(readsBack(line)).toBe(want);
   });
