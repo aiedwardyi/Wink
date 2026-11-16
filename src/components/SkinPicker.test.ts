@@ -36,7 +36,7 @@ const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
 const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Dim Sand", "Wink Day", "Notebook"];
-const darkCount = 17;
+const lightStart = 17;
 const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", "Samurai Ink": "사무라이 잉크", "Night Rain": "나이트 레인", Warp: "워프", Circuit: "서킷", Lagoon: "라군", Snow: "스노우" };
 const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Lagoon", "Snow"];
 const animated = ["circuit", "lagoon", "lagoon-night", "neon-grid", "night-rain", "samurai-ink", "snow", "snow-night", "warp"];
@@ -142,7 +142,7 @@ describe("featured themes", () => {
     expect(servo.getAttribute("aria-pressed")).toBe("true");
     await act(async () => more.click());
     await folded();
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Servo Gray", ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), "Servo Gray", ...featured.slice(lightStart)]);
   });
 
   it("keeps Precision Dimmed under More themes and gives an active extra theme the current-theme slot", async () => {
@@ -150,10 +150,10 @@ describe("featured themes", () => {
     expect(names()).not.toContain("Precision Dimmed");
     await act(async () => root.unmount());
     await mount("precision-dimmed");
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Precision Dimmed", ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), "Precision Dimmed", ...featured.slice(lightStart)]);
     await act(async () => root.unmount());
     await mount("kanagawa");
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Kanagawa", ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), "Kanagawa", ...featured.slice(lightStart)]);
     await act(async () => applySkin("precision"));
     expect(names()).not.toContain("Kanagawa");
     expect(names()).not.toContain("Wink");
@@ -163,7 +163,7 @@ describe("featured themes", () => {
     await mount(id);
     expect(document.documentElement.dataset.skin).toBe(id);
     const name = SKINS.find((skin) => skin.id === id)!.name;
-    expect(names()).toEqual([...featured.slice(0, darkCount), name, ...featured.slice(darkCount)]);
+    expect(names()).toEqual([...featured.slice(0, lightStart), name, ...featured.slice(lightStart)]);
     expect(document.querySelector('[aria-pressed="true"]')?.querySelector(".font-medium")?.textContent).toBe(name);
   });
 
