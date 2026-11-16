@@ -172,9 +172,9 @@ function under(root: string, real: string): string | null {
 export function sharableLocalFile(path: string, roots: readonly string[]): { path: string; size: number } {
   const file = resolveLocalFile(path, [ATTACHMENTS_DIR, ...roots]);
   if (under(ATTACHMENTS_DIR, file.path) !== null) return file;
-  const open = under(DATA_DIR, file.path) === null && roots.some((root) =>
+  const allowed = under(DATA_DIR, file.path) === null && roots.some((root) =>
     under(root, file.path)?.split(/[\\/]/).every((part) => !part.startsWith(".") && part.toLowerCase() !== "appdata"));
-  if (!open) throw Object.assign(new Error(`${path}: private files can't be shared`), { status: 403 });
+  if (!allowed) throw Object.assign(new Error(`${path}: private files can't be shared`), { status: 403 });
   return file;
 }
 
