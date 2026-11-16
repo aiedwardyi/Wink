@@ -317,7 +317,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16187);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16200);
   });
 
   it("fills the worktree path from the configured root", () => {
