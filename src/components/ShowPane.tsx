@@ -56,7 +56,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     ...(tab === "show" || again ? ["show" as const] : []),
     ...(source ? ["media" as const] : []),
     ...(checkable ? ["check" as const] : []),
-    ...(source ? ["map" as const] : []),
+    ...(source && botId ? ["map" as const] : []),
   ];
   const choose = (next: PaneSwipeTarget) => {
     if (next.kind) ref.current?.querySelector<HTMLButtonElement>(`[data-pane-current] [data-media-kind="${next.kind}"]`)?.click();
