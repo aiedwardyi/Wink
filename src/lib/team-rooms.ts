@@ -215,9 +215,13 @@ export const typedRoomName = (value: string) => [...value.normalize("NFC").repla
 export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
   error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
-/** `codeChanged` when Remove retired the room code instead of barring a PC. */
-export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true; codeChanged?: true }> {
+/** Remove always retires the room code; `barred` when their PC is listed under Let back in. */
+export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true; codeChanged?: true; barred?: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });
+}
+
+export function setCanWork(roomId: string, personId: string, on: boolean): Promise<{ ok: true }> {
+  return request(`${hostRoomBase(roomId)}/people/${personId}/works`, { method: "POST", body: JSON.stringify({ on }) });
 }
 
 export function removeTeamBot(roomId: string, botId: string): Promise<{ ok: true }> {

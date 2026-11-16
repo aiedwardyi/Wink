@@ -3,12 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, setCanWork, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
 import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
+import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomCode } from "./RoomCode";
 import { RoomOwnName } from "./RoomOwnName";
@@ -77,11 +77,27 @@ export function HostPeople({ group }: { group: Group }) {
     }
     if (!alive.current) return;
     if (result.codeChanged) setCodeChanged(true);
-    // A retired code bars no one, so only a kept code lists them under Let back in.
-    const barred = [...removed.filter((person) => person.id !== gone.id), ...(result.codeChanged ? [] : [gone])];
+    // Only a PC the server barred is listed under Let back in.
+    const barred = [...removed.filter((person) => person.id !== gone.id), ...(result.barred ? [gone] : [])];
     if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, people: group.room.people.filter((person) => person.id !== gone.id), removed: barred } } });
     setCode(null);
     void invite(false);
+  };
+
+  const patchPeople = (id: string, works: boolean) => {
+    if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, people: group.room.people.map((person) => (person.id === id ? { ...person, works } : person)) } } });
+  };
+
+  const toggleWorks = async (person: { id: string; works?: boolean }) => {
+    if (!group.hosted) return;
+    const on = !person.works;
+    patchPeople(person.id, on);
+    try {
+      await setCanWork(group.hosted.roomId, person.id, on);
+    } catch {
+      patchPeople(person.id, !on);
+      setProblem("errors.request");
+    }
   };
 
   const letBack = async (personId: string) => {
@@ -99,7 +115,16 @@ export function HostPeople({ group }: { group: Group }) {
       <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
         <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} />
         {people.map((person) => (
-          <PersonRow key={person.id} name={person.name}>
+          <PersonRow
+            key={person.id}
+            name={person.name}
+            below={
+              <div className="mt-1 flex items-center justify-between gap-3 pl-[34px]">
+                <span className="min-w-0 text-[13px] text-ink-secondary">{t("teamRoom.canWork")}</span>
+                <DetailsSwitch on={Boolean(person.works)} label={t("teamRoom.canWorkNamed", { name: person.name })} onToggle={() => void toggleWorks(person)} />
+              </div>
+            }
+          >
             <button
               type="button"
               onClick={() => setRemoving(person)}
@@ -172,12 +197,19 @@ export function JoinedPeople({ room }: { room: JoinedView }) {
   );
 }
 
-function PersonRow({ name, gone = false, children }: { name: string; gone?: boolean; children?: React.ReactNode }) {
-  return (
-    <li data-room-removed={gone || undefined} className={`${DETAILS_ROW} flex items-center gap-2.5 py-2`}>
+function PersonRow({ name, gone = false, below, children }: { name: string; gone?: boolean; below?: React.ReactNode; children?: React.ReactNode }) {
+  const row = (
+    <>
       <InitialsAvatar initials={profileInitials({ name })} size={24} tone="bg-control" />
       <span className={`min-w-0 flex-1 truncate text-[14px] ${gone ? "text-ink-secondary" : "text-ink"}`}>{name}</span>
       {children}
+    </>
+  );
+  if (!below) return <li data-room-removed={gone || undefined} className={`${DETAILS_ROW} flex items-center gap-2.5 py-2`}>{row}</li>;
+  return (
+    <li className={`${DETAILS_ROW} py-2`}>
+      <div className="flex items-center gap-2.5">{row}</div>
+      {below}
     </li>
   );
 }
