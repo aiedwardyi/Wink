@@ -3,17 +3,17 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { get, keepFilledRows, percent, readModels, readSnapshot, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
+import { get, keepFilledRows, readModels, readSnapshot, saveRaw, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
 
-export const API_URL = "https://artificialanalysis.ai/api/v2/data/llms/models";
+export const API_URL = "https://artificialanalysis.ai/api/v2/language/models/free";
 export const INDEX_PAGE = "https://artificialanalysis.ai/models";
 export const BENCHMARKS = {
   "aa-intelligence-index": { field: "artificial_analysis_intelligence_index", checksPublishedVersion: true },
-  "aa-terminal-bench": { field: "terminalbench_v4_0", version: "4.0", fraction: true },
 };
 export const MANUAL = [
   { name: "aa-gdpval", why: "AA's LLM API has no GDPval field" },
   { name: "aa-frontiercode", why: "AA's LLM API has no FrontierCode field" },
+  { name: "aa-terminal-bench", why: "AA's free LLM API has no Terminal-Bench field" },
 ];
 
 export function rawFileArg(args) {
@@ -29,7 +29,7 @@ export function parseResponse(text) {
   } catch {
     throw new Unverifiable("AA response is not JSON");
   }
-  if (data?.status !== 200 || !Array.isArray(data.data) || data.data.length === 0) throw new Unverifiable("AA response shape changed");
+  if (!Array.isArray(data?.data) || data.data.length === 0) throw new Unverifiable("AA response shape changed");
   for (const row of data.data) {
     if (typeof row.id !== "string" || typeof row.slug !== "string" || typeof row.name !== "string" || !row.evaluations || typeof row.evaluations !== "object") {
       throw new Unverifiable("AA model shape changed");
@@ -56,10 +56,9 @@ export function buildSnapshot({ rows, models, retrievedAt, previous, indexVersio
   if (benchmark.checksPublishedVersion && indexVersion && indexVersion !== previous.version) {
     throw new Unverifiable(`AA Intelligence Index is now v${indexVersion}, snapshot is ${previous.version}; move the snapshot to the new version before refreshing`);
   }
-  if (benchmark.version && previous.version !== benchmark.version) throw new Unverifiable(`AA API supports Terminal-Bench 2.1, 4.0 and hard; snapshot version does not match ${benchmark.version}`);
   if (!rows.some((row) => Object.hasOwn(row.evaluations, benchmark.field))) throw new Unverifiable(`AA API has no ${benchmark.field} field`);
   // JSON drops a trailing zero (56.0 parses as 56), so precision comes from the whole response; past 10 places is float noise
-  const precision = Math.min(10, Math.max(0, ...rows.map((row) => row.evaluations[benchmark.field]).filter(Number.isFinite).map((value) => places(benchmark.fraction ? percent(value) : value))));
+  const precision = Math.min(10, Math.max(0, ...rows.map((row) => row.evaluations[benchmark.field]).filter(Number.isFinite).map(places)));
   const ids = sourceIds(models, "aa");
   const out = [];
   const unmapped = [];
@@ -74,24 +73,26 @@ export function buildSnapshot({ rows, models, retrievedAt, previous, indexVersio
       unmapped.push(row.slug);
       continue;
     }
-    const value = row.evaluations[benchmark.field];
-    if (value === null || value === undefined) continue;
-    if (!Number.isFinite(value) || value < 0 || (benchmark.fraction && value > 1)) throw new Unverifiable("AA score is not in the expected scale");
+    const score = row.evaluations[benchmark.field];
+    if (score === null || score === undefined) continue;
+    if (!Number.isFinite(score) || score < 0) throw new Unverifiable("AA score is not in the expected scale");
     const named = row.name.match(/\((Low|Medium|High|Xhigh|Max)(?:,|\))/i)?.[1].toLowerCase();
     if (named && tier && named !== tier) throw new Unverifiable("AA effort disagrees between name and slug");
     const effort = named ?? tier ?? "max";
     const key = `${model} ${effort}`;
     if (landed.has(key)) throw new Unverifiable(`repeated ${key}`);
     landed.add(key);
-    const score = benchmark.fraction ? percent(value) : value;
     const prev = old.get(key);
     const carried = {};
+    let value = score;
     if (prev && Number(prev.value.toFixed(precision)) === Number(score.toFixed(precision))) {
+      // the free API rounds; a model page value it agrees with keeps its full precision
+      value = prev.value;
       for (const field of ["cost_per_task", "cost_benchmark", "cost_source", "interval", "harness"]) {
         if (Object.hasOwn(prev, field)) carried[field] = prev[field];
       }
     } else needsCost.push(key);
-    out.push({ model, effort, value: score, ...carried, source_url: `https://artificialanalysis.ai/models/${row.slug}`, retrieved_at: retrievedAt, kind: "independent" });
+    out.push({ model, effort, value, ...carried, source_url: `https://artificialanalysis.ai/models/${row.slug}`, retrieved_at: retrievedAt, kind: "independent" });
   }
   if (out.length === 0) throw new Unverifiable(`no AA ${benchmark.field} score maps to a Wink model`);
   return { snapshot: keepFilledRows(previous, { ...previous, updated: null, rows: sortRows(out, models) }, models), unmapped: unmapped.sort(), needsCost };
@@ -115,9 +116,16 @@ export async function loadResponse({ rawFile, apiKey = process.env.AA_API_KEY, k
   }
   if (key) {
     try {
-      const response = await fetch(API_URL, { headers: { "x-api-key": key }, signal: AbortSignal.timeout(60_000) });
-      if (response.status !== 200) throw new Error();
-      const rows = parseResponse(await response.text());
+      const rows = [];
+      for (let page = 1, more = true; more; page++) {
+        if (page > 50) throw new Error();
+        const response = await fetch(`${API_URL}?page=${page}`, { headers: { "x-api-key": key }, signal: AbortSignal.timeout(60_000) });
+        if (response.status !== 200) throw new Error();
+        const text = await response.text();
+        rows.push(...parseResponse(text));
+        more = JSON.parse(text).pagination?.has_more === true;
+      }
+      saveRaw("aa-models", JSON.stringify({ data: rows }), "json");
       return { rows, retrievedAt: new Date().toISOString(), indexVersion: publishedIndexVersion((await get(INDEX_PAGE)).text) };
     } catch (error) {
       if (error instanceof Unverifiable) throw error;

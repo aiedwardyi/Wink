@@ -36,7 +36,7 @@ describe("room sends and chat sync", () => {
     }]]]), { profileDeviceId: "local", writerId: OWN, memoryDeviceId: "a".repeat(12) });
     const startGroupTurn = vi.fn(() => ({ id: "message-1" }));
     const routes = createGroupRoutes({
-      store, startGroupTurn, resolveReplyTarget: () => undefined, syncSettled: (threadId: string) => syncHold.settle(threadId),
+      store, startGroupTurn, groupIsWorking: () => false, resolveReplyTarget: () => undefined, syncSettled: (threadId: string) => syncHold.settle(threadId),
       sendSequencer: { run: (_key: unknown, _print: unknown, work: () => unknown) => work() },
     } as unknown as Parameters<typeof createGroupRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };
@@ -46,7 +46,7 @@ describe("room sends and chat sync", () => {
     syncHold.release(group.threadId);
     await vi.advanceTimersByTimeAsync(200);
     await sent;
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "hi", undefined, undefined);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "hi", undefined, undefined, undefined, undefined, []);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
   });
 
@@ -55,7 +55,7 @@ describe("room sends and chat sync", () => {
     const group = store.createGroup("Plans", []);
     const startGroupTurn = vi.fn(() => ({ id: "message-1" }));
     const routes = createGroupRoutes({
-      store, startGroupTurn, resolveReplyTarget: () => undefined, syncSettled: (threadId: string) => syncHold.settle(threadId),
+      store, startGroupTurn, groupIsWorking: () => false, resolveReplyTarget: () => undefined, syncSettled: (threadId: string) => syncHold.settle(threadId),
       sendSequencer: { run: (_key: unknown, _print: unknown, work: () => unknown) => work() },
     } as unknown as Parameters<typeof createGroupRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };

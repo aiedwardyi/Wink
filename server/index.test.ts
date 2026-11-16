@@ -426,17 +426,20 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("refuses to empty a room's roster", async () => {
+  it("takes a room's last bot out and still takes a message", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const room = (await api("POST", "/api/groups", { name: "Never empty", memberIds: [bot.id] })).body.group;
+    const room = (await api("POST", "/api/groups", { name: "Empty later", memberIds: [bot.id] })).body.group;
     try {
-      for (const memberIds of [[], ["no-such-bot"]]) {
-        const attempted = await api("PATCH", `/api/groups/${room.id}`, { memberIds });
-        expect(attempted.status).toBe(400);
-        expect(attempted.body.error).toMatch(/at least one bot|unknown room member/i);
-      }
-      const state = (await api("GET", "/api/bots")).body;
-      expect(state.groups.find((group: { id: string }) => group.id === room.id).memberIds).toEqual([bot.id]);
+      const unknown = await api("PATCH", `/api/groups/${room.id}`, { memberIds: ["no-such-bot"] });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.error).toMatch(/unknown room member/i);
+      expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: [] })).status).toBe(200);
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "anyone here?" })).status).toBe(202);
+      const state = (await api("GET", "/api/bots?messages=20")).body;
+      const empty = state.groups.find((group: { id: string }) => group.id === room.id);
+      expect(empty.memberIds).toEqual([]);
+      expect(empty.messages.at(-2)).toMatchObject({ role: "user", text: "anyone here?" });
+      expect(empty.messages.at(-1)).toMatchObject({ kind: "activity", tool: { ok: false } });
     } finally {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${bot.id}`);
@@ -879,6 +882,22 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("reads the Usage page's accounts through the usage_status route", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const headers = await agentsHeaders(api, fakeClaudeDump, bot.id, bot.threadId);
+      expect((await fetch(`${BASE}/api/internal/usage?self=nobody`, { headers })).status).toBe(403);
+      const res = await fetch(`${BASE}/api/internal/usage?self=${encodeURIComponent(bot.id)}`, { headers });
+      expect(res.status).toBe(200);
+      const { text } = z.object({ text: z.string() }).parse(await res.json());
+      const board = z.object({ engines: z.array(z.object({ accounts: z.array(z.object({ name: z.string() })) })).min(1) }).parse((await api("GET", "/api/usage/board")).body);
+      expect(text).toContain("Percent is what is LEFT.");
+      for (const account of board.engines.flatMap((engine) => engine.accounts)) expect(text).toContain(`- ${account.name}`);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("lets a bot with agents tools create a two-bot channel that mirrors UI group constraints", async () => {
     const chief = (await api("POST", "/api/bots")).body.bot;
     const peer = (await api("POST", "/api/bots")).body.bot;
@@ -1267,6 +1286,27 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("tells the sender a line nobody was asked to answer starts no turn", async () => {
+    const alpha = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Mention room", memberIds: [alpha.id] })).body.group;
+    const working = async () =>
+      (await api("GET", "/api/bots?messages=0")).body.groups.find((candidate: { id: string }) => candidate.id === room.id).working;
+    try {
+      await api("PATCH", `/api/bots/${alpha.id}`, { name: "Alpha", modelSelection: { instanceId: "ghost", model: "ghost-1" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "go" })).body.idle).toBe(false);
+      await expect.poll(working).toBe(false);
+
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "hi" })).body).toMatchObject({ ok: true, idle: true });
+      expect(await working()).toBe(false);
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@Alpha hi" })).body.idle).toBe(false);
+      await expect.poll(working).toBe(false);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${alpha.id}`);
+    }
+  });
+
   it("creates, patches, and deletes a bot", async () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);
@@ -1279,13 +1319,12 @@ describe("harness HTTP API", () => {
     const missing = await api("PATCH", "/api/bots/does-not-exist", { name: "x" });
     expect(missing.status).toBe(404);
 
-    // persona fields are bounded at the write boundary — they reach system
-    // prompts (Chief roster, room rosters), so an unbounded PATCH is a
-    // token-burn and prompt-injection surface
+    // names and titles are bounded at the write boundary; instructions are the
+    // user's own and other bots' rosters clip them
     expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "N".repeat(101) })).status).toBe(400);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "   " })).status).toBe(400);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { title: "T".repeat(201) })).status).toBe(400);
-    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: "D".repeat(4001) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: "D".repeat(4001) })).status).toBe(200);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { description: 7 })).status).toBe(400);
 
     // the per-bot composio gate is a boolean, and it round-trips
@@ -3357,7 +3396,10 @@ describe("harness HTTP API", () => {
       const immediate = (await api("GET", "/api/bots?messages=0")).body;
       expect(immediate.groups.find((group: { id: string }) => group.id === room.id)?.working).toBe(true);
       expect((await api("POST", `/api/groups/${room.id}/tasks`, { title: "Too soon" })).status).toBe(409);
-      expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: [first.id] })).status).toBe(409);
+      expect((await api("PATCH", `/api/groups/${room.id}`, { bulletin: "Too soon" })).status).toBe(409);
+      const picked = await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect(picked.status).toBe(200);
+      expect(picked.body.group.defaultResponder).toEqual({ kind: "mentions" });
 
       const interrupted = await api("POST", `/api/groups/${room.id}/interrupt`, {
         threadId: room.threadId,
@@ -3773,6 +3815,19 @@ describe("harness HTTP API", () => {
       expect(duplicate.body.alreadySettled).toBe(true);
       expect((await api("GET", "/api/routines")).body.routines
         .filter((routine: { botId: string }) => routine.botId === bot.id)).toHaveLength(1);
+      for (let i = 1; i <= 9; i++) {
+        const more = await fetch(`${BASE}/api/internal/routine-requests`, {
+          method: "POST",
+          headers: internalHeaders,
+          body: JSON.stringify({
+            fromBotId: bot.id,
+            fromThreadId: bot.threadId,
+            action: "create",
+            routine: { name: `Brief ${i}`, instructions: "Summarize.", schedule: { type: "weekly", time: "09:00", weekdays: ["monday"] }, runOn: "maus", durationMinutes: 30 },
+          }),
+        });
+        expect(more.status).toBe(201);
+      }
 
       // The initial fixture turn is deliberately hung. Once it is stopped,
       // force a deterministic dispatch failure by choosing the configured
@@ -4799,6 +4854,27 @@ describe("startTurn presence boundary", () => {
     }
   });
 
+  it("lets the user's own bot read its worker map", async () => {
+    const bot = (await api("POST", "/api/bots", {})).body.bot;
+    const hanging = await hangingModel();
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, {
+        modelSelection: { instanceId: "claude", model: hanging.models.default },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "open the map" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const token = z.object({
+        mcpConfig: z.object({ mcpServers: z.object({ agents: z.object({ env: z.object({ OMB_COMMS_TOKEN: z.string() }) }) }) }),
+      }).parse(JSON.parse(readFileSync(fakeClaudeDump, "utf8"))).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+      const res = await fetch(`${BASE}/api/bots/${bot.id}/map/repo?worker=none`, { headers: { authorization: `Bearer ${token}` } });
+      expect({ status: res.status, body: await res.json() }).toEqual({ status: 404, body: { error: "No such worker" } });
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
+      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
+    }
+  });
+
   it("announces a new wait when a drained queued send calls startTurn", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const hanging = await hangingModel();
@@ -4911,8 +4987,8 @@ describe("startTurn presence boundary", () => {
 // deliberately different turn state must therefore carry the same bytes here:
 // anything interpolated into the block costs a cold start on every send.
 describe("corpus search discipline instructions", () => {
-  const BLOCK_START = "When you search a corpus";
-  const BLOCK_END = "an unlucky query.";
+  const BLOCK_START = "When searching any corpus";
+  const BLOCK_END = "a true negative.";
 
   const corpusBlock = (system: string): string => {
     const start = system.indexOf(BLOCK_START);
@@ -4953,7 +5029,7 @@ describe("corpus search discipline instructions", () => {
       const second = await systemForTurn(decorated.id, "who is BANQUE GENEVOISE SA");
 
       expect(first).toContain("match case-insensitively");
-      expect(first).toContain("try at least one different search strategy or tool class");
+      expect(first).toContain("try another search strategy or tool class");
       expect(first).toContain("Never state an unqualified absence");
       // the two prompts are genuinely different turns, so the comparison below
       // is not two copies of one string

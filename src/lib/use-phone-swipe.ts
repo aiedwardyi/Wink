@@ -13,7 +13,6 @@ import {
   neighborId,
   reducedMotion,
   sheetSwipeCloses,
-  sidebarBotIds,
   swipeBlocked,
   swipeStep,
   type SwipeAxis,
@@ -44,21 +43,22 @@ function settle(stages: (HTMLElement | null | undefined)[], from: number, to: nu
   }
 }
 
-/** Phone-only horizontal swipe on the returned stage ref to move between sidebar bots, plus the enter motion and haptic on any bot switch. `rider` moves with the stage. */
+/** Phone-only horizontal swipe on the returned stage ref to move between the bots `order` lists, plus the enter motion and haptic on any bot switch. `rider` moves with the stage. */
 export function usePhoneSwipe(
   botId: string | undefined,
   enabled: boolean,
   select: (id: string) => void,
-  rider?: RefObject<HTMLElement | null>,
+  rider: RefObject<HTMLElement | null> | undefined,
+  order: () => string[],
 ): (node: HTMLElement | null) => void {
   const [el, setEl] = useState<HTMLElement | null>(null);
   const stage = useCallback((node: HTMLElement | null) => setEl(node), []);
 
   const enterFrom = useRef<number | null>(null);
   const shownBot = useRef(botId);
-  const latest = useRef({ botId, select });
+  const latest = useRef({ botId, select, order });
   useLayoutEffect(() => {
-    latest.current = { botId, select };
+    latest.current = { botId, select, order };
   });
 
   useLayoutEffect(() => {
@@ -71,7 +71,7 @@ export function usePhoneSwipe(
       enterFrom.current = null;
       return;
     }
-    const ids = sidebarBotIds();
+    const ids = latest.current.order();
     const dir = Math.sign(ids.indexOf(botId) - ids.indexOf(from));
     settle([el, rider?.current], ids.includes(from) && ids.includes(botId) ? dir * TAP_ENTER_PX : 0, 0, 0);
   }, [botId, el, rider]);
@@ -90,7 +90,7 @@ export function usePhoneSwipe(
       const touch = e.touches[0];
       if (e.touches.length !== 1 || !touch || !isPhone() || swipeBlocked(e.target, touch.clientX)) return;
       stages().forEach((stage) => stage?.getAnimations?.().forEach((animation) => animation.cancel()));
-      drag = { x: touch.clientX, y: touch.clientY, lastX: touch.clientX, lastT: e.timeStamp, velocity: 0, axis: null, ids: sidebarBotIds() };
+      drag = { x: touch.clientX, y: touch.clientY, lastX: touch.clientX, lastT: e.timeStamp, velocity: 0, axis: null, ids: latest.current.order() };
     };
     const onMove = (e: TouchEvent) => {
       const touch = e.touches[0];

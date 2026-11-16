@@ -70,7 +70,8 @@ export function isEmptyEngineLaunch(
   instances: readonly { driverKind?: string; snapshot?: { state?: string } }[],
 ): boolean {
   return instances.length > 0
-    && !instances.some((instance) => instance.snapshot?.state === "available" && !isRetiredEngineKind(instance.driverKind));
+    && !instances.some((instance) => instance.snapshot?.state === "checking"
+      || instance.snapshot?.state === "available" && !isRetiredEngineKind(instance.driverKind));
 }
 
 export function starterConnectEngines<T>(instances: readonly T[]): T[] {

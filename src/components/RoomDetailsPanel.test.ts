@@ -79,12 +79,13 @@ afterEach(async () => {
   document.body.innerHTML = "";
   localStorage.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("Room details", () => {
   it.each([
-    ["en", "Room Details", "People (2)", "Bots (1)", "Add instructions for every bot…", "+ Add bot"],
-    ["ko", "채팅방 세부 정보", "참여자 (2)", "봇 (1)", "모든 봇에게 줄 지침 추가…", "+ 봇 추가"],
+    ["en", "Group details", "People (2)", "Bots (1)", "Add instructions for every bot…", "+ Add bot"],
+    ["ko", "그룹 세부 정보", "참여자 (2)", "봇 (1)", "모든 봇에게 줄 지침 추가…", "+ 봇 추가"],
   ] as const)("reads top down like group info in %s: room, people, bots", async (locale, title, people, bots, placeholder, addBot) => {
     mock.state.bots = [bot("b1", "Wink"), bot("b2", "Ada")];
     await open({ group: shared([{ id: "p1", name: "Mina" }]) }, () => json({ code: "old-code" }), locale);
@@ -169,6 +170,18 @@ describe("Room details", () => {
     expect(section("room").querySelector("input")).toBeNull();
   });
 
+  it("closes from one X at the far right of its header, sized like Show's", async () => {
+    await open({ group });
+    const head = host.querySelector("aside[data-room-details] > div")!;
+    const buttons = [...head.querySelectorAll("button")];
+    expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(["Close group details"]);
+    expect(head.lastElementChild).toBe(buttons[0]);
+    expect(buttons[0]!.className.split(" ")).toEqual(expect.arrayContaining(["size-7", "max-md:size-11"]));
+    expect(buttons[0]!.querySelector("svg")!.getAttribute("width")).toBe("15");
+    await act(async () => buttons[0]!.click());
+    expect(mock.dispatched).toContainEqual({ type: "toggleSettings", open: false });
+  });
+
   it("sits in Bot details' slot: 400px on desktop, full width on a phone", async () => {
     await open({ group });
     const panel = host.querySelector<HTMLElement>("aside[data-room-details]")!;
@@ -192,21 +205,36 @@ describe("Bots", () => {
     expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { memberIds: ["b1", "b2"] } });
   });
 
+  it.each([[false, "smooth"], [true, "instant"]] as const)("Add bot scrolls the opened picker into view, reduced motion %s", async (reduced, behavior) => {
+    mock.state.bots = [bot("b1", "Wink"), bot("b2", "Ada")];
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} }));
+    await open({ group: { ...group, memberIds: ["b1"] } });
+    const scrolled: Array<[Element, unknown]> = [];
+    vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element, options) { scrolled.push([this, options]); });
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
+    expect(scrolled).toHaveLength(1);
+    const [picker, options] = scrolled[0]!;
+    expect(picker.querySelector('[role="checkbox"]')).not.toBeNull();
+    expect(picker.querySelector("[data-manage-create-bot]")).not.toBeNull();
+    expect(picker.contains(host.querySelector("[data-room-add-bot]"))).toBe(false);
+    expect(options).toEqual({ block: "nearest", behavior });
+  });
+
   it.each([[[], false], [["b1"], true]] as const)("says who answers only once a bot is in: %j", async (memberIds, told) => {
     mock.state.bots = [bot("b1", "Wink")];
     await open({ group: { ...group, memberIds: [...memberIds] } });
     expect(section("bots").textContent!.includes("Everyone responds")).toBe(told);
   });
 
-  it.each([["shared", true], ["plain", false]] as const)("taking the last bot out of a %s group: %s", async (kind, allowed) => {
+  it.each(["shared", "plain"] as const)("takes the last bot out of a %s group", async (kind) => {
     mock.state.bots = [bot("b1", "Wink")];
     await open({ group: kind === "shared" ? shared([]) : { ...group, memberIds: ["b1"] } }, () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
     const toggle = removeButtons()[0]!;
     expect(toggle.getAttribute("aria-label")).toBe("Remove Wink");
-    expect(toggle.disabled).toBe(!allowed);
-    expect(section("bots").textContent!.includes("A group needs at least one bot.")).toBe(!allowed);
+    expect(toggle.disabled).toBe(false);
+    expect(section("bots").textContent!.includes("A group needs at least one bot.")).toBe(false);
     await act(async () => toggle.click());
-    expect(mock.dispatched.filter((action) => action.type === "patchGroup")).toEqual(allowed ? [{ type: "patchGroup", groupId: "group-1", patch: { memberIds: [] } }] : []);
+    expect(mock.dispatched.filter((action) => action.type === "patchGroup")).toEqual([{ type: "patchGroup", groupId: "group-1", patch: { memberIds: [] } }]);
   });
 
   it.each([
@@ -229,15 +257,14 @@ describe("Bots", () => {
     await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
     await act(async () => host.querySelector<HTMLButtonElement>("[data-manage-create-bot]")!.click());
     const name = host.querySelector<HTMLInputElement>('input[id^="group-wizard-name-"]')!;
-    const selects = [...host.querySelectorAll("select")];
     expect(host.querySelector(`label[for="${name.id}"]`)?.textContent).toBe(label);
     expect(name.placeholder).toBe(placeholder);
     await act(async () => {
       Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "  research Desk v2 / Seoul HQ  ");
       name.dispatchEvent(new Event("input", { bubbles: true }));
-      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!.call(selects[1], "codex-pro");
-      selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${locale === "en" ? "Change model" : "모델 변경"}"]`)!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) button')].find((choice) => choice.textContent === "Codex Pro")!.click());
     const add = [...host.querySelectorAll("button")].find((each) => !each.hasAttribute("data-manage-create-bot") && !each.hasAttribute("data-room-add-bot") && (each.textContent?.includes("Add bot") || each.textContent?.includes("봇 추가")))!;
     await act(async () => add.click());
     await settle();
@@ -310,7 +337,7 @@ describe("People", () => {
     await confirm("Remove");
     await settle();
     expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [], removed: codeChanged ? [] : [{ id: "mina", name: "Mina" }] } } });
-    expect(section("people").querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "The room code changed. Send the new one to your team." : undefined);
+    expect(section("people").querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "The group code changed. Send the new one to your team." : undefined);
   });
 
   it("says Phone Access is off only after a tap on Invite, never on open", async () => {
@@ -380,18 +407,32 @@ describe("room settings", () => {
   const bodies = () => (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([, init]) => init?.method === "PATCH").map(([path, init]) => [path, JSON.parse(String(init.body))]);
 
   it.each([
-    ["en", "Folder", "Each bot's own folder"],
-    ["ko", "폴더", "봇마다 자신의 폴더"],
-  ] as const)("sets the room's folder from the Room section in %s", async (locale, label, empty) => {
+    ["en", "Folder", "Clear"],
+    ["ko", "폴더", "지우기"],
+  ] as const)("changes and clears the room's shared folder from the Room section in %s", async (locale, label, clear) => {
     mock.state.bots = [bot("b1", "Kai"), bot("b2", "Ray")];
     vi.stubGlobal("ogb", { pickFolder: async () => "/Users/mina/work/wink-release-crew" });
-    await open({ group: kaiRay }, () => json({ group: { ...kaiRay, cwd: "/Users/mina/work/wink-release-crew" } }), locale);
+    await open({ group: { ...kaiRay, cwd: "/Users/mina/work/wink" } }, () => json({ group: kaiRay }), locale);
     const row = section("room").querySelector<HTMLElement>("[data-room-folder]")!;
     expect(row.textContent).toContain(label);
-    expect(row.textContent).toContain(empty);
+    expect(row.textContent).toContain("wink");
     await act(async () => row.querySelector<HTMLButtonElement>("button")!.click());
     await settle();
-    expect(bodies()).toEqual([["/api/groups/group-1", { cwd: "/Users/mina/work/wink-release-crew" }]]);
+    await act(async () => [...row.querySelectorAll("button")].find((each) => each.textContent === clear)!.click());
+    await settle();
+    expect(bodies()).toEqual([["/api/groups/group-1", { cwd: "/Users/mina/work/wink-release-crew" }], ["/api/groups/group-1", { cwd: null }]]);
+  });
+
+  it.each([
+    ["in the app", true, {}],
+    ["in a browser", false, {}],
+    ["once its folder is fixed", true, { pinnedCwd: null }],
+  ] as const)("has no folder row without a shared folder %s", async (_, picker, patch) => {
+    mock.state.bots = [bot("b1", "Kai"), bot("b2", "Ray")];
+    if (picker) vi.stubGlobal("ogb", { pickFolder: async () => null });
+    await open({ group: { ...kaiRay, ...patch } });
+    expect(section("room").querySelector('[role="switch"]')).not.toBeNull();
+    expect(host.querySelector("[data-room-folder]")).toBeNull();
   });
 
   it("shows the folder a room already works in, fixed", async () => {
@@ -414,14 +455,13 @@ describe("room settings", () => {
   ] as const)("picks who answers from the Bots section in %s", async (locale, options) => {
     mock.state.bots = [bot("b1", "Kai"), bot("b2", "research Desk v2 / Seoul HQ")];
     await open({ group: kaiRay }, undefined, locale);
-    const pick = section("bots").querySelector<HTMLSelectElement>("select[data-who-answers]")!;
-    expect([...pick.options].map((option) => option.textContent)).toEqual(options);
-    expect(pick.value).toBe("everyone");
-    for (const [value, responder] of [["member:b2", { kind: "member", botId: "b2" }], ["mentions", { kind: "mentions" }]] as const) {
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!.call(pick, value);
-        pick.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+    const pick = section("bots").querySelector<HTMLButtonElement>("[data-who-answers] button")!;
+    expect(pick.textContent).toBe(options[0]);
+    for (const [index, responder] of [[2, { kind: "member", botId: "b2" }], [3, { kind: "mentions" }]] as const) {
+      await act(async () => pick.click());
+      const choices = [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) [role="menuitemradio"]')];
+      expect(choices.map((option) => option.textContent)).toEqual(options);
+      await act(async () => choices[index]!.click());
       expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { defaultResponder: responder } });
     }
   });
@@ -478,8 +518,13 @@ describe("a joined room", () => {
     expect([...section("bots").querySelectorAll("[data-room-team-bot]")].map((row) => row.textContent)).toEqual(["EdBot", "Scout · Mina'sRemove", "Mini · Seo-yeon Park's"]);
     await act(async () => button("Remove Scout").click());
     expect(calls).toContainEqual({ method: "DELETE", path: "/api/joined/rooms/j1/bots/tb-A" });
+    const scrolled: Element[] = [];
+    vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) { scrolled.push(this); });
     await act(async () => host.querySelector<HTMLButtonElement>("[data-add-my-bot]")!.click());
     const picks = [...section("bots").querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]!.contains(picks[0]!)).toBe(true);
+    expect(scrolled[0]!.contains(host.querySelector("[data-add-my-bot]"))).toBe(false);
     expect(picks.map((each) => each.textContent)).toEqual(["Ada"]);
     await act(async () => picks[0]!.click());
     expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/bots" });

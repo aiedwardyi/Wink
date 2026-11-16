@@ -64,9 +64,11 @@ export function createPaneRuns(file) {
       if (baseHead) run.baseHead = baseHead;
       const stored = runs.get(id);
       if (stored?.session && session?.launchGeneration === stored.session.launchGeneration) run.session = { ...stored.session, lifecycle: "running" };
-      if (stored && Object.keys(run).every((key) => stored[key] === run[key])) return;
-      runs.set(id, run);
+      // A send after a BLOCKED report is the answer, so it clears the question.
+      if (stored && !stored.blocked && Object.keys(run).every((key) => stored[key] === run[key])) return;
       const original = runs.get(session?.recoveredFrom);
+      if (!stored && original?.blocked) run.blocked = original.blocked;
+      runs.set(id, run);
       if (original?.recovery && prior.has(original.id)) original.recovery.replacement = id;
       save();
     },
@@ -82,6 +84,12 @@ export function createPaneRuns(file) {
       return false;
     },
     reported: (id) => mark(id, "reported"),
+    blocked(id, question) {
+      const run = runs.get(id);
+      if (!run || prior.has(id) || run.blocked === question) return;
+      run.blocked = question;
+      save();
+    },
     ended: (id) => mark(id, "ended"),
     closed(id) {
       if (runs.delete(id)) save();

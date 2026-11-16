@@ -49,9 +49,8 @@ export function routesQuick(gate: QuickGate): boolean {
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  // typing answers a pinned card without choices, or a tapped choice's text
-  const question = scanQuestion(gate.messages)?.card;
-  if (question && (!question.staysOpen || !question.options.length || question.options.includes(gate.text.trim()))) return false;
+  // typing answers the pinned card
+  if (scanQuestion(gate.messages)) return false;
   if (gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
@@ -206,11 +205,13 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
 }
 
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
   // the open chats plus the threads of asks still running at shutdown; no other thread is read
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   for (const [threadId, id] of threads) {
+    // Loading every open chat here held the server for ~30 s on a big messages.db.
+    if (!store.hasUnansweredQuickAsk(threadId)) continue;
     const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
     for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
   }
@@ -264,7 +265,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {

@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
@@ -26,7 +27,8 @@ describe("replyActivity", () => {
 
   it("is empty with no replies", () => {
     const activity = replyActivity(local(11, 4));
-    expect(activity).toMatchObject({ start: "2026-05-10", since: null, streak: 0, busiest: null, total: 0 });
+    expect(activity).toMatchObject({ start: "2026-05-10", since: null, busiest: null, total: 0, workers: 0, engines: [] });
+    expect(activity).not.toHaveProperty("streak");
     expect(activity.counts).toHaveLength(25 * 7 + 4);
     expect(activity.counts.every((count) => count === 0)).toBe(true);
   });
@@ -53,23 +55,35 @@ describe("replyActivity", () => {
     expect(activity).toMatchObject({ since: "2025-06-03", total: 3 });
   });
 
-  it("runs the streak and the busiest day back past the grid", () => {
+  it("runs the busiest day back past the grid", () => {
     for (let day = 0; day < 200; day++) reply(new Date(2026, 3, 19 + day, 12).getTime());
     for (const hour of [9, 10]) reply(new Date(2026, 0, 2, hour).getTime());
     const activity = replyActivity(local(11, 4));
-    expect(activity.streak).toBe(200);
     expect(activity.busiest).toEqual({ day: "2026-01-02", count: 2 });
     expect(activity.since).toBe("2026-01-02");
   });
 
-  it("keeps the streak through a quiet morning and stops at a gap", () => {
-    for (const day of [28, 30, 31]) reply(local(10, day));
-    for (const day of [1, 2, 3]) reply(local(11, day));
-    expect(replyActivity(local(11, 4, 8)).streak).toBe(5);
-    reply(local(11, 4, 9));
-    expect(replyActivity(local(11, 4, 10)).streak).toBe(6);
-    expect(replyActivity(local(11, 5, 10)).streak).toBe(6);
-    expect(replyActivity(local(11, 6, 10)).streak).toBe(0);
+  it("reads the most workers at once from the peak file", () => {
+    const file = join(DATA_DIR, "worker-peak.json");
+    writeFileSync(file, JSON.stringify({ count: 12 }));
+    expect(replyActivity(local(11, 4)).workers).toBe(12);
+    writeFileSync(file, "{");
+    expect(replyActivity(local(11, 4)).workers).toBe(0);
+    writeFileSync(file, JSON.stringify({ count: -3 }));
+    expect(replyActivity(local(11, 4)).workers).toBe(0);
+  });
+
+  it("counts replies by their engine, else the bot's current engine, biggest first", () => {
+    for (let n = 0; n < 3; n++) reply(local(11, 1), { engine: "codex" } as Partial<Message>);
+    reply(local(11, 1));
+    reply(local(11, 2));
+    insertMessage("room", { id: `m${seq++}`, role: "bot", kind: "text", text: "hi", at: local(11, 2), from: { botId: "b2", name: "B2", color: "#000" } });
+    insertMessage("gone", { id: `m${seq++}`, role: "bot", kind: "text", text: "hi", at: local(11, 2) });
+    reply(local(11, 3), { kind: "activity", engine: "grokAgent" } as Partial<Message>);
+    const engineOf = (threadId: string, botId: string | null) => (botId === "b2" ? "museAgent" : threadId === "t1" ? "claudeAgent" : null);
+    const activity = replyActivity(local(11, 4), engineOf);
+    expect(activity.engines).toEqual([{ engine: "codex", count: 3 }, { engine: "claudeAgent", count: 2 }, { engine: "museAgent", count: 1 }]);
+    expect(activity.total).toBe(7);
   });
 
   it("names the busiest day, the latest on a tie", () => {
@@ -96,9 +110,10 @@ describe("replyActivity", () => {
     closeMessageDb();
     messageDatabase();
     const started = performance.now();
-    const activity = replyActivity(now);
+    const activity = replyActivity(now, () => "claudeAgent");
     const ms = performance.now() - started;
     expect(activity.total).toBeGreaterThan(40_000);
+    expect(activity.engines).toEqual([{ engine: "claudeAgent", count: activity.total }]);
     expect(ms).toBeLessThan(50);
   });
 });

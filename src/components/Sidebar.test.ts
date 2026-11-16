@@ -19,7 +19,7 @@ import {
   SIDEBAR_SIDE_KEY,
   SIDEBAR_WIDTH_KEY,
 } from "@/lib/sidebar-preferences";
-import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
+import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
 import { usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { formatTime, StoreProvider, useStore, type Bot } from "@/state/store";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
@@ -2181,7 +2181,7 @@ function SelectedProbe() {
 }
 
 function SwipeStage({ onSelect }: { onSelect: (id: string) => void }) {
-  const stage = usePhoneSwipe("a", true, onSelect);
+  const stage = usePhoneSwipe("a", true, onSelect, undefined, () => ["a", "b", "c"]);
   return createElement("div", { ref: stage }, createElement(Sidebar, { open: false, onClose: () => {} }));
 }
 
@@ -2191,6 +2191,339 @@ const touch = (target: Element, type: string, x = 100, y = 100) => {
   target.dispatchEvent(event);
   return event;
 };
+
+describe("Sidebar hold menu", () => {
+  afterEach(() => {
+    document.dispatchEvent(new Event("touchcancel"));
+    document.dispatchEvent(new Event("touchstart"));
+  });
+
+  async function mount(kind: "bot" | "group") {
+    const rooms = ["room-a", "room-b"].map((id) => ({ ...bot(id), memberIds: [] }));
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/api/bots?messages=200") return new Response(JSON.stringify({ bots: ["a", "b"].map(bot), groups: rooms }));
+      if (init?.method === "PATCH") {
+        const id = path.split("/").at(-1)!;
+        const patch = JSON.parse(String(init.body));
+        return new Response(JSON.stringify(path.startsWith("/api/groups/")
+          ? { group: { ...rooms.find((room) => room.id === id), ...patch } }
+          : { bot: { id, ...patch } }));
+      }
+      return new Response("{}", { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(hapticTick).mockClear();
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(StoreProvider, null,
+      createElement(Sidebar, { open: true, onClose: () => {} }), createElement(SelectedProbe))));
+    await act(async () => FakeEventSource.current!.onmessage?.({
+      data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "",
+    }));
+    await vi.waitFor(() => expect(host.querySelectorAll("[data-sidebar-row]")).toHaveLength(4));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const row = (id = kind === "bot" ? "b" : "room-b") => host.querySelector<HTMLElement>(
+      `[data-sidebar-row-id="${id}"] ${id.startsWith("room-") ? "button" : '[role="button"]'}`,
+    )!;
+    const menu = () => document.querySelector(`[data-${kind === "bot" ? "bot" : "room"}-menu]:not([data-closing])`);
+    const selected = () => host.querySelector("output")!.getAttribute("data-selected");
+    const hold = async () => {
+      await act(async () => void touch(row(), "touchstart"));
+      await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS));
+    };
+    const open = () => act(async () => row().dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, clientX: 100, clientY: 100,
+    })));
+    const unmount = async () => {
+      await act(async () => root.unmount());
+      host.remove();
+    };
+    return { host, row, menu, selected, hold, open, unmount };
+  }
+
+  describe.each(["bot", "group"] as const)("%s menu", (kind) => {
+    it("opens at 400 ms before release and keeps the menu without selecting on release", async () => {
+      const view = await mount(kind);
+      const selected = view.selected();
+      try {
+        await act(async () => void touch(view.row(), "touchstart"));
+        await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS - 1));
+        expect(view.menu()).toBeNull();
+        await act(async () => void vi.advanceTimersByTime(1));
+        expect(view.menu()).not.toBeNull();
+        expect(hapticTick).toHaveBeenCalledTimes(1);
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
+        let end: Event;
+        await act(async () => { end = touch(view.row(), "touchend"); });
+        expect(end!.defaultPrevented).toBe(true);
+        await act(async () => view.row().click());
+        expect(view.selected()).toBe(selected);
+        expect(view.menu()).not.toBeNull();
+        const nativeMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 });
+        await act(async () => view.row().dispatchEvent(nativeMenu));
+        expect(nativeMenu.defaultPrevented).toBe(true);
+        expect((view.menu() as HTMLElement).style.left).toBe("100px");
+        const pin = view.menu()!.querySelector("button")!;
+        await act(async () => {
+          touch(pin, "touchstart");
+          touch(pin, "touchend");
+          pin.click();
+        });
+        expect(view.menu()).toBeNull();
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it.each(["list", "page"])("closes when the %s scrolls", async (target) => {
+      const view = await mount(kind);
+      try {
+        await view.open();
+        expect(view.menu()).not.toBeNull();
+        await act(async () => (target === "page" ? window : view.row().closest(".overflow-y-auto")!)
+          .dispatchEvent(new Event("scroll")));
+        expect(view.menu()).toBeNull();
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it.each(["contextmenu", "hold"])("stays open after %s while another pane scrolls", async (method) => {
+      const view = await mount(kind);
+      const chat = document.body.appendChild(document.createElement("div"));
+      try {
+        if (method === "contextmenu") await view.open();
+        else await view.hold();
+        await act(async () => chat.dispatchEvent(new Event("scroll")));
+        expect(view.menu()).not.toBeNull();
+        await act(async () => view.row().closest("[data-sidebar-list]")!.dispatchEvent(new Event("scroll")));
+        expect(view.menu()).toBeNull();
+      } finally {
+        chat.remove();
+        await view.unmount();
+      }
+    });
+
+    it.each(["list", "page"])("keeps scrolling and release guarded when the %s closes a held menu", async (target) => {
+      const view = await mount(kind);
+      const selected = view.selected();
+      try {
+        await view.hold();
+        expect(view.menu()).not.toBeNull();
+        await act(async () => (target === "page" ? window : view.row().closest(".overflow-y-auto")!)
+          .dispatchEvent(new Event("scroll")));
+        expect(view.menu()).toBeNull();
+        const move = touch(view.row(), "touchmove", 100, 100 + LONG_PRESS_SLOP + 1);
+        expect(move.defaultPrevented).toBe(false);
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
+        let end: Event;
+        await act(async () => { end = touch(view.row(), "touchend"); });
+        expect(end!.defaultPrevented).toBe(true);
+        await act(async () => view.row().click());
+        expect(view.selected()).toBe(selected);
+        expect(view.menu()).toBeNull();
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it.each(["contextmenu", "hold"])("swallows the outside touch after %s, then lets the next tap select", async (method) => {
+      const view = await mount(kind);
+      const selected = view.selected();
+      try {
+        if (method === "contextmenu") await view.open();
+        else {
+          await view.hold();
+          await act(async () => void touch(view.row(), "touchend"));
+        }
+        expect(view.menu()).not.toBeNull();
+        const other = view.row("a");
+        let outside: Event;
+        await act(async () => { outside = touch(other, "touchstart"); });
+        expect(outside!.defaultPrevented).toBe(true);
+        expect(view.menu()).toBeNull();
+        await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS * 2));
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
+        expect(view.menu()).toBeNull();
+        await act(async () => {
+          touch(other, "touchend");
+          other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+          other.click();
+        });
+        expect(view.selected()).toBe(selected);
+        await act(async () => {
+          touch(other, "touchstart");
+          touch(other, "touchend");
+          other.click();
+        });
+        expect(view.selected()).toBe("a");
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it("cancels a moving hold without preventing the scroll", async () => {
+      const view = await mount(kind);
+      try {
+        await act(async () => void touch(view.row(), "touchstart"));
+        const move = touch(view.row(), "touchmove", 100, 100 + LONG_PRESS_SLOP + 1);
+        await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS * 2));
+        expect(move.defaultPrevented).toBe(false);
+        expect(view.menu()).toBeNull();
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
+        expect(hapticTick).not.toHaveBeenCalled();
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it("hands the held row to reorder after movement and buzzes only once", async () => {
+      const view = await mount(kind);
+      try {
+        await view.hold();
+        expect(view.menu()).not.toBeNull();
+        await act(async () => void touch(view.row(), "touchmove", 100 + LONG_PRESS_SLOP, 100));
+        expect(view.menu()).not.toBeNull();
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
+        await act(async () => void touch(view.row(), "touchmove", 100 + LONG_PRESS_SLOP + 1, 100));
+        expect(view.menu()).toBeNull();
+        expect(view.host.querySelector("[data-touch-lifted]")?.getAttribute("data-sidebar-row-kind")).toBe(kind);
+        expect(hapticTick).toHaveBeenCalledTimes(1);
+        await act(async () => void touch(view.row(), "touchcancel"));
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
+        expect(view.menu()).toBeNull();
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it("captures an outside touch pointer before a button can start an action", async () => {
+      const view = await mount(kind);
+      const button = view.host.appendChild(document.createElement("button"));
+      const down = vi.fn();
+      const click = vi.fn();
+      button.addEventListener("pointerdown", down);
+      button.addEventListener("click", click);
+      const pointer = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "pointerType", { value: "touch" });
+        button.dispatchEvent(event);
+        return event;
+      };
+      try {
+        await view.open();
+        expect(view.menu()).not.toBeNull();
+        await act(async () => void pointer("pointerdown"));
+        expect(down).not.toHaveBeenCalled();
+        expect(view.menu()).toBeNull();
+        await act(async () => void touch(button, "touchstart"));
+        await act(async () => void vi.advanceTimersByTime(1500));
+        await act(async () => {
+          pointer("pointerup");
+          touch(button, "touchend");
+          button.click();
+        });
+        expect(click).not.toHaveBeenCalled();
+        await act(async () => {
+          pointer("pointerdown");
+          touch(button, "touchstart");
+          pointer("pointerup");
+          touch(button, "touchend");
+          button.click();
+        });
+        expect(down).toHaveBeenCalledTimes(1);
+        expect(click).toHaveBeenCalledTimes(1);
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it.each(["touch", "mouse"])("lets the next physical %s input work after unmount during outside dismissal", async (input) => {
+      const view = await mount(kind);
+      const button = document.body.appendChild(document.createElement("button"));
+      const click = vi.fn();
+      button.addEventListener("click", click);
+      const pointer = (type: string, pointerType = "touch") => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "pointerType", { value: pointerType });
+        button.dispatchEvent(event);
+      };
+      let unmounted = false;
+      try {
+        await view.hold();
+        await act(async () => void touch(view.row(), "touchend"));
+        await act(async () => {
+          pointer("pointerdown");
+          touch(button, "touchstart");
+        });
+        expect(view.menu()).toBeNull();
+        await view.unmount();
+        unmounted = true;
+        pointer("pointerup");
+        touch(button, "touchend");
+        button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        button.click();
+        expect(click).not.toHaveBeenCalled();
+        pointer("pointerdown", input);
+        if (input === "touch") {
+          touch(button, "touchstart");
+          touch(button, "touchend");
+        } else button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        pointer("pointerup", input);
+        button.click();
+        expect(click).toHaveBeenCalledTimes(1);
+      } finally {
+        if (!unmounted) await view.unmount();
+        button.remove();
+      }
+    });
+
+    it("dismisses the section picker without selecting the row under the outside touch", async () => {
+      const view = await mount(kind);
+      const selected = view.selected();
+      try {
+        await act(async () => view.row().dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true, cancelable: true, clientX: 100, clientY: 100,
+        })));
+        const move = [...view.menu()!.querySelectorAll("button")].find((button) => button.textContent === "Move to section")!;
+        expect(move).toBeDefined();
+        await act(async () => move.click());
+        const picker = () => document.querySelector("[data-section-picker]:not([data-closing])");
+        expect(picker()).not.toBeNull();
+        await act(async () => void touch(view.row("a"), "touchstart"));
+        expect(picker()).toBeNull();
+        await act(async () => {
+          touch(view.row("a"), "touchend");
+          view.row("a").click();
+        });
+        expect(view.selected()).toBe(selected);
+      } finally {
+        await view.unmount();
+      }
+    });
+
+    it("keeps desktop right-click coordinates and outside mousedown dismissal", async () => {
+      const view = await mount(kind);
+      try {
+        await act(async () => view.row().dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true, cancelable: true, clientX: 50, clientY: 150,
+        })));
+        expect(view.menu()).not.toBeNull();
+        expect((view.menu() as HTMLElement).style.left).toBe("50px");
+        expect((view.menu() as HTMLElement).style.top).toBe("150px");
+        const outside = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+        await act(async () => view.row("a").dispatchEvent(outside));
+        expect(outside.defaultPrevented).toBe(false);
+        expect(view.menu()).toBeNull();
+        await act(async () => view.row("a").click());
+        expect(view.selected()).toBe("a");
+      } finally {
+        await view.unmount();
+      }
+    });
+  });
+});
 
 describe("Sidebar touch drag", () => {
   let under: Element | null = null;
@@ -2251,6 +2584,7 @@ describe("Sidebar touch drag", () => {
     const hold = async (id: string) => {
       await act(async () => void touch(row(id), "touchstart"));
       await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS));
+      await act(async () => void touch(row(id), "touchmove", 100 + LONG_PRESS_SLOP + 1, 100));
     };
     const middle = (target: Element | null) => {
       const rect = target?.getBoundingClientRect();
@@ -2275,14 +2609,20 @@ describe("Sidebar touch drag", () => {
     return { host, patches, commits, row, order, lifted, marked, hold, moveOver, unmount };
   }
 
-  it("lifts a row after a long press and buzzes once", async () => {
+  it("opens on hold, then closes the menu and lifts only after movement past the slop", async () => {
     const view = await mount(["a", "b", "c"].map(bot));
     try {
       await act(async () => void touch(view.row("b"), "touchstart"));
       await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS - 50));
       expect(view.lifted()).toBeNull();
       await act(async () => void vi.advanceTimersByTime(50));
+      expect(document.querySelector("[data-bot-menu]:not([data-closing])")).not.toBeNull();
+      expect(view.lifted()).toBeNull();
+      await act(async () => void touch(view.row("b"), "touchmove", 100 + LONG_PRESS_SLOP, 100));
+      expect(view.lifted()).toBeNull();
+      await act(async () => void touch(view.row("b"), "touchmove", 100 + LONG_PRESS_SLOP + 1, 100));
       expect(view.lifted()).toBe("b");
+      expect(document.querySelector("[data-bot-menu]:not([data-closing])")).toBeNull();
       expect(hapticTick).toHaveBeenCalledTimes(1);
       expect(view.host.querySelector<HTMLElement>("[data-touch-lifted]")?.style.getPropertyValue("pointer-events")).toBe("none");
     } finally {
@@ -2469,7 +2809,7 @@ describe("Sidebar touch drag", () => {
       await act(async () => void touch(child, "touchstart"));
       child.remove();
       await act(async () => void vi.advanceTimersByTime(LONG_PRESS_MS));
-      expect(view.lifted()).toBe("a");
+      expect(document.querySelector("[data-bot-menu]:not([data-closing])")).not.toBeNull();
       await act(async () => void touch(child, "touchend"));
       expect(view.lifted()).toBeNull();
     } finally {

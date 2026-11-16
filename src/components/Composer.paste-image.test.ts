@@ -104,6 +104,18 @@ describe("0-byte image paste", () => {
   });
 });
 
+describe("many files", () => {
+  it("attaches every picked file past five", async () => {
+    const composer = await mountComposer();
+    const input = composer.host.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const files = Array.from({ length: 7 }, (_, index) => new File([new Uint8Array([index])], `data-${index}.bin`, { type: "application/octet-stream" }));
+    Object.defineProperty(input, "files", { value: files, configurable: true });
+    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    await vi.waitFor(() => expect(composer.host.querySelectorAll('[aria-label="Cancel upload"]')).toHaveLength(7));
+    expect(composer.notice() ?? "").not.toContain("Up to 5 files");
+  });
+});
+
 describe("attachment notice", () => {
   it.each(intakes)("clears once a later %s attaches", async (_name, intake) => {
     const composer = await mountComposer();

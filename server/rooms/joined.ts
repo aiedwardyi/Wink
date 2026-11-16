@@ -43,9 +43,9 @@ export interface JoinedState {
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
-  bots: Array<{ id: string; name: string; color: string }>;
+  bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
   /** Only from a host that takes teammates' bots. */
-  teamBots?: Array<{ id: string; name: string; color: string; owner: string }>;
+  teamBots?: Array<{ id: string; name: string; color: string; owner: string; mascotStyle?: string }>;
 }
 
 /** One of this PC's bots in a joined room: the host's id for it, and its hidden room task. */

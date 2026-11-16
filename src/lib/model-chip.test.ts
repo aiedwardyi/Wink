@@ -323,6 +323,7 @@ describe("engineBadgeText", () => {
     expect(engineBadgeText({}, "not-installed", t)).toBe("Not installed");
     expect(engineBadgeText({ version: "1.0.13" }, "sign-in", t)).toBe("Sign-in required");
     expect(engineBadgeText({}, "ready", t)).toBe("Ready");
+    expect(engineBadgeText({}, "checking", t)).toBe("Checking...");
     expect(engineBadgeText({ version: null }, "ready", t)).toBe("Ready");
   });
 });

@@ -365,8 +365,11 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
       rmSync(fakeCodexDump, { force: true });
       expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "remember that" })).status).toBe(202);
       await waitFor(async () => !(await getBot(created.id)).busy, "the resumed Codex turn");
-      const resumed = JSON.parse(readFileSync(fakeCodexDump, "utf8"));
-      expect(resumed.calls.map((call: { method: string }) => call.method)).toContain("thread/resume");
+      const resumed: { calls: Array<{ method: string; params: { threadId?: string } }> } = JSON.parse(readFileSync(fakeCodexDump, "utf8"));
+      // the same thread either way: resumed by a new app-server, or the warm one (whose dump also holds turn 1) carried on
+      const opened = resumed.calls.filter((call) => call.method === "thread/start" || call.method === "thread/resume");
+      expect(opened).toHaveLength(1);
+      expect(resumed.calls.filter((call) => call.method === "turn/start").at(-1)?.params.threadId).toBe("codex-thread-1");
 
       await api("PATCH", `/api/bots/${created.id}`, {
         modelSelection: { instanceId: "codexSwitch", model: "gpt-page-two" },

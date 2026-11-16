@@ -22,6 +22,7 @@ import { parseJson, type JsonValue } from "./schema.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
 import { awaitDyingAppServers, codexHome, retireAppServer } from "./drivers/codex-catalog.ts";
 import { parseCodexAccount } from "./drivers/codex-account.ts";
+import { codexDirect } from "./drivers/codex-direct.ts";
 import { createClaudeUsageProbe, readClaudeUsage } from "./claude-usage-probe.ts";
 
 type Report = { windows: RateLimitWindow[]; observedAt: string };
@@ -73,7 +74,7 @@ export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?
   const home = account?.home ?? codexHome(env);
   if (account) await awaitDyingAppServers(2_000, home);
   return new Promise((resolve, reject) => {
-    const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env, stdio: ["pipe", "pipe", "pipe"], ...(account ? { account, accountDriver: "codex" } : {}) });
+    const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env, stdio: ["pipe", "pipe", "pipe"], direct: codexDirect, ...(account ? { account, accountDriver: "codex" } : {}) });
     const lines = createInterface({ input: child.stdout });
     let settled = false;
     let usage: JsonValue | undefined;

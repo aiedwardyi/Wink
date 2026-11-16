@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { botAvatarChoiceSchema } from "../../shared/bot-avatar.ts";
 import { roomsDatabase, RoomError } from "./db.ts";
 import { checkedRoomName } from "./names.ts";
 
@@ -11,6 +12,7 @@ export interface TeamBot {
   owner: string;
   name: string;
   color: string;
+  mascotStyle?: string;
 }
 
 export const TEAM_BOTS_PER_PERSON = 5;
@@ -27,30 +29,35 @@ function db(): DatabaseSync {
         owner TEXT NOT NULL,
         name TEXT NOT NULL,
         color TEXT NOT NULL,
+        mascot TEXT,
         at INTEGER NOT NULL,
         PRIMARY KEY (room_id, id)
       );
     `);
+    const columns = (database.prepare("PRAGMA table_info(room_bots)").all() as Array<{ name: string }>).map((column) => column.name);
+    if (!columns.includes("mascot")) database.exec("ALTER TABLE room_bots ADD COLUMN mascot TEXT");
     ready.add(database);
   }
   return database;
 }
 
 export function teamBots(roomId: string): TeamBot[] {
-  return db().prepare("SELECT id, owner, name, color FROM room_bots WHERE room_id = ? ORDER BY at, rowid").all(roomId) as unknown as TeamBot[];
+  const rows = db().prepare("SELECT id, owner, name, color, mascot FROM room_bots WHERE room_id = ? ORDER BY at, rowid").all(roomId) as Array<Omit<TeamBot, "mascotStyle"> & { mascot: string | null }>;
+  return rows.map(({ mascot, ...bot }) => (mascot ? { ...bot, mascotStyle: mascot } : bot));
 }
 
 export const teamBot = (roomId: string, id: string): TeamBot | null => teamBots(roomId).find((bot) => bot.id === id) ?? null;
 
 /** `taken` is every other name in the room. */
-export function addTeamBot(roomId: string, owner: string, name: unknown, color: unknown, taken: readonly string[]): TeamBot {
+export function addTeamBot(roomId: string, owner: string, name: unknown, color: unknown, taken: readonly string[], mascotStyle?: unknown): TeamBot {
   const bots = teamBots(roomId);
   if (bots.filter((bot) => bot.owner === owner).length >= TEAM_BOTS_PER_PERSON) throw new RoomError(409, "too many bots");
   const checked = checkedRoomName(name, [...taken, ...bots.map((bot) => bot.name)]);
   if (!checked.ok) throw new RoomError(409, checked.error);
+  const style = botAvatarChoiceSchema.safeParse(mascotStyle).data;
   // Teammate PCs read ids as [\w-]{1,64}.
-  const bot = { id: `tb-${randomBytes(12).toString("base64url")}`, owner, name: checked.name, color: typeof color === "string" && /^[\w#-]{1,32}$/.test(color) ? color : "" };
-  db().prepare("INSERT INTO room_bots (room_id, id, owner, name, color, at) VALUES (?, ?, ?, ?, ?, ?)").run(roomId, bot.id, owner, bot.name, bot.color, Date.now());
+  const bot: TeamBot = { id: `tb-${randomBytes(12).toString("base64url")}`, owner, name: checked.name, color: typeof color === "string" && /^[\w#-]{1,32}$/.test(color) ? color : "", ...(style ? { mascotStyle: style } : {}) };
+  db().prepare("INSERT INTO room_bots (room_id, id, owner, name, color, mascot, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(roomId, bot.id, owner, bot.name, bot.color, style ?? null, Date.now());
   return bot;
 }
 

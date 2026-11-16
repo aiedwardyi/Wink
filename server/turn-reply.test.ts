@@ -132,4 +132,82 @@ describe("turnSummaries", () => {
     expect(summaries.settle("t2", "b")).toEqual([]);
     expect(summaries.settle("t1", "a")).toEqual(["s1"]);
   });
+
+  const answer = "The build passed on all three PCs and the release notes are in the docs folder.";
+  const settled = (texts: Array<string | undefined>) => {
+    const hidden: string[] = [];
+    const summaries = turnSummaries((_threadId, ids, restated) => hidden.push(...ids.map((id) => (restated ? id : `commentary:${id}`))));
+    texts.forEach((text, i) => summaries.note("t1", "turn-1", `r${i}`, false, undefined, text));
+    summaries.settle("t1", "turn-1");
+    return hidden;
+  };
+
+  it("hides a text the turn later restates", () => {
+    expect(settled([answer, `Build passed on all three PCs, and the release notes are in the docs folder. ${"Your one question is in your box."}`])).toEqual(["r0"]);
+    expect(settled([answer, answer, answer])).toEqual(["r0", "r1"]);
+  });
+
+  it("keeps an answer followed by a short or different line", () => {
+    expect(settled([answer, "Saved."])).toEqual([]);
+    expect(settled([answer, "Next I'll check the phone build and the release on work tomorrow."])).toEqual([]);
+    expect(settled(["Checking the logs.", "Checking the logs."])).toEqual([]);
+  });
+
+  it("hides a restated commentary row once, as restated", () => {
+    const hidden: Array<[string[], true | undefined]> = [];
+    const summaries = turnSummaries((_threadId, ids, restated) => hidden.push([ids, restated]));
+    summaries.note("t1", "turn-1", "c0", false, "commentary", answer);
+    summaries.note("t1", "turn-1", "c1", false, "commentary", "Checking the logs.");
+    summaries.note("t1", "turn-1", "f0", false, "final_answer", answer);
+    summaries.settle("t1", "turn-1");
+    expect(hidden).toEqual([[["c1"], undefined], [["c0"], true]]);
+  });
+
+  it("counts only content words", () => {
+    expect(settled(["Done, I moved the old notes into the archive for you.", "Done. I think the old plan is all for you, and it is still on the list, into next week."])).toEqual([]);
+  });
+
+  it("keeps a line whose words a long answer only holds far apart", () => {
+    const later = "**Not quite.** Most of the eval did run, and two results are real. What's missing is the rival race. - **Token use:** Wink uses more tokens than last week, so a worker is cutting it now. - **Deadline:** the fix lands Friday before the next phone release, then the eval reruns overnight on the home PC. - **Cards:** the ADEMark card and the memory card are written and waiting for your pick.";
+    expect(settled(["Now the token worker deadline, then the eval and ADEMark cards.", later])).toEqual([]);
+  });
+
+  const long = "The build passed on all three PCs, the release notes are in the docs folder, and the phone build ships tomorrow morning after the nightly run.";
+  const ask = `${long} Your one question is in your box.`;
+
+  it("keeps an earlier text with a link the later one lacks", () => {
+    expect(settled([`${long} See https://wink.dev/notes.`, ask])).toEqual([]);
+    expect(settled([`${long} See https://wink.dev/notes.`, `${ask} https://wink.dev/notes`])).toEqual(["r0"]);
+  });
+
+  it("keeps an earlier text with a path the later one lacks", () => {
+    expect(settled([`${long} Notes: D:\\wink\\docs\\notes.md`, ask])).toEqual([]);
+  });
+
+  it("keeps an earlier text with an image the later one lacks", () => {
+    expect(settled([`${long} ![chart](/api/attachments/chart.png)`, ask])).toEqual([]);
+  });
+
+  it("keeps an earlier text with a code block the later one lacks", () => {
+    expect(settled([`${long}\n\`\`\`\npnpm test\n\`\`\``, ask])).toEqual([]);
+  });
+
+  it("keeps an earlier text with a number the later one lacks", () => {
+    expect(settled([`${long} It took 14 minutes.`, ask])).toEqual([]);
+    expect(settled([`${long} It took 14 minutes.`, `${ask} Took 14 minutes.`])).toEqual(["r0"]);
+  });
+
+  it("keeps a final answer whose restatement is commentary the final hides", () => {
+    const hidden: Array<[string[], true | undefined]> = [];
+    const summaries = turnSummaries((_threadId, ids, restated) => hidden.push([ids, restated]));
+    summaries.note("t1", "turn-1", "f0", false, "final_answer", answer);
+    summaries.note("t1", "turn-1", "c0", false, "commentary", `${answer} Checking the logs.`);
+    summaries.settle("t1", "turn-1");
+    expect(hidden).toEqual([[["c0"], undefined]]);
+  });
+
+  it("keeps a row noted without text", () => {
+    expect(settled([undefined, answer])).toEqual([]);
+    expect(settled([answer, undefined])).toEqual([]);
+  });
 });

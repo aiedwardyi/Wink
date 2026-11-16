@@ -406,7 +406,7 @@ describe("ChatView worker rows", () => {
         "GUIDEOpus 5.5 · HighWaiting", "BUILDGPT-6 Astra · HighWorking",
       ]);
       await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -461,7 +461,7 @@ describe("ChatView worker rows", () => {
       expect(entry.textContent).not.toContain("WORK");
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith(liveDone);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -1645,15 +1645,17 @@ describe("phone header name floor", () => {
       const header = headerOf(this);
       const label = header ? modelLabelOf(header) : null;
       const hidden = label?.style.display === "none";
+      const truncated = label?.style.textOverflow === "ellipsis";
+      const narrow = hidden || truncated;
       const chip = label?.closest("button");
       const name = header && [...header.querySelectorAll("button")].find((el) => el.textContent === "Bounty-Watch" && el.className.includes("md:hidden"));
       const cluster = name?.parentElement ?? null;
       if (header && this === header) return box(0, 360, 0, 60);
-      if (cluster && this === cluster) return overlap && !hidden ? box(0, 280, 8, 44) : box(0, 160, 8, 44);
+      if (cluster && this === cluster) return overlap && !narrow ? box(0, 280, 8, 44) : box(0, 160, 8, 44);
       if (name && this === name) return box(46, 100, 16, 22);
       if (cluster && this === cluster.firstElementChild) return box(6, 40, 10, 40);
-      if (chip && this === chip) return overlap && !hidden ? box(40, 200, 14, 30) : box(240, 100, 14, 30);
-      if (label && this === label) return box(80, 100, 18, 16);
+      if (chip && (this === chip || this === chip.parentElement)) return overlap && !narrow ? box(40, 200, 14, 30) : box(240, truncated ? 48 : 100, 14, 30);
+      if (label && this === label) return truncated ? box(252, 24, 18, 16) : box(80, 100, 18, 16);
       if (this instanceof HTMLElement && this.classList.contains("truncate")) return box(80, 100, 18, 16);
       if (this instanceof HTMLElement && this.hasAttribute("data-model-effort")) return box(160, 40, 18, 14);
       if (this instanceof SVGElement && chip?.contains(this)) return box(50, 14, 20, 14);
@@ -1732,7 +1734,7 @@ describe("phone header name floor", () => {
 
   afterEach(restoreRects);
 
-  it("hides a long model label at 360 when no device tag is rendered", async () => {
+  it("truncates a long model label at 360 when no device tag is rendered", async () => {
     const view = await mount(true);
     try {
       expect(view.header).not.toBeNull();
@@ -1740,7 +1742,9 @@ describe("phone header name floor", () => {
       expect(view.cluster).not.toBeNull();
       if (!view.header || !view.modelLabel || !view.cluster) return;
       expect(view.header.querySelector("[data-device-tag]")).toBeNull();
-      expect(view.modelLabel.style.display).toBe("none");
+      expect(view.modelLabel.style.display).not.toBe("none");
+      expect(view.modelLabel.style.textOverflow).toBe("ellipsis");
+      expect(view.modelLabel.getBoundingClientRect().width).toBeGreaterThan(0);
       const chip = view.modelLabel.closest("button");
       expect(chip).toBeInstanceOf(HTMLElement);
       if (!(chip instanceof HTMLElement)) return;
@@ -1799,20 +1803,22 @@ describe("phone header name floor", () => {
     }
   });
 
-  it("hides the model label when the chip box reaches the menu button", async () => {
+  it("truncates the model label when the chip box reaches the menu button", async () => {
     const view = await mount(false, { left: 300 });
     try {
       expect(view.modelLabel).not.toBeNull();
-      expect(view.modelLabel?.style.display).toBe("none");
+      expect(view.modelLabel?.style.display).not.toBe("none");
+      expect(view.modelLabel?.style.textOverflow).toBe("ellipsis");
     } finally {
       await view.unmount();
     }
   });
 
-  it("hides the model label when the chip box reaches the menu glow", async () => {
+  it("truncates the model label when the chip box reaches the menu glow", async () => {
     const view = await mount(false, { left: 348, glow: true });
     try {
-      expect(view.modelLabel?.style.display).toBe("none");
+      expect(view.modelLabel?.style.display).not.toBe("none");
+      expect(view.modelLabel?.style.textOverflow).toBe("ellipsis");
     } finally {
       await view.unmount();
     }
@@ -1824,7 +1830,8 @@ describe("phone header name floor", () => {
       const menu = document.querySelector("[data-test-menu]");
       expect(menu?.hasAttribute("data-phone-menu")).toBe(true);
       expect(menu?.className).not.toContain("md:hidden");
-      expect(view.modelLabel?.style.display).toBe("none");
+      expect(view.modelLabel?.style.display).not.toBe("none");
+      expect(view.modelLabel?.style.textOverflow).toBe("ellipsis");
     } finally {
       await view.unmount();
     }
@@ -1850,10 +1857,11 @@ describe("phone header name floor", () => {
     }
   });
 
-  it("hides the model label while the chat stage slides away from the menu it reaches", async () => {
+  it("truncates the model label while the chat stage slides away from the menu it reaches", async () => {
     const view = await mount(false, { left: 330, slide: -32 });
     try {
-      expect(view.modelLabel?.style.display).toBe("none");
+      expect(view.modelLabel?.style.display).not.toBe("none");
+      expect(view.modelLabel?.style.textOverflow).toBe("ellipsis");
     } finally {
       await view.unmount();
     }
@@ -1869,10 +1877,11 @@ describe("phone header name floor", () => {
     }
   });
 
-  it("hides an overlapping model label while the menu rides the chat stage toward it", async () => {
+  it("truncates an overlapping model label while the menu rides the chat stage toward it", async () => {
     const view = await mount(false, { left: 362, slide: 32, rider: true });
     try {
-      expect(view.modelLabel?.style.display).toBe("none");
+      expect(view.modelLabel?.style.display).not.toBe("none");
+      expect(view.modelLabel?.style.textOverflow).toBe("ellipsis");
     } finally {
       await view.unmount();
     }

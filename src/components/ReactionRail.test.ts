@@ -53,12 +53,11 @@ describe("reaction rail", () => {
     expect(sources["ChatBubble.tsx"]).not.toContain("flex flex-col gap-0.5 self-end");
     expect(sources["ChatBubble.tsx"]).toContain("data-message-hover-actions");
     expect(sources["GroupView.tsx"]).toContain("data-message-hover-actions");
-    // both ChatView rows dock under the bubble since the copy-buttons fix,
-    // so only GroupView keeps the vertically-centered side float
-    expect(sources["ChatBubble.tsx"]).not.toContain("right-full");
-    expect(sources["ChatBubble.tsx"]).toContain("bottom-0");
-    expect(sources["GroupView.tsx"]).toContain("left-full");
-    expect(sources["GroupView.tsx"]).toContain("right-full");
+    for (const file of ["ChatBubble.tsx", "GroupView.tsx"] as const) {
+      expect(sources[file]).not.toContain("right-full");
+      expect(sources[file]).not.toContain("left-full");
+      expect(sources[file]).toContain("bottom-0");
+    }
     const chatRows = sources["ChatBubble.tsx"].split("data-message-hover-actions").slice(1);
     expect(chatRows.length).toBeGreaterThanOrEqual(2);
     expect(chatRows.every((row) => row.includes("items-center"))).toBe(true);

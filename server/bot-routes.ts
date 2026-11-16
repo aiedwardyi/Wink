@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
 import { BOT_AVATAR_PICKER_ORDER, botAvatarChoiceSchema, botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
-import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
@@ -34,6 +33,7 @@ type BotRouteDeps = {
   defaultSelection: () => Promise<ModelSelection>;
   botJobSchema: z.ZodString;
   checkedModelSelection: (raw: unknown, existing?: boolean, requireAvailableModel?: boolean) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
+  restoreWait?: (of?: string) => Promise<unknown> | undefined;
   store: Store;
   keepGoing: KeepGoing;
   wireBot: (bot: BotRecord) => Record<string, unknown>;
@@ -67,7 +67,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
     activeVpsThreads,
     resumePaneWakes,
   } = deps;
-  const applyProfile = (id: string, input: BotProfilePatchInput) => {
+  const patchTurns = new Map<string, Promise<unknown>>();
+  const applyProfile =(id: string, input: BotProfilePatchInput) => {
     const parsed = parseBotProfilePatch(input, true);
     if (!parsed.ok) return { status: 400, error: parsed.error };
     if (parsed.patch.avatarUrl && !storedAvatarExists(parsed.patch.avatarUrl)) {
@@ -103,7 +104,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (body.job !== undefined) {
         const parsedJob = botJobSchema.safeParse(body.job);
         if (!parsedJob.success) {
-          return json(res, 400, { error: `job must be 1-${BOT_PROFILE_LIMITS.description} characters` });
+          return json(res, 400, { error: "job must not be empty" });
         }
         job = parsedJob.data;
       }
@@ -265,6 +266,14 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
+      // A plain model switch waits only for its engine's account; any other edit keeps the whole startup wait.
+      // Edits to one bot still land in arrival order, so an earlier pick held for its account never overwrites a later one.
+      const target = (body.modelSelection as { instanceId?: unknown } | null | undefined)?.instanceId;
+      const switchOnly = Object.keys(body).every((key) => ["modelSelection", "holdForSwitch", "requireAvailableModel"].includes(key));
+      const turn = (patchTurns.get(m[1]) ?? Promise.resolve()).then(() => deps.restoreWait?.(switchOnly && typeof target === "string" ? target.trim() : undefined));
+      patchTurns.set(m[1], turn);
+      await turn;
+      if (patchTurns.get(m[1]) === turn) patchTurns.delete(m[1]);
       const existingBot = store.bot(m[1]);
       if (body.requireAvailableModel !== undefined && typeof body.requireAvailableModel !== "boolean") {
         return json(res, 400, { error: "requireAvailableModel must be true or false" });

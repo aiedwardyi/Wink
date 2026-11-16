@@ -80,6 +80,8 @@ export function createStartupTiming(options: {
     },
     beforeRequest(method: string, path: string): Promise<unknown> | undefined {
       if (["GET", "HEAD", "OPTIONS"].includes(method) || ["/api/diag/cold-open", "/api/internal/google-account", "/api/internal/terminal-bridge", "/api/attachments"].includes(path)) return;
+      // The bot edit route waits on its own, per account for a model switch.
+      if (method === "PATCH" && /^\/api\/bots\/[\w-]+$/.test(path)) return;
       return tasks.get("accounts")?.then(() => {}, () => {});
     },
     close(): void {

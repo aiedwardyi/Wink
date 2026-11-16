@@ -4,16 +4,53 @@
 // `[data-skin]` rather than `:root[data-skin]` — any element can open a skin
 // context for its own subtree, so the miniature styles itself and can never
 // drift from what picking it actually does.
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_CHANGE_EVENT, applySkin, readSkin, readTriedSkins, type SkinId } from "@/lib/skins";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { reducedMotion } from "@/lib/phone-swipe";
+import { startScene, type SceneHost } from "@/scenes/scene-host";
+import { loadScene, sceneOf, type SceneId } from "./ChatScene";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "dim-sand", "wink-day", "notebook"];
-const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand"]);
+const FEATURED_SKIN_IDS: readonly SkinId[] = ["neon-grid", "samurai-ink", "night-rain", "warp", "circuit", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "dim-sand", "lagoon", "snow", "wink-day", "notebook"];
+const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand", "lagoon", "lagoon-night", "snow", "snow-night", "neon-grid", "samurai-ink", "night-rain", "warp", "circuit"]);
+// Themes opens with every animated tile playing this long; after that only a hovered or pressed tile plays.
+const TILE_PLAY_MS = 3000;
+
+/** An animated theme's own scene, looping in its tile while mounted; a still tile under reduced motion. */
+function MiniScene({ scene }: { scene: SceneId }) {
+  const layer = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (reducedMotion()) return;
+    let live = true;
+    let host: SceneHost | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const start = () =>
+      void loadScene(scene)
+        .then((module) => {
+          const tile = layer.current?.closest<HTMLElement>("[data-skin]");
+          if (!live || !layer.current || !tile) return;
+          // A loop is the longest runner, so every tile also rests on blur.
+          host = startScene(layer.current, { ...module, pauseOnBlur: true }, document.documentElement, tile);
+          host.emit({ name: "loop" });
+          layer.current.dataset.live = "";
+        })
+        // A scene that cannot start (no canvas, a stale chunk) leaves the still tile.
+        .catch(() => host?.stop());
+    // After the first paint: a first shader compile must not hold up opening Themes.
+    const frame = requestAnimationFrame(() => { timer = setTimeout(start, 0); });
+    return () => {
+      live = false;
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+      host?.stop();
+    };
+  }, [scene]);
+  return <div ref={layer} data-mini-scene={scene} />;
+}
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected
@@ -21,7 +58,8 @@ const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "
  * accent on purpose — a skin is mostly judged by where its colour lands, and a
  * single dot was too small to judge.
  */
-function Miniature({ skin }: { skin: SkinId }) {
+export function Miniature({ skin, still = false }: { skin: SkinId; still?: boolean }) {
+  const scene = sceneOf(skin);
   return (
     <div
       data-skin={skin}
@@ -45,7 +83,8 @@ function Miniature({ skin }: { skin: SkinId }) {
         <span className="h-[3px] w-[74%] rounded-full bg-ink-secondary/30" />
       </div>
       {/* thread */}
-      <div className="flex min-w-0 flex-1 flex-col gap-[4px] p-[6px]">
+      <div data-mini-thread="" className="relative isolate flex min-w-0 flex-1 flex-col gap-[4px] p-[6px]">
+        {scene && !still && <MiniScene scene={scene} />}
         <span className="h-[13px] w-[62%] self-end rounded-md bg-bubble-user" />
         <div className="flex w-[88%] flex-col gap-[3px] rounded-md bg-card p-[4px]">
           <span className="h-[2px] w-full rounded-full bg-ink/45" />
@@ -84,6 +123,12 @@ export function SkinPicker() {
   const [picked, setPicked] = useState<SkinId | null>(null);
   const moreId = useId();
   const [tried, setTried] = useState(readTriedSkins);
+  const [opening, setOpening] = useState(true);
+  const [hovered, setHovered] = useState<SkinId | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setOpening(false), TILE_PLAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
 
   // The theme-cycle hotkey calls applySkin() directly, outside this
   // component's own onClick - without this, the checkmark would go stale.
@@ -123,6 +168,12 @@ export function SkinPicker() {
                 setPicked(folded ? skin.id : null);
               }}
               aria-pressed={selected}
+              // A touch enters on press and leaves on release or scroll, so a held tile plays too.
+              onPointerEnter={() => {
+                setOpening(false);
+                setHovered(skin.id);
+              }}
+              onPointerLeave={() => setHovered((was) => (was === skin.id ? null : was))}
               className={cn(
                 "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
                 selected
@@ -130,11 +181,12 @@ export function SkinPicker() {
                   : "border-hairline/60 hover:border-hairline hover:bg-control/50",
               )}
             >
-              <Miniature skin={skin.id} />
-              <div className="flex flex-wrap items-start gap-1.5 px-0.5 pb-0.5">
-                {/* Auto basis lets the New tag drop to its own line instead of covering a long name. */}
-                <div className={cn("min-w-0", isNew ? "flex-[1_1_auto]" : "flex-1")}>
-                  <div className="text-[13px] font-medium text-ink">{skin.name}</div>
+              {/* A new key on hover: the scene plays again from its start. */}
+              <Miniature key={hovered === skin.id ? "hover" : "rest"} skin={skin.id} still={hovered ? hovered !== skin.id : !opening} />
+              <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
+                {/* A long name wraps inside its own box, so the New tag never drops under it or covers it. */}
+                <div className="min-w-0 flex-1 break-words">
+                  <div className="text-[13px] font-medium text-ink">{skin.nameKey ? t(skin.nameKey) : skin.name}</div>
                 </div>
                 {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
                 {isNew && (

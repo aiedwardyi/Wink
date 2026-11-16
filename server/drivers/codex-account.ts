@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { AccountContext } from "../account-policy.ts";
 import { spawnCli } from "../procs.ts";
+import { codexDirect } from "./codex-direct.ts";
 import { awaitDyingAppServers, codexHome, retireAppServer } from "./codex-catalog.ts";
 import { accountLabel, storedAccount } from "./auth-status.ts";
 
@@ -44,7 +45,7 @@ export async function readCodexAccount(cli: string, env: NodeJS.ProcessEnv, acco
   const home = account?.home ?? codexHome(env);
   await awaitDyingAppServers(2_000, home);
   return new Promise((resolve) => {
-    const child = spawnCli(cli, ["app-server"], { env, cwd: homedir(), stdio: ["pipe", "pipe", "pipe"], ...(account ? { account, accountDriver: "codex" } : {}) });
+    const child = spawnCli(cli, ["app-server"], { env, cwd: homedir(), stdio: ["pipe", "pipe", "pipe"], direct: codexDirect, ...(account ? { account, accountDriver: "codex" } : {}) });
     let buffer = "";
     let settled = false;
     const finish = (value: CodexAccount = {}) => {

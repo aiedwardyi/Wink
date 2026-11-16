@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, Download, ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { Download, ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import type { MediaSource } from "@/lib/show-media";
@@ -15,7 +15,9 @@ import "./ShowPane.css";
 
 const ShowPdf = lazy(() => import("./ShowPdf"));
 const MapPane = lazy(() => import("./MapPane").then(module => ({ default: module.MapPane })));
-const ICON = { image: ImageIcon, pdf: FileText, page: Globe };
+const ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText };
+// Past this a text file is a log to open in an editor, not something to read in the pane.
+const TEXT_MAX = 1_000_000;
 
 interface ShowPaneProps {
   item?: ShowItem;
@@ -68,7 +70,6 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
   const pane = (
     <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className="verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in" data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
       <div className="show-pane-head">
-        {!phone && <button type="button" onClick={closePane} aria-label={t("show.collapse")} title={t("show.collapse")} className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><ChevronRight size={18} /></button>}
         <div role="tablist" className="show-pane-tabs">
           <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
@@ -100,6 +101,26 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const [pageSrc, setPageSrc] = useState<string>();
+  const [text, setText] = useState<string>();
+
+  useEffect(() => {
+    if (item.kind !== "text") return;
+    let alive = true;
+    fetch(src)
+      .then(async (res) => {
+        if (!res.ok || Number(res.headers.get("content-length")) > TEXT_MAX) {
+          void res.body?.cancel();
+          throw new Error("unshowable");
+        }
+        const body = await res.text();
+        if (body.length > TEXT_MAX) throw new Error("unshowable");
+        if (!alive) return;
+        setText(body);
+        setReady(true);
+      })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [item.kind, src]);
 
   // Resolve the page's grant in the app; the opaque frame cannot authenticate itself.
   useEffect(() => {
@@ -137,7 +158,9 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
             ? <img src={src} alt={name} onLoad={() => setReady(true)} onError={() => setFailed(true)} />
             : item.kind === "pdf"
               ? <Suspense fallback={null}><ShowPdf src={src} onReady={() => setReady(true)} onFail={() => setFailed(true)} /></Suspense>
-              : pageSrc && <iframe key={loads} src={pageSrc} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
+              : item.kind === "text"
+                ? text !== undefined && <pre>{text}</pre>
+                : pageSrc && <iframe key={loads} src={pageSrc} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
       </div>
     </div>
   );

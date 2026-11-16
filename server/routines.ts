@@ -233,7 +233,7 @@ function sanitizeInput(input: RoutineInput): Omit<Routine, "id" | "createdAt" | 
     runOn,
     enabled: input.enabled !== false,
     schedule: cleanSchedule(input.schedule),
-    durationMinutes: Math.min(240, Math.max(15, Math.round(Number(input.durationMinutes) || 30))),
+    durationMinutes: Math.max(1, Math.round(Number(input.durationMinutes) || 30)),
   };
 }
 

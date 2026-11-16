@@ -148,7 +148,7 @@ describe("linked files", () => {
   });
 
   it.each(["other-PC", "phone"])("streams bot-linked Desktop media outside roots to %s", async (client) => {
-    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "mredw");
+    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "alice");
     const desktop = join(user, "Desktop");
     const folder = join(user, "Projects", "car-advisor");
     mkdirSync(desktop, { recursive: true });
@@ -187,7 +187,7 @@ describe("linked files", () => {
   });
 
   it("hands over a bot-linked Desktop document outside roots as a download", async () => {
-    const desktop = join(temp("linked-doc-", process.cwd()), "Users", "mredw", "Desktop");
+    const desktop = join(temp("linked-doc-", process.cwd()), "Users", "alice", "Desktop");
     mkdirSync(desktop, { recursive: true });
     const file = join(desktop, "UN-Certificate_Vertia.docx");
     writeFileSync(file, "docx-bytes");
@@ -209,7 +209,7 @@ describe("linked files", () => {
   it("keeps unlinked, code, hidden, AppData, system, and disguised files outside roots refused", async () => {
     const root = temp("linked-media-policy-", process.cwd());
     const folder = join(root, "bot");
-    const desktop = join(root, "Users", "mredw", "Desktop");
+    const desktop = join(root, "Users", "alice", "Desktop");
     mkdirSync(folder);
     mkdirSync(desktop, { recursive: true });
     const refused = [
@@ -279,7 +279,7 @@ describe("linked files", () => {
   });
 
   it.each(["other-PC", "phone"])("explains a bot-linked Desktop video outside roots to %s without exposing unlinked paths", async (client) => {
-    const user = join(temp("linked-desktop-"), "Users", "mredw");
+    const user = join(temp("linked-desktop-"), "Users", "alice");
     const desktop = join(user, "Desktop");
     const folder = join(user, "Projects", "car-advisor");
     mkdirSync(desktop, { recursive: true });
@@ -346,6 +346,31 @@ describe("linked files", () => {
     }));
     try {
       expect((await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves a picture the user attached by path, but not another file type or an unattached picture", async () => {
+    const root = temp("linked-attached-", process.cwd());
+    const picture = join(root, "image (3).png");
+    const notes = join(root, "notes.txt");
+    const other = join(root, "other.png");
+    for (const file of [picture, notes, other]) writeFileSync(file, "pixels");
+    const tag = (path: string) => `<attached-file path="${path.replaceAll("&", "&amp;")}" name="${basename(path)}" size="6" />`;
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "user", text: `look\n\n${tag(picture)}\n${tag(notes)}\n[other](${other})` }],
+      writerDeviceId: () => null, rootsFor: () => [],
+    }));
+    try {
+      const open = (path: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+      const shown = await open(picture);
+      expect(shown.status).toBe(200);
+      expect(shown.headers.get("content-type")).toBe("image/png");
+      expect(await shown.text()).toBe("pixels");
+      expect((await open(notes)).status).toBe(404);
+      expect((await open(other)).status).toBe(404);
     } finally {
       await server.close();
     }

@@ -15,6 +15,13 @@
           history.replaceState(history.state, "", url.pathname + url.search + url.hash);
         }
       } catch {}
+      // sw.js finds this page by its app url and posts a tapped notification's chat to it like to the app.
+      if (navigator.serviceWorker) navigator.serviceWorker.onmessage = (event) => {
+        if (event.data?.type !== "orbit-open" || typeof event.data.url !== "string") return;
+        const next = new URL(event.data.url, location.href);
+        if (typeof event.data.t0 === "number") next.searchParams.set("t0", String(event.data.t0));
+        location.assign(next.href);
+      };
     </script>
     <style>
       :root {

@@ -182,8 +182,10 @@ describe("SettingsPanel Korean bot details", () => {
       createElement(I18nProvider, null, createElement(SettingsPanel, { bot })),
     );
     expect(html).toContain("봇 세부 정보");
-    expect(html).toContain("aria-label=\"봇 세부 정보 접기\"");
-    expect(html).toContain("aria-label=\"봇 세부 정보 닫기\"");
+    const head = html.slice(html.indexOf("<aside"), html.indexOf('role="tablist"'));
+    expect(head.match(/<button/g)).toHaveLength(1);
+    expect(head).toMatch(/>봇 세부 정보<\/span><button [^>]*aria-label="봇 세부 정보 닫기"[^>]*class="[^"]*size-7 [^"]*max-md:size-11/);
+    expect(head).toContain('<svg xmlns="http://www.w3.org/2000/svg" width="15"');
     expect(html).toContain(">프로젝트 폴더<");
     expect(html).toContain(">이름<");
     expect(html).toContain(">메모리<");

@@ -78,6 +78,16 @@ describe("model index data", () => {
     }
   });
 
+  it("charts every sourced Ember row without changing its values", () => {
+    expect(PICKER_MODEL_IDS).toContain("muse-ember-1.0");
+    for (const index of MODEL_INDEXES) {
+      const rows = MODEL_INDEX_ENTRIES.filter((entry) => entry.model === "muse-ember-1.0" && entry.index === index);
+      const points = indexView(index, []).points.filter((entry) => entry.model === "muse-ember-1.0");
+      expect(points, index).toHaveLength(rows.length);
+      for (const row of rows) expect(points, index).toContainEqual(expect.objectContaining(row));
+    }
+  });
+
   it("prices every picker model its vendor still lists, once, per 1M tokens, blended 7:2:1", () => {
     const cost = indexView("cost", []).points;
     expect(cost.map((e) => e.model).sort()).toEqual([...CHARTED].sort());
@@ -197,7 +207,7 @@ describe("sourced data", () => {
   it("charts 12 Design models with published page costs and confidence intervals", () => {
     const { points, missing } = indexView("design", PICKER_MODEL_IDS.map((model) => ({ provider: "other", model, label: model })));
     expect(new Set(points.map((e) => e.model)).size).toBe(12);
-    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "grok-4.6", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
+    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "gemini-4-carbon", "gemini-4-hydrogen", "grok-4.6", "muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
     for (const e of points) {
       expect([e.benchmark, e.costBenchmark, e.effort]).toEqual(["rams-index", "rams-index", "default"]);
       expect(e.costSource).toBe("https://www.rams.ai/index/data/models-v0.6.1.json");
@@ -255,9 +265,13 @@ describe("sourced data", () => {
   it("charts Argon on the four AA indexes, Rams Index and the two Vals benchmarks", () => {
     const scored = MODEL_INDEX_ENTRIES.filter((e) => e.model === "gemini-4-argon" && e.index !== "cost");
     expect(scored.map((e) => [e.index, e.benchmark, e.effort, e.score, e.cost])).toEqual([
+      ["coding", "aa-frontiercode", "medium", 25.0184848484849, undefined],
       ["coding", "aa-frontiercode", "high", 25.7076262626263, undefined],
-      ["general", "aa-gdpval", "high", 1630.66, 3.64],
-      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 9.946608711550533],
+      ["general", "aa-gdpval", "medium", 1578.39, undefined],
+      ["general", "aa-gdpval", "high", 1633.51, 3.64],
+      ["intelligence", "aa-intelligence-index", "medium", 47.6040598289046, 4.314621569087732],
+      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 4.973304355775267],
+      ["agentic", "aa-terminal-bench", "medium", 55.050505050505, 6.424922769986513],
       ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
       ["design", "rams-index", "default", 20.7, 0.149],
       ["security", "vals-cyberbench", "all", 77.857, 5.113798],

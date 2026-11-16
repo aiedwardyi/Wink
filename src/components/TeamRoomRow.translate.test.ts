@@ -4,9 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
+import { useTranslationAvailable } from "@/lib/room-translate";
 import type { RoomLine } from "@/lib/team-rooms";
 
-import { RoomLineText, TeamRoomTranscript } from "./TeamRoomRow";
+import { RoomLineTranslation, RoomTranslateButton, RoomTranslationText, TeamRoomTranscript } from "./TeamRoomRow";
 
 const readiness = vi.hoisted(() => ({ instances: [] as unknown[], config: null as unknown }));
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -30,6 +31,8 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("fetch", fetch);
   fetch.mockClear();
+  readiness.instances = [];
+  readiness.config = null;
   available = true;
   generate = async () => new Response(JSON.stringify({ text: "The materials are ready.\nPlease review them together." }));
   applyLocale("en");
@@ -52,11 +55,14 @@ const button = () => host.querySelector<HTMLButtonElement>('button[data-room-tra
 
 describe("teammate translation", () => {
   it("drops a local bubble's translation when its source text changes", async () => {
-    const props = { base: "/api/rooms/r1", entryId: "m-b1", canTranslate: true };
-    await act(async () => root.render(createElement(RoomLineText, { ...props, text: "준비됐어요." })));
+    const props = { base: "/api/rooms/r1", entryId: "m-b1", canTranslate: true, children: (translation: Parameters<typeof RoomTranslationText>[0]["translation"] | null) => translation && [
+      createElement(RoomTranslateButton, { key: "button", translation }),
+      createElement(RoomTranslationText, { key: "text", translation, markdown: false }),
+    ] };
+    await act(async () => root.render(createElement(RoomLineTranslation, { ...props, text: "준비됐어요." })));
     await act(async () => button()!.click());
     expect(host.querySelector("[data-room-translation]")).not.toBeNull();
-    await act(async () => root.render(createElement(RoomLineText, { ...props, text: "내용을 수정했어요." })));
+    await act(async () => root.render(createElement(RoomLineTranslation, { ...props, text: "내용을 수정했어요." })));
     expect(host.querySelector("[data-room-translation]")).toBeNull();
     await act(async () => button()!.click());
     expect(fetch.mock.calls.filter(([path]) => path.includes("/entries/"))).toHaveLength(2);
@@ -88,9 +94,38 @@ describe("teammate translation", () => {
     expect(button()).toBeNull();
   });
 
+  it("keeps a host row's shown translation while an engine recheck is in flight, and skips the recheck on a usage report", async () => {
+    const engine = { instanceId: "claude", driverKind: "claudeAgent", snapshot: { state: "available" }, models: { default: "", options: [] } };
+    const HostRow = () => createElement(RoomLineTranslation, { base: "/api/rooms/r1", entryId: "m-b1", text: "준비됐어요.", canTranslate: useTranslationAvailable("/api/rooms/r1"), children: (translation) => translation && [
+      createElement(RoomTranslateButton, { key: "button", translation }),
+      createElement(RoomTranslationText, { key: "text", translation, markdown: true }),
+    ] });
+    readiness.instances = [engine];
+    await act(async () => root.render(createElement(HostRow)));
+    await act(async () => button()!.click());
+    const shown = () => host.querySelector("[data-room-translation]")?.textContent ?? "";
+    const checks = () => fetch.mock.calls.filter(([path]) => path === "/api/rooms/r1/translate").length;
+    let answer!: (response: Response) => void;
+    fetch.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    const engines = [engine, { ...engine, instanceId: "codex", driverKind: "codex" }];
+    readiness.instances = engines;
+    await act(async () => root.render(createElement(HostRow)));
+    expect(shown()).toContain("The materials are ready.");
+    await act(async () => answer(new Response(JSON.stringify({ available: true }))));
+    expect(shown()).toContain("The materials are ready.");
+    const before = checks();
+    readiness.instances = engines.map((row) => ({ ...row, rateLimits: { windows: [], observedAt: "2026-11-16T00:00:00Z" } }));
+    await act(async () => root.render(createElement(HostRow)));
+    expect(checks()).toBe(before);
+    expect(shown()).toContain("The materials are ready.");
+    expect(button()).not.toBeNull();
+  });
+
   it("shows only the other-language button and keeps the original through show and hide", async () => {
     await render();
     expect(host.querySelectorAll("button[data-room-translate]")).toHaveLength(1);
+    expect([...button()!.closest("[data-message-hover-actions]")!.querySelectorAll("button")].map((item) => item.getAttribute("aria-label"))).toEqual(["Copy message", "Reply to message", "Translate"]);
+    expect(host.querySelector("[data-team-room-content] button")).toBeNull();
     expect(button()?.getAttribute("aria-label")).toBe("Translate");
     await act(async () => button()!.click());
     expect(host.textContent).toContain("The materials are ready.");
@@ -134,10 +169,43 @@ describe("teammate translation", () => {
     expect(host.textContent).toContain("체크리스트가 준비됐어요.");
   });
 
+  it("renders a bot line's translation through Markdown like its original", async () => {
+    const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando" }, text: "Status:\n\n- **Workers** are done\n- Tests pass", files: [] };
+    generate = async () => new Response(JSON.stringify({ text: "상태:\n\n- **작업자**가 끝났어요\n- 테스트 통과" }));
+    applyLocale("ko");
+    await render([bot]);
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect([...translated.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["작업자가 끝났어요", "테스트 통과"]);
+    expect(translated.querySelector("strong")?.textContent).toBe("작업자");
+    expect(translated.textContent).not.toContain("**");
+  });
+
+  it("renders HTML in a bot line's translation as text", async () => {
+    const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando" }, text: "All set.", files: [] };
+    generate = async () => new Response(JSON.stringify({ text: '<img src=x onerror="alert(1)">준비됐어요' }));
+    applyLocale("ko");
+    await render([bot]);
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect(translated.querySelector("img, script")).toBeNull();
+    expect(translated.textContent).toContain("준비됐어요");
+  });
+
+  it("keeps a person line's translation as linked plain text", async () => {
+    generate = async () => new Response(JSON.stringify({ text: "- **not bold**\nhttps://example.com" }));
+    await render();
+    await act(async () => button()!.click());
+    const translated = host.querySelector("[data-room-translation]")!;
+    expect(translated.querySelector("li, strong")).toBeNull();
+    expect(translated.textContent).toContain("- **not bold**");
+    expect(translated.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+  });
+
   it("has no translate button without an engine", async () => {
     available = false;
     await render();
     expect(button()).toBeNull();
-    expect(host.querySelectorAll("[data-room-translate-gutter]")).toHaveLength(2);
+    expect(host.querySelector("[data-room-translate-gutter]")).toBeNull();
   });
 });

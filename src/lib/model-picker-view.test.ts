@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadModelPickerView, saveModelPickerView } from "./model-picker-view";
+import { loadModelPickerView, nextPickerStyle, saveModelPickerView } from "./model-picker-view";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -31,5 +31,26 @@ describe("model picker view", () => {
     expect(loadModelPickerView()).toBe("dial");
     expect(() => saveModelPickerView("list")).not.toThrow();
     expect(loadModelPickerView()).toBe("list");
+  });
+});
+
+describe("model picker style rotation", () => {
+  it("steps to the next style and wraps", () => {
+    const styles = ["dial", "list", "chart", "machine"] as const;
+    expect(styles.map((style) => nextPickerStyle(styles, style))).toEqual(["list", "chart", "machine", "dial"]);
+  });
+
+  it("starts from the first style when the shown one is not offered", () => {
+    expect(nextPickerStyle(["list", "machine"], "dial")).toBe("list");
+  });
+
+  it("remembers the Machine as a style", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+    saveModelPickerView("machine");
+    expect(loadModelPickerView()).toBe("machine");
   });
 });

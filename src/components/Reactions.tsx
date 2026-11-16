@@ -21,7 +21,7 @@ function reactLabel(t: Translate, emoji: string, pressed: boolean) {
   return pressed ? t("chat.removeReaction", { emoji }) : t("chat.reactEmoji", { emoji });
 }
 
-export function ReactionBar({ threadId, message }: { threadId: string; message: Message }) {
+export function ReactionBar({ threadId, message, onPick }: { threadId: string; message: Message; onPick?: (emoji: string) => void }) {
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -163,7 +163,8 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
   }, [pickerOpen, placed]);
 
   const toggle = (emoji: string) => {
-    dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
+    if (onPick) onPick(emoji);
+    else dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
     closeAndRefocus();
   };
 
@@ -226,6 +227,7 @@ export function ReactionChips({
   className,
   onToggle,
   names,
+  readOnly = false,
 }: {
   threadId: string;
   message: Message;
@@ -235,6 +237,7 @@ export function ReactionChips({
   /** A team room: toggles go to the room, chips always count, `names` hold people. */
   onToggle?: (emoji: string) => void;
   names?: ReadonlyMap<string, string>;
+  readOnly?: boolean;
 }) {
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
@@ -251,6 +254,7 @@ export function ReactionChips({
       className={cn(
         "absolute z-10 flex w-max max-w-80 translate-y-1/2 flex-wrap gap-1",
         corner === "left" ? "left-2" : "right-2 justify-end",
+        readOnly && "pointer-events-none",
         className,
       )}
     >
@@ -258,6 +262,7 @@ export function ReactionChips({
         <button
           key={emoji}
           type="button"
+          disabled={readOnly}
           onClick={() => onToggle ? onToggle(emoji) : dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message })}
           title={bys.map(nameOf).join(", ")}
           aria-label={onToggle || bys.length > 1 ? `${emoji} ${bys.length}` : emoji}

@@ -4,14 +4,13 @@
 // visible line and the bubble reads as the previous speaker's.
 import { activityRunVisible, activityVisibleInChat, type TranscriptItem } from "./activity-runs";
 import { isShownMessage } from "./shown-message";
-import { LIVE_VERIFY_V0 } from "../../shared/live-verify";
 import type { Message } from "@/state/store";
 
 export interface RoomTranscriptOptions {
   showToolCalls: boolean;
   showActivities?: boolean;
-  /** Worker run rows, which messageVisible alone hides. */
-  workerRows?: ReadonlySet<string>;
+  /** Worker run notes: the run's anchor shows its row, the rest fold into it. */
+  workers?: ReadonlyMap<string, unknown>;
 }
 
 export interface RoomTranscriptRow {
@@ -27,7 +26,7 @@ export interface RoomTranscriptRow {
 export function messageVisible(message: Message, showToolCalls: boolean, showActivities = showToolCalls): boolean {
   switch (message.kind) {
     case "note":
-      return LIVE_VERIFY_V0 && Boolean(message.verify);
+      return isShownMessage(message);
     case "text":
       return Boolean(message.text || message.roomFiles?.length) && isShownMessage(message);
     case "activity":
@@ -58,7 +57,9 @@ export function roomTranscriptRows(
     const visible =
       item.kind === "run"
         ? activityRunVisible(item.messages, options.showActivities ?? options.showToolCalls)
-        : messageVisible(first, options.showToolCalls, options.showActivities) || Boolean(options.workerRows?.has(first.id));
+        : options.workers?.has(first.id)
+          ? Boolean(options.workers.get(first.id))
+          : messageVisible(first, options.showToolCalls, options.showActivities);
     if (!visible) return { visible, newDay: false, cluster: false };
     const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
     const cluster = !prev || prev.role !== first.role || prev.from?.botId !== first.from?.botId || prev.author?.id !== first.author?.id || newDay;

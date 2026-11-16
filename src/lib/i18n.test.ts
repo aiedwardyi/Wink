@@ -188,7 +188,7 @@ describe("catalogs", () => {
 
   it("substitutes template values across different runtime values", () => {
     const phrases = [
-      ["composer.roomLead", "{name}에 메시지"],
+      ["composer.roomLead", "{name}에게 메시지 보내기"],
       ["room.hint.lead", "답변할 봇을 고르려면 @로 언급하세요."],
       ["chat.conversationAria", "대화 상대: {name}"],
       ["palette.noMatch", "“{query}” 검색 결과가 없습니다"],
@@ -410,12 +410,14 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(ko["connectedApps.unavailable"]).not.toMatch(/temporarily unavailable/);
     expect("room.manageMembersTitle" in en).toBe(false);
     expect("room.manageMembersTitle" in ko).toBe(false);
-    expect(en["room.details"]).toBe("Room Details");
-    expect(ko["room.details"]).toBe("채팅방 세부 정보");
+    expect(en["room.details"]).toBe("Group details");
+    expect(ko["room.details"]).toBe("그룹 세부 정보");
     expect(en["bot.details"]).toBe("Bot Details");
     expect(ko["bot.details"]).toBe("봇 세부 정보");
-    expect(en["bot.collapseDetails"]).toBe("Collapse Bot Details");
-    expect(ko["bot.collapseDetails"]).toBe("봇 세부 정보 접기");
+    for (const key of ["show.collapse", "bot.collapseDetails", "room.collapseDetails"]) {
+      expect(key in en).toBe(false);
+      expect(key in ko).toBe(false);
+    }
     expect(en["bot.closeDetails"]).toBe("Close Bot Details");
     expect(ko["bot.closeDetails"]).toBe("봇 세부 정보 닫기");
   });
@@ -432,7 +434,6 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(settingsPanel).not.toContain('t("chrome.connectedApps")');
     expect(settingsPanel).not.toContain("connectedAppsEnabled");
     expect(settingsPanel).toContain('t("bot.details")');
-    expect(settingsPanel).toContain('t("bot.collapseDetails")');
     expect(settingsPanel).toContain('t("bot.closeDetails")');
     expect(settingsPanel).not.toMatch(/>Bot details</);
     expect(settingsPanel).not.toMatch(/Collapse bot details/);

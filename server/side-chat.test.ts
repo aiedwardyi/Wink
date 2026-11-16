@@ -322,7 +322,7 @@ describe("quickAsk without a fork", () => {
 
 describe("sweepSide", () => {
   it("cleans dead forks and keeps live ones", async () => {
-    const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+    const dead = spawnSync(process.execPath, ["-e", ""], { windowsHide: true }).pid!;
     const config = join(scratch, "cfg");
     const logs = join(scratch, "logs");
     mkdirSync(join(config, "sessions"), { recursive: true });
@@ -524,6 +524,19 @@ describe("Claude fork (fake CLI)", () => {
     await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
     await handle.close(5_000);
     expect(prompts().find((line) => line.argv.includes("--fork-session"))!.text).toBe("[LIVE]\n\nq");
+  });
+
+  it("runs the headless fork without Code Mode", async () => {
+    process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Port 8080.");
+    const dump = join(scratch, "fork-env.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await mainTurn("t-code-mode");
+    const handle = instance.fork!({ threadId: "t-code-mode", text: "q" })!;
+    await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
+    await handle.close(5_000);
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain("--fork-session");
+    expect(seen.env).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE");
   });
 
   const forkOf = (settings: object, policy: Parameters<typeof forkClaude>[0]["policy"] = {}) => {

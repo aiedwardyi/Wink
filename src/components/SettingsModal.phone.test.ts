@@ -105,6 +105,32 @@ describe("phone Settings navigation", () => {
     expect(pane.textContent).not.toContain("Sync");
   });
 
+  it.each(["en", "ko"])("fits phone Account to its content while keeping taller content scrollable in %s", async (locale) => {
+    await open(locale);
+    await tap(locale === "ko" ? "계정" : "Account");
+    expect(dialog()!.classList.contains("h-auto")).toBe(true);
+    expect(dialog()!.classList.contains("max-h-full")).toBe(true);
+    expect(dialog()!.querySelector("[data-settings-page] .overflow-y-auto")).not.toBeNull();
+  });
+
+  it("gives the list and page X a 44px touch area without growing it", async () => {
+    await open();
+    const touchArea = (x: HTMLButtonElement) => {
+      expect(x.className).toContain("relative");
+      expect(x.className).toContain("p-1 ");
+      expect(x.className).toContain("pointer-coarse:after:absolute pointer-coarse:after:-inset-[9px]");
+    };
+    touchArea(button("Close Settings")!);
+    await tap("General");
+    touchArea(dialog()!.querySelector<HTMLButtonElement>('[data-settings-page] button[aria-label="Close Settings"]')!);
+  });
+
+  it("keeps the other phone Settings pages at their fixed height", async () => {
+    await open();
+    await tap("General");
+    expect(dialog()!.classList.contains("h-[560px]")).toBe(true);
+  });
+
   it("keeps Vibration in one row without its help text", async () => {
     Object.defineProperty(navigator, "vibrate", { value: vi.fn(), configurable: true });
     await open();

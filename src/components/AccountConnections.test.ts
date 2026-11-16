@@ -56,10 +56,10 @@ afterEach(async () => {
 
 it("keeps each Connections email bound to its account id when Main and order change", async () => {
   await render(5);
-  const labels = ["hitecledtx", "getwinkdev", "aiedwardyi", "mredwardyi", "rocknblock.official"];
+  const labels = ["alex", "blair", "casey", "drew", "emery"];
   state.instances = state.instances.map((account, index) => ({ ...account,
     snapshot: { ...account.snapshot, account: `${labels[index]}@example.test` },
-    pickerSnapshot: { state: "available" as const, authenticated: true, account: "mredwardyi@example.test" },
+    pickerSnapshot: { state: "available" as const, authenticated: true, account: "drew@example.test" },
     accountMain: index === 3,
   })).reverse();
   await update();

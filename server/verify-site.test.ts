@@ -154,7 +154,7 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 
-it("streams only to thread readers, saves after the reply, and serves replay or 404", async () => {
+it("streams to the app and the user's bots, saves after the reply, and serves replay or 404", async () => {
   let finishRun!: () => void;
   const done = new Promise<void>(resolve => { finishRun = resolve; });
   bridge!.cast = async run => new ReadableStream({ start(controller) {
@@ -169,9 +169,9 @@ it("streams only to thread readers, saves after the reply, and serves replay or 
   const runId = live.verify!.runId;
   const get = (suffix: string, headers: Record<string, string> = { authorization: "Bearer app-token" }) => fetch(`${base}/api/verify/runs/${runId}/${suffix}`, { headers });
   expect((await get("live", {})).status).toBe(401);
-  expect((await get("live", { authorization: `Bearer ${token}` })).status).toBe(403);
   expect((await get("live", { "x-relay": "1", authorization: "Bearer app-token" })).status).toBe(401);
-  const first = await get("live"), second = await get("live", { "x-relay": "1", "x-phone": "1" });
+  const first = await get("live", { authorization: `Bearer ${token}` }), second = await get("live", { "x-relay": "1", "x-phone": "1" });
+  expect(first.status).toBe(200);
   expect(first.headers.get("cache-control")).toBe("no-store");
   expect(first.headers.get("x-content-type-options")).toBe("nosniff");
   expect((await get("live")).status).toBe(429);

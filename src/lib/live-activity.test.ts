@@ -10,6 +10,7 @@ import type { Message } from "@/state/store";
 const here = dirname(fileURLToPath(import.meta.url));
 const chatView = readFileSync(join(here, "../components/ChatView.tsx"), "utf8");
 const groupView = readFileSync(join(here, "../components/GroupView.tsx"), "utf8");
+const roomTurn = readFileSync(join(here, "room-turn.ts"), "utf8");
 
 const activity = (name: string, extra: Partial<NonNullable<Message["tool"]>> = {}): Message => ({
   id: "activity",
@@ -66,10 +67,24 @@ describe("liveActivityLabel", () => {
     expect(liveActivityLabel(activity("Bash: pnpm test"), true)).toBe("Running a command");
   });
 
+  it("says a tool silent past the stall window is still running, whatever Show tool calls says", () => {
+    expect(liveActivityLabel(activity("Bash: pnpm test"), false, true)).toBe("Still on a tool, no output for a while");
+    expect(liveActivityLabel(activity("Bash: pnpm test"), true, true)).toBe("Still on a tool, no output for a while");
+    expect(liveActivityLabel(activity("Bash: pnpm test", { ok: true }), false, true)).toBe("Thinking");
+    applyLocale("ko");
+    expect(liveActivityLabel(activity("Bash: pnpm test"), false, true)).toBe("아직 도구 실행 중, 한동안 출력이 없어요");
+    applyLocale("en");
+  });
+
+  it("feeds the bot's no-signal into ChatView and GroupView presence labels", () => {
+    expect(chatView).toContain('liveActivityLabel(lastMessage, showActivities, bot.activity === "no-signal")');
+    expect(roomTurn).toContain("liveActivityLabel(last, showActivities, quiet)");
+    expect(groupView).toMatch(/useRoomTurnStage\([^)]*speaker\?\.activity === "no-signal"\)/);
+  });
+
   it("passes activity visibility into ChatView and GroupView presence labels", () => {
-    for (const view of [chatView, groupView]) {
-      expect(view).toContain("const showActivities = showToolCalls || terminal;");
-      expect(view).toMatch(/liveActivityLabel\([^,]+,\s*showActivities\)/);
-    }
+    for (const view of [chatView, groupView]) expect(view).toContain("const showActivities = showToolCalls || terminal;");
+    for (const view of [chatView, roomTurn]) expect(view).toMatch(/liveActivityLabel\([^,]+,\s*showActivities[,)]/);
+    expect(groupView).toMatch(/useRoomTurnStage\([^)]*showActivities/);
   });
 });
