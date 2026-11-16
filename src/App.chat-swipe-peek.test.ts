@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Group } from "@/state/store";
 import { ChatPeekPart } from "@/lib/chat-preview";
+import { forgetJoinedRoom, noteJoinedRoom } from "@/lib/joined-rooms";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
 import { UNASSIGNED_SECTION_ID, sidebarItemKey } from "@/lib/sidebar-order";
@@ -33,7 +34,7 @@ const chat = (id: string) => host.querySelector<HTMLElement>(`[data-test-chat="$
 const mountedChats = () => [...host.querySelectorAll<HTMLElement>("[data-test-chat]")].map((node) => node.dataset.testChat);
 const wait = (ms: number) => act(() => new Promise<void>((done) => setTimeout(done, ms)));
 
-async function mount(selectedId: string, emptyId?: string, room = false) {
+async function mount(selectedId: string, emptyId?: string, room = false, joined: string[] = []) {
   const order = room ? ["a", "room", "b", "c"] : ["a", "b", "c"];
   localStorage.setItem(SIDEBAR_ORDER_KEY, JSON.stringify({ sectionOrder: [], itemOrder: { [UNASSIGNED_SECTION_ID]: order.map((id) => sidebarItemKey(id === "room" ? "group" : "bot", id)) } }));
   localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
@@ -50,7 +51,7 @@ async function mount(selectedId: string, emptyId?: string, room = false) {
     selectedId,
   }));
   await act(async () => root.render(createElement(App)));
-  expect([...document.querySelectorAll("[data-sidebar-row-id]")].map((row) => row.getAttribute("data-sidebar-row-id"))).toEqual(order);
+  expect([...document.querySelectorAll("[data-sidebar-row-id]")].map((row) => row.getAttribute("data-sidebar-row-id"))).toEqual([...order, ...joined]);
   expect(mountedChats()).toEqual([selectedId]);
 }
 
@@ -214,6 +215,17 @@ describe("phone chat peek", () => {
     expect(mountedChats()).toEqual(["c"]);
     for (let node = incoming; node && host.contains(node); node = node.parentElement) {
       expect(node.getAnimations?.() ?? []).toHaveLength(0);
+    }
+  });
+
+  it("peeks a joined room after the last bot", async () => {
+    noteJoinedRoom({ roomId: "qa", status: "joined", link: "live", me: { id: "me", name: "Me" }, state: { roomName: "QA", host: "Host", people: [] } });
+    try {
+      await mount("c", undefined, false, ["joined:qa"]);
+      await drag("c", 300, 140);
+      expect(host.querySelector('[data-phone-chat-page="joined:qa"]')).not.toBeNull();
+    } finally {
+      forgetJoinedRoom("qa");
     }
   });
 

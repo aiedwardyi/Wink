@@ -22,6 +22,7 @@ import { listedGroups, preferredStartupSelectionId } from "@/lib/sidebar-order";
 import { DRAWER_BUTTON_LEFT, DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
+import { useSidebarRooms } from "@/components/SidebarRooms";
 import { ChatView, warmCallViews } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
@@ -625,7 +626,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const selectSwipe = useCallback((id: string) => {
     dispatch({ type: "select", id });
   }, [dispatch]);
-  const swipeOrder = () => swipeChatIds(state.bots, state.groups, loadSidebarOrder(), swipeChatId);
+  const sidebarChats = useSidebarRooms().state;
+  const swipeOrder = () => swipeChatIds(sidebarChats.bots, sidebarChats.groups, loadSidebarOrder(), swipeChatId);
   const closeDrawer = () => {
     setDrawerOpen(false);
     menuButtonRef.current?.focus();
