@@ -215,6 +215,18 @@ describe("cached chat preview", () => {
     expect(requests.some((url) => url.includes("before="))).toBe(false);
   });
 
+  it.each(["bot", "room"] as const)("grows a %s tail that overflows by less than the follow threshold", async (kind) => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? 600 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? (this.querySelectorAll("[data-mid]").length < 8 ? 300 : 610) : 0;
+    });
+    if (kind === "bot") await render(true, heavyBot);
+    else await renderRoom(true, heavyRoom);
+    expect(host.querySelectorAll("[data-mid]").length).toBeGreaterThan(8);
+  });
+
   it.each(["bot", "room"] as const)("fills an underfilled %s preview from cached rows before paint", async (kind) => {
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
       return this.hasAttribute("data-orbit-transcript") ? 600 : 0;
