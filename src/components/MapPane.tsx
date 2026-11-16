@@ -35,7 +35,7 @@ const CodeRow = memo(function CodeRow({ line, source }: { line: MapDiffLine; sou
   return <div className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{tokens?.length ? tokens.map((token, i) => token.color ? <span key={i} style={{ color: token.color }}>{token.content}</span> : token.content) : line.text || " "}</code></div>;
 });
 
-export function MapPane({ botId, maximized = false, active = true }: { botId?: string; maximized?: boolean; active?: boolean }) {
+export function MapPane({ botId, maximized = false, active = true }: { botId: string; maximized?: boolean; active?: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
   const [snapshot, setSnapshot] = useState<MapSnapshot>(EMPTY);
@@ -54,7 +54,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [connection, setConnection] = useState(0);
   const [link, setLink] = useState(0);
   const liveReady = useRef(false);
-  const [live, setReady] = useState(!botId);
+  const [live, setReady] = useState(false);
   const ready = live || snapshot.workers.length > 0;
   const topRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -87,7 +87,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const index = useMemo(() => paths ? treeIndex(repo?.name ?? "", extra.length ? [...paths, ...extra] : paths) : lost ? treeIndex("", changed) : undefined, [paths, extraKey, lost && changedKey]);
   const order = useMemo(() => index ? treeOrder(index, new Set(changedKey.split("\0"))) : [], [index, changedKey]);
   const current = useMemo(() => worker?.path ? { path: worker.path, worker: worker.id, at: worker.editedAt } : undefined, [worker?.path, worker?.id, worker?.editedAt]);
-  const base = botId && `/api/bots/${encodeURIComponent(botId)}/map`;
+  const base = `/api/bots/${encodeURIComponent(botId)}/map`;
   const openRef = useRef((_path: string) => {});
   openRef.current = path => {
     const owners = snapshot.workers.filter(item => item.files.some(file => file.path === path));
@@ -102,7 +102,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
 
   useEffect(() => {
     liveReady.current = false;
-    if (!base || !active) return;
+    if (!active) return;
     setReady(false);
     let stream: EventSource;
     let reopen: ReturnType<typeof setTimeout> | undefined;
@@ -129,7 +129,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   }, [base, active, link]);
 
   useEffect(() => {
-    if (!active || !liveReady.current || !base || !repoWorker) return;
+    if (!active || !liveReady.current || !repoWorker) return;
     const controller = new AbortController();
     const id = repoWorker;
     request(`${base}/repo?${new URLSearchParams({ worker: id })}`, { signal: controller.signal }).then((data: MapRepo) => {
@@ -140,7 +140,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
 
   useEffect(() => {
     if (!active || !liveReady.current) return;
-    if (!base || !worker?.git || !chosen.path) { setDiff(null); return; }
+    if (!worker?.git || !chosen.path) { setDiff(null); return; }
     const controller = new AbortController();
     setFailed(false);
     const id = worker.id;
@@ -207,7 +207,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   if (!rows && worker && (paths || lost || !repoWorker) && (loaded || failed || !worker.git || !chosen.path)) setRows(true);
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
-    if (!base || !loaded || held) return;
+    if (!loaded || held) return;
     const { worker: id, path, data } = loaded;
     const diffs = cache.current.diffs;
     const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path && current.data === data ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
@@ -263,7 +263,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapSplit target={topRef} rows />
-      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active && rows} />
+      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active && rows} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
         <div ref={barRef} className="map-crumbs">
@@ -292,6 +292,6 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         </div>
       </>}
     </>}
-    {base && ready && !worker && !connectionFailed && !snapshot.error && <MapExample labels={c.tree} active={active} />}
+    {ready && !worker && !connectionFailed && !snapshot.error && <MapExample labels={c.tree} active={active} />}
   </section>;
 }
