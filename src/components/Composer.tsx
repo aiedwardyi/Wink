@@ -39,6 +39,7 @@ import {
   isLongPaste,
   pasteAttachment,
   rereadEmptyImages,
+  roomCopyPath,
   shrinksImage,
   uploadAttachment,
   uploadAttachmentFile,
@@ -695,6 +696,7 @@ export function Composer({
       allowImages: engineSupportsImages,
       getPath: pathForFile,
       shrunkPath: shrunkPicture,
+      roomCopy: group?.hosted ? roomCopyPath : undefined,
     });
     if (added.length) addAttachments(added, uploads, startedAt);
     // Keep file-specific failures beside the attachments. A successful
@@ -1258,6 +1260,7 @@ export function Composer({
           localFile={room ? roomPicture : undefined}
           onDropFiles={room ? (files) => void pickFiles(files) : undefined}
           dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
+          roomCopy={group?.hosted ? roomCopyPath : undefined}
         />
         </div>
         </div>

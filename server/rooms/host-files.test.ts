@@ -1,12 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ATTACHMENTS_DIR } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
 import { createGroupRoutes } from "../group-routes.ts";
+import { markRelaySocket } from "../phone-relay/via.ts";
 import { SendSequencer } from "../send-idempotency.ts";
 import { Store, type Message } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, type HostedGroup } from "./asks.ts";
@@ -21,6 +24,12 @@ vi.mock("./send.ts", async (actual) => {
     await copying.before?.();
     return real.hostRoomFiles(...args);
   }) };
+});
+
+// a share path must never reach the disk: Windows would dial out over SMB
+vi.mock("node:fs/promises", async (actual) => {
+  const real = await actual<typeof import("node:fs/promises")>();
+  return { ...real, open: vi.fn((path: string, ...rest: []) => (/^[\\/]{2}/.test(String(path)) ? Promise.reject(new Error("share opened")) : real.open(path, ...rest))) };
 });
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
@@ -47,8 +56,13 @@ function routes(botCaller = false) {
   } as unknown as Parameters<typeof createGroupRoutes>[0]);
 }
 
-async function send(text: string, sendId = "send-0123456789abcdef", botCaller = false, made = routes(botCaller)) {
+async function send(text: string, sendId = "send-0123456789abcdef", botCaller = false, made = routes(botCaller), phone = false) {
   const req = Readable.from([JSON.stringify({ text, sendId })]) as unknown as IncomingMessage;
+  if (phone) {
+    const socket = new PassThrough();
+    markRelaySocket(socket);
+    Object.assign(req, { socket });
+  }
   const res = { writeHead: vi.fn(), end: vi.fn() };
   await made.postMessage(req, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
   return { status: res.writeHead.mock.calls[0][0] as number, body: JSON.parse(res.end.mock.calls[0][0]) };
@@ -69,13 +83,14 @@ beforeEach(() => {
   rmSync(DATA_DIR, { recursive: true, force: true });
   local = mkdtempSync(join(tmpdir(), "host-files-"));
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
-  const wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
+  const wink = store.patchBot(store.createBot().id, { name: "Wink", cwd: local })!.id;
   group = store.createGroup("Team", [wink], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;
   addPerson(group.hosted.roomId, "Peter", ["Wink"]);
   configureRoomAsks({ store, hostName: () => "Edward", instance: () => null, dispatch: vi.fn(), stopTurn: vi.fn(async () => {}), endSession: vi.fn(async () => {}) });
 });
 afterEach(() => {
   copying.before = null;
+  vi.mocked(open).mockClear();
   configureRoomAsks(null);
   closeAsksDb();
   closeRoomsDb();
@@ -113,7 +128,7 @@ describe("the host's files in a room with people and bots", () => {
     const refused = await send(`here\n\n${file(put("tool.exe", Buffer.from([0x4d, 0x5a, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e])), "tool.exe")}`);
     expect(refused).toEqual({ status: 415, body: { error: "only pictures, video, audio, PDF, zip, Office and text files can be shared", code: "ROOM_FILE", file: "tool.exe" } });
     expect(store.messagesFor(group.threadId)).toHaveLength(before);
-    expect((await send(Array.from({ length: 51 }, () => image(join(local, "x.png"))).join("\n"), "send-many-0123456789")).body).toMatchObject({ code: "ROOM_FILE", error: "at most 50 files per message" });
+    expect((await send(Array.from({ length: 51 }, () => image(put("x.png", PNG))).join("\n"), "send-many-0123456789")).body).toMatchObject({ code: "ROOM_FILE", error: "at most 50 files per message" });
   });
 
   it("reuses a retried send's files", async () => {
@@ -146,5 +161,99 @@ describe("the host's files in a room with people and bots", () => {
     expect(lastEntry()).toMatchObject({ text: "see [image]" });
     expect(lastEntry().files).toBeUndefined();
     expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+  });
+});
+
+describe("a host file tag that the composer did not attach", () => {
+  const words = (name: string) => `[file: ${name}]`;
+  const secret = (folder: string, name: string) => {
+    mkdirSync(folder, { recursive: true });
+    const path = join(folder, name);
+    writeFileSync(path, "-----BEGIN OPENSSH PRIVATE KEY-----");
+    return path;
+  };
+
+  it("stays as words for a file outside every project and the attachments folder", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "host-secret-"));
+    try {
+      expect((await send(`why ${file(secret(outside, "notes.txt"), "notes.txt")}`)).status).toBe(202);
+      expect(lastEntry()).toMatchObject({ text: `why ${words("notes.txt")}` });
+      expect(lastEntry().files).toBeUndefined();
+      expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("stays as words for a dot folder or Wink's data inside a project", async () => {
+    store.patchBot(group.memberIds[0]!, { cwd: homedir() });
+    const key = secret(join(homedir(), ".ssh"), "id_ed25519");
+    const bots = secret(DATA_DIR, "bots.json");
+    const keys = secret(join(homedir(), "AppData", "Roaming"), "keys.txt");
+    expect((await send([file(key, "id_ed25519"), file(bots, "bots.json"), file(keys, "keys.txt")].join(", "))).status).toBe(202);
+    expect(lastEntry()).toMatchObject({ text: [words("id_ed25519"), words("bots.json"), words("keys.txt")].join(", ") });
+    expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+  });
+
+  it("never opens a network share", async () => {
+    for (const [at, path] of ["\\\\attacker.invalid\\share\\a.txt", "//attacker.invalid/share/a.txt", "\\\\.\\pipe\\wink", "\\\\?\\C:\\a.txt"].entries()) {
+      expect((await send(file(path, "a.txt"), `send-share-${at}-0123456789`)).status).toBe(202);
+      expect(lastEntry()).toMatchObject({ text: words("a.txt") });
+    }
+    expect(vi.mocked(open).mock.calls.map(([path]) => path)).toEqual([]);
+  });
+
+  it("is refused the same way from a paired phone", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "host-secret-"));
+    try {
+      expect((await send(file(secret(outside, "id_ed25519"), "id_ed25519"), undefined, false, routes(), true)).status).toBe(202);
+      expect(lastEntry()).toMatchObject({ text: words("id_ed25519") });
+      expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("still lets the composer's upload through beside a refused tag", async () => {
+    mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    const upload = join(ATTACHMENTS_DIR, "0b9c1d2e-upload.png");
+    writeFileSync(upload, PNG);
+    store.patchBot(group.memberIds[0]!, { cwd: undefined });
+    const outside = mkdtempSync(join(tmpdir(), "host-secret-"));
+    try {
+      expect((await send(`look ${image(upload)} and ${file(secret(outside, "notes.txt"), "notes.txt")}`)).status).toBe(202);
+      expect(lastEntry()).toMatchObject({ text: `look  and ${words("notes.txt")}` });
+      expect(lastEntry().files?.map((each) => each.name)).toEqual(["0b9c1d2e-upload.png"]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("reaches guests through the composer's copy of a desktop file outside every project", async () => {
+    mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    const downloads = join(homedir(), "Downloads");
+    mkdirSync(downloads, { recursive: true });
+    const pdf = join(downloads, "plan.pdf");
+    writeFileSync(pdf, PDF);
+    const copy = join(ATTACHMENTS_DIR, "5f0c7a1e-plan.pdf");
+    writeFileSync(copy, PDF);
+    expect((await send(`plan ${file(pdf, "plan.pdf", ` copy="${copy}"`)}`)).status).toBe(202);
+    expect(lastEntry()).toMatchObject({ text: "plan" });
+    expect(lastEntry().files?.map((each) => [each.name, each.type])).toEqual([["plan.pdf", "application/pdf"]]);
+  });
+
+  it("ignores a copy of a private file, and a copy from outside the attachments folder", async () => {
+    mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    const copy = join(ATTACHMENTS_DIR, "5f0c7a1e-key.txt");
+    writeFileSync(copy, "key");
+    const key = secret(join(homedir(), ".ssh"), "id_ed25519");
+    const plan = secret(join(homedir(), "Downloads"), "plan.txt");
+    const other = secret(join(homedir(), "Documents"), "taxes.txt");
+    const share = "\\attacker.invalid\share\a.txt";
+    const text = [file(key, "id_ed25519", ` copy="${copy}"`), file(plan, "plan.txt", ` copy="${other}"`), file(share, "a.txt", ` copy="${copy}"`)].join(", ");
+    expect((await send(text)).status).toBe(202);
+    expect(lastEntry()).toMatchObject({ text: [words("id_ed25519"), words("plan.txt"), words("a.txt")].join(", ") });
+    expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+    expect(vi.mocked(open).mock.calls.map(([path]) => path)).toEqual([]);
   });
 });
