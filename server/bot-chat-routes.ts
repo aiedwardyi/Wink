@@ -40,7 +40,7 @@ type BotChatRouteDeps = {
   threadSyncGate: ReturnType<typeof createThreadSyncV2Gate>;
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
-  freshTurnShape?: (bot: BotRecord, instance: ProviderInstance) => PrepareFocus["fresh"] | null;
+  firstTurnLaunch?: (bot: BotRecord, instance: ProviderInstance) => PrepareFocus["fresh"] | null;
   store: Store;
   clientMessage: (message: Message) => Message;
   sendSequencer: SendSequencer;
@@ -512,7 +512,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 200, { ok: true, prepared: false, reason: "driver has no prepare" });
       }
       const { model, effort } = bot.modelSelection;
-      const fresh = deps.freshTurnShape?.(bot, instance) ?? undefined;
+      const fresh = deps.firstTurnLaunch?.(bot, instance) ?? undefined;
       void instance.prepare(undefined, { threadId: bot.threadId, model, effort, approval: bot.autoApprove ? "auto" : "ask", fresh }).catch(() => {});
       return json(res, 200, { ok: true, prepared: true });
     },

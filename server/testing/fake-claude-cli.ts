@@ -85,6 +85,7 @@
 //   FAKE_CLAUDE_PROMPT_LOG  path; every stdin message is appended as a JSON
 //                      line {pid, argv, systemPrompt, text}, so a test sees
 //                      what each turn of a retained process was sent
+//   FAKE_CLAUDE_INIT_REPLY  error: refuse an `initialize` control request
 //   FAKE_CLAUDE_EAGER_INIT  path; a session process prints `init` before any
 //                      stdin, then creates this file
 //   FAKE_CLAUDE_HOLD_DIR  path; a prompt whose last hold:<name> is that name
@@ -1058,9 +1059,12 @@ process.stdin.on("data", (c) => {
       if (control.request?.subtype === "interrupt" && onInterrupt) onInterrupt(requestId);
       else if (control.request?.subtype === "apply_flag_settings") answerFlagSettings(requestId, control.request.settings?.effortLevel);
       else if (control.request?.subtype === "initialize") {
-        // the real CLI appends this to the system text of every later request
-        if (control.request.appendSystemPrompt) systemPrompt = control.request.appendSystemPrompt;
-        ackInterrupt(requestId);
+        if (process.env.FAKE_CLAUDE_INIT_REPLY === "error") out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "unsupported" } });
+        else {
+          // the real CLI appends this to the system text of every later request
+          if (control.request.appendSystemPrompt) systemPrompt = control.request.appendSystemPrompt;
+          ackInterrupt(requestId);
+        }
       }
       else ackInterrupt(requestId);
       continue;

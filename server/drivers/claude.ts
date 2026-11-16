@@ -1012,6 +1012,25 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
+    // true once the CLI acknowledges the system text; false if it refuses or exits first
+    const initialize = (s: Session, threadId: string, system: string): Promise<boolean> => {
+      const requestId = newId();
+      return new Promise((resolve) => {
+        const done = (ok: boolean) => {
+          s.replies.delete(requestId);
+          s.child.off("exit", gone);
+          resolve(ok);
+        };
+        const gone = () => done(false);
+        s.replies.set(requestId, done);
+        s.child.once("exit", gone);
+        if (s.child.exitCode !== null) return done(false);
+        void writeControl(s, threadId, { type: "control_request", request_id: requestId, request: { subtype: "initialize", appendSystemPrompt: system } }).then((written) => {
+          if (!written) done(false);
+        });
+      });
+    };
+
     const emit = (event: RuntimeEvent) => traceRuntimeEvent(event, () => {
       finishNative(event);
       for (const l of [...listeners]) l(event);
@@ -1267,9 +1286,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           broker: live.broker,
         });
         if (!relaunchOf) emit({ ...base(threadId, turnId), type: "turn.started" });
-        // ordered ahead of the message on stdin; the CLI applies it before its first request
-        const initialized = !deferred || !turn.system || await writeControl(live, threadId, { type: "control_request", request_id: newId(), request: { subtype: "initialize", appendSystemPrompt: turn.system } });
-        const written = initialized && await writeUser(live, threadId, turn.text);
+        const initialized = !deferred || !turn.system || await initialize(live, threadId, turn.system);
+        if (!initialized) {
+          active.delete(threadId);
+          live.turn = null;
+          closeSession(threadId, "initialize refused");
+          throw new Error("claude session did not accept its system prompt");
+        }
+        const written = await writeUser(live, threadId, turn.text);
         if (!written) {
           active.delete(threadId);
           live.turn = null;

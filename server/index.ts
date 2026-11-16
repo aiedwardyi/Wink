@@ -4938,7 +4938,7 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 
 // The spawn shape startClaimedTurn gives an ordinary chat turn that opens a new session, or null when that
 // turn mounts something only a send may set up (a remote or VM computer, connected apps).
-function freshTurnShape(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
+function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
   const task = store.taskByThread(bot.id, bot.threadId);
   // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
   if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
@@ -7791,7 +7791,7 @@ applyBrandLeadBot({
 const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId) });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
-  freshTurnShape,
+  firstTurnLaunch,
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,
   threadSyncGate,

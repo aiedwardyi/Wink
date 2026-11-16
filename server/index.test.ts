@@ -266,7 +266,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => boxStub.listen(0, "127.0.0.1", r));
   boxStubPort = (boxStub.address() as { port: number }).port;
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--require", join(SERVER_DIR, "testing", "roomy-host.cjs"), join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -2312,7 +2312,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "first word" })).status).toBe(202);
       const prompts = join(home, "prewarm-prompts.ndjson");
       await expect.poll(() => existsSync(prompts)).toBe(true);
-      const [sent, ...more] = readFileSync(prompts, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { argv: string[]; systemPrompt?: string; text: string });
+      const [sent, ...more] = readFileSync(prompts, "utf8").trim().split("\n").map((line): { argv: string[]; systemPrompt?: string; text: string } => JSON.parse(line));
       expect(more).toEqual([]);
       expect(sent!.text).toContain("first word");
       expect(sent!.argv.some((arg) => arg.startsWith("--append-system-prompt"))).toBe(false);

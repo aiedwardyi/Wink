@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -107,7 +107,7 @@ describe("Claude prepared children", () => {
   });
 
   describe("a thread's first turn", () => {
-    const sentSystem = (log: string) => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; argv: string[]; systemPrompt?: string });
+    const sentSystem = (log: string) => readFileSync(log, "utf8").trim().split("\n").map((line): { pid: number; argv: string[]; systemPrompt?: string } => JSON.parse(line));
     const firstTurn = async (fresh: { cwd: string }, sendCwd: string) => {
       const log = join(mkdtempSync(join(tmpdir(), "claude-first-")), "prompts.ndjson");
       vi.stubEnv("FAKE_CLAUDE_PROMPT_LOG", log);
@@ -125,6 +125,15 @@ describe("Claude prepared children", () => {
       expect(sent).toHaveLength(1);
       expect(sent[0]!.systemPrompt).toBe("You are Wink.");
       expect(sent[0]!.argv.some((arg) => arg.startsWith("--append-system-prompt"))).toBe(false);
+    });
+
+    it("fails the turn instead of sending without its system text when the CLI refuses it", async () => {
+      vi.stubEnv("FAKE_CLAUDE_INIT_REPLY", "error");
+      const log = join(mkdtempSync(join(tmpdir(), "claude-first-")), "prompts.ndjson");
+      vi.stubEnv("FAKE_CLAUDE_PROMPT_LOG", log);
+      await instance.prepare!(undefined, { threadId: "t-first", approval: "ask", fresh: { cwd: tmpdir() } });
+      await expect(instance.adapter.sendTurn({ threadId: "t-first", text: "hi", approval: "ask", cwd: tmpdir(), system: "You are Wink." })).rejects.toThrow("did not accept its system prompt");
+      expect(existsSync(log)).toBe(false);
     });
 
     it("cold-starts when the turn's shape differs from the prepared one", async () => {
