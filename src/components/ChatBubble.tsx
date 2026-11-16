@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Phone, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
@@ -9,7 +9,7 @@ import { ReplyQuote } from "./ReplyQuote";
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRows } from "./FileAttachmentRow";
 import { ReactionBar, ReactionChips } from "./Reactions";
-import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
+import { messageMenuProps, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { cn } from "@/lib/cn";
 import { useThreadMessage } from "@/lib/message-pages";
 import { detectChatOptions } from "@/lib/chat-options";
@@ -350,32 +350,7 @@ const Bubble = memo(function Bubble({
       }
       : null;
 
-  const menuProps: HTMLAttributes<HTMLDivElement> = {
-    ...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget }))),
-    onContextMenu: menuTarget ? (e) => {
-      if (isTouchPrimary() || !(e.target instanceof Element)) return;
-      const kind = contextClickKind(e.target, e.clientX, e.clientY);
-      if (kind === "native") return;
-      e.preventDefault();
-      e.stopPropagation();
-      onMessageMenu(kind === "selection"
-        ? { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" }
-        : { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, target: menuTarget });
-    } : undefined,
-    onKeyDown: menuTarget ? (e) => {
-      if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
-      if (e.target instanceof Element && keepsNativeMenu(e.target)) return;
-      e.preventDefault();
-      const rect = e.currentTarget.getBoundingClientRect();
-      onMessageMenu({
-        kind: "message",
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-        opener: e.currentTarget,
-        target: menuTarget,
-      });
-    } : undefined,
-  };
+  const menuProps = messageMenuProps(menuTarget, onMessageMenu);
 
   // a teammate's message lands as a user row; it reads as theirs, like the asker side's
   if (user && message.from) {

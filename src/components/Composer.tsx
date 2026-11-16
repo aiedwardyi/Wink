@@ -105,7 +105,7 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   if (at === -1) return null;
   if (at > 0 && !/\s/.test(upto[at - 1])) return null; // user@host, not a tag
   const query = upto.slice(at + 1);
-  if (query.length > 24 || query.includes("@") || query.includes("\n")) return null;
+  if (query.length > 24 || query.includes("@") || /^\s/.test(query) || query.includes("\n")) return null;
   return { start: at, query };
 }
 
@@ -460,7 +460,7 @@ export function Composer({
   const [terminalSendError, setTerminalSendError] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
-  const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd or pressed away from this @ until the next edit
   const [stoppingBotId, setStoppingBotId] = useState<string | null>(null);
   const stopping = !group && Boolean(bot) && stoppingBotId === bot?.id;
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -578,6 +578,16 @@ export function Composer({
   }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(pickerOpen, () => setDismissedAt(mention?.start ?? null));
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const mentionStart = mention?.start ?? null;
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (event.target instanceof Node && !pickerRef.current?.contains(event.target)) setDismissedAt(mentionStart);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
+  }, [pickerOpen, mentionStart]);
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query]);
 
@@ -1054,6 +1064,7 @@ export function Composer({
       <div className="pointer-events-auto relative flex max-h-[60dvh] w-full flex-col">
         {pickerOpen && (
           <div
+            ref={pickerRef}
             role="listbox"
             aria-label={t("composer.tagBot")}
             className="absolute bottom-full left-2 z-20 mb-2 w-72 overflow-hidden rounded-xl border border-hairline/40 bg-raised shadow-lg"

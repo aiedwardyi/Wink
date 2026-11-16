@@ -2,7 +2,7 @@ export type CatalogTool = { name: string; description: string; inputSchema: obje
 type Integration = { command: string; args: string[]; env: Record<string, string> };
 
 // Only tools a user asks for by name: a lookup is one more model call, and reactions, images and routines (reminders) must stay one call away.
-const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential"]);
+const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status"]);
 
 export const CATALOG_TOOLS = [
   {

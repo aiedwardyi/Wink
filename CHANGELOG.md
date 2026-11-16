@@ -2,6 +2,27 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.272] - 2026-11-16
+
+### Added
+- A bot stuck on a sign-in or engine problem calls your phone: Answer starts a voice call where it tells you what it needs, Not now leaves a plain alert.
+- Every bot follows short code-fix rules by default: fix the root cause, add a check, prove it by running the code. Your own instructions win.
+- Claude bots in terminal panes start with Code Mode on.
+
+### Changed
+- Most leftover limits on terminals, sign-ins, phones, uploads, routines and rooms are gone, and a team room holds up to 100 people.
+- Gemini, Grok and Muse bots no longer resend their full setup after Wink restarts, so the next message uses fewer tokens.
+
+### Fixed
+- When a bot's final answer repeats what it already wrote in the same turn, you see it once.
+- A folded question shows the choices that fit plus a "+N" pill for the rest; tapping it opens the card.
+- Typing an answer to a question no longer hits a "question already settled" error.
+- In a call, a "yes" followed by a new request no longer confirms the old one, and "wait" or "bye" no longer answers an open question.
+- In a call, asking what the bot said reads its newest chat message out in full.
+- Browser sign-in titles the PC list "Choose a PC" and drops the "Choose another PC" link that went nowhere.
+- Lagoon and Lagoon Night keep rippling while a bot works and settle when it finishes.
+- Worker rows in chat hover with a rounded, padded fill, and nothing shifts.
+
 ## [1.0.271] - 2026-11-16
 
 ### Changed

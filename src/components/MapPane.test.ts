@@ -833,3 +833,15 @@ it("colors a removed line inside an unchanged comment as a comment", async () =>
   const color = (kind: string) => host.querySelector<HTMLElement>(`.map-code-row[data-kind="${kind}"] code span`)?.style.color.toUpperCase();
   expect([color("remove"), color("add")]).toEqual(["#6A9955", "#6A9955"]);
 });
+
+it("puts a second drag line between the tree and the Git rows, hidden when no Git rows follow", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ commits: [] }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await act(async () => {});
+  const order = [...host.querySelector(".map-pane")!.children].map(part => part.matches(".map-split") ? part.getAttribute("aria-label") : part.className);
+  expect(order.slice(0, 6)).toEqual(["map-head", "map-top", "Resize the file tree", "map-flow-rows", "Resize the code view", "map-crumbs"]);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toContain(".map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }");
+  expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
+});
