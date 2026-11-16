@@ -73,6 +73,9 @@ export const BOT_AVATAR_IDS = [
   "icon-47",
   "icon-48",
   "icon-49",
+  "icon-50",
+  "icon-51",
+  "icon-52",
 ] as const;
 export const botAvatarIdSchema = z.enum(BOT_AVATAR_IDS);
 export type BotAvatarId = z.infer<typeof botAvatarIdSchema>;
@@ -129,6 +132,9 @@ export const BOT_AVATAR_ASSETS = {
   "icon-47": "icon-47-engine-gemini.png",
   "icon-48": "icon-48-engine-grok.png",
   "icon-49": "icon-49-engine-muse.png",
+  "icon-50": "icon-50-wink-geometric.png",
+  "icon-51": "icon-51-wink-ink.png",
+  "icon-52": "icon-52-wink-warp.png",
 } satisfies Record<BotAvatarId, string>;
 
 export const BOT_AVATAR_LABELS = {
@@ -181,6 +187,9 @@ export const BOT_AVATAR_LABELS = {
   "icon-47": "Gemini",
   "icon-48": "Grok",
   "icon-49": "Muse",
+  "icon-50": "Wink geometric",
+  "icon-51": "Wink ink",
+  "icon-52": "Wink warp",
 } satisfies Record<BotAvatarId, string>;
 
 export const WINK_ICON_IDS = ["icon-31", "icon-32", "icon-33", "icon-34", "icon-35", "icon-36"] as const satisfies readonly BotAvatarId[];
@@ -203,6 +212,7 @@ export function nextWinkAvatar(bots: readonly { mascotStyle?: string | null; cre
 /** Older ids stay valid and still render; the picker just stops offering them. */
 export const BOT_AVATAR_PICKER_ORDER = [
   ...WINK_ICON_IDS,
+  "icon-50", "icon-51", "icon-52",
   "icon-37", "icon-38", "icon-39", "icon-40", "icon-41", "icon-42", "icon-43", "icon-44",
   "icon-45", "icon-46", "icon-47", "icon-48", "icon-49",
 ] as const satisfies readonly BotAvatarId[];
@@ -212,6 +222,7 @@ export const EXTENDED_BOT_AVATAR_IDS: ReadonlySet<string> = new Set([
   "icon-36",
   "icon-37", "icon-38", "icon-39", "icon-40", "icon-41", "icon-42", "icon-43", "icon-44",
   "icon-45", "icon-46", "icon-47", "icon-48", "icon-49",
+  "icon-50", "icon-51", "icon-52",
 ] satisfies BotAvatarId[]);
 
 const BOT_AVATAR_ID_SET = new Set<string>(BOT_AVATAR_IDS);
