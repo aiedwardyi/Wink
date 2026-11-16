@@ -274,6 +274,14 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   expect(shown).toEqual({ threadId: "r-thread", path: "plan.pdf", kind: "pdf", src: `/api/rooms/r1/files/${id(2)}` });
 });
 
+it("a room's pane has no Map tab, a bot chat's does", async () => {
+  const room: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => root.render(createElement(ShowPane, { media: true, source: room, hidden: false })));
+  expect(tab("Map")).toBeUndefined();
+  await act(async () => root.render(createElement(ShowPane, { media: true, source: chat, botId: "b1", hidden: false })));
+  expect(tab("Map")).toBeDefined();
+});
+
 it("says so when there are no files yet, in English and Korean", async () => {
   room = { files: [] };
   await act(async () => showMedia("t9"));

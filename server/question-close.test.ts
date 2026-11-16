@@ -8,7 +8,7 @@ import { AskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser, type AskUserDeps } from "./ask-user.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
-import { Store, type BotRecord } from "./store.ts";
+import { Store, type BotRecord, type Message } from "./store.ts";
 import { scanQuestion } from "../shared/open-question.ts";
 
 function harness() {
@@ -30,7 +30,7 @@ function harness() {
   };
   const ask = (question: string, close = false, threadId = bot.threadId) => postAskUser(deps,
     askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: threadId, question, choices: ["Yes", "No"], close }));
-  return { store, bot, hold, ask, notifyQuestion, patchMessage };
+  return { store, bot, hold, deps, ask, notifyQuestion, patchMessage };
 }
 
 describe("close question", () => {
@@ -45,6 +45,17 @@ describe("close question", () => {
       card: expect.objectContaining({ answered: "Answered in chat" }),
     });
     expect(h.notifyQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a card with choices open through typed lines until the bot closes it", () => {
+    const h = harness();
+    const rows: Message[] = JSON.parse(readFileSync(new URL("../test/fixtures/ask-typed-past.json", import.meta.url), "utf8"));
+    for (const { id: _id, at: _at, parentId: _parentId, ...row } of rows) h.store.appendMessage(h.bot.threadId, row);
+    const asked = h.store.activePath(h.bot.threadId).find((message) => message.card?.askUser)!;
+    expect(scanQuestion(h.store.activePath(h.bot.threadId))?.id).toBe(asked.id);
+    expect(postAskUser(h.deps, askUserRequestSchema.parse({ fromBotId: h.bot.id, fromThreadId: h.bot.threadId, question: asked.card!.subtitle, close: true })))
+      .toEqual({ status: 200, body: { closed: true } });
+    expect(scanQuestion(h.store.activePath(h.bot.threadId))).toBeNull();
   });
 
   it.each([{ answered: "Yes" }, { dismissed: true }])("leaves a settled card unchanged: %j", (patch) => {

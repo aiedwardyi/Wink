@@ -6,6 +6,7 @@
 // client-side, flushed FIFO on settle.
 // Lecturing the empty box about "the turn" made forever-chat feel like
 // supervising an agent. Keep the queue; drop the gate-y chrome.
+import type { Message } from "@/state/store";
 import { roomRespondersForComposer } from "./group-routing";
 import type { MessageKey } from "./i18n";
 
@@ -30,9 +31,10 @@ export function roomLineSteers<T extends { id: string; name: string; hidden?: bo
   text: string,
   members: T[],
   busyBotId: string | null | undefined,
+  replyTo?: Pick<Message, "from" | "author"> | null,
 ): boolean {
   if (!busyBotId) return false;
-  const responders = roomRespondersForComposer(text, members, { defaultResponder: { kind: "member", botId: busyBotId } });
+  const responders = roomRespondersForComposer(text, members, { defaultResponder: { kind: "member", botId: busyBotId } }, replyTo);
   return responders.length === 1 && responders[0]!.id === busyBotId;
 }
 

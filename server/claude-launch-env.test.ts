@@ -12,7 +12,7 @@ const SITES = {
   "electron/terminal-host.mjs": { launches: 4, claude: "withClaudePaneEnv(" },
   "electron/terminal-remote.mjs": { launches: 1, claude: "CLAUDE_PANE_ENV" },
   // Headless Claude: Code Mode only runs in the interactive terminal.
-  "server/drivers/claude.ts": { launches: 3 },
+  "server/drivers/claude.ts": { launches: 2 },
   "server/drivers/claude-fork.ts": { launches: 1 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
@@ -44,7 +44,7 @@ const SITES = {
   "server/map-git.ts": { launches: 1 },
   "server/map-pr.ts": { launches: 1 },
   "server/mcp-bridge.ts": { launches: 2 },
-  "server/procs.ts": { launches: 5 },
+  "server/procs.ts": { launches: 7 },
   "server/remote-access.ts": { launches: 1 },
   "server/tailscale-setup.ts": { launches: 1 },
   "server/usage-refresh.ts": { launches: 5 },

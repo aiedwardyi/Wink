@@ -276,6 +276,7 @@ export class ProviderRegistry {
     this.get(id)?.setAccountBlocked?.(blocked);
   }
   accountBlocked(id: string) { return this.blockedAccounts.has(id); }
+  cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
     if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));

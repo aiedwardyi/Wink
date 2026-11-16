@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, mapClashes, rowY, treeIndex, treeLayout } from "./map-tree";
+import { fmt, mapClashes, rowY, treeClimb, treeEdges, treeIndex, treeLayout } from "./map-tree";
 
 it("sizes a folder box for the padding, border and gap its name and count are drawn with", () => {
   const box = readFileSync("src/components/MapTree.css", "utf8").match(/\.map-tree-box \{([^}]*)\}/)![1];
@@ -84,6 +84,30 @@ it("keeps every box apart across random small projects on a phone", () => {
     if (overlaps(items)) bad++;
   }
   expect(bad).toBe(0);
+});
+
+it("runs a parent's line straight into a kid that sits under it, at every width", () => {
+  let seed = 7;
+  const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor(seed / 2147483648 * n); };
+  const tops = ["src", "server", ".github", "supabase", "services", "docs", "lib", "app", "tests", "scripts", "public", "ios", "assets", "electron", "shared"];
+  const jags: string[] = [];
+  for (let run = 0; run < 40; run++) {
+    const paths = tops.filter(() => rand(5) < 2).flatMap(top => Array.from({ length: 1 + rand(40) }, (_, i) => `${top}/${rand(2) ? "sub/" : ""}file-${i}.ts`));
+    const changed = new Set(paths.filter(() => !rand(20)));
+    const px = 5.5 + rand(20) / 10;
+    for (let width = 320; width <= 1000; width += 7) {
+      const { items } = treeLayout(treeIndex("zlife-audit-fixes", paths), opts(width, changed, { phone: width < 480 }, px));
+      for (const parent of items.filter(it => it.kids?.length)) {
+        const [[x, , bus], ...kids] = [...treeEdges([parent], it => it).matchAll(/M([\d.]+) ([\d.]+)V([\d.]+)/g)].map(match => match.slice(1).map(Number));
+        for (const [kid, y] of kids) if (y === bus && kid !== x && Math.abs(kid - x) <= 4) jags.push(`run ${run} width ${width} ${parent.id}: ${x} -> ${kid}`);
+      }
+      for (const path of changed) {
+        const climb = treeClimb(items, path, it => it) ?? [];
+        climb.forEach((point, i) => { const off = point.busOf ? Math.abs(Math.round(point.x) - Math.round(climb[i - 1].x)) : 0; if (off && off <= 4) jags.push(`run ${run} width ${width} ${path}: lit line ${off}px`); });
+      }
+    }
+  }
+  expect(jags).toEqual([]);
 });
 
 it("keeps a changed root file reachable when the phone's top row folds it away", () => {
