@@ -795,7 +795,7 @@ describe("Google sync routes", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const route = source.indexOf("googleSyncRoute(method, path, { relay, bearerOk: credentials.bearerOk, phoneSession: credentials.phoneSession, remoteCookie: apiRequestAuthorized(false, req.headers.cookie, credentials.remoteKey, path) }, googleSync, () => readBody(req))");
     expect(route).toBeGreaterThan(source.indexOf("const gate = await phoneAccess.gate(req, res);"));
-    expect(route).toBeGreaterThan(source.indexOf("const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);"));
+    expect(route).toBeGreaterThan(source.indexOf("const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization, path), REMOTE_KEY);"));
     expect(route).toBeGreaterThan(source.indexOf("return json(res, 401, { error: \"unauthorized\" });"));
     expect(source.includes("const bots = profileSyncBots();")).toBe(true);
     expect(source.indexOf("googleSync.resume();")).toBeGreaterThan(source.lastIndexOf("\nsyncAllThreads();"));

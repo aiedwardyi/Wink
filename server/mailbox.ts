@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
+import { parsePaneNote } from "../shared/pane-note.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
 
@@ -137,6 +138,9 @@ export function mailboxRecipient<T extends { id: string }>(bots: readonly T[], s
   return bots.find((bot) => bot.id === scope.bot);
 }
 
+/** Deliverables that are not PRs (pages, sites, docs) never get a built.md line on merge. */
+export const BUILT_REMINDER = "Add or edit its built.md line now (PR or not).";
+
 /** Pane text is untrusted: strip escapes and controls, cap it, tag it. Null when nothing is left. */
 export function mailboxNoteText(pane: string, from: string, botId: string, text: string, label?: string | null): string | null {
   const clean = text
@@ -146,7 +150,10 @@ export function mailboxNoteText(pane: string, from: string, botId: string, text:
     .replace(UNSAFE_CONTROLS, "")
     .trim();
   if (!clean) return null;
-  const capped = clean.length > MAILBOX_NOTE_MAX_CHARS ? `${clean.slice(0, MAILBOX_NOTE_MAX_CHARS)}\n[truncated]` : clean;
+  const cut = clean.length > MAILBOX_NOTE_MAX_CHARS;
+  const done = parsePaneNote(clean).status === "done" ? `\n${BUILT_REMINDER}` : "";
+  // [truncated] stays last: parsePaneNote only spots a cut at the very end.
+  const capped = `${cut ? clean.slice(0, MAILBOX_NOTE_MAX_CHARS) : clean}${done}${cut ? "\n[truncated]" : ""}`;
   const who = sanitizeMailboxName(from);
   const pane8 = `[pane ${pane.slice(0, 8)}]`;
   const tag = label ? `${pane8} [${sanitizeMailboxName(label).replace(/\]/g, ")")}]` : pane8;

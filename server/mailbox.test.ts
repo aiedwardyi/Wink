@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { installOrbitMsg, terminalPaneEnv } from "../electron/terminal-mailbox.mjs";
 import {
-  loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody,
+  BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody,
 } from "./mailbox.ts";
 import { PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
@@ -185,6 +185,20 @@ describe("mailbox note text", () => {
     expect(mailboxNoteText(PANE, "worker", "w1", "done", "OPUS | MED")).toBe("[pane 0f3c9a1e] [OPUS | MED] from worker (w1): done");
     expect(mailboxNoteText(PANE, "worker", "w1", "done", "weird]label")).toBe("[pane 0f3c9a1e] [weird)label] from worker (w1): done");
     expect(mailboxNoteText(PANE, "worker", "w1", "done", null)).toBe("[pane 0f3c9a1e] from worker (w1): done");
+  });
+
+  it("reminds the teacher to record every DONE deliverable in built.md, PR or not", () => {
+    expect(BUILT_REMINDER).toBe("Add or edit its built.md line now (PR or not).");
+    const head = "DONE SITE branch=HEAD sha=abc1234 dirty=no";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${head}\npage live`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${head}\npage live\n${BUILT_REMINDER}`);
+    const long = mailboxNoteText(PANE, "worker", "w1", `${head}\n${"x".repeat(MAILBOX_NOTE_MAX_CHARS)}`)!;
+    expect(long.endsWith(`x\n${BUILT_REMINDER}\n[truncated]`)).toBe(true);
+    const plain = "DONE RESEARCH branch=none sha=none dirty=unknown";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${plain}\nmemo saved to Documents\\pricing.docx`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${plain}\nmemo saved to Documents\\pricing.docx\n${BUILT_REMINDER}`);
+    expect(mailboxNoteText(PANE, "worker", "w1", plain)).toBe(`[pane 0f3c9a1e] from worker (w1): ${plain}\n${BUILT_REMINDER}`);
+    for (const text of ["FAIL SITE branch=HEAD sha=abc1234 dirty=no\nbroke", "DONE: lead work", "done"]) {
+      expect(mailboxNoteText(PANE, "worker", "w1", text), text).not.toContain(BUILT_REMINDER);
+    }
   });
 });
 
