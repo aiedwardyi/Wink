@@ -72,19 +72,17 @@ export function showSelectHandles(row: Element, content: Element, copyLabel: str
     handles.start.style.transform = `translate(${first.left + shift}px, ${first.bottom}px)`;
     handles.start.style.setProperty("--grip-shift", `${shift}px`);
     handles.end.style.transform = `translate(${last.right}px, ${last.bottom}px)`;
-    // above the row clears its name and text; then below the text and the hanging handles
+    // above the first line, else below the last line and its hanging touch box
     const view = window.visualViewport;
     const floor = (view ? view.offsetTop + view.height : window.innerHeight) - EDGE;
     const ceiling = Math.max(view?.offsetTop ?? 0, row.closest("[data-orbit-transcript]")?.getBoundingClientRect().top ?? 0) + EDGE;
     const height = copy.offsetHeight;
-    const above = row.getBoundingClientRect().top - height - EDGE;
-    const below = Math.max(content.getBoundingClientRect().bottom, last.bottom + GRIP / 2) + EDGE;
-    const top = above >= ceiling
-      ? above
-      : below + height <= floor
-        ? below
-        : Math.max(ceiling, Math.min(first.top - height - EDGE, floor - height));
-    const left = Math.max(EDGE, Math.min(first.left, window.innerWidth - copy.offsetWidth - EDGE));
+    const width = copy.offsetWidth;
+    const above = first.top - height - EDGE;
+    const below = last.bottom + GRIP + EDGE;
+    const top = above >= ceiling ? above : below + height <= floor ? below : ceiling;
+    const middle = (Math.min(...rects.map((rect) => rect.left)) + Math.max(...rects.map((rect) => rect.right))) / 2;
+    const left = Math.max(EDGE, Math.min(middle - width / 2, window.innerWidth - width - EDGE));
     copy.style.transform = `translate(${left}px, ${top}px)`;
   };
 
