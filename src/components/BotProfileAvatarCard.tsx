@@ -71,9 +71,10 @@ export function BotProfileAvatarCard({
   cropRef.current = crop;
 
   useEffect(() => {
-    const button = pickerButtonRefs.current[selectedAvatar];
+    if (!pickedAvatar) return;
+    const button = pickerButtonRefs.current[pickedAvatar];
     button?.scrollIntoView?.({ block: "nearest" });
-  }, [selectedAvatar]);
+  }, [pickedAvatar]);
 
   const upload = async (file: File | undefined) => {
     if (!file) return;

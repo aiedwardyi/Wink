@@ -17,12 +17,15 @@ const uploaded = {
   avatarCrop: "circle",
 } as Bot;
 
+const scrolled = vi.fn();
+
 afterEach(() => {
   document.body.replaceChildren();
+  scrolled.mockClear();
 });
 
 async function renderCard(bot: Bot, onPatch = vi.fn()) {
-  HTMLElement.prototype.scrollIntoView = () => {};
+  HTMLElement.prototype.scrollIntoView = scrolled;
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -44,6 +47,7 @@ describe("BotProfileAvatarCard", () => {
       const presets = host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]");
       expect(presets.length).toBeGreaterThan(0);
       expect([...presets].some((button) => button.getAttribute("aria-pressed") === "true")).toBe(false);
+      expect(scrolled).not.toHaveBeenCalled();
       const geometric = host.querySelector<HTMLButtonElement>('button[title="Wink geometric"]');
       expect(geometric).not.toBeNull();
       await act(async () => geometric!.click());
