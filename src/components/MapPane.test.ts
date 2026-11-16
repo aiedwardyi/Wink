@@ -596,14 +596,15 @@ it("expands the file over the tree and brings the tree back with the same file, 
   expect(expand()?.getAttribute("aria-label")).toBe("트리 보기");
 });
 
-it("shows one line and a labeled example on an empty Map, with no calls, until a worker starts", async () => {
+it("shows one line and a Demo-chipped example on an empty Map, with no calls, until a worker starts", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   expect(host.querySelector(".map-example")).toBeNull();
   await emit([]);
   expect(host.querySelector(".map-empty")?.textContent).toBe("No live workers");
   expect(host.querySelector(".map-example > p")?.textContent).toBe("Your workers' changes show here live");
-  expect(host.querySelector(".map-example small")?.textContent).toBe("Example");
+  expect(host.querySelector(".map-example small")?.textContent).toBe("Demo");
+  expect(["bg-accent", "text-accent-ink"].every(name => host.querySelector(".map-example small")?.classList.contains(name))).toBe(true);
   expect(host.querySelector(".map-example > div")?.hasAttribute("inert")).toBe(true);
   const file = () => host.querySelector(".map-example .map-code")?.textContent;
   const first = file();
@@ -617,7 +618,7 @@ it("shows one line and a labeled example on an empty Map, with no calls, until a
   vi.useRealTimers();
   await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "other" })); });
   await emit([]);
-  expect(host.querySelector(".map-example")?.textContent).toContain("예시");
+  expect(host.querySelector(".map-example small")?.textContent).toBe("데모");
 });
 
 it("keeps the last tree and diff up, with no loading line, while a picked worker's own load", async () => {
