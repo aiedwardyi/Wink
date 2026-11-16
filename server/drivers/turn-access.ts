@@ -1,7 +1,7 @@
 import type { SendTurnInput } from "../contracts.ts";
 
-/** free: never asks. auto: Wink answers the engine's asks, except risky ones. ask: the user answers. off: blocked. */
-export type Grant = "free" | "auto" | "ask" | "off";
+/** free: never asks. auto: Wink answers the engine's asks, except risky ones. ask: the user answers. own: the engine's own config decides. off: blocked. */
+export type Grant = "free" | "auto" | "ask" | "own" | "off";
 export interface TurnAccess {
   edits: Grant;
   commands: Grant;
@@ -19,6 +19,7 @@ const HOW: Record<Grant, string> = {
   free: "without asking",
   auto: "without asking (Wink asks the user only for risky ones)",
   ask: "once the user approves; just call the tool to ask them",
+  own: "as your own sandbox and approval settings allow",
   off: "",
 };
 

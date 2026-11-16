@@ -9,13 +9,23 @@ const agents = { command: "node", args: [], env: {} };
 describe("turn access", () => {
   it("a read-only turn can approve nothing, whatever the chip", () => {
     expect(routedAccess({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
-    expect(claudeAccess("bypassPermissions", { approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
+    expect(claudeAccess({ permissionMode: "bypassPermissions" }, { approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
   });
 
   it("claude Auto edits freely and sends commands to Wink", () => {
-    expect(claudeAccess("acceptEdits", { approval: "auto" })).toEqual({ edits: "free", commands: "auto" });
-    expect(claudeAccess("acceptEdits", { approval: "ask" })).toEqual({ edits: "ask", commands: "ask" });
-    expect(claudeAccess("bypassPermissions", { approval: "ask" })).toEqual(FREE_ACCESS);
+    expect(claudeAccess({ permissionMode: "acceptEdits" }, { approval: "auto" })).toEqual({ edits: "free", commands: "auto" });
+    expect(claudeAccess({ permissionMode: "acceptEdits" }, { approval: "ask" })).toEqual({ edits: "ask", commands: "ask" });
+    expect(claudeAccess({ permissionMode: "bypassPermissions" }, { approval: "ask" })).toEqual(FREE_ACCESS);
+  });
+
+  it("claude cannot do what its configured tool set leaves out", () => {
+    expect(claudeAccess({ permissionMode: "acceptEdits", tools: [] }, { approval: "auto" })).toEqual({ edits: "off", commands: "off" });
+    expect(claudeAccess({ permissionMode: "bypassPermissions", tools: ["Read", "WebFetch"] }, { approval: "auto" })).toEqual({ edits: "off", commands: "off" });
+    expect(claudeAccess({ permissionMode: "acceptEdits", disallowedTools: ["Bash", "PowerShell"] }, { approval: "auto" })).toEqual({ edits: "free", commands: "off" });
+  });
+
+  it("codex Auto without a Wink override defers to the user's own settings", () => {
+    expect(accessRules({ edits: "own", commands: "own" }, undefined)).toContain("You can read files; you can edit files and run commands as your own sandbox and approval settings allow.");
   });
 
   it("gemini reads its grants off its own argv", () => {

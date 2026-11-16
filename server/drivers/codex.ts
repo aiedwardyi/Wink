@@ -1158,7 +1158,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         pinnedSystem: true,
       },
       sendTurn,
-      access: (turn) => codexPolicy(config.fullAuto, turn).approvalPolicy === "never" ? FREE_ACCESS : routedAccess(turn),
+      access: (turn) => {
+        const { approvalPolicy } = codexPolicy(config.fullAuto, turn);
+        if (approvalPolicy === "never") return FREE_ACCESS;
+        return approvalPolicy || turn.readOnly ? routedAccess(turn) : { edits: "own", commands: "own" };
+      },
       steer: async (threadId, text) => active.get(threadId)?.steer(text) ?? false,
       interruptTurn: async (threadId) => active.get(threadId)?.stop(),
       endTurn: async (threadId, turnId) => {

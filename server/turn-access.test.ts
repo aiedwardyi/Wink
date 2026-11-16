@@ -20,7 +20,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok", "muse"] as const;
 type Engine = (typeof ENGINE_NAMES)[number];
 type Approval = "auto" | "ask";
-type Grant = "free" | "auto" | "ask" | "off";
+type Grant = "free" | "auto" | "ask" | "own" | "off";
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 type Dump = { argv?: string[]; calls?: Array<{ method: string; params: any }> };
 
@@ -51,7 +51,9 @@ function wireGrants(engine: Engine, approval: Approval, dump: Dump): { edits: Gr
     case "codex": {
       const start = dump.calls?.find((call) => call.method === "thread/start")?.params;
       expect(start).toBeTruthy();
-      return start.approvalPolicy === "never" ? { edits: "free", commands: "free" } : { edits: routed, commands: routed };
+      if (start.approvalPolicy === "never") return { edits: "free", commands: "free" };
+      // no Wink override: the user's own codex config decides
+      return start.approvalPolicy ? { edits: routed, commands: routed } : { edits: "own", commands: "own" };
     }
     case "gemini":
       if (argv.includes("--dangerously-skip-permissions")) return { edits: "free", commands: "free" };
@@ -69,6 +71,7 @@ const SAY: Record<Grant, string> = {
   free: "without asking",
   auto: "without asking (Wink asks the user only for risky ones)",
   ask: "once the user approves; just call the tool to ask them",
+  own: "as your own sandbox and approval settings allow",
   off: "",
 };
 const can = (what: string, grant: Grant) => (grant === "off" ? `cannot ${what}` : `can ${what} ${SAY[grant]}`);
