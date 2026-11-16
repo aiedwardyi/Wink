@@ -90,6 +90,16 @@ it("visits Photos then Files before Map and returns through Media", async () => 
   expect(selected()).toBe("Media");
 });
 
+it("stops a room at Media because rooms have no Map", async () => {
+  await act(async () => root.render(createElement(Harness, {})));
+  await act(async () => showMedia(source.threadId));
+  await swipe(true);
+  expect(pane().querySelector('.show-media-kinds [aria-selected="true"]')?.textContent).toBe("Files");
+  await swipe(true);
+  expect(selected()).toBe("Media");
+  expect(pane().dataset.tab).toBe("media");
+});
+
 it("closes toward the right only from the first available tab", async () => {
   await swipe(false);
   expect(document.querySelector(".show-pane")).toBeNull();
