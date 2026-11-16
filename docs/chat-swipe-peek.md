@@ -34,6 +34,16 @@ The initial cached-neighbor mount still has a measurable cost. Core first-transf
 
 In the four bot switching samples, the after landing interval >33 ms starts 300-317 ms after release, after the 260 ms spring. The baseline has a 550-667 ms stall starting about 33 ms after release. At base, src/lib/use-phone-swipe.ts:128-130 selects immediately and lines 70-76 start another enter. The trace attributes the resulting stall to selection-time ChatView mounting, transcript rendering and synchronous layout. The after trace still attributes initial preparation layout to usePhoneHeaderNameFloor and transcript pinning; steady drag writes only the carrier and existing menu rider transforms.
 
+## Quiet-slot re-measure (2026-11-17)
+
+Home PC quiet slot, two back-to-back pairs, before `6259193ea` vs after `a0c911cfa`, same protocol. Core gestures (slow-left, fast-flick, repeat-left-1/2):
+
+- First transform: before 42.6-103.6 ms, after 40.5-99.8 ms.
+- Drag intervals >33 ms: before 0 in every gesture; after one 33.3-33.4 ms interval (one missed RAF tick) in 3 of 4 gestures, in both pairs.
+- Landing max: before 450-500 ms, after 50-67 ms. Every flick lands.
+- Tap median 670 ms before, 240-253 ms after. Vertical start median 62.8 / 57.6 ms before, 74.5 / 51.2 ms after (3 samples each).
+- Both after runs logged two HTTP 500s from `POST /api/bots/b/prewarm` (arrived with the review-base merge, not the peek).
+
 ## Implementation and cost
 
 A cached neighbor uses the real view under an inactive context. Two stable page keys retain the incoming DOM through the existing spring, then activate it and release the outgoing page. No second enter runs. Compact phone tails start at four cached rows and double locally until the viewport fills; older cached rows remain reachable before network paging. Desktop keeps its existing transcript size, including on resize. Header measurement no longer inserts a cloned layout tree, viewport snapshots avoid commit-time width reads, and supported phone textareas use native field sizing.
