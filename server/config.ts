@@ -478,6 +478,13 @@ export function applyCredentialAllowlist(
   }
 }
 
+/** A copy of `env` for a helper CLI, without saved keys or Wink's own tokens. */
+export function scrubbedEnv(env: Record<string, string | undefined>, allowed: Iterable<string> = []): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  applyCredentialAllowlist(copy, allowed);
+  return copy;
+}
+
 /** Merge a partial config into ~/.orbit/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {

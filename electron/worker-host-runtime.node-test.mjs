@@ -5,6 +5,8 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
+import { spawnGate } from "./spawn-gate.mjs";
 import { terminalEnvironment } from "./terminal-host.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createWorkerHostClient } from "./worker-host-client.mjs";
@@ -131,7 +133,8 @@ test("the host is not created while a terminal is inside its start", { ...window
   const client = createWorkerHostClient({ root: path.join(root, "data"), runtimeRoot: await warmed(path.join(root, "runtime")), ptyModule: () => require.resolve("node-pty"), launch });
   const warm = client.prewarm();
   await until(() => fs.existsSync(path.join(root, "data", `v${WORKER_HOST_PROTOCOL}`, "launch.json")));
-  await wait(1_000);
+  // The launch has counted itself in at the gate and the held terminal keeps it there.
+  await until(() => Atomics.load(spawnGate, 1) === 1);
   const early = [...order];
   Atomics.store(hold, 0, 1);
   Atomics.notify(hold, 0);
@@ -152,10 +155,44 @@ test("a terminal opened as the host starts ends when it is stopped", { ...window
   await pty.ready;
   assert.equal(await warm, true);
   const host = client.state().host.pid;
+  t.after(() => pty.terminate());
   void pty.kill().catch(() => {});
-  const ended = await Promise.race([pty.exited.then(() => true), wait(8_000).then(() => false)]);
+  await pty.exited;
   client.close();
   await until(() => !alive(host), 15_000);
-  if (!ended) await pty.terminate();
-  assert.equal(ended, true);
+});
+
+test("the host keeps none of the app's inheritable handles, so a closed port is free again", { ...windows, timeout: 120_000 }, async (t) => {
+  const root = scratch(t);
+  const slot = path.join(root, "slot");
+  fs.mkdirSync(slot);
+  const input = { root: await warmed(path.join(root, "runtime")), executable: process.execPath, ptyModule: require.resolve("node-pty"), slot, launch: { nonce: "inherit", secret: "inherit", pipe: `\\\\.\\pipe\\wink-worker-test-${process.pid}-${Date.now()}`, install: path.join(root, "app") }, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } };
+  const app = path.join(root, "app.mjs");
+  fs.writeFileSync(app, `import fs from "node:fs";\nimport { launchWorkerHost } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "worker-host-runtime.mjs")).href)};\nconst { pid } = await launchWorkerHost(${JSON.stringify(input)});\nfs.writeFileSync(${JSON.stringify(path.join(root, "host.pid"))}, String(pid));\nprocess.exit(0);\n`);
+  // Windows PowerShell sockets are inheritable, like the app's debugging port; the app runs as its child and inherits it.
+  const holder = [
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$port = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)",
+    "$port.Start()",
+    "$app = New-Object System.Diagnostics.ProcessStartInfo",
+    `$app.FileName = '${process.execPath}'`,
+    `$app.Arguments = '"${app}"'`,
+    "$app.UseShellExecute = $false",
+    "[System.Diagnostics.Process]::Start($app).WaitForExit()",
+    "$number = $port.LocalEndpoint.Port",
+    "$port.Stop()",
+    "$again = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $number)",
+    "try { $again.Start(); $again.Stop(); $free = 'free' } catch { $free = 'held' }",
+    `[IO.File]::WriteAllText('${path.join(root, "port.txt")}', $free)`,
+  ].join("\n");
+  const shell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  // No pipes to this test: the old host would hold them open too.
+  execFileSync(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(holder, "utf16le").toString("base64")], { windowsHide: true, stdio: "ignore" });
+  const port = fs.readFileSync(path.join(root, "port.txt"), "utf8");
+  const host = Number(fs.readFileSync(path.join(root, "host.pid"), "utf8"));
+  t.after(() => { try { process.kill(host); } catch {} });
+  await until(() => fs.existsSync(path.join(slot, "host.json")));
+  assert.deepEqual({ port, alive: alive(host) }, { port: "free", alive: true });
+  process.kill(host);
+  await until(() => !alive(host), 15_000);
 });

@@ -63,6 +63,18 @@ function shipped(dir: string): string[] {
     .filter((file) => !file.includes("/testing/") && !file.includes("/node_modules/"));
 }
 
+// Child processes that may hold the user's own keys: their user-set MCP servers, and Wink's own sync worker.
+const RAW_ENV = new Map([["server/mcp-bridge.ts", 2], ["server/thread-sync-v2.ts", 1]]);
+
+it("helper CLIs start without saved keys", () => {
+  const problems: string[] = [];
+  for (const file of shipped("server")) {
+    const count = readFileSync(join(ROOT, file), "utf8").match(/\benv: \{ ?\.\.\.process\.env\b/g)?.length ?? 0;
+    if (count !== (RAW_ENV.get(file) ?? 0)) problems.push(`${file} passes process.env to ${count} launch(es) as is: wrap it in scrubbedEnv() from server/config.ts so saved keys and Wink's token stay out.`);
+  }
+  expect(problems).toEqual([]);
+});
+
 it("every process launch is listed, and every Claude pane gets the shared pane env", () => {
   const problems: string[] = [];
   const seen = new Map<string, number>();

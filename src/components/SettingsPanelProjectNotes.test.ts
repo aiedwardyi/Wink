@@ -14,7 +14,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   return {
     ...actual,
     useStore: () => ({
-      state: { instances: [], bots: [], config: {}, mascotMotion: null },
+      state: { instances: [], bots: [], routines: [], config: {}, mascotMotion: null },
       dispatch: mockDispatch,
       refreshInstances: async () => undefined,
     }),
