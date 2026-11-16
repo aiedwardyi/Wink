@@ -2,7 +2,23 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { createPlaybookGate, harnessPlaybookBody, harnessPlaybookPrompt, loadHarnessPlaybook } from "./harness-playbook.ts";
+import { workerModelsText } from "./drivers/terminal-proxy.ts";
+import { createPlaybookGate, harnessPlaybookBody, harnessPlaybookPrompt, loadHarnessPlaybook, modelPicksPrompt } from "./harness-playbook.ts";
+
+// Engine to picker labels, read back from the "Worker models to launch" line.
+const LAUNCHABLE = new Map(workerModelsText().split(/ (?=(?:Codex|Muse|Grok|Gemini): )/).map((segment) => [
+  /(\w+): [^:]*$/.exec(segment.split(" = ")[0])?.[1] ?? segment,
+  [...segment.matchAll(/(?:: |, )([^=,:]+?) = /g)].map((match) => match[1]),
+]));
+const MODEL_NAME = /\b(?:Opus|Sonnet|Haiku|Fable|GPT|Muse|Grok|Gemini)\b.*?(?=[,;:)]|\.(?!\d)|\s(?:and|at|just)\s|$)/g;
+
+function stalePicks(picks: string): string[] {
+  const labels = [...LAUNCHABLE.values()].flat().sort((a, b) => b.length - a.length);
+  const left = labels.reduce((text, label) => text.replace(new RegExp(`${label.replaceAll(".", "\\.")}(?!\\w|\\.\\d)`, "g"), ""), picks);
+  const unknown = [...left.matchAll(MODEL_NAME)].map((match) => `not launchable: ${match[0]}`);
+  const missing = [...LAUNCHABLE].filter(([, names]) => !names.some((name) => picks.includes(name))).map(([engine]) => `no pick for ${engine}`);
+  return [...unknown, ...missing];
+}
 
 describe("harness playbook", () => {
   it("is in the system prompt only when the terminal is shared", () => {
@@ -205,7 +221,17 @@ describe("harness playbook", () => {
   });
 
   it("matches the model to the job", () => {
-    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("Match the model to the job: the strongest for architecture, audits and hard bugs; a mid model for routine builds; the cheapest for searches and mechanical edits. Spread jobs across engines so no single plan runs out.");
+    const picks = modelPicksPrompt();
+    expect(picks).toContain("Spread jobs across engines so no single plan runs out. Tell the user each pick with a one-sentence reason.");
+    expect(picks).toContain("Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.");
+    expect(picks).toContain("Fable 5.2 at xhigh, code audits only.");
+    expect(modelPicksPrompt("x\r\n- Match the model to the job a.\r\n  - B: c.\r\n- Next.")).toBe(" Match the model to the job a. B: c.");
+  });
+
+  it("picks only launchable models and covers every engine", () => {
+    expect([...LAUNCHABLE.keys()]).toEqual(["Claude", "Codex", "Muse", "Grok", "Gemini"]);
+    expect(stalePicks(modelPicksPrompt())).toEqual([]);
+    expect(stalePicks(modelPicksPrompt().replace("Fable 5.2", "Fable 5"))).toEqual(["not launchable: Fable 5"]);
   });
 
   it("keeps a progress file beside the card and hands it on", () => {
@@ -291,7 +317,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(15813);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16187);
   });
 
   it("fills the worktree path from the configured root", () => {

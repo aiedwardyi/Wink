@@ -125,10 +125,14 @@ The exact shape of its final message, plus one line: what it reused.
   that starts from the card and its progress file.
 - Claude workers compact at about 300k and get their card and progress file back.
   Let them; a fresh worker just for context is slower and uncached.
-- Match the model to the job: the strongest for architecture, audits and hard
-  bugs; a mid model for routine builds; the cheapest for searches and mechanical
-  edits. Spread jobs across engines so no single plan runs out. Tell the user
-  each pick with a one-sentence reason.
+- Match the model to the job when you pick a worker or subagent. Pick only from
+  engines the user is signed in to. Spread jobs across engines so no single plan
+  runs out. Tell the user each pick with a one-sentence reason.
+  - Hardest work (architecture, hard bugs, high stakes): Opus 5.5, GPT-6.1 Sol.
+  - Code audits: Gemini 4 Carbon and Gemini 4 Argon, GPT-6 Astra; Fable 5.2 at xhigh, code audits only.
+  - Routine builds: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
+  - Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.
+  - Cheapest mechanical edits: Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash.
 - Default workers to high effort. Only when the user turns max mode on, use
   max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code
   audits only, at xhigh.

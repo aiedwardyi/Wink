@@ -46,6 +46,14 @@ export function harnessPlaybookPrompt(terminalShared: boolean, playbook = HARNES
   return `${playbook.slice(0, playbook.indexOf(ON_DEMAND)).trimEnd()}${CLOSE}`;
 }
 
+const MODEL_PICKS = /^- (Match the model to the job[^\n]*(?:\r?\n {2}[^\n]*)*)/m;
+
+/** The model list every bot gets, cut from the playbook so it lives in one place. */
+export function modelPicksPrompt(playbook = HARNESS_PLAYBOOK): string {
+  const picks = MODEL_PICKS.exec(playbook)?.[1];
+  return picks ? ` ${picks.trim().replace(/\s*\n\s*(?:- )?/g, " ")}` : "";
+}
+
 export function harnessPlaybookBody(playbook = HARNESS_PLAYBOOK): string {
   const at = playbook.indexOf(ON_DEMAND);
   return at < 0 ? "" : playbook.slice(at + ON_DEMAND.length, playbook.lastIndexOf(CLOSE)).trim();
