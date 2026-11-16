@@ -18,7 +18,7 @@ export function translateLine(base: string, entryId: string, lang: LocaleId): Pr
 export function useTranslationAvailable(base: string): boolean {
   const { state } = useStore();
   // A usage report lands on every bot turn and cannot change whether an engine translates.
-  const engines = useMemo(() => JSON.stringify([state.config?.gemini?.configured, state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance)]), [state.instances, state.config]);
+  const engines = useMemo(() => JSON.stringify([state.config?.gemini?.configured, state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance)]), [state.instances, state.config?.gemini?.configured]);
   const [answer, setAnswer] = useState({ base, available: false });
   useEffect(() => {
     if (!base) return;
