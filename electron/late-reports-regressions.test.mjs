@@ -179,7 +179,8 @@ it.skipIf(process.platform !== "win32")("keeps validation failures final even wi
 async function revival(overrides = {}) {
   const source = await fs.readFile(new URL("./main.mjs", import.meta.url), "utf8");
   const start = source.indexOf("const reviveServer = createServerRevival({");
-  const block = source.slice(start, source.indexOf("\n});\n", start) + "\n});\n".length);
+  // A Windows checkout ends lines with CRLF, so the end marker cannot include the trailing newline.
+  const block = source.slice(start, source.indexOf("\n});", start) + "\n});".length);
   const deps = { createServerRevival, quitting: false, verifyProbe: false, childEnvCredentials: null, absorbPackagedPlaintextSecrets() {}, secureCredentials: {}, startServerPackaged: async () => true, slog() {}, serverReady: false, serverKeptStopping: false, packagedBootPhase: null, BOOT_CONNECTING: 0, BOOT_READY: 1, BOOT_FAILED: 2, pushGoogleSession: async () => {}, livePackagedWindow: () => null, connectingPageHref() {}, packagedWindowHref() {}, app: { getPath: () => "profile" }, SERVER_PORT: 8799, terminalBridgeAccess: null, publishTerminalDiscovery: async () => {}, deliverMailboxOutbox: async () => ({}), paneRuns: { restarted: () => new Map() }, ...overrides };
   return new Function(...Object.keys(deps), `${block}return reviveServer;`)(...Object.values(deps));
 }
