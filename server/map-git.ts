@@ -15,7 +15,21 @@ const LIST_LIMIT = 32 * 1024 * 1024;
 const NEW_FILES = 200;
 const NEW_BYTES = 64 * 1024;
 
-export function mapGit(cwd: string, args: string[], limit = LIMIT): Promise<string> {
+// A cloned or unzipped repo's own config can name commands; Map only reads, so none may run.
+const NO_COMMANDS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`];
+
+export async function mapGit(cwd: string, args: string[], limit = LIMIT): Promise<string> {
+  const filters = args.includes("diff") ? await noFilters(cwd) : [];
+  return git(cwd, [...NO_COMMANDS, ...filters, ...args], limit);
+}
+
+async function noFilters(cwd: string): Promise<string[]> {
+  const keys = await git(cwd, ["config", "-z", "--name-only", "--get-regexp", "^filter\\."], LIMIT).catch(() => "");
+  const names = new Set(keys.split("\0").map((key) => /^filter\.(.+)\.[^.]+$/s.exec(key)?.[1]).filter((name) => name !== undefined));
+  return [...names].flatMap((name) => ["clean=", "smudge=", "process=", "required=false"].flatMap((value) => ["-c", `filter.${name}.${value}`]));
+}
+
+function git(cwd: string, args: string[], limit: number): Promise<string> {
   return new Promise((done, fail) => {
     execFile("git", ["--literal-pathspecs", "-C", cwd, ...args], {
       windowsHide: true, timeout: 5_000, maxBuffer: limit,

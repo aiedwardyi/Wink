@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -78,6 +78,26 @@ it("reads plain patches when user Git colors are always enabled", async () => {
     expect.objectContaining({ kind: "remove", text: "const before = 1;" }),
     expect.objectContaining({ kind: "add", text: "const colored = 2;" }),
   ]));
+});
+
+it("runs no command a repo's own config names", async () => {
+  const { root, git, base } = repo();
+  const slash = (path: string) => path.replace(/\\/g, "/");
+  const marker = join(root, "..", `${root.split(/[\\/]/).pop()}-ran.txt`);
+  const hook = join(root, "..", `${root.split(/[\\/]/).pop()}-hook.cjs`);
+  roots.push(marker, hook);
+  writeFileSync(hook, "require('fs').appendFileSync(process.argv[2], process.argv[3] + '\\n'); if (process.argv[3] === 'clean') process.stdin.pipe(process.stdout);\n");
+  const run = (what: string) => `"${slash(process.execPath)}" "${slash(hook)}" "${slash(marker)}" ${what}`;
+  git("config", "core.fsmonitor", run("fsmonitor"));
+  git("config", "filter.evil.clean", run("clean"));
+  git("config", "filter.evil.required", "true");
+  writeFileSync(join(root, ".gitattributes"), "* filter=evil\n");
+  writeFileSync(join(root, "file.ts"), "const after = 2;\n");
+  const files = await mapFiles(root, base);
+  await mapFileDiff(root, base, files.find(file => file.path === "file.ts")!);
+  await mapRepoFiles(root);
+  expect(files.map(file => file.path).sort()).toEqual([".gitattributes", "file.ts"]);
+  expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
 });
 
 it("keeps a deleted file diff separate from its replacement directory", async () => {
