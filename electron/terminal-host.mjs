@@ -25,6 +25,7 @@ const READY_TIMEOUT_MS = 5_000;
 const WINDOWS_READY_TIMEOUT_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 500;
 const QUIT_PANE_MS = 1_000;
+const KEEP_IDLE_MS = 2 * 60_000;
 export const TERMINAL_ACTIVITY_COALESCE_MS = 750;
 export const TERMINAL_ACTIVITY_ACK_COOLDOWN_MS = 3_000;
 export const TERMINAL_STALL_MS = 120_000;
@@ -522,7 +523,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null, remote = null }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null, remote = null, hostPty = null }) {
   const sessions = new Map();
   const mapEvents = createMapEvents();
   const watchedOwners = new WeakSet();
@@ -977,12 +978,34 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const retireQuietly = (session, forceKill = false, keepNotes = false) => {
     void retire(session, forceKill, keepNotes).catch(() => {});
   };
+  // Finished work still ends at quit; only a hosted pane in the middle of a run carries over to the next start.
+  const carriesOver = (session) => {
+    if (!session.botPane || session.retired || session.exitCode !== null) return false;
+    const text = session.screen.text();
+    const finished = session.reportAt > 0 && session.reportAt >= session.stallArmedAt && !AGENT_BUSY_RE.test(text) && !agentJobsRunning(text)
+      && now() - Math.max(session.stallChangedAt, session.reportAt, session.userInputAt) >= KEEP_IDLE_MS;
+    return session.adopting || (session.shellExecuting && !finished);
+  };
+  // The worker host keeps running the pane: nothing of it is stopped, and its record tells the next start to take it back. False = the pane ends here.
+  const leave = (session) => {
+    if (!carriesOver(session) || session.pty.detach?.() !== true) return false;
+    session.retired = true;
+    clearActivityTimer(session);
+    clearTimeout(session.claudeTrustTimer);
+    if (active.get(session.key) === session.id) active.delete(session.key);
+    endViewers(session);
+    exitNotes.delete(session);
+    sessions.delete(session.id);
+    paneRuns?.kept(session.id);
+    return true;
+  };
   const watchOwner = (owner) => {
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Electron sender mocks may omit lifecycle events.
     if (typeof owner.once !== "function" || watchedOwners.has(owner)) return;
     watchedOwners.add(owner);
     owner.once("destroyed", () => {
-      for (const live of sessions.values()) if (live.owner === owner) retireQuietly(live, true);
+      // Closing the window ends the app on Windows, and this runs before dispose() does.
+      for (const live of [...sessions.values()]) if (live.owner === owner && !leave(live)) retireQuietly(live, true);
     });
   };
   const reclaimExited = () => {
@@ -1135,7 +1158,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (parsed.bell && session.activityArmed) reportAttention(session, "bell");
       if (!parsed.bell && echo.text.trim()) scheduleActivity(session);
       const seq = ++session.seq;
-      emit(session, "terminal:data", { id: session.id, data, seq });
+      if (!session.adopting) emit(session, "terminal:data", { id: session.id, data, seq });
       if (session.viewers.size) fanOut(session, { seq, data });
     });
     pty.onExit(({ exitCode }) => { if (session.pty === pty) reportExit(session, exitCode); });
@@ -1216,15 +1239,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } catch {}
     }
     if (botPane) await withClaudePaneEnv(Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) }));
-    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
-      name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
-    });
+    const shellArgs = platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [];
+    const options = { name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32" };
+    const local = () => loadPty().spawn(shell, shellArgs, options);
+    // A bot pane runs in the worker host when one is connected; it never waits for one.
+    const spawn = () => (botPane && hostPty?.({ id, tag: input.botId, shell, args: shellArgs, options }, local)) || local();
     let pty;
     try {
       pty = await spawn();
     } catch (cause) {
       throw errorValue(cause);
     }
+    return awaitSession(createSession({ id, key, event, input, folder, cwd, botPane, worker, managed, workerSession, baseHead, paneEnv, shell, pty, spawn, mail }), cancelPromise);
+  };
+  const createSession = ({ id, key, event, input, folder, cwd, botPane, worker, managed, workerSession, baseHead, paneEnv, shell, pty, spawn, mail }) => {
     const session = {
       id, key, botId: input.botId, botPane, workerSession, baseHead, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
@@ -1241,6 +1269,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const [kind, markerId, value] = osc.startsWith("133;") ? osc.slice(4).split(";") : [];
       if (markerId !== session.id) return;
       if (kind === "C" && /^[A-Za-z0-9+/]{43}=$/.test(value)) {
+        session.marked = true;
         session.shellExecuting = true;
         // Input consumed by a program never reaches the shell's reader.
         const index = session.commandInputs.findIndex((command) => command.hash === value);
@@ -1250,6 +1279,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         return;
       }
       if (kind !== "D" || !/^\d+$/.test(value)) return;
+      session.marked = true;
       if (session.shellExecuting) {
         session.worker = false;
         session.workerFinished = true;
@@ -1272,6 +1302,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     sessions.set(session.id, session);
     watchOwner(event.sender);
     attach(session);
+    return session;
+  };
+  const awaitSession = async (session, cancelPromise) => {
+    const { pty, botPane } = session;
     try {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may expose readiness only when worker-backed.
       const ready = pty.ready && typeof pty.ready.then === "function"
@@ -1340,7 +1374,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.contextCompactPending = false;
         watchStalls(session);
       }
-      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run });
+      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run,
+        worker: { engine: session.engine, executable: session.workerEngine, account: session.workerAccount, shell: session.shell, remote: session.remote } });
     }
     if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
     if (session.respawn) {
@@ -1657,10 +1692,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       return labels;
     },
-    liveWorkerCount() {
+    /** `closing` counts only the workers a quit would stop: one the worker host keeps is not lost. */
+    liveWorkerCount({ closing = false } = {}) {
       let count = 0;
       for (const session of sessions.values()) {
-        if (session.botPane && !session.retired && session.exitCode === null && active.get(session.key) === session.id) count++;
+        if (session.botPane && !session.retired && session.exitCode === null && active.get(session.key) === session.id && !(closing && session.pty.hosted?.())) count++;
       }
       return count;
     },
@@ -1887,6 +1923,41 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       paneRuns?.closed(session.id);
       return retire(session, true).then(() => { void paneCleanup?.closed(session, keep); });
     },
+    /** Takes back a pane the worker host kept through a quit, under its old id. `pty` must not have handed on any output yet. */
+    adoptPane(run, pane, { pty, replayed }, mail = null) {
+      const sender = paneOwner();
+      if (disposed || sessions.has(run.id) || deletedBots.has(run.botId) || !sender || sender.isDestroyed?.()) return null;
+      const managed = Boolean(run.account);
+      const session = createSession({
+        id: run.id, key: `${sender.id}:${run.botId}:pane:${randomUUID()}`, event: { sender }, input: { botId: run.botId, label: run.label ?? undefined, cols: pane.cols, rows: pane.rows }, folder: { teacher: run.teacher }, cwd: run.cwd, botPane: true,
+        worker: managed ? { kind: "managed", account: run.account, executable: run.executable } : null, managed, workerSession: run.session ? { auth: null, env: {}, run: { ...run.session } } : null, baseHead: run.baseHead ?? null,
+        paneEnv: { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${run.id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${run.id}`) }, shell: run.shell, pty, spawn: null, mail,
+      });
+      // Old output only rebuilds the screen: no keys are typed at it, no note is sent for it and the window does not see it twice.
+      Object.assign(session, { adopting: true, respawned: true, exitReported: true, startedAt: pane.start, spawnedAt: run.spawnedAt, label: run.label ?? undefined, resizedAt: Infinity, reportAt: Infinity });
+      if (run.remote) session.remote = run.remote;
+      return replayed.then(() => {
+        if (session.retired) return null;
+        const at = now();
+        // The listed mark is older than the replay, so it only stands in when the replay had none.
+        const running = session.exitCode === null && (!session.marked && pane.mark?.value.startsWith(`${run.id};`) ? pane.mark.kind === "C" : session.shellExecuting);
+        const reported = run.state === "reported";
+        Object.assign(session, { adopting: false, workerReady: true, exitReported: session.exitCode !== null, resizedAt: -Infinity, reportAt: reported ? at : 0, stallArmedAt: at, stallChangedAt: at, engine: run.engine ?? null, agentSeen: true, claudeTrustAnswered: true, shellExecuting: running, workerFinished: !running });
+        // The prompt before a kept command may be past the ring, so its end counts whatever history id it shows.
+        if (running) Object.assign(session, { runningCommand: { hash: null, reported }, historyId: session.historyId ?? "" });
+        if (running && run.engine) watchStalls(session);
+        if (session.exitCode === null) paneCleanup?.opened(session);
+        active.set(session.key, session.id);
+        paneRuns?.adopted(run.id);
+        // A run that ended while the app was away is told once; its record must not bring it back again.
+        if (!running) paneRuns?.ended(run.id);
+        emit(session, "terminal:opened", { id: session.id, botId: run.botId, label: run.label ?? null, generation: session.generation });
+        // A pane that ended while the app was away gets its row first, so the row shows as ended.
+        if (session.exitCode !== null) emit(session, "terminal:exit", { id: session.id, exitCode: session.exitCode });
+        const text = session.screen.text();
+        return { sessionId: session.id, running, busy: AGENT_BUSY_RE.test(text) || agentJobsRunning(text), exitCode: session.exitCode, reported };
+      });
+    },
     dispose() {
       if (disposal) return disposal;
       disposed = true;
@@ -1895,6 +1966,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       active.clear();
       const stopping = [...sessions.values()];
       const stops = stopping.map((session) => {
+        if (leave(session)) return undefined;
         session.retired = true;
         return retire(session);
       });

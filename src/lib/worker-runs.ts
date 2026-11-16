@@ -181,7 +181,7 @@ export function workerAnchors<T extends { run: WorkerRun }>(workers: readonly T[
 function noteState(note: PaneNote): WorkerState {
   if (note.status === "done") return "done";
   if (note.status === "failed") return "failed";
-  if (note.status === "blocked" || note.alert) return "waiting";
+  if (note.status === "blocked" || (note.alert && note.alert.kind !== "kept")) return "waiting";
   return "working";
 }
 
