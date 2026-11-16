@@ -732,6 +732,28 @@ describe("backoff after failures", () => {
     expect(acme.log.length).toBeGreaterThan(asked);
   });
 
+  it("checks again when a restored retry time comes due, not a full check interval later", async () => {
+    const { dir, acme, clock } = await failing("reject");
+    const first = await manager(dir, acme, clock);
+    first.certs.start();
+    let done = first.settled();
+    first.certs.setConnected(true);
+    await done;
+    for (let i = 0; i < 3; i++) {
+      done = first.settled();
+      clock.advance(clock.nextAt! - clock.now());
+      await done;
+    }
+    first.certs.stop();
+    const retryAt = clock.now() + DAY;
+    clock.advance(DAY - RENEW_CHECK_MS - 60 * 60_000);
+    const second = await manager(dir, acme, clock);
+    second.certs.start();
+    second.certs.setConnected(true);
+    clock.advance(RENEW_CHECK_MS);
+    expect(clock.nextAt).toBe(retryAt);
+  });
+
   it("waits out a rate limit's Retry-After when it is longer than the backoff", async () => {
     const { dir, acme, clock } = await failing("limited");
     acme.retryAfterSec = 7200;

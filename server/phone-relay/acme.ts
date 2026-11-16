@@ -340,8 +340,7 @@ export class CertManager {
       // Logged, not this.error: Settings reads that as a failed renewal, and fresh retry state is safe.
       console.warn(`phone relay: ACME retry state not loaded (${state.reason})`);
     }
-    const wait = this.retryAt - this.clock.now();
-    this.scheduleCheck(wait > 0 ? Math.min(wait, RENEW_CHECK_MS) : RENEW_CHECK_MS);
+    this.scheduleCheck(this.checkDelay());
   }
 
   /** The relay connection is up (true) or down. Issuance needs it for the challenge. */
@@ -378,8 +377,14 @@ export class CertManager {
       this.opts.onChange();
       this.maybeIssue();
       void this.checkRenewalInfo();
-      if (!this.timer) this.scheduleCheck(RENEW_CHECK_MS);
+      if (!this.timer) this.scheduleCheck(this.checkDelay());
     });
+  }
+
+  /** The routine check interval, cut short to land on the end of a backoff. */
+  private checkDelay(): number {
+    const wait = this.retryAt - this.clock.now();
+    return wait > 0 ? Math.min(wait, RENEW_CHECK_MS) : RENEW_CHECK_MS;
   }
 
   private maybeIssue(): void {

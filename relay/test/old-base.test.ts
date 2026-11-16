@@ -73,6 +73,15 @@ describe("old base kept beside the new one", () => {
     expect(await status(h, pc.label, `https://${pc.label}.other.example`)).toBeUndefined();
   });
 
+  it("orders one certificate per name when old bases repeat", async () => {
+    h = await startRelay({
+      base: NEW,
+      oldBases: [BASE, BASE.toUpperCase(), NEW],
+      acme: { directoryUrl: "https://ca.invalid/d", termsOfServiceAgreed: true, createClient: () => ({ auto: () => new Promise<string>(() => {}) }) },
+    });
+    expect(h.logs.filter((line) => event("cert-order")(JSON.parse(line)))).toHaveLength(2);
+  });
+
   it("still refuses names under any other base", async () => {
     h = await startRelay({ base: NEW, oldBases: [BASE] });
     const pc = makePc();

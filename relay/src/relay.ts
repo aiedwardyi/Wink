@@ -95,7 +95,7 @@ export interface Relay {
 
 export async function createRelay(opts: RelayOptions): Promise<Relay> {
   const base = opts.base.toLowerCase();
-  const bases = [base, ...(opts.oldBases ?? []).map((old) => old.toLowerCase()).filter((old) => old !== base)];
+  const bases = [...new Set([base, ...(opts.oldBases ?? []).map((old) => old.toLowerCase())])];
   const relayHost = hostForRelay(base);
   const relayHosts = bases.map(hostForRelay);
   const limits: RelayLimits = { ...DEFAULT_LIMITS, ...opts.limits };
