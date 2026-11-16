@@ -47,7 +47,6 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     if (!box.below || box.tall === undefined) return;
     const rest = ((box.tall + box.from - height) / pane.clientHeight * 100).toFixed(1);
     pane.style.setProperty("--map-rows", `${rest}%`);
-    box.below.style.removeProperty("--map-rows");
     localStorage.setItem(ROWS, rest);
   };
   // The rows and the code move as layers while dragging: without it every frame repaints them.
@@ -61,6 +60,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     cancelAnimationFrame(now.frame);
     handle.removeAttribute("data-drag");
     lift(handle, false);
+    now.below?.style.removeProperty("--map-rows");
     if (now.to !== now.from) keep(now.to, now);
   };
 

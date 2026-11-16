@@ -73,6 +73,16 @@ it("drags the tree taller while the Git rows give the same height, and keeps bot
   expect([localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["25.0", "12.0"]);
 });
 
+it("hands the Git rows back to their saved share when a drag ends where it began", async () => {
+  await mount();
+  await drag(rowsLine(), 100, 150);
+  await act(async () => { rowsLine().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientY: 100 })); for (const frame of frames.splice(0)) frame(0); });
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("170px");
+  await drop(rowsLine());
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("");
+  expect(localStorage.getItem("omb-map-rows")).toBe(null);
+});
+
 it("keeps one Git row and lets the rows take back only what they hide", async () => {
   await mount();
   await drag(rowsLine(), 100, 900);
