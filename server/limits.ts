@@ -86,6 +86,7 @@ export const KEPT_LIMITS: Limits = {
   "server/rooms/door.ts": { MAX_STREAMS: OUTSIDER },
   "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER, MAX_PEOPLE: `${JOINER} 100 people loaded, 101 went blank (measured).` },
   "server/routines.ts": { MAX_RUNS: STATE },
+  "server/self-wake.ts": { MAX_AHEAD_MS: AUTO },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
     MAX_CHARS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",

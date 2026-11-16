@@ -86,6 +86,7 @@ function open(): DatabaseSync {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
+  const upgrade = !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'people_works'").get();
   db.exec(`
     CREATE TABLE IF NOT EXISTS joined (
       room_id TEXT PRIMARY KEY,
@@ -153,7 +154,23 @@ function open(): DatabaseSync {
       body TEXT NOT NULL,
       PRIMARY KEY (room_id, id)
     );
+    CREATE TABLE IF NOT EXISTS people_works (
+      room_id TEXT NOT NULL,
+      person_id TEXT NOT NULL,
+      works INTEGER NOT NULL,
+      PRIMARY KEY (room_id, person_id)
+    );
   `);
+  // Everyone already in a joined room keeps full power with this PC's bots; anyone seen later starts off.
+  if (upgrade) {
+    db.exec(`
+      INSERT OR IGNORE INTO people_works (room_id, person_id, works)
+      SELECT room_id, 'host', 1 FROM joined WHERE state IS NOT NULL
+      UNION ALL
+      SELECT j.room_id, json_extract(p.value, '$.id'), 1 FROM joined j, json_each(j.state, '$.people') p
+      WHERE j.state IS NOT NULL AND json_extract(p.value, '$.id') != j.person_id
+    `);
+  }
   return db;
 }
 
@@ -211,7 +228,10 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
     // The host keeps a returning person's bots, so this PC keeps its record of them.
     const before = database.prepare("SELECT person_id FROM joined WHERE room_id = ?").get(roomId) as { person_id: string } | undefined;
-    if (before?.person_id !== me.id) database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
+    if (before?.person_id !== me.id) {
+      database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM people_works WHERE room_id = ?").run(roomId);
+    }
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -411,9 +431,23 @@ export function removeJoined(roomId: string): boolean {
       database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM people_works WHERE room_id = ?").run(roomId);
     }
     return removed;
   });
+}
+
+/** Who may make this PC's bots work in the room: "host" or a person id. */
+export function joinedWorks(roomId: string): Set<string> {
+  return new Set((db().prepare("SELECT person_id FROM people_works WHERE room_id = ? AND works = 1").all(roomId) as Array<{ person_id: string }>).map((row) => row.person_id));
+}
+
+/** This PC's "Can make bots work" switch for the host or someone else in the room. */
+export function setJoinedWorks(roomId: string, personId: string, on: boolean): boolean {
+  const room = joinedRoom(roomId);
+  if (room?.status !== "joined" || personId === room.me.id || (personId !== "host" && !room.state?.people.some((person) => person.id === personId))) return false;
+  db().prepare("INSERT OR REPLACE INTO people_works (room_id, person_id, works) VALUES (?, ?, ?)").run(roomId, personId, Number(on));
+  return true;
 }
 
 export function myRoomBots(roomId: string): MyRoomBot[] {

@@ -322,8 +322,10 @@ test("forwards turn-end text and explicit read observation to the host", async (
   const headers = { authorization: `Bearer ${terminalReadGrant(connection.token, "bot-1")}`, "content-type": "application/json" };
   const note = await fetch(`${connection.url}/v1/bots/bot-1/terminal/attention`, { method: "POST", headers, body: JSON.stringify({ sessionId: "worker", kind: "auto", text: "done" }) });
   assert.deepEqual(await note.json(), { raised: true });
+  const identity = { messageId: "123e4567-e89b-12d3-a456-426614174000", sentAt: Date.now(), queued: true };
+  await fetch(`${connection.url}/v1/bots/bot-1/terminal/attention`, { method: "POST", headers, body: JSON.stringify({ sessionId: "worker", kind: "auto", text: "done", identity }) });
   await fetch(`${connection.url}/v1/bots/bot-1/terminal?sessionId=worker&observe=1`, { headers });
-  assert.deepEqual(calls, [["bot-1", "worker", "auto", "done"], ["bot-1", { sessionId: "worker", observe: true }]]);
+  assert.deepEqual(calls, [["bot-1", "worker", "auto", "done", undefined], ["bot-1", "worker", "auto", "done", identity], ["bot-1", { sessionId: "worker", observe: true }]]);
 });
 
 test("forwards panes-only reads and keeps full reads unchanged", async (t) => {

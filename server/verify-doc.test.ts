@@ -380,6 +380,8 @@ it("drops bot is fixing when the fix turn could not start", async () => {
   doc.schedule(start(["script.md"]));
   await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
   await vi.waitFor(() => expect(cards()[0]!.doc!.fixing).toBeUndefined());
+  await vi.waitFor(() => expect(cards()[0]!.replay).toBeDefined());
+  expect(cards()[0]!.doc!.fixing).toBeUndefined();
 });
 
 it("hands a room's findings to the bot that last wrote the file", async () => {
@@ -590,7 +592,6 @@ it("lets a newer edit replace a running check on the same card", async () => {
 it("does nothing when the bot has no text engine", async () => {
   engine = null;
   doc.schedule(start(["script.md"]));
-  await delay(100);
+  await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("no text engine")));
   expect(cards()).toHaveLength(0);
-  expect(log).toHaveBeenCalledWith(expect.stringContaining("no text engine"));
 });

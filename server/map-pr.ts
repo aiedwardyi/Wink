@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { z } from "zod";
 import type { MapCheck, MapFlow, MapPr, MapReview } from "../shared/map-flow.ts";
+import { scrubbedEnv } from "./config.ts";
 import { mapGit } from "./map-git.ts";
 
 export type MapGh = (cwd: string, args: string[]) => Promise<string>;
@@ -18,10 +19,12 @@ const viewSchema = z.object({
 });
 const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }) }) }) }) });
 
+const GH_AUTH_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
+
 export const ghRun: MapGh = (cwd, args) => new Promise((done, fail) => {
   execFile("gh", args, {
     cwd, windowsHide: true, timeout: 15_000, maxBuffer: 8 * 1024 * 1024,
-    env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" },
+    env: scrubbedEnv({ ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" }, GH_AUTH_ENV),
   }, (error, stdout) => error ? fail(error) : done(stdout));
 });
 

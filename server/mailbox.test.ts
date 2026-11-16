@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
@@ -9,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { installOrbitMsg, terminalPaneEnv } from "../electron/terminal-mailbox.mjs";
 import {
-  loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody,
+  BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody,
 } from "./mailbox.ts";
 import { PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
@@ -185,6 +186,20 @@ describe("mailbox note text", () => {
     expect(mailboxNoteText(PANE, "worker", "w1", "done", "weird]label")).toBe("[pane 0f3c9a1e] [weird)label] from worker (w1): done");
     expect(mailboxNoteText(PANE, "worker", "w1", "done", null)).toBe("[pane 0f3c9a1e] from worker (w1): done");
   });
+
+  it("reminds the teacher to record every DONE deliverable in built.md, PR or not", () => {
+    expect(BUILT_REMINDER).toBe("Add or edit its built.md line now (PR or not).");
+    const head = "DONE SITE branch=HEAD sha=abc1234 dirty=no";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${head}\npage live`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${head}\npage live\n${BUILT_REMINDER}`);
+    const long = mailboxNoteText(PANE, "worker", "w1", `${head}\n${"x".repeat(MAILBOX_NOTE_MAX_CHARS)}`)!;
+    expect(long.endsWith(`x\n${BUILT_REMINDER}\n[truncated]`)).toBe(true);
+    const plain = "DONE RESEARCH branch=none sha=none dirty=unknown";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${plain}\nmemo saved to Documents\\pricing.docx`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${plain}\nmemo saved to Documents\\pricing.docx\n${BUILT_REMINDER}`);
+    expect(mailboxNoteText(PANE, "worker", "w1", plain)).toBe(`[pane 0f3c9a1e] from worker (w1): ${plain}\n${BUILT_REMINDER}`);
+    for (const text of ["FAIL SITE branch=HEAD sha=abc1234 dirty=no\nbroke", "DONE: lead work", "done"]) {
+      expect(mailboxNoteText(PANE, "worker", "w1", text), text).not.toContain(BUILT_REMINDER);
+    }
+  });
 });
 
 describe("mailbox post schema", () => {
@@ -222,6 +237,21 @@ describe("mailbox secret", () => {
 });
 
 describe("POST /api/mailbox", () => {
+  it("stores a queued message ID once through the real mailbox route", async () => {
+    const scope = { pane: PANE, bot: "stale-worker", teacher: "stale-teacher" };
+    const grant = mailboxGrant(MAILBOX_KEY, scope.pane, scope.bot, scope.teacher);
+    const text = `DONE LATE branch=test sha=test dirty=no\n${randomUUID()}`;
+    const payload = { text, kind: "report", messageId: randomUUID(), sentAt: Date.now(), queued: true };
+    const responses = await Promise.all([post(payload, scope, grant), post(payload, scope, grant)]);
+    const bodies = await Promise.all(responses.map(response => response.json()));
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    expect(bodies[0]).toEqual(bodies[1]);
+    const notes = (await transcript("stale-worker-thread")).filter(message => message.text?.includes(text));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).not.toHaveProperty("mailbox");
+    expect(notes[0]!.text).toMatch(/\(sent \d\d:\d\d while Wink was closed\)$/);
+  });
+
   it("adds a plain note to the owner's chat without starting a turn", async () => {
     const response = await post({ text: "report: <b>tests</b> pass" });
     expect(response.status).toBe(200);
@@ -382,7 +412,7 @@ describe("POST /api/mailbox", () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it.runIf(process.platform === "win32")("orbit-msg gives up after 10s on a server that never answers", async () => {
+  it.runIf(process.platform === "win32")("orbit-msg queues after 45s on a server that never answers", async () => {
     const stub = createServer(() => {});
     await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
     const address = stub.address();
@@ -394,12 +424,12 @@ describe("POST /api/mailbox", () => {
     const started = Date.now();
     const hung = await orbitMsgFile(paneEnv, bin, ["hi"]);
     const waited = Date.now() - started;
-    expect(hung.status).toBe(1);
-    expect(hung.stderr).toContain("orbit-msg: Wink did not answer in 10s");
-    expect(waited).toBeGreaterThanOrEqual(9000);
-    expect(waited).toBeLessThan(30000);
+    expect(hung.status).toBe(0);
+    expect(hung.stdout).toContain("orbit-msg: queued");
+    expect(waited).toBeGreaterThanOrEqual(45000);
+    expect(waited).toBeLessThan(90000);
     await new Promise((resolve) => stub.close(resolve));
-  }, 60_000);
+  }, 120_000);
 
   it("installOrbitMsg skips the write when the script is byte-identical", async () => {
     const dir = join(home, "bin-identical");
@@ -445,9 +475,9 @@ describe("POST /api/mailbox", () => {
     await new Promise((resolve) => stub.close(resolve));
 
     const refused = await orbitMsgFile(paneEnvFor(closed), bin, ["hi"]);
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toMatch(/Unable to connect|refused/);
-  }, 60_000);
+    expect(refused.status).toBe(0);
+    expect(refused.stdout).toContain("orbit-msg: queued");
+  }, 120_000);
 
   it.runIf(process.platform === "win32")("orbit-msg posts from pane env and fails clearly outside a pane", async () => {
     mkdirSync(join(home, "bin"), { recursive: true });

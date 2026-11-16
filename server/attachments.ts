@@ -139,7 +139,7 @@ export function resolveLocalFile(path: string, roots: readonly string[], kind = 
   if (!isAbsolute(path)) throw fail(400, `${path}: path must be absolute, inside ${folders}`);
   let real: string;
   try {
-    real = realpathSync(path);
+    real = realpathSync.native(path);
   } catch {
     throw fail(404, missing);
   }
@@ -161,7 +161,7 @@ export function resolveLocalFile(path: string, roots: readonly string[], kind = 
 function under(root: string, real: string): string | null {
   if (/^[\\/]{2}/.test(root)) return null;
   try {
-    const fromRoot = relative(realpathSync(root), real);
+    const fromRoot = relative(realpathSync.native(root), real);
     return fromRoot.startsWith("..") || isAbsolute(fromRoot) ? null : fromRoot;
   } catch {
     return null;

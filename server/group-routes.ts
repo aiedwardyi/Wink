@@ -54,7 +54,23 @@ type GroupRouteDeps = {
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => void;
   closeOpenApprovals: (threadId: string) => void;
   releaseInterruptedBot: (botId: string, threadId: string, lane?: boolean) => void;
+  /** Profile sync hears each user edit; `edited` runs before the patch lands. */
+  rooms?: {
+    created: () => void;
+    edited: (before: GroupRecord, patch: Partial<GroupRecord>) => void;
+    removed: (group: GroupRecord) => void;
+  };
+  /** A send waits here while chat sync is fetching this thread's newer rows. */
+  syncSettled?: (threadId: string) => Promise<void>;
 };
+
+/** Rooms from before setup existed carry neither stamp and stay usable. */
+export function roomSetupPending(group: GroupRecord, rows: number): boolean {
+  const hasMarker =
+    Object.prototype.hasOwnProperty.call(group, "setupCompletedAt") ||
+    Object.prototype.hasOwnProperty.call(group, "setupSkippedAt");
+  return !group.dm && hasMarker && group.setupCompletedAt == null && group.setupSkippedAt == null && rows === 0;
+}
 
 export function createGroupRoutes(deps: GroupRouteDeps) {
   const {
@@ -79,6 +95,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     flushInterruptedTask,
     closeOpenApprovals,
     releaseInterruptedBot,
+    rooms,
   } = deps;
   // a Stop that lands while a room send awaits its steer
   const roomStops = new Map<string, number>();
@@ -166,6 +183,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const refusal = body.hosted ? roomBots(memberIds) : null;
       if (refusal) return json(res, 400, { error: refusal });
       const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: (body.peopleOnly ? createPeopleOnlyRoom : createRoom)(name).id } : undefined);
+      rooms?.created();
       return json(res, 201, { group: { ...publicGroupState(group), messages: [] } });
     },
     setup: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
@@ -204,6 +222,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       } else {
         patch.setupSkippedAt = Date.now();
       }
+      rooms?.edited(group, patch);
       const updated = store.patchGroup(m[1], patch);
       if (!updated) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group: publicGroupState(updated) });
@@ -381,6 +400,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (leaving && Array.isArray(patch.memberIds) && !patch.memberIds.includes(leaving)) await stopMember(existing.threadId, leaving);
       if (body.cwd !== undefined) repinRoomCwd(store, existing, patch.cwd as string | undefined);
       if (existing.hosted && Array.isArray(patch.memberIds)) setPeopleOnly(existing.hosted.roomId, !patch.memberIds.length);
+      rooms?.edited(existing, patch);
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group: publicGroupState(group) });
@@ -399,6 +419,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const threadIds = new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
       for (const threadId of threadIds) lastReply.delete(threadId);
+      rooms?.removed(group);
       store.deleteGroup(group.id);
       for (const threadId of threadIds) {
         for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
@@ -448,6 +469,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
             }
           }
           const stops = roomStops.get(group.id);
+          await deps.syncSettled?.(threadId);
           const roomFileIds = group.hosted && !deps.botCaller?.(req) ? await hostRoomFiles(group as HostedGroup, text, sendId) : [];
           const current = store.group(group.id);
           if (!current) throw Object.assign(new Error("no such group"), { status: 404 });

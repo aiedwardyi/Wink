@@ -23,6 +23,7 @@ function wink(pc: string, bots: Record<string, string>) {
     },
     known: (botId) => Object.values(bots).includes(botId),
     projectOf: () => "",
+    roomTurn: () => null,
   });
   return { board, routes };
 }

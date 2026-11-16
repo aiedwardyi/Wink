@@ -135,6 +135,7 @@ export interface Message {
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
   text?: string;
+  mailbox?: { key: string };
   /** Versioned model-context state. Unknown versions stay intact on disk. */
   compaction?: unknown;
   card?: OptionCardData;
@@ -766,6 +767,7 @@ export class Store {
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
   botsFile: "loaded" | "missing" | "unreadable" = "loaded";
   groups: GroupRecord[] = [];
+  groupsFile: "loaded" | "missing" | "unreadable" = "loaded";
   readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
@@ -797,7 +799,8 @@ export class Store {
       this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
     } catch (error) {
       this.groups = [];
-      if (!fileMissing(error)) this.unloaded.add(GROUPS_FILE);
+      this.groupsFile = fileMissing(error) ? "missing" : "unreadable";
+      if (this.groupsFile === "unreadable") this.unloaded.add(GROUPS_FILE);
     }
     // busy never survives a restart - no turn does either.
     let botsMigrated = false;
@@ -1050,7 +1053,7 @@ export class Store {
     else write();
   }
 
-  private persistTask(task: TaskRecord): void {
+  private persistTask(task: TaskRecord | GroupTaskRecord): void {
     this.persistThread(task.threadId, [{ kind: "metadata", value: { title: task.title, createdAt: task.createdAt } }], () => {});
   }
 
@@ -1139,11 +1142,28 @@ export class Store {
     return group;
   }
 
+  /** A room another PC made, under that PC's ids. */
+  addSyncedGroup(group: GroupRecord): GroupRecord {
+    group.defaultResponder = normalizeGroupDefaultResponder(group.defaultResponder, group.memberIds, Boolean(group.dm));
+    this.groups.unshift(group);
+    this.saveGroups();
+    this.emit({ type: "group", groupId: group.id });
+    return group;
+  }
+
+  /** Room thread imports write their rows outside the store. */
+  syncedGroupThread(groupId: string, threadId: string): void {
+    this.threads.delete(threadId);
+    this.saveGroups();
+    this.emit({ type: "group", groupId });
+  }
+
   /** The bot⇄bot channel for a pair, if it exists (order-insensitive). */
   dmGroup(a: string, b: string): GroupRecord | undefined {
-    return this.groups.find(
+    // the oldest, so PCs that each made one for the pair pick the same
+    return this.groups.filter(
       (g) => g.dm && g.memberIds.length === 2 && g.memberIds.includes(a) && g.memberIds.includes(b),
-    );
+    ).sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1))[0];
   }
 
   patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
@@ -1245,6 +1265,7 @@ export class Store {
     const task = this.groupTaskByThread(groupId, threadId);
     if (!task) return null;
     task.title = title.trim().slice(0, 80) || UNTITLED_TASK;
+    this.persistTask(task);
     this.saveGroups();
     this.emit({ type: "group", groupId });
     return task;
@@ -1254,6 +1275,7 @@ export class Store {
     const task = threadId ? this.groupTaskByThread(groupId, threadId) : this.activeGroupTask(groupId);
     if (!task || task.title !== UNTITLED_TASK) return;
     task.title = titleFromMessage(text);
+    this.persistTask(task);
     this.saveGroups();
     this.emit({ type: "group", groupId });
   }
@@ -2143,6 +2165,8 @@ export class Store {
     const followed = follow && !bot.busy && current !== threadId
       && (empty || newest(messages, -Infinity) > newest(this.messagesFor(current), this.activeTask(botId)?.createdAt ?? 0));
     const t = this.thread(threadId);
+    const receipts = new Map(t.messages.filter(message => message.mailbox).map(message => [message.id, message.mailbox]));
+    messages = messages.map(message => receipts.has(message.id) ? { ...message, mailbox: receipts.get(message.id) } : message);
     const before = new Map(t.messages.map((m) => [m.id, JSON.stringify(m)]));
     mdb.replaceThread(threadId, messages, activeLeafId);
     t.messages = messages;

@@ -2,7 +2,24 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { createPlaybookGate, harnessPlaybookBody, harnessPlaybookPrompt, loadHarnessPlaybook } from "./harness-playbook.ts";
+import { workerModelsText } from "./drivers/terminal-proxy.ts";
+import { createPlaybookGate, harnessPlaybookBody, harnessPlaybookPrompt, loadHarnessPlaybook, modelPicksPrompt } from "./harness-playbook.ts";
+
+// Engine to picker labels, read back from the "Worker models to launch" line.
+const LAUNCHABLE = new Map(workerModelsText().split(/ (?=(?:Codex|Muse|Grok|Gemini): )/).map((segment) => [
+  /(\w+): [^:]*$/.exec(segment.split(" = ")[0])?.[1] ?? segment,
+  [...segment.matchAll(/(?:: |, )([^=,:]+?) = /g)].map((match) => match[1]),
+]));
+const NAME_END = String.raw`(?=[,;:)]|\.(?!\d)|\s(?:and|at|just)\s|$)`;
+const MODEL_NAME = new RegExp(String.raw`\b(?:Opus|Sonnet|Haiku|Fable|GPT|Muse|Grok|Gemini)\b.*?${NAME_END}`, "g");
+
+function stalePicks(picks: string): string[] {
+  const labels = [...LAUNCHABLE.values()].flat().sort((a, b) => b.length - a.length);
+  const left = labels.reduce((text, label) => text.replace(new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${NAME_END}`, "g"), ""), picks);
+  const unknown = [...left.matchAll(MODEL_NAME)].map((match) => `not launchable: ${match[0]}`);
+  const missing = [...LAUNCHABLE].filter(([, names]) => !names.some((name) => picks.includes(name))).map(([engine]) => `no pick for ${engine}`);
+  return [...unknown, ...missing];
+}
 
 describe("harness playbook", () => {
   it("is in the system prompt only when the terminal is shared", () => {
@@ -55,6 +72,57 @@ describe("harness playbook", () => {
     for (const command of ["", "pnpm test", "git status", "node claude-notes.js", "type docs\\codex.md"]) expect(gate.hold("s1", command), command).toBeUndefined();
   });
 
+  it("holds a card launch until its Already built section holds the prior-work search", () => {
+    const empty = String.raw`C:\cards\EMPTY.md`;
+    const missing = String.raw`C:\cards\MISSING.md`;
+    const filled = String.raw`C:\my cards\FILLED.md`;
+    const last = String.raw`C:\cards\LAST.md`;
+    const cards = new Map([
+      [empty, "# EMPTY\n## Acceptance\n- x\n\n## Already built\n\n## Files\n- a.ts\n"],
+      [missing, "# MISSING\n## Acceptance\n- x\n"],
+      [filled, "# FILLED\r\n## Already built\r\n- none found (searched: scoreboard, results page)\r\n## Files\r\n"],
+      [last, "# LAST\n## Already built\n- built.md: Scoreboard | web | site/ | #12"],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    const launch = (card: string) => `claude --model claude-opus-5-5 --effort high 'Read ${card} and do it.'`;
+    for (const card of [empty, missing]) {
+      expect(gate.hold("s1", launch(card)), card).toBe(`Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`);
+    }
+    expect(gate.hold("s1", launch(filled))).toBeUndefined();
+    expect(gate.hold("s1", `codex "Read ${last} and do it."`)).toBeUndefined();
+    expect(gate.hold("s1", launch(String.raw`C:\cards\GONE.md`))).toBeUndefined();
+    expect(gate.hold("s1", "claude --model x 'Fix the header.'")).toBeUndefined();
+    expect(gate.hold("s1", `type ${empty}`)).toBeUndefined();
+  });
+
+  it("finds a relative card in the spawn's cwd and skips it without one", () => {
+    const cwd = String.raw`D:\wt\site`;
+    const gate = createPlaybookGate("BODY", (path) => (path === join(cwd, "CARD.md") ? "# CARD\n## Already built\n" : undefined));
+    gate.read("s1");
+    const launch = "claude --model x 'Read CARD.md and do it.'";
+    expect(gate.hold("s1", launch, cwd)).toContain(`Held: ${join(cwd, "CARD.md")} has no prior-work search.`);
+    expect(gate.hold("s1", launch)).toBeUndefined();
+  });
+
+  it("holds a non-code card in a plain folder the same way", () => {
+    const folder = String.raw`C:\Users\me\Documents\Q3 research`;
+    const cards = new Map([
+      [join(folder, "DECK.md"), "# DECK | sonnet | high | FRESH\n## Purpose\nBuild the Q3 board deck.\n## Already built\n\n## Files\n- notes.docx\n"],
+      [join(folder, "MEMO.md"), "# MEMO\n## Already built\n- none found (searched: project notes built.md, status board, cards for 'pricing memo')\n"],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    expect(gate.hold("s1", "claude --model x 'Read DECK.md and do it.'", folder)).toContain(`Held: ${join(folder, "DECK.md")} has no prior-work search.`);
+    expect(gate.hold("s1", "claude --model x 'Read MEMO.md and do it.'", folder)).toBeUndefined();
+  });
+
+  it("says the built list covers docs, decks and pages, written from the files when there is no code", () => {
+    const prompt = loadHarnessPlaybook().replace(/\s+/g, " ");
+    expect(prompt).toContain("Keep one line per feature, doc, deck or page in `built.md`");
+    expect(prompt).toContain("No built.md yet: write it from the code or files before the first build card.");
+  });
+
   it("is wired ahead of the usage check on the spawn route", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const route = source.slice(source.indexOf('path === "/api/internal/spawn-usage"'));
@@ -101,10 +169,10 @@ describe("harness playbook", () => {
 
   it("keeps a built list, checked before feature claims and updated on landing", () => {
     const prompt = loadHarnessPlaybook();
-    expect(prompt).toContain("Keep one line per user-facing feature in `built.md`");
+    expect(prompt).toContain("Keep one line per feature, doc, deck or page in `built.md`");
     expect(prompt).toContain("`- Name | where: device, size, setting | files | PRs`");
     expect(prompt).toContain("then read the code it names. No line: search the code.");
-    expect(prompt).toContain("When you land a user-facing change, add or edit its one line");
+    expect(prompt).toContain("- On each DONE report or landed change, PR or not, add or edit its line.");
   });
 
   it("verifies a scratch-copy review by its findings and deletes the copy", () => {
@@ -196,8 +264,8 @@ describe("harness playbook", () => {
 
   it("writes the built list before building and quotes it in cards", () => {
     const prompt = loadHarnessPlaybook().replace(/\s+/g, " ");
-    expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
-    expect(prompt).toContain("## Already built - The built.md lines and status-board decisions this touches, and the live files to open first.");
+    expect(prompt).toContain("No built.md yet: write it from the code or files before the first build card.");
+    expect(prompt).toContain("## Already built - Search built.md, the status board and earlier cards: lines it touches, or `none found (searched: <terms>)`. Then files to open first.");
   });
 
   it("logs every walk snag to one shared list", () => {
@@ -205,7 +273,18 @@ describe("harness playbook", () => {
   });
 
   it("matches the model to the job", () => {
-    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("Match the model to the job: the strongest for architecture, audits and hard bugs; a mid model for routine builds; the cheapest for searches and mechanical edits. Spread jobs across engines so no single plan runs out.");
+    const picks = modelPicksPrompt();
+    expect(picks).toContain("Spread jobs across engines so no single plan runs out. Tell the user each pick with a one-sentence reason.");
+    expect(picks).toContain("Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.");
+    expect(picks).toContain("Fable 5.2 at xhigh, code audits only.");
+    expect(modelPicksPrompt("x\r\n- Match the model to the job a.\r\n  - B: c.\r\n- Next.")).toBe(" Match the model to the job a. B: c.");
+  });
+
+  it("picks only launchable models and covers every engine", () => {
+    expect([...LAUNCHABLE.keys()]).toEqual(["Claude", "Codex", "Muse", "Grok", "Gemini"]);
+    expect(stalePicks(modelPicksPrompt())).toEqual([]);
+    expect(stalePicks(modelPicksPrompt().replace("Fable 5.2", "Fable 5"))).toEqual(["not launchable: Fable 5"]);
+    expect(stalePicks(modelPicksPrompt().replace("Fable 5.2", "Fable 5.2 Nonexistent"))).toEqual(["not launchable: Fable 5.2 Nonexistent"]);
   });
 
   it("keeps a progress file beside the card and hands it on", () => {
@@ -291,7 +370,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(15813);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16203);
   });
 
   it("fills the worktree path from the configured root", () => {
