@@ -9,7 +9,6 @@ import { createTeamRoom } from "@/lib/team-rooms";
 import { BotPickerList } from "./BotPickerList";
 import { AccountPicker } from "./UsageAccounts";
 import {
-  WIZARD_BOT_NAME_LIMIT,
   groupCreatePayload,
   newBotPayload,
   resolveWizardModel,
@@ -256,7 +255,6 @@ export function NewBotRow({
         id={`group-wizard-name-${row.key}`}
         autoFocus
         value={row.name}
-        maxLength={WIZARD_BOT_NAME_LIMIT}
         onChange={(e) => {
           setNameInvalid(false);
           onPatch({ name: e.target.value });

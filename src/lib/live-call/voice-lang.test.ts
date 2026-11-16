@@ -7,6 +7,7 @@ import type { CallLine, LiveVoice } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
+import { route } from "./gemini";
 import * as guard from "./guard";
 
 class FakeEngine implements LiveEngine {
@@ -651,5 +652,21 @@ describe("9 quiet means quiet", () => {
     expect(engine().results).toEqual([]);
     expect(fixes(engine())).toEqual([]);
     expect(engine().contexts.at(-1)).toContain("Already answered aloud. Context only, do not read it out.");
+  });
+});
+
+describe("S03 words that came with their audio are checked first", () => {
+  it("a frame with Spanish words never plays its audio", async () => {
+    const { audio, engine } = await live();
+    engine().events.heard("Hello again.");
+    route({ serverContent: { modelTurn: { parts: [{ inlineData: { data: "AAAA" } }] }, outputTranscription: { text: "Hola, aquí estoy." } } }, engine().events, { answering: false });
+    expect(audio.played).toBe(0);
+  });
+
+  it("an English frame still plays", async () => {
+    const { audio, engine } = await live();
+    engine().events.heard("Hello again.");
+    route({ serverContent: { modelTurn: { parts: [{ inlineData: { data: "AAAA" } }] }, outputTranscription: { text: "Hi, I'm here." } } }, engine().events, { answering: false });
+    expect(audio.played).toBe(1);
   });
 });

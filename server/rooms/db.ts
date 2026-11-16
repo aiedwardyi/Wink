@@ -58,7 +58,8 @@ export interface RoomEntry {
 export type RoomEntryDraft = Omit<RoomEntry, "seq" | "id" | "at">;
 
 export const PERSON_TEXT_MAX = 4_000;
-export const BOT_TEXT_MAX = 20_000;
+// Every joiner build parses entry text up to this; one longer line fails their whole snapshot.
+export const ROOM_TEXT_MAX = 20_000;
 
 export class RoomError extends Error {
   readonly status: 400 | 404 | 409;
@@ -271,10 +272,10 @@ export function committedRoomText(author: RoomAuthor["kind"], text: string): str
   const clean = cleanText(text);
   if (author !== "bot") {
     if (ATTACHED.test(clean)) throw new RoomError(400, "team rooms don't take attachments");
-    return clean.slice(0, PERSON_TEXT_MAX);
+    return clean.slice(0, author === "host" ? ROOM_TEXT_MAX : PERSON_TEXT_MAX);
   }
   // Mask before the cap, so the cut can never leave half a secret unmasked.
-  return redactSecretsInText(clean.replace(/<(attached-)/gi, "[$1")).slice(0, BOT_TEXT_MAX);
+  return redactSecretsInText(clean.replace(/<(attached-)/gi, "[$1")).slice(0, ROOM_TEXT_MAX);
 }
 
 /** The only insert into the room log. Entries are never updated. `at` is set only for carried history. */

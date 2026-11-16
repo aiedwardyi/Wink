@@ -27,7 +27,7 @@ beforeAll(async () => {
   mkdirSync(DATA_DIR, { recursive: true });
   server = createServer(async (req, res) => {
     if (await translate?.translateRoute(req, res, req.method!, req.url!, {
-      store: { groups, messagesFor: (threadId: string) => messages.get(threadId) ?? [] }, instances, key: "", hostName: "Edward", botCaller: req.headers.authorization === "Bearer bot",
+      store: { groups, messagesFor: (threadId: string) => messages.get(threadId) ?? [] }, instances, key: "", hostName: "Edward",
     })) return;
     json(res, 404, { error: "not found" });
   });
@@ -80,7 +80,7 @@ describe("room translation", () => {
     expect(generateText).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps local bubble lookup inside the held room and refuses bot callers", async () => {
+  it("keeps local bubble lookup inside the held room", async () => {
     groups.find((group) => group.hosted.roomId === roomId)!.threadId = "held-thread";
     const bot: Message = { id: "private", role: "bot", kind: "text", at: Date.now(), text: "비공개 대화", from: { botId: "b1", name: "Rando", color: "blue" } };
     messages.set("private-thread", [bot]);
@@ -89,7 +89,6 @@ describe("room translation", () => {
     messages.set("held-thread", [{ ...bot, role: "user" }]);
     expect((await call(path)).status).toBe(404);
     messages.set("held-thread", [bot]);
-    expect((await call(path, "en", true)).status).toBe(403);
     joinRoom();
     expect((await call(path.replace("/api/rooms/", "/api/joined/rooms/"))).status).toBe(404);
     expect(generateText).not.toHaveBeenCalled();
@@ -209,10 +208,10 @@ describe("room translation", () => {
     );
   });
 
-  it("refuses bot callers on both routes before generation", async () => {
+  it("translates for the user's own bot on both routes", async () => {
     joinRoom();
-    for (const path of [hostPath(), joinedPath()]) expect((await call(path, "en", true)).status).toBe(403);
-    expect(generateText).not.toHaveBeenCalled();
+    for (const path of [hostPath(), joinedPath()]) expect(await call(path, "en", true)).toEqual({ status: 200, body: { text: "The launch is ready." } });
+    expect(generateText).toHaveBeenCalled();
   });
 
   it("refuses invalid languages, foreign entries and own host lines", async () => {
@@ -298,12 +297,12 @@ describe("room translation", () => {
     }
   });
 
-  it("mounts before catch-all room routes with bot-token refusal", () => {
+  it("mounts before catch-all room routes, bots included", () => {
     const source = readFileSync(join(import.meta.dirname, "../index.ts"), "utf8");
     const start = source.indexOf("await translateRoute(");
     expect(start).toBeGreaterThan(0);
     expect(start).toBeLessThan(source.indexOf("await joinedFileRoute("));
-    expect(source.slice(start, source.indexOf("\n", start))).toContain("botCaller: Boolean(commsCallers.resolve(req.headers.authorization))");
+    expect(source.slice(start, source.indexOf("\n", start))).not.toContain("botCaller");
   });
 });
 

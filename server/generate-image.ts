@@ -9,7 +9,7 @@ export const MISSING_IMAGE_KEY =
   "No image key saved. Call request_credential with openaiImageApiKey, end the turn, then retry generate_image.";
 
 export const generateImageRequestSchema = z.object({
-  prompt: z.string().trim().min(1).max(4000),
+  prompt: z.string().trim().min(1),
   filename: z.string().optional(),
   size: z.enum(["1024x1024", "1536x1024", "1024x1536"]).default("1024x1024"),
   quality: z.enum(["low", "medium", "high"]).default("medium"),

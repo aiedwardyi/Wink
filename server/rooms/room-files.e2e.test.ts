@@ -46,6 +46,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
+const BOT = "Bearer bot-token";
 
 interface Reply {
   status: number;
@@ -85,7 +86,7 @@ async function localApp(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
   if (client && (await joinedFileRoute(req, res, method, url, client))) return;
-  if (await hostFileRoute(req, res, method, url, { store, hostName: () => "Edward", botCaller: false })) return;
+  if (await hostFileRoute(req, res, method, url, { store, hostName: () => "Edward", botCaller: req.headers.authorization === BOT })) return;
   res.writeHead(404).end();
 }
 
@@ -392,6 +393,18 @@ describe("pictures and files in a team room, through the real door", () => {
     expect(store.messagesFor(group.threadId).at(-1)?.roomFiles?.[0]).toMatchObject({ deleted: true });
     expect(recentRoomEntries(roomId, 10).at(-1)?.files?.[0]).toMatchObject({ deleted: true });
     expect((await call("GET", `/api/joined/rooms/${roomId}/files/${guest.id}`)).status).toBe(404);
+  });
+
+  it("lets the user's own bot list, read and delete room files, but not post as the host", async () => {
+    const { roomId } = await joinedTeam();
+    const file = await hostUpload(roomId, pdf(100), "plan.pdf");
+    const bot = { authorization: BOT };
+    expect(await call("GET", `/api/rooms/${roomId}/files`, undefined, bot)).toMatchObject({ status: 200, json: { files: [{ id: file.id }] } });
+    expect(await call("GET", `/api/rooms/${roomId}/files-state`, undefined, bot)).toMatchObject({ status: 200 });
+    expect(await call("GET", "/api/room-files-folder", undefined, bot)).toMatchObject({ status: 200, json: { error: null } });
+    expect(await call("DELETE", `/api/rooms/${roomId}/files/${file.id}`, undefined, bot)).toMatchObject({ status: 200 });
+    expect(existsSync(join(DATA_DIR, "room-files", roomId, file.id))).toBe(false);
+    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "hi" })), bot)).status).toBe(403);
   });
 
   it("moves room files after verifying their size and sha256", async () => {

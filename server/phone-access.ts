@@ -43,7 +43,6 @@ const PAIR_STATUS = {
   "no-pairing": 409,
   "wrong-credential": 401,
   "too-many-attempts": 401,
-  "too-many-phones": 409,
   "save-failed": 500,
 } satisfies Record<PairError, number>;
 const GOOGLE_STATUS = {

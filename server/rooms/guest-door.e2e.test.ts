@@ -341,6 +341,14 @@ describe("teammate and the real door", () => {
     expect(seqs(roomId)).toEqual([1, 2, 3, 4]);
   });
 
+  it("hands a teammate the host's 20,000-character line whole, in a shape older builds parse", async () => {
+    const { group, roomId } = await joinedTeam();
+    const long = "x".repeat(20_000);
+    hostSays(group, long);
+    await until(() => texts(roomId).includes(long));
+    expect(olderEntry.safeParse(recentRoomEntries(roomId, 1)[0]).success).toBe(true);
+  });
+
   it("keeps sends in order", async () => {
     const { c, roomId } = await joinedTeam();
     const results = await Promise.all(["one", "two", "three", "four"].map((text) => c.send(roomId, text)));

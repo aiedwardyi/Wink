@@ -37,18 +37,12 @@ describe("browser document intake", () => {
     }));
   });
 
-  it.each(["en", "ko"] as const)("localizes a file over 10 GB in %s", async (locale) => {
-    applyLocale(locale);
-    const fetcher = vi.fn();
-    vi.stubGlobal("fetch", fetcher);
-    const out = await intakeFiles([file("huge.iso", "", 10 * 1024 ** 3 + 1)], {
-      t, allowImages: true, getPath: () => "",
-    });
-    expect(out.attachments).toEqual([]);
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(out.notice).toContain("huge.iso");
-    expect(out.notice).toContain(locale === "ko" ? "10GB까지" : "over 10 GB");
-    expect(out.notice).not.toMatch(/Finder|File Explorer/);
+  it("takes a pathless file over 10 GB as an upload, with no notice", async () => {
+    const huge = file("huge.iso", "", 10 * 1024 ** 3 + 1);
+    const out = await intakeFiles([huge], { t, allowImages: true, getPath: () => "" });
+    expect(out.attachments).toEqual([expect.objectContaining({ kind: "upload", name: "huge.iso", size: 10 * 1024 ** 3 + 1 })]);
+    expect(out.uploads.map((upload) => upload.file)).toEqual([huge]);
+    expect(out.notice).toBeNull();
   });
 
   it("keeps desktop paths even for unsupported types and large documents", async () => {
@@ -95,15 +89,6 @@ describe("intakeFiles", () => {
     });
     expect(out.attachments).toHaveLength(1);
     expect(out.attachments[0].kind).toBe("file");
-  });
-
-  it("names the files it could not take, rather than dropping them in silence", async () => {
-    const out = await intakeFiles([{ ...file("ghost.bin", "application/octet-stream", 10 * 1024 ** 3 + 1) }], {
-      t, allowImages: true,
-      getPath: () => "",
-    });
-    expect(out.attachments).toHaveLength(0);
-    expect(out.notice).toMatch(/ghost\.bin/);
   });
 
   it("keeps a small pathless text file outside the document types as a paste chip", async () => {

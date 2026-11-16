@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
-import { REMOTE_PANE_CEILING, remoteSlot, startingPanes } from "./terminal-remote.mjs";
+import { remoteSlot, startingPanes } from "./terminal-remote.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
@@ -68,10 +68,6 @@ const stallSignature = (screenText) => AGENT_BUSY_RE.test(screenText) ? screenTe
 const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!waitsOnly || /\b[1-9]\d* (?:shells?|monitors?)\b/u.test(line)));
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
-// Only stops a runaway loop; free memory is the real gate (16 workers used about 13 GB).
-export const BOT_PANE_LIMIT = 128;
-// Pane-count readers (terminal-bridge, server/terminal-snapshot.ts, src/lib/terminal-panes.ts) accept up to this many per bot.
-export const BOT_PANE_TOTAL = BOT_PANE_LIMIT + REMOTE_PANE_CEILING;
 // Exited panes stay readable until this many terminals are open.
 const SESSION_LIMIT = 32;
 const MB = 1024 ** 2;
@@ -532,7 +528,6 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const active = new Map();
   const generations = new Map();
   const pending = new Map();
-  const paneReservations = new Map();
   const remoteOpens = new Set();
   let loadingPanes = [];
   const deletedBots = new Set();
@@ -1791,12 +1786,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (disposed) throw new Error("Terminal host is shutting down");
       const sender = paneOwner();
       if (!sender || sender.isDestroyed?.()) throw new Error("Wink window is not available");
-      // Reserved before the first await so concurrent opens cannot overshoot the caps.
-      const botReserved = paneReservations.get(botId) ?? 0;
       const slot = input.host === undefined ? null : remoteSlot(input.host, remotePanes(), now());
-      // A remote pane counts toward its host's cap; at home it is only a shell running ssh.
-      if (!slot && botSessions(botId).filter((session) => session.botPane && !session.remote && session.exitCode === null).length + botReserved >= BOT_PANE_LIMIT) throw new Error(`Too many bot terminals (limit ${BOT_PANE_LIMIT})`);
-      if (botSessions(botId).filter((session) => session.botPane && session.exitCode === null).length + botReserved >= BOT_PANE_TOTAL) throw new Error(`Too many bot terminals (limit ${BOT_PANE_TOTAL})`);
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
       const floor = paneMemoryFloor(slot ? "" : input.command);
       const free = freeMemory();
@@ -1808,7 +1798,6 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
         throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(needed / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close or open it on another PC with host.`);
       }
-      paneReservations.set(botId, botReserved + 1);
       reservedPanes += 1;
       loadingPanes.push(loading);
       if (slot) remoteOpens.add(slot);
@@ -1864,9 +1853,6 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (session) loading.session = session;
         else loadingPanes = loadingPanes.filter((pane) => pane !== loading);
         reservedPanes -= 1;
-        const left = paneReservations.get(botId) - 1;
-        if (left) paneReservations.set(botId, left);
-        else paneReservations.delete(botId);
       }
       emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
       if (input.command) {

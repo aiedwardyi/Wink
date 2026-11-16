@@ -114,14 +114,17 @@ export function WorkerRow({ run, state, live, onOpenTerminalPane, open: expanded
         type="button"
         onClick={onToggle ?? (() => setLocalOpen((v) => !v))}
         aria-expanded={open}
-        className="flex w-full items-center gap-2.5 border-b border-hairline/40 py-2 text-left text-[13px] hover:bg-raised/50"
+        className="group flex w-full border-b border-hairline/40 py-0.5 text-left text-[13px]"
       >
-        <WorkerLine run={run} state={state} />
-        <ChevronDown size={12} aria-hidden className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180")} />
+        {/* A rounded fill on the button itself would curl the divider at its corners. */}
+        <span className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-1.5 group-hover:bg-raised/50">
+          <WorkerLine run={run} state={state} />
+          <ChevronDown size={12} aria-hidden className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180")} />
+        </span>
       </button>
       <Fold open={open}>
         {/* pane text is untrusted; plain text only, never markdown */}
-        <div data-orbit-worker className="flex flex-col gap-2 border-b border-hairline/40 py-2 pl-8.5 text-[12.5px] leading-relaxed text-ink-secondary">
+        <div data-orbit-worker className="flex flex-col gap-2 border-b border-hairline/40 py-2 pl-11.5 pr-3 text-[12.5px] leading-relaxed text-ink-secondary">
           {run.folder && (jump ? (
             <button type="button" onClick={() => onOpenTerminalPane?.(jump)} className="self-start text-left underline-offset-2 hover:text-ink hover:underline">
               {t(where, { folder: run.folder })}

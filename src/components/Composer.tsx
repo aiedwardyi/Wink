@@ -261,9 +261,8 @@ export function Composer({
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
-  const sendBlocked = locked || Boolean(approval);
   // A bot's open ask_user question pins above the composer but never locks
-  // it; a pending approval keeps its takeover and the pin waits behind it.
+  // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
   const pinned = pinnedQuestion(chatMessages, threadMessages);
   const questions = pinned ? openQuestions(chatMessages) : [];
@@ -502,7 +501,7 @@ export function Composer({
     if (!composerNeedsTap()) input.focus();
     requestBotPrewarm(bot.id);
     dispatch({ type: "composerFocused", botId: bot.id });
-  }, [bot, dispatch, focusBlocked, locked, approval, requestBotPrewarm, state.composerFocusBotId]);
+  }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId]);
 
   useEffect(() => {
     if (peopleRoom) focusComposerOnActivation({ composer: inputRef.current });
@@ -519,7 +518,7 @@ export function Composer({
     const input = inputRef.current;
     if (!input || input.disabled) return;
     input.focus();
-  }, [approval, focusBlocked, locked, replyTo]);
+  }, [focusBlocked, locked, replyTo]);
 
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
@@ -731,7 +730,7 @@ export function Composer({
     bot && !group && terminalBridge?.readBot && terminalBridge?.sendBot,
   );
   const retryFailedSend = (failed: FailedComposerSend) => {
-    if (sendBlocked) return;
+    if (locked) return;
     if (failed.requestText.includes("<attached-image ")) {
       const support = imageTargetsSupport(failed.requestText, failed.after);
       if (support !== "supported") {
@@ -764,9 +763,11 @@ export function Composer({
     }
     onSend?.();
   };
-  const send = (after = false) => {
+  const send = (requestedAfter = false) => {
+    // a turn waiting on an approval takes the line after it, not mid-decision
+    const after = requestedAfter || Boolean(approval);
     const action = composerBusySendAction({
-      locked: sendBlocked,
+      locked,
       isRoom: Boolean(group),
       busy,
       canSteer: roomSteers(composerSendSourceText(inputRef.current?.value, text)),
@@ -845,7 +846,7 @@ export function Composer({
     onSend?.();
   };
   const previewTerminalSend = async () => {
-    if (sendBlocked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
+    if (locked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (!liveText.trim()) return;
     if (attachments.length) {
@@ -871,8 +872,8 @@ export function Composer({
     }
   };
   const confirmTerminalSend = async () => {
-    if (sendBlocked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
-      if (sendBlocked || !canSendToTerminal) setTerminalSendPreview(null);
+    if (locked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
+      if (locked || !canSendToTerminal) setTerminalSendPreview(null);
       return;
     }
     setTerminalSendBusy(true);
@@ -901,7 +902,7 @@ export function Composer({
   };
   useEffect(() => {
     if (!group) return;
-    if (sendBlocked) return;
+    if (locked) return;
     if (busy) {
       roomFlushLock.current = false;
       return;
@@ -934,13 +935,13 @@ export function Composer({
         commitQueued(rearmRoomFlushHold(queuedRef.current));
       },
     });
-  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, sendBlocked]);
+  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, locked]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
   useEffect(() => {
     if (!recording) return;
-    if (sendBlocked) {
+    if (locked) {
       setRecording(false);
       return;
     }
@@ -970,10 +971,10 @@ export function Composer({
       offEnd();
       void bridge.speechStop();
     };
-  }, [recording, editText, sendBlocked]);
+  }, [recording, editText, locked]);
 
   const toggleMic = () => {
-    if (sendBlocked) return;
+    if (locked) return;
     if (!capabilities.dictation.available || !window.ogb) {
       setSpeechError(t("composer.dictationUnavailable"));
       return;
@@ -1098,7 +1099,7 @@ export function Composer({
             <button
               type="button"
               onClick={() => retryFailedSend(failed)}
-              disabled={sendBlocked}
+              disabled={locked}
               className="shrink-0 rounded px-2 py-1 font-medium hover:bg-danger/10"
             >
               {t("composer.retry")}
@@ -1148,8 +1149,7 @@ export function Composer({
             </button>
           </div>
         ))}
-        {/* An approval takes over the composer: you answer it before you
-            can type again, so a waiting bot is impossible to miss. */}
+        {/* An approval sits on the composer so a waiting bot is impossible to miss. */}
         {approval && (
           <div data-pending-approval className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
             <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
@@ -1199,9 +1199,9 @@ export function Composer({
             />
           </div>
         )}
-        <div inert={sendBlocked}>
+        <div inert={locked}>
         <ComposerAttachments
-          disabled={sendBlocked}
+          disabled={locked}
           items={shownAttachments}
           onAdd={addAttachments}
           onRemove={removeAttachment}
@@ -1247,7 +1247,7 @@ export function Composer({
           {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
-            disabled={sendBlocked}
+            disabled={locked}
             type="file"
             multiple
             className="hidden"
@@ -1259,7 +1259,7 @@ export function Composer({
           />
           <input
             ref={repickInput}
-            disabled={sendBlocked}
+            disabled={locked}
             type="file"
             className="hidden"
             onChange={(e) => {
@@ -1267,7 +1267,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!sendBlocked && !room?.offline && (
+          {!locked && !room?.offline && (
             <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
               <button
                 type="button"
@@ -1380,12 +1380,10 @@ export function Composer({
             }
             if (e.key === "Escape" && recording) setRecording(false);
           }}
-          disabled={Boolean(approval) || locked}
+          disabled={locked}
           placeholder={
             locked
               ? t("composer.finishSetup")
-              : approval
-              ? t("composer.answerApproval")
               : recording
               ? t("composer.listening")
               : pinned && !pinned.card?.options.length
@@ -1425,7 +1423,7 @@ export function Composer({
             <Square size={12} className="fill-current" />
           </button>
         )}
-        {!sendBlocked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
+        {!locked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.stopDictation") : t("composer.startDictation")}
@@ -1440,7 +1438,7 @@ export function Composer({
             <Mic size={18} />
           </button>
         )}
-        {hasContent && !sendBlocked && (
+        {hasContent && !locked && (
           <>
           {/* Hidden while sharing is on: the bot types into its own panes. */}
           {canSendToTerminal && bot?.shareTerminalWithChat === false && !busy && (
@@ -1466,7 +1464,7 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
+          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
             <button
               type="button"
               onClick={onCall}

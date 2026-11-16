@@ -424,14 +424,14 @@ describe("races and floods", () => {
     expect(urls("/snapshot")).toHaveLength(2);
   });
 
-  it("refuses sends past a small queue instead of waiting on a silent host", async () => {
+  it("queues every send behind a silent host, each waiting its turn", async () => {
     const held: ServerResponse[] = [];
     route = (req, res) => (req.url?.endsWith("/send") ? void held.push(res) : quietDoor(req, res));
     const c = guest();
     await c.join(CODE);
-    const queued = Array.from({ length: 20 }, (_, i) => c.send("r1", `m${i}`));
-    const extra = await Promise.race([c.send("r1", "one too many"), new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
-    expect(extra).toEqual({ ok: false, status: 429, error: "too many messages waiting to send" });
+    const queued = Array.from({ length: 21 }, (_, i) => c.send("r1", `m${i}`));
+    const last = await Promise.race([queued[20], new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
+    expect(last).toBe("waiting");
     route = (req, res) => (req.url?.endsWith("/send") ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res));
     for (const res of held) reply(res, 503, { error: "phone access is off" });
     await until(() => held.every((res) => res.writableEnded));

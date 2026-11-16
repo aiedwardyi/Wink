@@ -121,8 +121,10 @@ describe.skipIf(process.platform !== "win32")("one mind between a room and its b
     expect(search.body.text).toContain("Edward: use the zebra-route for deploys");
     await replied;
     expect((await room()).messages.at(-1).tool.name).toBe("Searched your 1:1: zebra-route");
-    const own = turns().find((line) => line.input.threadId !== group.threadId).input.integrations.agents.env.OMB_COMMS_TOKEN;
-    expect((await api("POST", "/api/internal/my-chats", { query: "starzum" }, own)).status).toBe(403);
+    const own = turns().filter((line) => line.input.threadId !== group.threadId).at(-1).input.integrations.agents.env;
+    const fromOwn = await api("POST", "/api/internal/my-chats", { query: "starzum" }, own.OMB_COMMS_TOKEN);
+    expect(fromOwn.status).toBe(200);
+    expect(fromOwn.body.text).toContain("Plan for starzum.com");
 
     const oneOnOne = turns().filter((line) => line.input.threadId !== group.threadId);
     expect(oneOnOne.at(-1).input.text).toContain(ECHO_HEAD);

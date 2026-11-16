@@ -43,8 +43,9 @@ export function route(msg: ServerMessage, events: LiveEvents, turn: { answering:
       turn.answering = true;
       events.answering();
     }
-    for (const part of parts) if (part.inlineData?.data) events.audio(fromBase64(part.inlineData.data));
+    // Words checked before the audio they came with, so a wrong-language turn never starts playing.
     if (content.outputTranscription?.text) events.said(content.outputTranscription.text);
+    for (const part of parts) if (part.inlineData?.data) events.audio(fromBase64(part.inlineData.data));
     if (content.interrupted) {
       turn.answering = false;
       events.interrupted();

@@ -317,8 +317,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.memberIds !== undefined) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
-        const empty = existing.hosted ? peopleOnlyRoster(body.memberIds) : null;
-        const roster = empty?.ok ? empty : checkedMemberIds(body.memberIds, existing.memberIds);
+        const empty = peopleOnlyRoster(body.memberIds);
+        const roster = empty.ok ? empty : checkedMemberIds(body.memberIds, existing.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
         const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
         if (refusal) return json(res, 400, { error: refusal });

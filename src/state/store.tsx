@@ -1468,8 +1468,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
-          // only once the server took the send, so it routed it with the question still open
-          const saveTyped = () => { if (typedBeforeSend) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
+          // only once the server took the send, so it routed it with the question still open; a line in the transcript settles it there
+          const saveTyped = (queued: boolean) => { if (typedBeforeSend && (queued || !typedBeforeSend.byLine)) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           const post = () =>
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1540,7 +1540,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (typeof settledThread === "string") {
               rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.queued === true });
             }
-            saveTyped();
+            saveTyped(body?.queued === true);
           };
           const sending = post()
             .then(settle)
@@ -1552,7 +1552,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
-                saveTyped();
+                saveTyped(false);
                 return;
               }
               // A queued send stays off the transcript until drain; the same
@@ -1808,7 +1808,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
-          const saveTyped = () => { if (typedBeforeSend) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
+          const saveTyped = () => { if (typedBeforeSend && !typedBeforeSend.byLine) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",

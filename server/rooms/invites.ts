@@ -19,7 +19,8 @@ import { checkedRoomName, joinerName } from "./names.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 const SHORT_CODE_REFRESH_MS = 24 * 60 * 60_000;
-const MAX_PEOPLE = 20;
+// Every joiner build parses room state with at most 100 people; a 101st leaves every joiner unable to load the room.
+const MAX_PEOPLE = 100;
 const JOINS_PER_MINUTE = 20;
 const SECRET_PREFIX = "wki_";
 const KEY_PREFIX = "wkg_";

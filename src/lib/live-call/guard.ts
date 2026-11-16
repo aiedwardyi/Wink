@@ -1,5 +1,5 @@
 // What the voice's turn claims, one sentence at a time: a promise of work, a refusal, a dodge, or an honest "not sent".
-import { bareYes } from "./consent";
+import { afterYes, bareYes, YES_KO } from "./consent";
 
 export type Claim = "promise" | "cant" | "unsure" | "failed";
 
@@ -65,6 +65,24 @@ export function ordersChange(heard: string, names: readonly string[] = []): bool
   return asksForChange(said) || NEED_EN.test(heard) || COMMAND_KO.test(heard);
 }
 
+// What a yes may add and still mean the offered order: "Yes, go ahead and send it."
+const SAME_ORDER = new RegExp(`^(?:${CHANGES}|do|go|ahead|and|then|please|just|it|that|this|them|those|one|now|right|away|a|an|to|of|on|in|at|by|as|so|up|me|my|us|is|be|ok)$`, "i");
+const CHANGE_WORD = new RegExp(`\\b(?:${CHANGES})\\b`, "i");
+
+/** A yes word that goes on to give another order: "Okay, delete the logs instead" does not confirm "Merge PR 12". */
+export function ordersOther(said: string, order: string): boolean {
+  if (bareYes(said)) return false;
+  const rest = afterYes(said);
+  if (/\binstead\b|대신/i.test(rest)) return true;
+  // "Okay, send it to Bob": the yes words took the verb, the line still had one.
+  if (!ordersChange(rest) && !(rest && CHANGE_WORD.test(said))) return false;
+  const known = order.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  // A Korean verb alone ("배포해줘") says yes in its own words.
+  const words = (rest.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !SAME_ORDER.test(word) && !YES_KO.includes(word) && !FILLER_WORDS.has(word) && !/[가-힣](?:해|줘|봐|라|요|세요)$/.test(word));
+  // "server2" is not "server1".
+  return words.some((word) => !known.some((was) => /\p{N}/u.test(word + was) ? word === was : sameWord(word, was)));
+}
+
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;
 // Korean puts the verb last, so the lookup has to end the order: "검색해서 나온 파일은 지워줘" deletes.
 const LOOKUP_KO = /(?:(?:검색|조사)(?:\s?좀)?\s?해|(?:찾아|알아)\s?(?:봐|보세요|볼래|줘|주세요|줄래))(?:\s?(?:봐|보세요|볼래|줘|주세요|줄래))*요?[\s.!?~]*$/;
@@ -109,6 +127,14 @@ const AGAIN = /\bwhat(?:'s| is| was)\s+(?:the|that|their|his|her|its)\s+question
 /** The person asking to hear the question again, which is not its answer. */
 export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
+}
+
+// Only a request to hear it: "fix the bug in the message" or "do what you said" is work.
+const READ_BACK = /\b(?:tell|remind) me what you (?:just |had )?(?:said|wrote|sent)\b|(?:^|[.!?]\s+)(?:(?:sorry|so|wait|and|um|uh)[,\s]+)*what (?:did|was it) you (?:just )?(?:say|write|send)\b|\bread (?:me |out |back )?(?:it|that|this|the|your)(?: last| latest| newest)? (?:message|reply|answer|text)\b|\bread (?:it|that) (?:out|back|to me)\b|(?:^|[.!?]\s+)(?:(?:earlier|before|just now)[,\s]+)*(?:like )?(?:in|from) (?:the|that|your) (?:last |latest |newest )?(?:message|reply)[\s.!?]*$|\bwhat (?:does|did|was) (?:the|that|your) (?:last |latest )?(?:message|reply)\b|(?:메시지|메세지|답장|답변)[^.!?]*(?:읽어\s*(?:줘|줄래|봐|주세요)|뭐라고\s*(?:했|썼|그랬)|뭐였)|(?:방금|아까)\s*(?:뭐라고|뭐라)\s*(?:했|그랬|썼)/i;
+
+/** The person asking to hear what the bot wrote in the chat, which only the message itself answers. */
+export function readsBack(heard: string): boolean {
+  return READ_BACK.test(heard);
 }
 
 // Every clause of the line asks for quiet or says he is talking to someone else, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.

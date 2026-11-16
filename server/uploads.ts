@@ -25,7 +25,6 @@ import { finished, pipeline } from "node:stream/promises";
 import { writeFileAtomic } from "./atomic.ts";
 import { sendJson } from "./compression.ts";
 
-export const UPLOAD_MAX_BYTES = 10 * 1024 ** 3;
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 ** 2;
 
 const UPLOADING_DIR = ".uploading";
@@ -241,7 +240,6 @@ export function createUploads(options: UploadsOptions) {
     if (!name.trim() || typeof size !== "number" || !Number.isSafeInteger(size) || size < 1) {
       return json(res, 400, { error: "name and a size of 1 or more are required" });
     }
-    if (size > UPLOAD_MAX_BYTES) return json(res, 413, { code: "too_big" });
     const type = typeof body?.type === "string" && body.type ? body.type.slice(0, 200) : "application/octet-stream";
     const lastModified = typeof body?.lastModified === "number" && Number.isFinite(body.lastModified) ? body.lastModified : 0;
     const open = sessions().filter(([, record]) => !record.path);

@@ -34,8 +34,6 @@ export function RoomDetailsBots({ group }: { group: Group }) {
     [state.bots, group.memberIds],
   );
   const inRoom = bots.filter((b) => group.memberIds.includes(b.id));
-  // A shared group with no bots stays open as a people-only room.
-  const lastLocked = !group.hosted && group.memberIds.length === 1;
 
   const setMember = (id: string, on: boolean) => {
     const current = memberIds.current;
@@ -77,9 +75,8 @@ export function RoomDetailsBots({ group }: { group: Group }) {
             <button
               type="button"
               onClick={() => setMember(b.id, false)}
-              disabled={lastLocked}
               aria-label={t("room.removeBot", { name: b.name })}
-              className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-secondary"
+              className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
             >
               {t("teamRoom.remove")}
             </button>
@@ -93,17 +90,13 @@ export function RoomDetailsBots({ group }: { group: Group }) {
         </li>
       </ul>
       {problem && <p role="alert" className="mt-1 px-1 text-[12.5px] text-danger">{t("errors.request")}</p>}
-      {lastLocked && <p className="mt-1.5 px-1 text-[12px] text-ink-secondary">{t("room.needsBot")}</p>}
       {adding && (
         <div className={`${DETAILS_BOX} mt-2 p-2`}>
           <BotPickerList
             bots={bots}
             picked={new Set(group.memberIds)}
             emptyHint={t("chrome.createBotFirst")}
-            onToggle={(id) => {
-              const on = group.memberIds.includes(id);
-              if (!on || !lastLocked) setMember(id, !on);
-            }}
+            onToggle={(id) => setMember(id, !group.memberIds.includes(id))}
           />
           {rows.map((row, rowIndex) => (
             <NewBotRow

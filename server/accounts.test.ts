@@ -40,12 +40,12 @@ describe("PC-local accounts", () => {
     expect(service.list().filter((row) => row.of === "claude").map((row) => row.id)).toEqual(["claude", added[0].id, added[2].id]);
   });
 
-  it("counts the existing sign-in in the engine cap", async () => {
-    const { service } = fixture();
-    for (let i = 1; i < core!.MAX_ENGINE_ACCOUNTS; i++) await service.add("claude");
-    await expect(service.add("claude")).rejects.toThrow(/8 accounts/);
-    expect(service.snapshot).toHaveLength(7);
-    await expect(service.add("codex")).resolves.toMatchObject({ of: "codex" });
+  it("adds a ninth sign-in to one engine and keeps it after a restart", async () => {
+    const { dir, service } = fixture();
+    for (let i = 0; i < 8; i++) await service.add("claude");
+    await expect(service.add("claude")).resolves.toMatchObject({ of: "claude" });
+    expect(service.snapshot).toHaveLength(9);
+    expect(new core!.AccountService(dir, () => bases).snapshot).toHaveLength(9);
   });
 
   it.each(["grok", "missing", "__proto__", "../claude", "constructor"])("refuses an unsupported base %s", async (of) => {

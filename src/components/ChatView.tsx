@@ -1235,7 +1235,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const modelSwitch = useNoReplySwitch(bot, lastUserMessage?.id, turnSignal !== undefined);
   const activityLabel = turnStageLabel(
     phase,
-    liveActivityLabel(lastMessage, showActivities),
+    liveActivityLabel(lastMessage, showActivities, bot.activity === "no-signal"),
     busyRetryLabel(lastMessage),
     noReply?.label,
   );

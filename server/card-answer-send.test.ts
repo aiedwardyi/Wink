@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
+import { lineSettles } from "../shared/open-question.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { planCompaction } from "./context-compaction.ts";
 import { SendSequencer } from "./send-idempotency.ts";
@@ -22,16 +23,19 @@ function harness(opts: { activeTurn?: boolean } = {}) {
     wireBot: () => ({}), wireTask: () => ({}), sendSequencer: new SendSequencer(), startTurn, noteTalked: noop, pullSyncedThread: noop,
     resolveReplyTarget: () => undefined, ensureChatLatency: noop, markChatLatency: noop, broadcast: noop, clearUnattended: noop, resumePaneWakes: noop,
     botHasActiveTurn: () => Boolean(opts.activeTurn || store.bot(bot.id)?.busy), paneNoteTurnThreads: new Set(), busyResumeThreads: new Set(), drainQueuedSends: noop,
-    routines: { activeRunForBot: () => null }, taskResumes: { forgetBot: noop }, closeOpenApprovals: noop,
+    routines: { activeRunForBot: () => null }, taskResumes: { forgetBot: noop }, closeOpenApprovals: noop, clientMessage: (message: unknown) => message,
   } as unknown as Parameters<typeof createBotChatRoutes>[0]);
-  async function send(body: object) {
+  async function call(route: "send" | "patchCard", body: object, ...params: string[]) {
+    let status = 0;
     let data: Record<string, any> = {};
-    const res = { writeHead: () => {}, setHeader: () => {}, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
-    await routes.send(Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", bot.id] as RegExpMatchArray);
-    return data;
+    const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
+    await routes[route](Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", bot.id, ...params] as RegExpMatchArray);
+    return { status, data };
   }
+  const send = async (body: object) => (await call("send", body)).data;
+  const patchCard = async (cardId: string, body: object) => (await call("patchCard", body, cardId)).status;
   const last = () => store.activePath(bot.threadId).at(-1)!;
-  return { store, bot, card, steer, startTurn, send, last, busy: () => store.setActivity(bot.id, "working") };
+  return { store, bot, card, steer, startTurn, send, patchCard, last, busy: () => store.setActivity(bot.id, "working") };
 }
 
 it("an idle tap starts the same turn and marks the line with its card", async () => {
@@ -84,4 +88,19 @@ it("the model still reads a tapped answer on replay", async () => {
   const plan = planCompaction({ messages: h.store.activePath(h.bot.threadId), contextWindow: 1_000_000 });
   if (plan.needed || plan.status !== "fits") throw new Error("expected the whole transcript");
   expect(plan.transcript).toContainEqual(expect.objectContaining({ role: "user", text: expect.stringContaining("Can't tonight") }));
+});
+
+it.each([
+  { name: "without choices", card: { options: [], staysOpen: true as const }, text: "Polaris", saves: false },
+  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Polaris", saves: true },
+  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] }, text: "Polaris", saves: false },
+  { name: "with choices that stays open, typed as a choice", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Can't tonight", saves: false },
+])("the client saves a typed answer only when its line leaves a question $name open", async ({ card, text, saves }) => {
+  const h = harness();
+  const asked = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Which star?", askUser: true, ...card } });
+  const byLine = lineSettles(h.store.activePath(h.bot.threadId), asked, text);
+  expect(byLine).toBe(!saves);
+  h.busy();
+  expect((await h.send({ text })).steered).toBe(true);
+  expect(await h.patchCard(asked.id, { answered: text })).toBe(byLine ? 409 : 200);
 });
