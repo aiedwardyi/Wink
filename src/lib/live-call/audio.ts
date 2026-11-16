@@ -49,13 +49,17 @@ export class CallAudio {
     this.out.connect(this.destination);
   }
 
-  async capture(onFrame: (pcm: ArrayBuffer) => void) {
+  /** False once the mic is open but the voice waits on a tap: a call answered from a notification, or a slow mic prompt, has no tap left. */
+  async capture(onFrame: (pcm: ArrayBuffer) => void): Promise<boolean> {
     const stream = await navigator.mediaDevices.getUserMedia(MIC);
     // A keyless try's mic, granted late, must not stay on beside this one.
     if (this.stream !== stream) for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = stream;
     // The mic now opens beside the call token, so a hang-up or a failed token can land first.
-    if (this.closed) return this.stopMic();
+    if (this.closed) {
+      this.stopMic();
+      return false;
+    }
     if (!this.node) {
       const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
       try {
@@ -69,8 +73,8 @@ export class CallAudio {
     }
     this.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => onFrame(event.data);
     this.listen(this.stream);
-    await this.ctx.resume();
-    await this.speak(this.stream);
+    const [running, played] = await Promise.all([this.tapped(this.ctx.resume()), this.tapped(this.speak(this.stream))]);
+    return running && played;
   }
 
   // Takes the open mic as proof: Android gives a stream call or media volume once, as it opens, by whether a mic is open then; the side keys follow the mic.

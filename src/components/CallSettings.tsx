@@ -5,6 +5,7 @@ import { ChevronDown, Pause, Play } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
+import { useActiveCall } from "@/lib/live-call/active";
 import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
 import { hapticTick } from "@/lib/phone-swipe";
@@ -43,7 +44,9 @@ function useCallPrefs(bot: Bot) {
   };
 }
 
-export function usePreview(language: "en" | "ko") {
+/** No preview during a call: it would play into the open mic, and a pick is heard on the next words anyway. */
+export function usePreview(language: "en" | "ko"): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
+  const onCall = Boolean(useActiveCall());
   const [playing, setPlaying] = useState<LiveVoice | null>(null);
   const clip = useRef<HTMLAudioElement | null>(null);
   const stop = () => {
@@ -51,6 +54,7 @@ export function usePreview(language: "en" | "ko") {
     clip.current = null;
     setPlaying(null);
   };
+  useEffect(() => (onCall ? stop() : undefined), [onCall]);
   useEffect(() => () => clip.current?.pause(), []);
   const volume = useCallVolume();
   useEffect(() => {
@@ -67,7 +71,7 @@ export function usePreview(language: "en" | "ko") {
     setPlaying(name);
     audio.play().catch(() => clip.current === audio && stop());
   };
-  return { playing, preview };
+  return { playing, preview: onCall ? undefined : preview };
 }
 
 function Slider({ label, value, range, text, onChange }: {
@@ -106,7 +110,7 @@ export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
   value: LiveVoice;
   onPick: (voice: LiveVoice) => void;
   playing: LiveVoice | null;
-  preview: (voice: LiveVoice) => void;
+  preview?: (voice: LiveVoice) => void;
   badge?: ReactNode;
 }) {
   const { t } = useI18n();
@@ -134,11 +138,11 @@ export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
               <span className="max-w-full truncate text-[12px] text-ink-secondary">{t(`callVoice.vibe.${id}`)}</span>
             </button>
             {picked && badge && <span aria-hidden className="pointer-events-none absolute left-3 top-2.5">{badge}</span>}
-            <button type="button" aria-label={t(playing === id ? "callVoice.stop" : "callVoice.play", { name: shown })} aria-pressed={playing === id}
+            {preview && <button type="button" aria-label={t(playing === id ? "callVoice.stop" : "callVoice.play", { name: shown })} aria-pressed={playing === id}
               onClick={() => preview(id)}
               className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-ink/10 text-ink-secondary hover:text-ink max-md:size-8">
               {playing === id ? <Pause size={12} aria-hidden className="fill-current" /> : <Play size={12} aria-hidden className="fill-current" />}
-            </button>
+            </button>}
           </div>
         );
       })}

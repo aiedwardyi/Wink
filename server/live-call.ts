@@ -264,7 +264,8 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
     const swap = body.swap === true && callId === body.callId;
-    const picks = swap ? callPrefsSchema.safeParse(body.call).data ?? bot.call : bot.call;
+    // A swap or a new call carries the picks; a resume keeps the session's own.
+    const picks = swap || body.callId === undefined ? callPrefsSchema.safeParse(body.call).data ?? bot.call : bot.call;
     const { brief, locale, voice, style } = await briefFor(bot, callId, body.locale, swap, picks);
     const at = now();
     const expiresAt = at + TOKEN_MS;

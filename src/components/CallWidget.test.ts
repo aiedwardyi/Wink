@@ -346,10 +346,12 @@ describe("call voice in Settings", () => {
     expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Aoede-en.mp3", false]]);
   });
 
-  it("keeps previews during a live call, as the call menu does", async () => {
+  it("stops and hides the preview during a live call", async () => {
     await mount(atlas);
+    await act(async () => preview("Jenn")!.click());
     await call();
-    await act(async () => preview("Eddie")!.click());
-    expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Alnilam-en.mp3", false]]);
+    expect(fakes.clips[0]!.paused).toBe(true);
+    expect(preview("Jenn")).toBeNull();
+    expect(preview("Eddie")).toBeNull();
   });
 });

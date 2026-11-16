@@ -274,6 +274,30 @@ describe("live call in the message box", () => {
     }
   });
 
+  it("Back closes the call settings first, and a short screen scrolls them", async () => {
+    const layers = new Map<string, () => void>();
+    const layer = (event: Event) => {
+      const { key, close } = (event as CustomEvent<{ key: string; close?: () => void }>).detail;
+      if (close) layers.set(key, close);
+      else layers.delete(key);
+    };
+    window.addEventListener("orbit:back-layer", layer);
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      await act(async () => button(frame(host), "Call settings")!.click());
+      const panel = frame(host).querySelector<HTMLElement>("[data-call-settings]")!;
+      expect(panel.className).toContain("overflow-y-auto");
+      expect(panel.className).toMatch(/max-h-\[min\(60dvh/);
+      expect(layers.size).toBe(1);
+      await act(async () => [...layers.values()][0]!());
+      expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+    } finally {
+      window.removeEventListener("orbit:back-layer", layer);
+      await unmount();
+    }
+  });
+
   it("keeps captions above typing and remembers the toggle", async () => {
     const first = await mount();
     try {

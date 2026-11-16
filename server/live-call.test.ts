@@ -133,6 +133,13 @@ describe("call token", () => {
     expect(h.sent(2).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
   });
 
+  it("a new call speaks with the picks it carries, before the bot's own save lands", async () => {
+    const h = harness();
+    const { data } = await h.post("token", { call: { voice: "Fenrir", style: "lively" } });
+    expect(data).toMatchObject({ voice: "Fenrir", style: "lively" });
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("bright, upbeat");
+  });
+
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");

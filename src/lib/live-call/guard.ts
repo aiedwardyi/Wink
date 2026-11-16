@@ -148,7 +148,14 @@ const FOR_A_BIT = /for (?:a|one|a few|a couple(?: of)?|two|three|five|ten|\d+) (
 
 const escaped = (name: string) => name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // How speech-to-text spells a shown voice name. A whole word only: "Jenkins" and "에디터" are not names.
-const SPELLED: Record<string, string> = { Jenn: "Jen|Jennifer|젠|제니퍼", Eddie: "Eddy|에디" };
+const SPELLED: Record<string, string> = {
+  Jenn: "Jen|Jennifer|젠|제니퍼", Eddie: "Eddy|에디",
+  Zephyr: "제퍼|제피르", Puck: "퍽", Charon: "카론|캐런", Kore: "코레", Fenrir: "펜리르|펜리어", Leda: "레다|리다", Orus: "오루스|오러스",
+  Callirrhoe: "칼리로에|칼리로", Autonoe: "오토노에|아우토노에", Enceladus: "엔셀라두스|엔켈라두스", Iapetus: "이아페투스|야페투스", Umbriel: "움브리엘|엄브리엘",
+  Algieba: "알기에바|알지에바", Despina: "데스피나", Algenib: "알게닙|알제닙", Rasalgethi: "라스알게티|라살게티", Laomedeia: "라오메데이아", Achernar: "아케르나르|아커나",
+  Schedar: "셰다르|쉐다르", Gacrux: "가크룩스", Pulcherrima: "풀케리마", Achird: "아키르드|아치르드", Zubenelgenubi: "주베넬게누비", Vindemiatrix: "빈데미아트릭스",
+  Sadachbia: "사닥비아|사다크비아", Sadaltager: "사달타게르|사달타거", Sulafat: "술라파트|술라팟",
+};
 const spelled = (aliases: readonly string[]) => aliases.flatMap((alias) => SPELLED[alias] ? [`(?:${SPELLED[alias]})(?:야|아)?(?![a-z0-9가-힣])`] : []);
 
 /** The person telling the voice to stop talking for now, which is not a no to a job. */
@@ -164,11 +171,17 @@ export function asksForQuiet(heard: string, name = "", aliases: readonly string[
 const HELLO = /hey|hi|hello|ok(?:ay)?|alright|so|yo|헤이|저기/.source;
 const BACK = /are you (?:still )?there|you (?:still )?there|can you hear me|you can (?:talk|speak|go on|go ahead|continue)(?: again| now)*|go ahead|i'?m back|i'?m done|we'?re (?:back|done)|come back|wake up|talk to me|들려|거기 있어|있어|(?:이제\s?)?말해(?:도\s?(?:돼|되))?|다시\s?말해|나\s?왔어|돌아와|일어나/.source;
 
-/** Talking to the voice again: the whole line is its name, or the name the picker shows for its voice, with at most a hello or a "you there?". A name inside other talk is talk. */
+/** Talking to the voice again: the whole line is its name, or the name the picker shows for its voice, with at most a hello or a "you there?", or it opens by calling the bot's own name ("Hey Nova, check the build"). A name inside other talk is talk. */
 export function callsVoice(heard: string, name: string, aliases: readonly string[] = []): boolean {
   // A Korean particle may follow the name ("Nova야"); every other spelling is listed, so "Korean" never calls Kore.
   const own = [escaped(name), ...aliases.map(escaped), ...aliases.flatMap((alias) => SPELLED[alias] ?? [])].filter(Boolean).join("|");
-  return own !== "" && new RegExp(`^(?:(?:${HELLO})[\\s,]*)*(?:(?:${BACK})[\\s,]+)?(?:${own})(?:야|아)?(?:[\\s,]+(?:${BACK}))?[\\s~….,!?]*$`, "i").test(heard.trim());
+  if (!own) return false;
+  const line = heard.trim();
+  if (new RegExp(`^(?:(?:${HELLO})[\\s,]*)*(?:(?:${BACK})[\\s,]+)?(?:${own})(?:야|아)?(?:[\\s,]+(?:${BACK}))?[\\s~….,!?]*$`, "i").test(line)) return true;
+  // Only the bot's own name leads a request: a voice's name is a person's too ("Eddie, dinner's ready").
+  // A comma or a 야 marks it as called, so "Nova is great" stays talk; "Nova, be quiet" stays quiet.
+  const rest = name.trim() ? new RegExp(`^(?:(?:${HELLO})[\\s,]+)*${escaped(name)}(?:(?:야|아)(?![가-힣])[\\s,]*|\\s*,\\s*)(\\S.*)$`, "i").exec(line)?.[1] : undefined;
+  return rest !== undefined && !asksForQuiet(rest, name, aliases);
 }
 
 // Letters English and Korean never use, and the words a mis-hear lands on ("¿Qué?", "Hola, aquí estoy.").

@@ -175,6 +175,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       audio,
       post,
       opener: active.opener,
+      prefs: bot.call,
     });
     return { call, level: (mic) => audio.level(mic) };
   });

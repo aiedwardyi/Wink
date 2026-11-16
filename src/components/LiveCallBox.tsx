@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { CallState } from "@/lib/live-call/controller";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { CallSettings } from "./CallSettings";
 import { clock, useLive, WORDS, type Live } from "./LiveCallBar";
 
@@ -70,6 +71,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
   const [captions, setCaptions] = useState(captionsOn);
   const [menu, setMenu] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  useBackLayer(menu, () => setMenu(false));
 
   useEffect(() => {
     if (!snap.startedAt) return;
@@ -126,7 +128,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
           <PhoneOff size={16} />
         </button>
       </div>
-      {menu && <CallSettings bot={bot} className="col-span-full row-start-4 mt-2 border-t border-hairline/60 px-1 pt-3" />}
+      {menu && <CallSettings bot={bot} className="col-span-full row-start-4 mt-2 max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain border-t border-hairline/60 px-1 pt-3" />}
     </>
   );
 }

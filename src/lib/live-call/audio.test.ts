@@ -257,11 +257,25 @@ describe("CallAudio", () => {
     }
   });
 
-  it("reports a blocked output instead of silently connecting", async () => {
+  it("reports a blocked output instead of silently connecting, and never as a mic error", async () => {
     const { audio, output } = setup();
-    output.play.mockRejectedValueOnce(new Error("Playback blocked"));
-    await expect(audio.capture(() => {})).rejects.toThrow("Playback blocked");
+    output.play.mockRejectedValueOnce(Object.assign(new Error("Playback blocked"), { name: "NotAllowedError" }));
+    await expect(audio.capture(() => {})).resolves.toBe(false);
     audio.close();
+  });
+
+  it("reports a context that will not resume without a tap instead of hanging", async () => {
+    vi.useFakeTimers();
+    try {
+      const { audio, ctx } = setup();
+      ctx.resume.mockReturnValueOnce(new Promise<void>(() => {}));
+      const capture = audio.capture(() => {});
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(capture).resolves.toBe(false);
+      audio.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resumes the context and the output on return", async () => {
