@@ -75,7 +75,8 @@ import { MediaViewerProvider } from "./MediaViewerProvider";
 import { ModelPicker } from "./ModelPicker";
 import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
+import { ReactionChips } from "./Reactions";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
 import { CallCard } from "./CallCard";
 import { ChatScene, sceneOf } from "./ChatScene";
@@ -278,13 +279,13 @@ export function ErrorRow({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-export const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot?: Bot }) {
+export const ActivityChip = memo(function ActivityChip({ message, notices, bot, onMessageMenu }: { message: Message; notices?: LinkedApproval[]; bot?: Bot; onMessageMenu?: (menu: MessageMenuRequest) => void }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
   if (tool.name === "memory.save" && bot) return <MemoryCleanSave message={message} bot={bot} />;
-  if (message.comm) return <CommChip message={message} comm={message.comm} />;
+  if (message.comm) return <CommChip message={message} comm={message.comm} threadId={bot?.threadId} onMessageMenu={onMessageMenu} />;
   if (terminal) return <ActivityStep message={message} notices={notices} />;
   const failed = tool.ok === false;
   const status = isServerLine(tool.name);
@@ -308,7 +309,7 @@ export const ActivityChip = memo(function ActivityChip({ message, notices, bot }
       </div>
     </div>
   );
-}, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
+}, (a, b) => a.message === b.message && a.bot === b.bot && a.onMessageMenu === b.onMessageMenu && sameNotices(a.notices, b.notices));
 
 /** A row synced from another PC names the peer by that PC's bot id; the name still finds it here. */
 export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]>): Bot | undefined {
@@ -317,7 +318,7 @@ export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]
 }
 
 /** bot⇄bot comm chip: opens the channel where the exchange lives. */
-function CommChip({ message, comm }: { message: Message; comm: NonNullable<Message["comm"]> }) {
+function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message; comm: NonNullable<Message["comm"]>; threadId?: string; onMessageMenu?: (menu: MessageMenuRequest) => void }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
   const peer = commPeer(state.bots, comm);
@@ -335,10 +336,14 @@ function CommChip({ message, comm }: { message: Message; comm: NonNullable<Messa
     </div>
   );
   if (!message.text) return chip;
+  const menuProps = threadId && onMessageMenu
+    ? messageMenuProps({ threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
+    : {};
   return (
-    <div>
+    <div {...menuProps} tabIndex={-1}>
       {chip}
       <PeerMessageBody text={message.text} />
+      {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
     </div>
   );
 }
@@ -831,7 +836,7 @@ const MessagesList = memo(function MessagesList({
                 );
               }
               if (!activityVisibleInChat(m, showActivities) && !found) return null;
-              return <ActivityChip bot={bot} message={m} notices={item.notices} />;
+              return <ActivityChip bot={bot} message={m} notices={item.notices} onMessageMenu={onMessageMenu} />;
             }
             case "screen":
               if (m.image) return <ShownImage name={m.image} caption={m.text} />;
