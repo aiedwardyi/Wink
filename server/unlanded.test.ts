@@ -282,7 +282,7 @@ describe("unlanded wiring", () => {
     writer.appendMessage(bot.threadId, { role: "bot", ...report(NOW - 18 * HOUR, "PR 1640") });
     const store = fresh();
     const { gh, calls } = fakeGh(new Map([["1640", { number: 1640, title: "fix: tell bots what has not landed", state: "OPEN" }]]));
-    expect(source).toContain("  reportsBack: (threadId) => store.notesBack(threadId),\n");
+    expect(source).toContain("  reportsBack: (threadId) => store.notesBack(threadId),");
     const work = createUnlandedWork({ reportsBack: (threadId) => store.notesBack(threadId), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     await work.refresh(bot.id, bot.threadId);
     expect(work.take(bot.threadId)).toContain("#1640 fix: tell bots what has not landed (18h)");
