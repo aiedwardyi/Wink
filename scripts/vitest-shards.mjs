@@ -72,7 +72,11 @@ function main([first, ...rest]) {
   const files = vitestFiles(fileURLToPath(new URL("../", import.meta.url)));
   const overlaps = overlappingPaths(files);
   if (overlaps.length) throw new Error(`vitest-shards: overlapping test paths: ${overlaps.join(", ")}`);
-  const shards = packShards(files, JSON.parse(readFileSync(timingsUrl, "utf8")), count);
+  const timings = JSON.parse(readFileSync(timingsUrl, "utf8"));
+  const untimed = files.filter((file) => !(file in timings)).length;
+  // An untimed file is packed at the median, so stale timings let one shard run long and set the run's wall time.
+  if (index === 1 && untimed > files.length / 10) console.error(`::warning::${untimed} of ${files.length} test files have no shard timing; refresh with node scripts/vitest-shards.mjs --update <the vitest-N.json artifacts of a green run>`);
+  const shards = packShards(files, timings, count);
   console.log(shards[index - 1].files.join("\n"));
 }
 
