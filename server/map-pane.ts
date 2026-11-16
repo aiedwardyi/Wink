@@ -79,10 +79,20 @@ export function createMapPane(deps: MapPaneDeps) {
       if (res.writableLength > 1024 * 1024) res.destroy();
     };
     const refresh = async (record: WatchedPane, quiet = false) => {
-      if (closed || !record.base || !record.watcher || panes.get(record.pane.sessionId) !== record) return;
+      if (closed || !record.watcher || panes.get(record.pane.sessionId) !== record) return;
       if (record.running) { record.dirty = true; return; }
       record.running = true;
       try {
+        if (!record.base) {
+          // A folder that becomes a repo later turns to git here; until then Map lists the folder again on each edit.
+          const base = existsSync(resolve(record.pane.cwd, ".git")) ? await mapHead(record.pane.cwd) : null;
+          if (closed || !record.watcher) return;
+          if (!base) { record.worker = { ...record.worker, editedAt: Date.now() }; if (!quiet) send(); return; }
+          record.root = (await mapGit(record.pane.cwd, ["rev-parse", "--show-toplevel"])).trim();
+          record.base = base;
+          fallback.set(`${botId}:${record.pane.sessionId}`, base);
+          record.worker = { ...record.worker, git: true };
+        }
         const fork = await mapFork(record.root, record.base);
         const { files, more } = await mapFiles(record.root, fork, [...panes.values()].find(value => value.base)?.base ?? undefined);
         if (closed || !record.watcher) return;
@@ -149,20 +159,21 @@ export function createMapPane(deps: MapPaneDeps) {
         if (closed) return;
         for (const record of records) {
           panes.set(record.pane.sessionId, record);
-          if (!record.base) continue;
+          if (!record.root) continue;
           try {
             record.watcher = watch(record.root, { recursive: true }, (event, name) => {
               // Windows repeats this event without end once the folder is gone.
               if (event === "rename" && !existsSync(record.root)) { fail(record); return send(); }
               if (!name) return schedule(record);
               const path = name.toString().replaceAll("\\", "/");
-              if (path.split("/").some(part => part === ".git" || part === "node_modules")) return;
+              // A folder without git yet still hears its .git: that is how it becomes a repo.
+              if (path.split("/").some(part => part === ".git" && record.base || part === "node_modules")) return;
               schedule(record, path);
             });
             record.watcher.on("error", () => { fail(record); send(); });
           } catch { fail(record); }
         }
-        await Promise.all(records.map(record => refresh(record, true)));
+        await Promise.all(records.filter(record => record.base).map(record => refresh(record, true)));
         if (changed || records.length) send();
       } catch { send(true); }
       finally {

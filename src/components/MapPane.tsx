@@ -73,6 +73,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   // A team's tree never hangs off a folder without git.
   const source = team ? snapshot.workers.find(item => item.git) ?? worker : worker;
   const repoWorker = source?.id;
+  // A git tree takes new files from the snapshot; a folder without git is listed again whenever it changes.
+  const walked = source?.git ? 0 : source?.editedAt;
   const more = onTree.reduce((sum, item) => sum + (item.more ?? 0), 0);
   const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
   const lost = !paths && !!repoWorker && repoFailed === repoWorker;
@@ -134,7 +136,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       if (!controller.signal.aborted && Array.isArray(data?.paths)) { setRepo({ worker: id, name: String(data.name ?? ""), paths: data.paths }); setRepoFailed(null); }
     }, () => { if (!controller.signal.aborted) setRepoFailed(id); });
     return () => controller.abort();
-  }, [base, repoWorker, active, connection, repoRetry]);
+  }, [base, repoWorker, walked, active, connection, repoRetry]);
 
   useEffect(() => {
     if (!active || !liveReady.current) return;

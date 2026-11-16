@@ -472,6 +472,59 @@ it("recognizes non-git folders", async () => {
   expect(await mapHead(folder)).toBeNull();
 });
 
+function plain() {
+  const root = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
+  roots.push(root);
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" }).trim();
+  return { root, git };
+}
+
+it("shows a worker's new files in a folder without git as they land", async () => {
+  const { root } = plain();
+  const map = await open([{ sessionId: "pane-p", cwd: root, label: "PLAIN" }]);
+  expect((await map.until(() => true)).workers[0]).toMatchObject({ git: false, files: [] });
+  writeFileSync(join(root, "01_notes.md"), "one\n");
+  const after = await map.until(data => data.workers[0].editedAt > 0);
+  expect(after.workers[0]).toMatchObject({ git: false, files: [] });
+  expect(await fetch(`${map.url}/repo?worker=pane-p`).then(res => res.json())).toMatchObject({ paths: ["01_notes.md"] });
+  writeFileSync(join(root, "02_notes.md"), "two\n");
+  await map.until(data => data.workers[0].editedAt > after.workers[0].editedAt);
+  expect(await fetch(`${map.url}/repo?worker=pane-p`).then(res => res.json())).toMatchObject({ paths: ["01_notes.md", "02_notes.md"] });
+  map.close();
+});
+
+it("reads a repo with no commits as git with every file new, and keeps it through the first commits", async () => {
+  const { root, git } = plain();
+  git("init", "-q");
+  expect(await mapHead(root)).toBe("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+  writeFileSync(join(root, "a.md"), "a\n");
+  const map = await open([{ sessionId: "pane-g", cwd: root, label: "FRESH" }]);
+  expect((await map.until(() => true)).workers[0]).toMatchObject({ git: true, files: [{ path: "a.md", added: 1, removed: 0 }] });
+  const unborn = await fetch(`${map.url}/flow?worker=pane-g`);
+  expect([unborn.status, await unborn.json()]).toEqual([200, expect.objectContaining({ total: 0, pushed: 0, commits: [], pr: null })]);
+  git("commit", "-q", "--allow-empty", "-m", "empty");
+  writeFileSync(join(root, "b.md"), "b\n");
+  await map.until(data => data.workers[0].files.length === 2);
+  git("add", ".");
+  git("commit", "-qm", "notes");
+  writeFileSync(join(root, "c.md"), "c\n");
+  const committed = await map.until(data => data.workers[0].files.length === 3);
+  expect(committed.workers[0]).toMatchObject({ git: true, path: "c.md" });
+  expect(await fetch(`${map.url}/file?worker=pane-g&path=a.md`).then(res => res.json())).toMatchObject({ lines: [{ kind: "add", text: "a", line: 1 }] });
+  map.close();
+});
+
+it("switches a folder to git once it becomes a repo after Map first read it", async () => {
+  const { root, git } = plain();
+  writeFileSync(join(root, "a.md"), "a\n");
+  const map = await open([{ sessionId: "pane-n", cwd: root, label: "LATER" }]);
+  expect((await map.until(() => true)).workers[0].git).toBe(false);
+  git("init", "-q");
+  const repo = await map.until(data => data.workers[0].git);
+  expect(repo.workers[0].files.map(file => file.path)).toEqual(["a.md"]);
+  map.close();
+});
+
 it("subscribes to authorized lifecycle events and disconnects when Map closes", async () => {
   const listener = vi.fn();
   let response: ServerResponse | undefined;
