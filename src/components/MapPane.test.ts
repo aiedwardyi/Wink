@@ -89,9 +89,9 @@ it("follows edits across workers, pins a worker, and keeps a manual file with Fo
 });
 
 it("uses plain empty and non-git lines in both languages", async () => {
-  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, {})); });
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
+  await emit([]);
   expect(host.textContent).toContain("실행 중인 작업자가 없어요");
-  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[0], git: false, files: [] }]);
   expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 · Git 폴더가 아니에요wink / ALPHA");
   expect([...host.querySelectorAll(".map-tree-file")].map(row => row.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts", "README.md", "b.ts"]);
