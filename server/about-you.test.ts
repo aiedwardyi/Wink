@@ -2,6 +2,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf, removeAboutYouSource } from "./about-you.ts";
@@ -11,6 +12,7 @@ import { Store } from "./store.ts";
 
 const file = join(DATA_DIR, "about-you", "MEMORY.md");
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const index = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
 const paste = [
   "WINK MEMORY EXPORT",
   "",
@@ -119,9 +121,28 @@ describe("every bot reads About You", () => {
     expect(prompt).not.toContain("from ChatGPT");
   });
 
-  it("goes into every 1:1 and room system text, whatever the bot or its engine", () => {
+  it("goes into every 1:1 system text, whatever the bot or its engine", () => {
     expect(source).toContain('tracePart("memory", aboutYouPrompt()) +\n          tracePart("memory", privateWorkspace');
-    expect(source).toContain("    aboutYouPrompt() +\n    (workspace ? `\\n${memorySystemPrompt(bot.id, lane");
+  });
+
+  it("goes into the owner's own room turns, never a turn a teammate asked for", () => {
+    const run = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    const find = (node: ts.Node): ts.VariableStatement | undefined => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === "roomSystem") ? node : ts.forEachChild(node, find);
+    const code = ts.transpileModule(find(run)!.getText(index), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const roomSystem = (authority?: string): string => {
+      const deps = {
+        system: "", projectFolderPrompt: () => "", cwd: ".", workspace: undefined, detailedRepliesEnabled: () => false, cfg: {},
+        DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", aboutYouPrompt, memorySystemPrompt: () => "",
+        memoryNotesEnabled: () => false, bot: { id: "bot", playbooks: [] }, lane: false, renderSkillInstructions: () => "", selectedSkills: [],
+        installedPlaybookInstructions: () => "", text: "", harnessPlaybookPrompt: () => "", integrations: {}, accessRules: () => "",
+        instance: { adapter: {} }, access: {}, memberTurnSelection: () => ({}), selection: {}, authority,
+      };
+      return new Function(...Object.keys(deps), `${code}\nreturn roomSystem;`)(...Object.values(deps));
+    };
+    addToAboutYou(paste, "2026-11-16");
+    expect(roomSystem()).toContain("- The user is Dana Park; call her Dana. (noted 2026-11-16)");
+    expect(roomSystem("ask-from-sora")).not.toContain("Dana Park");
+    expect(roomSystem("ask-from-sora")).not.toContain("About the user");
   });
 
   it("goes into every bot's call brief", async () => {
