@@ -32,7 +32,10 @@ export function ChatPeekParts({ id, preview, children }: { id: string; preview: 
   const part = !preview ? PEEK_SETTLED : mounted.id === id ? mounted.part : 0;
   useEffect(() => {
     if (part >= PEEK_SETTLED) return;
-    const frame = requestAnimationFrame(() => startTransition(() => setMounted({ id, part: part + 1 })));
+    // The first frame paints this part; the next part renders only after it, so the two never share a frame.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => startTransition(() => setMounted({ id, part: part + 1 })));
+    });
     return () => cancelAnimationFrame(frame);
   }, [id, part]);
   return createElement(ChatPeekPartContext.Provider, { value: part },

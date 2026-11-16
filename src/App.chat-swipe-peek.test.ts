@@ -119,7 +119,7 @@ describe("phone chat peek", () => {
     expect(mountedChats()).toEqual([id]);
   });
 
-  it("mounts the neighbor a part per frame and the rest on landing", async () => {
+  it("mounts the neighbor a part every other frame, leaving each part's paint frame alone", async () => {
     await mount("b");
     const target = chat("b")!;
     expect(target.querySelector("footer")).not.toBeNull();
@@ -127,9 +127,10 @@ describe("phone chat peek", () => {
     await touch("touchmove", 140, 300, 1000, target);
     const incoming = chat("c");
     expect(incoming?.querySelector("h1")?.textContent).toBe("C");
-    expect(incoming?.querySelector("footer")).toBeNull();
-    await frame();
-    expect(incoming?.querySelector("footer")).toBeNull();
+    for (let painted = 1; painted <= 3; painted++) {
+      await frame();
+      expect(incoming?.querySelector("footer")).toBeNull();
+    }
     await frame();
     expect(incoming?.querySelector("footer")).not.toBeNull();
   });
@@ -151,7 +152,7 @@ describe("phone chat peek", () => {
   it("restages the neighbor when the drag reverses", async () => {
     await mount("b");
     const target = await drag("b", 200, 100);
-    await frame();
+    for (let painted = 2; painted <= 4; painted++) await frame();
     expect(chat("c")?.querySelector("footer")).not.toBeNull();
     await touch("touchmove", 300, 300, 2000, target);
     expect(chat("a")).not.toBeNull();

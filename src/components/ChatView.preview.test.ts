@@ -280,6 +280,10 @@ describe("staged chat peek", () => {
     frames.clear();
     for (const callback of pending) callback(0);
   });
+  const nextPart = async () => {
+    await frame();
+    await frame();
+  };
   const mids = () => [...host.querySelectorAll("[data-mid]")].map((node) => node.getAttribute("data-mid"));
   const stage = (kind: "bot" | "room" | "people", preview: boolean) => act(async () => root.render(createElement(StoreProvider, null,
     createElement(ChatPeekParts, { id: kind, preview, children: createElement(ChatPreviewContext.Provider, { value: preview },
@@ -293,14 +297,14 @@ describe("staged chat peek", () => {
     expect(host.querySelector("[data-orbit-transcript]")).not.toBeNull();
     expect(mids()).toEqual([]);
     expect(host.querySelector("[data-orbit-composer]")).toBeNull();
-    await frame();
-    await frame();
+    await nextPart();
+    await nextPart();
     expect(host.querySelector("[data-orbit-composer]") === null).toBe(kind === "people");
     expect(mids()).toEqual([]);
-    await frame();
+    await nextPart();
     expect(mids()).toEqual(["heavy-196"]);
     const head = host.querySelector('[data-mid="heavy-196"]');
-    await frame();
+    await nextPart();
     expect(mids()).toEqual(["heavy-196", "heavy-197"]);
     await stage(kind, false);
     expect(mids()).toEqual(["heavy-196", "heavy-197", "heavy-198", "heavy-199"]);
@@ -311,7 +315,7 @@ describe("staged chat peek", () => {
     await stage("bot", true);
     expect(host.querySelector('[aria-label="Open Neighbor\'s profile"]')).not.toBeNull();
     expect(host.querySelector('[aria-haspopup="dialog"]')).toBeNull();
-    await frame();
+    await nextPart();
     expect(host.querySelector('[aria-haspopup="dialog"]')).not.toBeNull();
   });
 
@@ -324,10 +328,10 @@ describe("staged chat peek", () => {
     });
     await stage(kind, true);
     for (let part = 1; part <= 6; part++) {
-      await frame();
+      await nextPart();
       expect(mids().length).toBe(Math.max(0, part - 2));
     }
-    await frame();
+    await nextPart();
     expect(mids()).toHaveLength(32);
     expect(requests.some((url) => url.includes("/api/threads/"))).toBe(false);
   });
