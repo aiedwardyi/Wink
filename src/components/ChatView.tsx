@@ -309,7 +309,7 @@ export const ActivityChip = memo(function ActivityChip({ message, notices, bot, 
       </div>
     </div>
   );
-}, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
+}, (a, b) => a.message === b.message && a.bot === b.bot && a.onMessageMenu === b.onMessageMenu && sameNotices(a.notices, b.notices));
 
 /** A row synced from another PC names the peer by that PC's bot id; the name still finds it here. */
 export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]>): Bot | undefined {
@@ -340,7 +340,7 @@ function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message
     ? messageMenuProps({ threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
     : {};
   return (
-    <div {...menuProps}>
+    <div {...menuProps} tabIndex={-1}>
       {chip}
       <PeerMessageBody text={message.text} />
       {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}

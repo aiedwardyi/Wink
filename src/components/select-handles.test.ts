@@ -71,6 +71,16 @@ describe("select handles Copy", () => {
     expect(top - rects[1]!.bottom).toBeLessThanOrEqual(60);
   });
 
+  it("stays on screen while the selection scrolls off it", () => {
+    expect(show({ rowTop: -900, contentBottom: 700, lines: [{ x: 100, y: -200, width: 80 }] }).top).toBe(56 + 8);
+    handles?.remove();
+    expect(show({ rowTop: 120, contentBottom: 1400, lines: [{ x: 100, y: 1200, width: 80 }] }).top).toBe(844 - 8 - COPY.height);
+  });
+
+  it("takes the top of the transcript when a selection fills the screen", () => {
+    expect(show({ rowTop: 40, contentBottom: 1400, lines: [{ x: 100, y: 70, width: 80 }, { x: 12, y: 820, width: 60 }] }).top).toBe(56 + 8);
+  });
+
   it("clamps to the screen edges", () => {
     expect(show({ rowTop: 120, contentBottom: 1400, lines: [{ x: 0, y: 500, width: 20 }] }).left).toBe(8);
     handles?.remove();

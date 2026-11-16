@@ -570,7 +570,7 @@ export function MessageMenu({
           {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
-      {message.quick?.state !== "answer" && (
+      {message.kind === "text" && message.quick?.state !== "answer" && (
         <button
           type="button"
           role="menuitem"

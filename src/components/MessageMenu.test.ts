@@ -760,14 +760,14 @@ describe("message menu on touch", () => {
     const host = await mountRoom(members, room([botToBot("c1", "room handoff", { botId: "m1", name: "Ada", color: "blue" })]));
     stubTouchScreen();
     await hold(peerBody(host, "c1"));
-    expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Reply", "Copy", "Select text"]);
+    expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Copy", "Select text"]);
     await act(async () => { document.querySelector("[data-menu-copy]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     expect(writeText).toHaveBeenCalledWith("room handoff");
     await unmount?.();
 
     const chat = await mountChat(bot([botToBot("c2", "chat handoff")]));
     await hold(peerBody(chat, "c2"));
-    expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Reply", "Copy", "Select text"]);
+    expect(labels("[role=menuitem]:not([data-menu-expand])")).toEqual(["Copy", "Select text"]);
   });
 
   it("gives every message row with text the hold menu", async () => {

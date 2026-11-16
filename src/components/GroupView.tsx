@@ -157,10 +157,10 @@ export function RoomToolChip({
       ? messageMenuProps({ threadId: group.threadId, message, copyText: message.text, user: false, pinned: false, canPin: false }, onMessageMenu)
       : {};
     return (
-      <div {...menuProps}>
+      <div {...menuProps} tabIndex={-1}>
         {chip}
         <PeerMessageBody text={message.text} />
-        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
+        {group && <ReactionChips threadId={group.threadId} message={message} corner="left" className={cn("static mt-1 ml-3 max-w-full translate-y-0", !onMessageMenu && "pointer-events-none")} />}
       </div>
     );
   }
