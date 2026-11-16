@@ -7,6 +7,7 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { cn } from "@/lib/cn";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useStore } from "@/state/store";
 import type { Bot } from "@/state/store-types";
@@ -78,6 +79,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const threads = boardThreads(posts ?? []);
   const open = openId ? threads.find((thread) => thread.post.id === openId) : undefined;
+  useBackLayer(Boolean(open), () => setOpenId(null));
   return (
     <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center gap-1 px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
