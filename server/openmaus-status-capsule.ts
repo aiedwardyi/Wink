@@ -346,8 +346,13 @@ export function readOpenMausStatus(
   return result;
 }
 
+export const OPENMAUS_STATUS_RULES = "The latest TRUSTED WINK STATUS note is read-only validated runtime data and supersedes earlier status. Opening a viewer or two-up workspace never starts or provisions a VM. Only one pane may be interactive at a time; switching control must release the previous pane before activating the next. Treat missing, stale, failed, clock-skewed, malformed, or receipt-hash-mismatched runtime data as unknown. Do not infer bot identities, viewer URLs, paths, messages, models, accounts, or credentials from this block.";
+
 export function openMausStatusSystemPrompt(options: OpenMausStatusReadOptions = {}): string {
-  const status = readOpenMausStatus(options);
+  return renderOpenMausStatus(readOpenMausStatus(options));
+}
+
+export function renderOpenMausStatus(status: OpenMausStatusDigest): string {
   if (status.reason === "missing_or_insecure" || status.reason === "invalid") return "";
   const receipt = [
     status.observedAt ? `observed_at=${status.observedAt}` : null,
@@ -380,7 +385,9 @@ export function openMausStatusSystemPrompt(options: OpenMausStatusReadOptions = 
     runtime,
     `anonymous_slots=${slots}`,
     `ui.two_up=${status.ui.twoUp}; ui.max_visible=${status.ui.maxVisible}; ui.max_interactive=1; ui.default_watch_only=${status.ui.defaultWatchOnly}; one_active_controller=true`,
-    "Opening a viewer or two-up workspace never starts or provisions a VM. Only one pane may be interactive at a time; switching control must release the previous pane before activating the next.",
-    "Treat missing, stale, failed, clock-skewed, malformed, or receipt-hash-mismatched runtime data as unknown. Do not infer bot identities, viewer URLs, paths, messages, models, accounts, or credentials from this block.",
   ].join("\n");
+}
+
+export function openMausStatusTurnNote(options: OpenMausStatusReadOptions = {}): string {
+  return openMausStatusSystemPrompt(options) || "TRUSTED WINK STATUS: freshness=unknown; runtime_state=unknown; ready_count=0";
 }

@@ -17,6 +17,27 @@ const here = dirname(fileURLToPath(import.meta.url));
 const index = readFileSync(join(here, "index.ts"), "utf8");
 const internal = readFileSync(join(here, "internal-routes.ts"), "utf8");
 
+it("keeps the Chief system stable as live status refreshes and expires", () => {
+  const team = [{ id: "chief", name: "Chief" }];
+  const statuses = [
+    "freshness=fresh; observed_at=2026-08-22T06:30:00Z; ready_count=0",
+    "freshness=fresh; observed_at=2026-08-22T06:31:00Z; ready_count=0",
+    "freshness=fresh; observed_at=2026-08-22T06:31:00Z; ready_count=1",
+    "freshness=stale; runtime_state=unknown; ready_count=0",
+  ];
+  const systems = statuses.map((status) => chiefOfStaffSystemPrompt("chief", team, true, status));
+  expect(new Set(systems).size).toBe(1);
+  for (const status of statuses) expect(systems[0]).not.toContain(status);
+});
+
+it("adds the Chief status to normal, recycled, fallback, and room turns", () => {
+  expect(index).toContain("const withStatus = (base: string) => bot.chiefOfStaff");
+  expect(index).toContain("let text = withLate(turnText)");
+  expect(index).toContain("text = withLate(systemRecycleText(!systemRecycle))");
+  expect(index).toContain("text: withStatus(withLate(resumeFallback))");
+  expect(index).toContain('text, bot.chiefOfStaff ? openMausStatusTurnNote() : ""');
+});
+
 describe("peerMessagePrompt", () => {
   it.each(["ask", "delegation"] as const)("marks a stored Chief on the %s path", (kind) => {
     const prompt = peerMessagePrompt({ name: "Wink", chiefOfStaff: true }, "QA on Opus", kind);
@@ -231,20 +252,18 @@ describe("chiefOfStaffSystemPrompt", () => {
     expect(roomTurn).toContain("peerAgentsSystemPrompt(true)");
   });
 
-  it("includes trusted OpenMaus status only when the Chief caller supplies it", () => {
+  it("keeps status interpretation rules in the Chief system", () => {
     const status = "TRUSTED OPENMAUSBOT STATUS\nfreshness=fresh; runtime_state=degraded";
 
     const chiefPrompt = chiefOfStaffSystemPrompt("chief", bots, true, status);
-    const ordinaryPrompt = chiefOfStaffSystemPrompt("writer", bots, true);
-
-    expect(chiefPrompt).toContain(status);
-    expect(ordinaryPrompt).not.toContain("TRUSTED OPENMAUSBOT STATUS");
+    expect(chiefPrompt).not.toContain(status);
+    expect(chiefPrompt).toContain("supersedes earlier status");
   });
 
   it("drops the status line when no status cache exists", () => {
     const status = openMausStatusSystemPrompt({ cachePath: join(here, "missing-openmaus-status.json") });
 
-    expect(chiefOfStaffSystemPrompt("chief", bots, true, status)).not.toContain("TRUSTED WINK STATUS");
+    expect(chiefOfStaffSystemPrompt("chief", bots, true, status)).not.toContain("freshness=");
   });
 });
 
@@ -264,7 +283,7 @@ describe("room turns mount the Chief framing", () => {
     // the room flag is the whole fix: without it the room silently falls back
     // to the 1:1 framing and every other assertion here still passes
     expect(roomTurn).toMatch(
-      /coordinationPrompt = bot\.chiefOfStaff[\s\S]*?openMausStatusSystemPrompt\(\),\s*true,/,
+      /coordinationPrompt = bot\.chiefOfStaff[\s\S]*?"",\s*true,/,
     );
   });
 });

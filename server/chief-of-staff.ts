@@ -1,3 +1,5 @@
+import { OPENMAUS_STATUS_RULES } from "./openmaus-status-capsule.ts";
+
 export interface ChiefTeamMember {
   id: string;
   name: string;
@@ -73,7 +75,7 @@ export function chiefOfStaffSystemPrompt(
   chiefId: string,
   bots: ChiefTeamMember[],
   canDelegate: boolean,
-  trustedOpenMausStatus = "",
+  _trustedOpenMausStatus = "",
   inRoom = false,
   coordinationAsked = false,
   turnLimit?: "ask" | "delegation" | "room",
@@ -151,6 +153,6 @@ export function chiefOfStaffSystemPrompt(
     roomDiscipline,
     hasTeam ? `Current ${sectionName} section team:` : "",
     roster,
-    trustedOpenMausStatus,
+    OPENMAUS_STATUS_RULES,
   ].filter(Boolean).join("\n");
 }

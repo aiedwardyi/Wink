@@ -85,7 +85,7 @@ import { vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
 import { isUtilityShutdownMessage } from "./utility-parent.ts";
 import { chiefOfStaffSystemPrompt, peerAgentsSystemPrompt } from "./chief-of-staff.ts";
-import { openMausStatusSystemPrompt } from "./openmaus-status-capsule.ts";
+import { openMausStatusTurnNote } from "./openmaus-status-capsule.ts";
 import {
   containerComputerAction,
   containerComputerExists,
@@ -5939,7 +5939,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             bot.id,
             store.bots,
             canMessage,
-            openMausStatusSystemPrompt(),
+            "",
             false,
             tagged.length > 0,
             turnLimit,
@@ -6123,6 +6123,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         if (!opts?.automationSource && !routineTurnThreads.has(threadId) && (instance.driverKind === "claudeAgent" || instance.driverKind === "codex")) {
           limitWaits.track(bot.id, threadId, selection, opts?.limitWaitId, { unattended: opts?.unattended, keepGoingWake: opts?.keepGoingWake, paneNoteWake: opts?.paneNoteWake });
         }
+        const withStatus = (base: string) => bot.chiefOfStaff ? `${base}\n\n${openMausStatusTurnNote()}` : base;
+        text = withStatus(text);
         pendingInterruptThreads.started(threadId, bot.id, epoch);
         const joined = await joinRunningTurn(live.adapter, { threadId, text, resumeCursor, systemUpdate }, runningTurnIdByThread.get(threadId));
         if (joined) {
@@ -6141,7 +6143,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         effort,
         leanStartup,
         resumeCursor,
-        resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+        resumeFallback: resumeCursor !== undefined ? { text: withStatus(withLate(resumeFallback)) } : undefined,
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
@@ -7083,7 +7085,7 @@ async function runClaimedGroupMemberTurn(
         bot.id,
         store.bots,
         canMessage,
-        openMausStatusSystemPrompt(),
+        "",
         true,
         // a room turn is a coordination context by definition; the room
         // discipline above governs how it coordinates
@@ -7210,7 +7212,7 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, turnKey, epoch);
       return live.adapter.sendTurn({
         threadId,
-        text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
+        text: [accountNote.text, topics, text, bot.chiefOfStaff ? openMausStatusTurnNote() : ""].filter(Boolean).join("\n\n"),
         system: roomSystem,
         ...access,
         attended: !isUnattended(bot.id),

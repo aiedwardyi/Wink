@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { openMausStatusSystemPrompt, readOpenMausStatus } from "./openmaus-status-capsule.ts";
+import { openMausStatusSystemPrompt, openMausStatusTurnNote, readOpenMausStatus, renderOpenMausStatus } from "./openmaus-status-capsule.ts";
 import type { JsonObject, JsonValue } from "./schema.ts";
 
 const NOW = new Date("2026-08-22T06:30:00Z");
@@ -330,4 +330,22 @@ it("leaves the status block out when the cache file is missing", () => {
   roots.push(root);
 
   expect(openMausStatusSystemPrompt({ cachePath: join(root, "latest.json"), now: NOW })).toBe("");
+  expect(openMausStatusTurnNote({ cachePath: join(root, "latest.json"), now: NOW })).toContain("freshness=unknown; runtime_state=unknown");
+});
+
+it("renders current status after refresh, count change, expiry, and clock skew", () => {
+  const root = mkdtempSync(join(tmpdir(), "openmaus-status-"));
+  roots.push(root);
+  const unknown = readOpenMausStatus({ cachePath: join(root, "latest.json"), now: NOW });
+  const fresh = { ...unknown, freshness: "fresh" as const, reason: undefined, observedAt: "2026-08-22T06:30:00Z", runtimeState: "degraded" as const, mode: "per-bot" as const, maxInstances: 2, readyCount: 0 };
+  const refreshed = { ...fresh, observedAt: "2026-08-22T06:31:00Z" };
+  const changed = { ...refreshed, readyCount: 1 };
+  const stale = { ...changed, freshness: "stale" as const, reason: "stale" as const };
+  const skewed = { ...changed, freshness: "unknown" as const, reason: "clock_skew" as const };
+
+  expect(renderOpenMausStatus(fresh)).toContain("observed_at=2026-08-22T06:30:00Z");
+  expect(renderOpenMausStatus(refreshed)).toContain("observed_at=2026-08-22T06:31:00Z");
+  expect(renderOpenMausStatus(changed)).toContain("ready_count=1");
+  expect(renderOpenMausStatus(stale)).toContain("runtime_state=unknown; mode=unknown; maximum_instances=unknown; ready_count=0");
+  expect(renderOpenMausStatus(skewed)).toContain("reason=clock_skew");
 });
