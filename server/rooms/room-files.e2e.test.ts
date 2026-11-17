@@ -635,6 +635,8 @@ describe("a teammate on 1.0.256 and video or audio files", () => {
     const path = side === "host" ? `/api/rooms/${roomId}/files/${file.id}` : `/api/joined/rooms/${roomId}/files/${file.id}`;
     const range = await call("GET", path, undefined, { range: "bytes=100-199" });
     expect([range.status, range.headers["content-range"], range.headers["accept-ranges"], range.headers["content-type"], range.body]).toEqual([206, "bytes 100-199/4096", "bytes", "video/mp4", bytes.subarray(100, 200)]);
+    const tail = await call("GET", path, undefined, { range: "bytes=-100" });
+    expect([tail.status, tail.headers["content-range"], tail.body]).toEqual([206, "bytes 3996-4095/4096", bytes.subarray(3996)]);
     const bad = await call("GET", path, undefined, { range: "bytes=5000-6000" });
     expect([bad.status, bad.headers["content-range"]]).toEqual([416, "bytes */4096"]);
     const all = await call("GET", path);
