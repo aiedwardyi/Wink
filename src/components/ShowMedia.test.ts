@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { forgetMedia, type MediaWire } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
-import { closeShow, showItem, showMedia, useMediaThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showFolder, showItem, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
@@ -586,4 +586,83 @@ it("a video whose frame can't be read keeps its play icon and name", async () =>
   expect(tile.querySelector("img")).toBeNull();
   expect(tile.querySelector(".lucide-play")).not.toBeNull();
   expect(tile.querySelector(".truncate")!.textContent).toBe("broken.mov");
+});
+
+const mock = String.raw`C:\cards\forum-look-mock-2`;
+const listing = {
+  files: [
+    ...["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"].map((name, n) => ({ name, path: `${mock}\\${name}`, size: 10, modified: NOVEMBER - n })),
+    { name: "forum-look-mock-2.html", path: `${mock}\\forum-look-mock-2.html`, size: 21_525, modified: NOVEMBER - 10 },
+    { name: "notes.txt", path: `${mock}\\notes.txt`, size: 8, modified: NOVEMBER - 11 },
+  ],
+  more: 2,
+};
+const folderFetch = (answer: FolderListing | null) => vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+  calls.push(url);
+  if (url.includes("/linked-folder?")) return answer ? Response.json(answer) : Response.json({ error: "not found" }, { status: 404 });
+  return new Response(null, { status: 206 });
+}));
+const linked = (path: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`;
+const viewed = () => document.querySelector("[data-media-viewer] img")?.getAttribute("src");
+const key = (name: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true })); });
+
+it("a linked folder shows in Show, and its pictures step with the arrow keys", async () => {
+  folderFetch(listing);
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await render(chat);
+  await settle();
+  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector(".show-frame-name")?.textContent).toBe("forum-look-mock-2");
+  expect(calls).toContain(`/api/threads/t1/linked-folder?path=${encodeURIComponent(mock)}`);
+  expect(tiles()).toEqual(["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"]);
+  await click(host.querySelector('[data-media-grid] [title="icon-31-wink.png"]'));
+  expect(viewed()).toBe(linked(listing.files[0]!.path));
+  await key("ArrowRight");
+  expect(viewed()).toBe(linked(listing.files[1]!.path));
+  await key("ArrowRight");
+  expect(viewed()).toBe(linked(listing.files[2]!.path));
+  await key("ArrowRight");
+  expect(viewed()).toBe(linked(listing.files[2]!.path));
+  await key("ArrowLeft");
+  expect(viewed()).toBe(linked(listing.files[1]!.path));
+});
+
+it("a linked folder's page shows in Show, other files download, and it says how many more", async () => {
+  folderFetch(listing);
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await render(chat);
+  await settle();
+  await click(tab("Files"));
+  expect(names()).toEqual(["forum-look-mock-2.html", "notes.txt"]);
+  expect(host.querySelector("[data-folder-more]")?.textContent).toBe("2 more files");
+  expect(row("notes.txt").getAttribute("href")).toBe(linked(listing.files[4]!.path));
+  expect(row("notes.txt").hasAttribute("download")).toBe(true);
+  await click(row("forum-look-mock-2.html"));
+  await settle();
+  expect(shown).toEqual({ threadId: "t1", path: listing.files[3]!.path, kind: "page" });
+  expect(host.querySelector('.show-frame[data-kind="page"] .show-frame-name')?.textContent).toBe("forum-look-mock-2.html");
+});
+
+it("a folder its link just listed draws without asking again, and says so when it can't list", async () => {
+  folderFetch(listing);
+  await act(async () => showFolder("t1", `${mock}-new`, listing));
+  await render(chat);
+  await settle();
+  expect(tiles()).toHaveLength(3);
+  expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
+  act(() => closeShow());
+  folderFetch(null);
+  applyLocale("ko");
+  await act(async () => showItem({ threadId: "t1", path: `${mock}-gone`, kind: "folder" }));
+  await settle();
+  expect(host.querySelector('[data-kind="folder"] [role="status"]')?.textContent).toBe("이 파일을 보여줄 수 없어요");
+});
+
+it("an empty linked folder says so in Korean", async () => {
+  folderFetch({ files: [], more: 0 });
+  applyLocale("ko");
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await render(chat);
+  await settle();
+  expect(host.querySelector(".show-media-empty")?.textContent).toBe("이 폴더에는 파일이 없어요");
 });
