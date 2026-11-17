@@ -1147,8 +1147,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const injected = input.account ? { model: turnModel, injected: false } : applyClaudeInject({ ...turnEnvironment }, turnModel);
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
-      if (turn.leanStartup === true) args.push("--setting-sources", "project");
-      else if (baseHome && !turn.readOnly) args.push(...userSetupArgs(baseHome, baseConfig));
+      // read-only: no user, project or local settings, so none of their hooks or enabled plugins run; --settings still applies
+      if (turn.readOnly) args.push("--setting-sources", "");
+      else if (turn.leanStartup === true) args.push("--setting-sources", "project");
+      else if (baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
       if (turn.readOnly) args.push("--strict-mcp-config", "--no-chrome");
       if (turn.system) args.push("--append-system-prompt", turn.system);
 

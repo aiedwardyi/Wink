@@ -1,12 +1,13 @@
 // Every engine's read-only turn, launched for real against its fake CLI on its most permissive
 // instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs } from "../config.ts";
+import * as procs from "../procs.ts";
 import type { ProviderInstance, SendTurnInput } from "../contracts.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { recordEvents } from "../testing/events.ts";
@@ -111,7 +112,7 @@ const ENGINES: Record<string, Engine> = {
       for (const method of ["thread/start", "thread/resume"]) {
         const { sandbox, approvalPolicy, config } = launch[method]!.params;
         expect({ method, sandbox, approvalPolicy }).toEqual({ method, sandbox: "read-only", approvalPolicy: "untrusted" });
-        expect(config).toMatchObject({ "mcp_servers.github.enabled": false, "plugins.unified-computer-use@openai-bundled.enabled": false, "features.apps": false, "features.remote_plugin": false });
+        expect(config).toMatchObject({ "mcp_servers.github.enabled": false, "plugins.unified-computer-use@openai-bundled.enabled": false, "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
         expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
       }
     },
@@ -157,6 +158,77 @@ const ENGINES: Record<string, Engine> = {
     },
   },
 };
+
+// The owner's own command hooks, from every settings file and an enabled plugin, each writing a marker.
+const HOOK_SOURCES = ["user", "project", "local", "installed-plugin", "plugin-dir"];
+const hookFixture = () => {
+  const marks = join(scratch, "marks");
+  const config = join(scratch, "config");
+  const project = join(scratch, "project");
+  const base = join(scratch, "base");
+  const hooks = (tag: string) => Object.fromEntries(["SessionStart", "UserPromptSubmit"].map((event) => [event, [{ hooks: [{
+    type: "command",
+    command: [process.execPath, "-e", "require('fs').writeFileSync(process.argv[1], '')", join(marks, `${tag}-${event}`)].map((part) => `"${part.replaceAll("\\", "/")}"`).join(" "),
+  }] }]]));
+  const plugin = (dir: string, tag: string) => {
+    mkdirSync(join(dir, ".claude-plugin"), { recursive: true });
+    mkdirSync(join(dir, "hooks"), { recursive: true });
+    writeFileSync(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: tag }));
+    writeFileSync(join(dir, "hooks", "hooks.json"), JSON.stringify({ hooks: hooks(tag) }));
+  };
+  for (const dir of [marks, join(config, "plugins"), join(project, ".claude"), join(base, "plugins")]) mkdirSync(dir, { recursive: true });
+  const installed = join(config, "plugins", "cache", "mkt", "hooky", "1.0.0");
+  plugin(installed, "installed-plugin");
+  writeFileSync(join(config, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "hooky@mkt": [{ scope: "user", installPath: installed, version: "1.0.0" }] } }));
+  writeFileSync(join(config, "settings.json"), JSON.stringify({ hooks: hooks("user"), enabledPlugins: { "hooky@mkt": true } }));
+  writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({ hooks: hooks("project") }));
+  writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({ hooks: hooks("local") }));
+  // the account path loads the base home's enabled plugins with --plugin-dir
+  const kit = join(base, "plugins", "cache", "mkt", "kit", "1.0.0");
+  plugin(kit, "plugin-dir");
+  writeFileSync(join(base, "settings.json"), JSON.stringify({ enabledPlugins: { "kit@mkt": true } }));
+  writeFileSync(join(base, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "kit@mkt": [{ scope: "user", installPath: kit, version: "1.0.0" }] } }));
+  const fired = () => readdirSync(marks).map((name) => name.replace(/-(SessionStart|UserPromptSubmit)$/, "")).filter((tag, i, all) => all.indexOf(tag) === i).sort();
+  return { marks, config, project, base, fired };
+};
+
+describe("Claude read-only turns run none of the owner's hooks", () => {
+  const launch = async (account: boolean) => {
+    const fixture = hookFixture();
+    setEnv("FAKE_CLAUDE_HOOKS", "1");
+    if (account) {
+      const exec = procs.execCli;
+      vi.spyOn(procs, "execCli").mockImplementation((cli, args, opts, cb) =>
+        args[0] === "auth" ? cb(null, JSON.stringify({ loggedIn: true, authMethod: "claude.ai", configDirectory: fixture.config })) : exec(cli, args, opts, cb));
+    }
+    const instance = await ClaudeDriver.create({
+      instanceId: account ? "hooks-claude-account" : "hooks-claude",
+      displayName: undefined,
+      environment: { CLAUDE_CONFIG_DIR: account ? fixture.base : fixture.config },
+      enabled: true,
+      ...(account && { account: { id: "acct-hooks", of: "claude-hooks", home: fixture.config, generation: 1 } }),
+      config: { cli: fake("fake-claude-cli.ts"), permissionMode: "bypassPermissions" },
+    });
+    live.push(instance);
+    const turn = async (threadId: string, extra: Partial<SendTurnInput>) => {
+      await run(instance, threadId, { cwd: fixture.project, integrations: { agents }, ...extra });
+      const fired = fixture.fired();
+      await removeTempDir(fixture.marks);
+      mkdirSync(fixture.marks);
+      return fired;
+    };
+    return turn;
+  };
+
+  it.each([["non-account", false], ["account", true]] as const)("%s: an owner turn runs them, a read-only turn fresh or resumed runs none", async (_path, account) => {
+    const turn = await launch(account);
+    const owned = account ? HOOK_SOURCES : HOOK_SOURCES.filter((source) => source !== "plugin-dir");
+    expect(await turn("t-owner", {})).toEqual([...owned].sort());
+    expect(await turn("t-owner-resumed", { resumeCursor: "s-owner" })).toEqual([...owned].sort());
+    expect(await turn("t-read-only", { readOnly: true })).toEqual([]);
+    expect(await turn("t-read-only-resumed", { readOnly: true, resumeCursor: "s-owner" })).toEqual([]);
+  });
+});
 
 describe("read-only launch contract", () => {
   it("runs with a throwaway HOME", () => {
