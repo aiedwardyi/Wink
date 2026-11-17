@@ -745,6 +745,7 @@ describe("MSP turns (fake host)", () => {
     const [decide] = JSON.parse(readFileSync(`${dump}.decide.json`, "utf8"));
     expect(decide.params).toMatchObject({ choiceId: "deny" });
     expect(JSON.parse(readFileSync(dump, "utf8")).argv.slice(-2)).toEqual(["--disable-write", "--disable-shell"]);
+    expect(instance.adapter.access!({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
     recorder.events.length = 0;
     await instance.adapter.sendTurn({ threadId: "t-read-only", text: "hi again" });
     expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
@@ -1606,6 +1607,18 @@ describe("MSP warm host (recorded transport)", () => {
     expect(peers).toHaveLength(3);
     expect(exited(peers[1])).toBe(true);
     expect(kept()).toBe(1);
+  });
+
+  it("retires the thread's kept host before a read-only turn resumes its session elsewhere", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    expect(kept()).toBe(1);
+    await completed(await send({ resumeCursor: cursorOf(first), readOnly: true }));
+    expect(exited(peers[0])).toBe(true);
+    await completed(await send({ resumeCursor: cursorOf(first) }));
+    expect(peers).toHaveLength(3);
+    expect(methods(peers[2])).toContain("session/resume");
   });
 
   it("prepare and sendTurn build the same fingerprint for the same shape", async () => {

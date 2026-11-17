@@ -453,7 +453,7 @@ export function estimateWin32CmdlineLength(command: string, args: string[]): num
 
 /** Print mode never asks: skip-permissions runs everything, accept-edits denies run_command, the default denies both. */
 export function antigravityAccess(argv: readonly string[]): TurnAccess {
-  if (argv[argv.indexOf("--mode") + 1] === "plan") return { edits: "off", commands: "off" };
+  if (argv.includes("--mode") && argv[argv.indexOf("--mode") + 1] === "plan") return { edits: "off", commands: "off" };
   if (argv.includes("--dangerously-skip-permissions")) return FREE_ACCESS;
   return { edits: argv.includes("accept-edits") ? "free" : "off", commands: "off" };
 }

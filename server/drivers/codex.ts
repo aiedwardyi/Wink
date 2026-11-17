@@ -629,7 +629,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               ? "ask_user"
               : "shell";
         const owned = isMcpElicitation && (preAllowed.has(params.serverName) || preAllowed.has(`${params.serverName}/${mcpTool}`));
-        if ((config.fullAuto && !isQuestion) || owned) {
+        // a read-only turn's escalations go to Wink, which denies them, whatever the instance's Auto
+        if (((config.fullAuto && !isQuestion) || owned) && !turn.readOnly) {
           return send({
             jsonrpc: "2.0",
             id: msg.id,

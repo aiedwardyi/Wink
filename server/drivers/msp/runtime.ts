@@ -692,6 +692,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const sessionRoot = isWslCli() ? toWslPath(cwd) : cwd;
         const sessionConfig = sessionConfigFor(turn.integrations);
         const captured = capture();
+        // the read-only host resumes this session elsewhere, so a kept host would continue stale history
+        if (turn.readOnly) pool.invalidate(keyFor(threadId), "read-only turn");
         const own = !cancelled && !turn.readOnly && identity && checked === prepares
           ? pool.take(keyFor(threadId), warmFingerprint(eligibility(turn, captured)), captured, turn.resumeCursor)
           : "miss";
@@ -1477,7 +1479,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           },
           sendTurn,
           // fullAuto answers every approval itself (openApproval); the rest reach Wink
-          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
+          access: (turn) => (config.fullAuto && !turn.readOnly ? FREE_ACCESS : routedAccess(turn)),
           interruptTurn: async (threadId) => {
             active.get(threadId)?.interrupt();
           },
