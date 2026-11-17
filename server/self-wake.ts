@@ -1,4 +1,5 @@
 import type { Routine, RoutineManager, RoutineRun } from "./routines.ts";
+import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
 
 export const WAKE_MAX_PENDING = 10;
 export const WAKE_NOTE_MAX = 500;
@@ -19,7 +20,7 @@ export function pendingWakes(routines: RoutineManager, botId: string): Routine[]
   return routines.listRoutines().filter((routine) => routine.wake && routine.botId === botId && routine.nextRunAt !== null);
 }
 
-function parseAt(raw: string): number {
+export function parseAt(raw: string): number {
   const match = RFC3339_WITH_OFFSET.exec(raw);
   const at = match ? Date.parse(raw) : NaN;
   if (!match || !Number.isFinite(at)) return NaN;
@@ -56,6 +57,40 @@ export function setWake(
 
 export function cancelWake(routines: RoutineManager, botId: string, id: string): boolean {
   return pendingWakes(routines, botId).some((routine) => routine.id === id) && routines.remove(id);
+}
+
+/** An open ask with a due time holds one wake; moving the time or closing the ask cancels it, reopening sets it again, and one that rang is not set again. */
+export function syncAskWakes(
+  routines: RoutineManager,
+  chat: { botId: string; threadId: string },
+  before: readonly TaskAsk[] | undefined,
+  after: TaskAsk[],
+  now = Date.now(),
+): string[] {
+  const notes: string[] = [];
+  // a closed ask the cap dropped takes its wake with it
+  for (const gone of before ?? []) {
+    if (gone.wake && !after.some((ask) => ask.id === gone.id)) cancelWake(routines, chat.botId, gone.wake);
+  }
+  for (const ask of after) {
+    const was = before?.find((item) => item.id === ask.id);
+    const moved = was?.due !== ask.due;
+    if (ask.wake && (moved || !isOpenAsk(ask))) {
+      cancelWake(routines, chat.botId, ask.wake);
+      delete ask.wake;
+    }
+    const reopened = was !== undefined && !isOpenAsk(was) && isOpenAsk(ask);
+    if (!(moved || reopened) || ask.due === undefined || !isOpenAsk(ask)) continue;
+    if (ask.due <= now) {
+      notes.push(`No wake for ${ask.id}: its due time already passed.`);
+      continue;
+    }
+    const note = `Ask ${ask.id} is due: ${ask.ask}. Start it now, or tell the user and set a new due time.`;
+    const set = setWake(routines, { ...chat, at: new Date(ask.due).toISOString(), note }, now);
+    if (set.ok) ask.wake = set.id;
+    else notes.push(`No wake for ${ask.id}: ${set.error}`);
+  }
+  return notes;
 }
 
 export function wakeFireLine(run: Pick<RoutineRun, "scheduledFor" | "late">, note: string, now: number): string {
