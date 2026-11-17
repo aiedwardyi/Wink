@@ -12,6 +12,7 @@ import { hostLines, hostRoomBase, reactionNames, roomNoticeText, roomPeople, roo
 import { useStore } from "@/state/store";
 
 import { AppErrorBanner } from "./AppErrorBanner";
+import { roomCallBot, useCallControls } from "./CallControls";
 import { ChatScene, sceneOf } from "./ChatScene";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ShowPaneButton } from "./ShowPaneButton";
@@ -36,6 +37,7 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
   const skin = useSkin();
   const scene = sceneOf(skin);
   const sceneSend = useRef<(() => void) | null>(null);
+  const call = useCallControls(roomCallBot(state.bots), hidden, { id: group.hosted.roomId, kind: "host", name: group.name });
   return (
     <main data-team-room="host" data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {scene && <ChatScene scene={scene} skin={skin} working={Boolean(group.busyBotId || group.botChain)} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
@@ -57,7 +59,7 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
         empty={missing ? undefined : { name: group.name, members: [state.config?.profile?.name ?? "", ...roomPeople(group).map((person) => person.name)].filter(Boolean), picture: roomPictureUrl(base, group.picture) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} onSend={() => sceneSend.current?.()} chain={group.botChain} onStop={group.botChain ? () => dispatch({ type: "interruptGroup", groupId: group.id }) : undefined} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} onSend={() => sceneSend.current?.()} chain={group.botChain} onStop={group.botChain ? () => dispatch({ type: "interruptGroup", groupId: group.id }) : undefined} call={call} />}
       </div>
     </main>
   );

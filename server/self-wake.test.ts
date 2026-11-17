@@ -280,6 +280,7 @@ describe("self-wake", () => {
       routines: h.manager,
       taskPacketForWrite: () => packet,
       persistTaskPacket: () => null,
+      readOnlyTurn: () => false,
     } as unknown as Parameters<typeof createInternalRoutes>[0]);
     const due = new Date(Date.now() + 30 * 60_000).toISOString();
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -294,6 +295,32 @@ describe("self-wake", () => {
       expect(status).toBe(409);
     }
     expect(h.manager.listRoutines()).toEqual([]);
+  });
+
+  it("a read-only turn's update_task_state neither saves the task record nor pauses automatic wakes", async () => {
+    const h = harness();
+    const packet = { v: 1, threadId: "room-a", botId: "bot-a", goal: "", plan: [], completed: [], evidence: [], artifacts: [], blockers: [], nextAction: "", updatedAt: 1 };
+    const persisted: unknown[] = [];
+    const patched: unknown[] = [];
+    const paused: unknown[] = [];
+    const routes = createInternalRoutes({
+      store: { bot: (id: string) => ({ id }), conversationForBot: () => ({}), taskByThread: () => undefined, patchBot: (...args: unknown[]) => patched.push(args) },
+      keepGoing: { pause: (...args: unknown[]) => paused.push(args) },
+      routines: h.manager,
+      taskPacketForWrite: () => packet,
+      persistTaskPacket: (next: unknown) => (persisted.push(next), next),
+      readOnlyTurn: (botId: string, threadId: string) => botId === "bot-a" && threadId === "room-a",
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = {};
+    let status = 0;
+    const res = { writeHead(code: number) { status = code; }, getHeader() {}, setHeader() {}, end() {} } as unknown as ServerResponse;
+    const pending = routes.taskState(req, res);
+    req.emit("data", JSON.stringify({ fromBotId: "bot-a", fromThreadId: "room-a", goal: "ship it", pause_automatic_wakes: true }));
+    req.emit("end");
+    await pending;
+    expect(status).toBe(403);
+    expect({ persisted, patched, paused }).toEqual({ persisted: [], patched: [], paused: [] });
   });
 
   it("never lets a wake ride a calendar routine id", () => {

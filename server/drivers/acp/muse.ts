@@ -161,7 +161,7 @@ export function museIsAuthenticated(
   env: Record<string, string | undefined>,
   _config?: unknown,
   overrides?: { platform?: NodeJS.Platform; probeWslAuth?: (probeEnv: NodeJS.ProcessEnv) => boolean },
-): boolean {
+): boolean | undefined {
   if (nonBlank(env.META_API_KEY)) return true;
   const signedIn = () => storedSignIn(museAuthPath(env), (text) => {
     const parsed = museAuthSchema.safeParse(JSON.parse(text));
@@ -173,15 +173,18 @@ export function museIsAuthenticated(
   // Native Windows Muse reads its own auth file. Keep the WSL probe as a
   // fallback for older installs and explicit WSL configurations.
   if ((overrides?.platform ?? process.platform) === "win32") {
+    let native: boolean | undefined = false;
     try {
-      if (signedIn()) return true;
+      native = signedIn();
+      if (native) return true;
     } catch {
       // Try the WSL-side login below.
     }
+    // An unreadable native file stays unknown unless WSL is signed in.
     try {
-      return (overrides?.probeWslAuth ?? probeWslMuseAuth)({ ...env, PATH: augmentedPath() });
+      return (overrides?.probeWslAuth ?? probeWslMuseAuth)({ ...env, PATH: augmentedPath() }) || native;
     } catch {
-      return false;
+      return native;
     }
   }
   try {
