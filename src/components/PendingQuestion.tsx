@@ -1,7 +1,8 @@
 // A bot's open ask_user question, pinned above the composer. It arrives as
 // the full card in the PendingApproval style and glows once; once the person
 // types, attaches or the chat moves on it shrinks to one quote row that keeps
-// its choices, and a tap on the row opens the card again. Unlike an approval
+// its choices, and a tap on the row opens the card again. It arrives as the row
+// when the box already holds a draft, a reply or attachments. Unlike an approval
 // it never takes the composer over: the bot keeps working, and typing a reply
 // answers it only when it has no choices. The row's x or a sideways swipe only
 // hides it here; the bot still waits, and a count on the composer brings it back.
@@ -62,6 +63,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   onStep,
   typed = "",
   attached = 0,
+  replying = false,
   movedOn = false,
   onPick,
   onDismiss,
@@ -77,13 +79,16 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   /** the message box's text and attachment count: a change after arrival shrinks the card */
   typed?: string;
   attached?: number;
+  replying?: boolean;
   /** the person sent a message, or the asker replied, after the question */
   movedOn?: boolean;
   onPick: (choice: string) => void;
   onDismiss: () => void;
 }) {
   const { t } = useI18n();
-  const folded = useMarked(rowQuestions, message.id);
+  const drafting = Boolean(typed.trim()) || attached > 0 || replying;
+  // read in render so a question arriving over a draft never paints as the card first
+  const folded = useMarked(rowQuestions, message.id) || (drafting && !shrunkQuestions.has(message.id));
   const hidden = useMarked(hiddenQuestions, message.id);
   const [glowing, setGlowing] = useState(() => !glowedQuestions.has(message.id) && !reducedMotion());
   useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
@@ -91,10 +96,10 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   useEffect(() => {
     const was = draft.current;
     draft.current = { typed, attached };
-    if (shrunkQuestions.has(message.id) || !(movedOn || typed !== was.typed || attached > was.attached)) return;
+    if (shrunkQuestions.has(message.id) || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
     setGlowing(false);
     foldQuestion(message.id);
-  }, [typed, attached, movedOn, message.id]);
+  }, [typed, attached, drafting, movedOn, message.id]);
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
   const rowButton = useRef<HTMLButtonElement>(null);

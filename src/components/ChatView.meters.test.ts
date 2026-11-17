@@ -22,7 +22,7 @@ const claude: InstanceInfo = {
   models: { default: "claude-opus", options: [{ id: "claude-opus", label: "Claude Opus" }] },
   rateLimits: {
     observedAt: new Date(now - 60_000).toISOString(),
-    windows: [{ id: "five_hour", usedPercent: 71, resetsAt: now + 3_600_000 }],
+    windows: [{ id: "five_hour", usedPercent: 81, resetsAt: now + 3_600_000 }],
   },
 };
 
@@ -44,7 +44,7 @@ const muse: InstanceInfo = {
     observedAt: new Date(now - 4 * 86400_000).toISOString(),
     windows: [
       { id: "five_hour", usedPercent: 10, resetsAt: now + 3_600_000 },
-      { id: "seven_day", usedPercent: 40, resetsAt: now + 86_400_000 },
+      { id: "seven_day", usedPercent: 80, resetsAt: now + 86_400_000 },
     ],
   },
 };
@@ -122,7 +122,7 @@ describe("ChatView plan meters follow the shown pick", () => {
       [claude, gemini],
     );
     expect(meter(host)).toBeNull();
-    expect(host.textContent).not.toContain("29%");
+    expect(host.textContent).not.toContain("19%");
   });
 
   it("shows the pending instance's windows in ChatPlanMeters", async () => {
@@ -130,13 +130,13 @@ describe("ChatView plan meters follow the shown pick", () => {
       { ...busy, pendingModelSelection: { instanceId: "muse", model: "muse-model", effort: "high" } },
       [claude, muse],
     );
-    expect(meter(host)).toEqual({ first: "5h 90%", second: "7d 60%" });
+    expect(meter(host)).toEqual({ first: "5h 90%", second: "7d 20%" });
     expect(host.textContent).not.toMatch(/Last seen|As of/);
   });
 
   it("shows the running engine's windows in ChatPlanMeters when nothing is pending", async () => {
     const { host } = await render(busy, [claude, gemini]);
-    expect(meter(host)).toEqual({ first: "5h 29%", second: null });
+    expect(meter(host)).toEqual({ first: "5h 19%", second: null });
     expect(host.textContent).not.toContain("Last seen");
   });
 
@@ -148,22 +148,22 @@ describe("ChatView plan meters follow the shown pick", () => {
         observedAt: new Date(now).toISOString(),
         windows: [
           { id: "five_hour", usedPercent: 12, resetsAt: now + 7_200_000 },
-          { id: "seven_day", usedPercent: 34, resetsAt: now + 86_400_000 },
+          { id: "seven_day", usedPercent: 84, resetsAt: now + 86_400_000 },
         ],
       },
     };
     const { host, dispatch } = await render(busy, [base, second]);
-    expect(meter(host)).toEqual({ first: "5h 29%", second: null });
+    expect(meter(host)).toEqual({ first: "5h 19%", second: null });
     await act(async () => dispatch({ type: "instances", instances: [
       { ...base, accountMain: false }, { ...second, accountMain: true },
     ] }));
-    expect(meter(host)).toEqual({ first: "5h 88%", second: "7d 66%" });
+    expect(meter(host)).toEqual({ first: "5h 88%", second: "7d 16%" });
     await act(async () => dispatch({ type: "rateLimits", instanceId: "second", report: {
       observedAt: new Date(now).toISOString(),
-      windows: [{ id: "five_hour", usedPercent: 20, resetsAt: now + 7_200_000 }],
+      windows: [{ id: "five_hour", usedPercent: 80, resetsAt: now + 7_200_000 }],
     } }));
-    expect(meter(host)).toEqual({ first: "5h 80%", second: null });
+    expect(meter(host)).toEqual({ first: "5h 20%", second: null });
     await act(async () => dispatch({ type: "instances", instances: [base, second] }));
-    expect(meter(host)).toEqual({ first: "5h 29%", second: null });
+    expect(meter(host)).toEqual({ first: "5h 19%", second: null });
   });
 });

@@ -19,6 +19,9 @@ vi.mock("@/state/store", async (importOriginal) => {
 import App from "./App";
 
 const MIN = 60_000;
+// The chat's limit line, and so its quick view, shows only once a window runs low.
+const low = structuredClone(usageBoardFixture);
+low.engines[0]!.accounts[0]!.windows[0]!.usedPercent = 80;
 const DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "antigravityAgent", muse: "museAgent" };
 
 function instancesFor(board: UsageBoard): InstanceInfo[] {
@@ -62,7 +65,7 @@ async function mount(bot: Bot, instances: InstanceInfo[]) {
   vi.useFakeTimers({ now: usageBoardNow, toFake: ["Date"] });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("/api/usage/board")
-    ? new Response(JSON.stringify(usageBoardFixture), { headers: { "content-type": "application/json" } })
+    ? new Response(JSON.stringify(low), { headers: { "content-type": "application/json" } })
     : new Promise<Response>(() => {})));
   vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
   keys.length = 0;
@@ -102,7 +105,7 @@ afterEach(async () => {
 
 describe("Alt+U", () => {
   it("opens the quick view, then all Usage, then closes on Alt+U", async () => {
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await mount(botOn("claude"), instancesFor(low));
     expect((await press()).defaultPrevented).toBe(true);
     expect(quick(), "quick view").not.toBeNull();
     expect(settings()).toBeNull();
@@ -115,7 +118,7 @@ describe("Alt+U", () => {
   });
 
   it("opens all Usage on Alt+U with no eligible meter", async () => {
-    await mount(botOn("muse"), [...instancesFor(usageBoardFixture), muse]);
+    await mount(botOn("muse"), [...instancesFor(low), muse]);
     expect(document.body.querySelector("[data-usage-meter]")).toBeNull();
     expect((await press()).defaultPrevented).toBe(true);
     expect(settings()).toBe("usage");
@@ -124,7 +127,7 @@ describe("Alt+U", () => {
   });
 
   it("opens all Usage on Alt+U while the terminal covers the chat", async () => {
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await mount(botOn("claude"), instancesFor(low));
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true, bubbles: true, cancelable: true })); });
     await settle();
     expect(document.body.querySelector('.orbit-terminal-overlay[data-open="true"]'), "terminal open").not.toBeNull();
@@ -134,7 +137,7 @@ describe("Alt+U", () => {
   });
 
   it("shuts an open quick view when the terminal covers the chat and keeps it shut after", async () => {
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await mount(botOn("claude"), instancesFor(low));
     await press();
     expect(quick(), "quick view").not.toBeNull();
     const backquote = () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true, bubbles: true, cancelable: true })); });
@@ -153,7 +156,7 @@ describe("Alt+U", () => {
     { code: "KeyI", key: "i", altKey: true },
     { code: "KeyK", key: "k", ctrlKey: true, altKey: false },
   ])("shuts the quick view when an app overlay opens ($code)", async (shortcut) => {
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await mount(botOn("claude"), instancesFor(low));
     await press();
     expect(quick()).not.toBeNull();
     await press(shortcut);
@@ -163,7 +166,7 @@ describe("Alt+U", () => {
   });
 
   it("leaves Settings shut when a view takes Alt+U", async () => {
-    await mount(botOn("muse"), [...instancesFor(usageBoardFixture), muse]);
+    await mount(botOn("muse"), [...instancesFor(low), muse]);
     const take = (event: Event) => event.preventDefault();
     window.addEventListener("orbit:usage-key", take);
     try {
@@ -178,7 +181,7 @@ describe("Alt+U", () => {
   });
 
   it("ignores Alt+U repeats and composition", async () => {
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await mount(botOn("claude"), instancesFor(low));
     for (const init of [{ repeat: true }, { isComposing: true }]) {
       await press(init);
       expect(settings(), JSON.stringify(init)).toBeNull();

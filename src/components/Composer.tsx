@@ -1127,7 +1127,7 @@ export function Composer({
         {/* Notices, reply/approval banners and the attachment tray scroll here
             first, so a long list of them shrinks instead of pushing the send
             row (below, shrink-0) off the screen. */}
-        <div className="min-h-0 shrink overflow-y-auto">
+        <div data-composer-tray="" className="min-h-0 max-h-[35dvh] shrink overflow-y-auto max-md:max-h-[30dvh]">
         {group?.waitingBotIds?.map((id) => (
           <p key={id} data-room-bot-wait role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
             {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
@@ -1232,6 +1232,7 @@ export function Composer({
             }}
             typed={text}
             attached={attachments.length}
+            replying={Boolean(replyTo)}
             movedOn={questionMovedOn}
             onPick={(choice) => {
               if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });
@@ -1242,15 +1243,6 @@ export function Composer({
               else if (bot) dispatch({ type: "dismissCard", botId: bot.id, messageId: question.id });
             }}
           />
-        )}
-        {replyTo && (
-          <div className="mb-2 px-1">
-            <ReplyQuote
-              message={replyTo}
-              fallbackName={room ? replyTo.author?.name : bot?.name}
-              onClear={onClearReply}
-            />
-          </div>
         )}
         <div inert={locked}>
         <ComposerAttachments
@@ -1271,6 +1263,7 @@ export function Composer({
           onDropFiles={room ? (files) => void pickFiles(files) : undefined}
           dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
           roomCopy={group?.hosted ? roomCopyPath : undefined}
+          quote={replyTo && <ReplyQuote message={replyTo} fallbackName={room ? replyTo.author?.name : bot?.name} onClear={onClearReply} />}
         />
         </div>
         </div>

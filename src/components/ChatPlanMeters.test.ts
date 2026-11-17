@@ -40,14 +40,25 @@ describe("ChatPlanMeters", () => {
     ).toBe("");
   });
 
+  it("hides while every window has plenty left and shows once one runs low", () => {
+    expect(render([
+      { id: "five_hour", usedPercent: 25, resetsAt: now + 115 * 60_000 },
+      { id: "seven_day", usedPercent: 74, resetsAt: now + 53 * 3_600_000 },
+    ])).toBe("");
+    expect(line(render([
+      { id: "five_hour", usedPercent: 25, resetsAt: now + 115 * 60_000 },
+      { id: "seven_day", usedPercent: 75, resetsAt: now + 53 * 3_600_000 },
+    ]))).toEqual({ first: "5h 75%", second: "7d 25%" });
+  });
+
   it("shows the live 5-hour and weekly windows with remaining percent, the session first", () => {
     const html = render([
       { id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 },
-      { id: "seven_day", usedPercent: 49, resetsAt: now + 53 * 3_600_000 },
+      { id: "seven_day", usedPercent: 80, resetsAt: now + 53 * 3_600_000 },
       { id: "seven_day_opus", usedPercent: 75, resetsAt: now + 53 * 3_600_000 },
       { id: "stale", usedPercent: 40, resetsAt: now - 60_000 },
     ]);
-    expect(line(html)).toEqual({ first: "5h 90%", second: "7d 51%" });
+    expect(line(html)).toEqual({ first: "5h 90%", second: "7d 20%" });
     expect(html).not.toContain("25%");
     expect(html).not.toContain("60%");
     expect(html).not.toContain("10% used");
@@ -74,15 +85,15 @@ describe("ChatPlanMeters", () => {
   });
 
   it("keeps a weekly-only report and says the session window has no data", () => {
-    expect(line(render([{ id: "seven_day", usedPercent: 71, resetsAt: now + 53 * 3_600_000 }]))).toEqual({ first: "7d 29%", second: null });
+    expect(line(render([{ id: "seven_day", usedPercent: 81, resetsAt: now + 53 * 3_600_000 }]))).toEqual({ first: "7d 19%", second: null });
   });
 
   it("never renders a token readout", () => {
-    const live: RateLimitWindow[] = [{ id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 }];
+    const live: RateLimitWindow[] = [{ id: "five_hour", usedPercent: 90, resetsAt: now + 115 * 60_000 }];
     const html = render(live);
     expect(html).not.toContain("↑");
     expect(html).not.toContain("↓");
-    expect(line(html)).toEqual({ first: "5h 90%", second: null });
+    expect(line(html)).toEqual({ first: "5h 10%", second: null });
   });
 
   it("dispatches the usage action when the strip is clicked", async () => {
@@ -94,7 +105,7 @@ describe("ChatPlanMeters", () => {
     try {
       await act(async () => {
         root.render(createElement(ChatPlanMeters, {
-          windows: [{ id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 }],
+          windows: [{ id: "five_hour", usedPercent: 90, resetsAt: now + 115 * 60_000 }],
           now,
           onOpenUsage,
         }));
@@ -126,7 +137,7 @@ describe("ChatPlanMeters", () => {
     try {
       await act(async () => {
         root.render(createElement(ChatPlanMeters, {
-          windows: [{ id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 }],
+          windows: [{ id: "five_hour", usedPercent: 90, resetsAt: now + 115 * 60_000 }],
           now,
           onOpenUsage,
         }));
@@ -173,7 +184,7 @@ describe("ChatPlanMeters", () => {
 
   it("describes the strip with a stale Muse reading's age and keeps its name", () => {
     applyLocale("en");
-    const windows = [{ id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 }];
+    const windows = [{ id: "five_hour", usedPercent: 90, resetsAt: now + 115 * 60_000 }];
     const host = document.createElement("div");
     const draw = (ageMs: number) => {
       host.innerHTML = renderToStaticMarkup(createElement(ChatPlanMeters, {
