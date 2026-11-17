@@ -16,6 +16,7 @@ import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
 import { AppErrorBanner } from "./AppErrorBanner";
 import { RoomBotAvatar } from "./Avatar";
+import { roomCallBot, useCallControls } from "./CallControls";
 import { ChatScene, sceneOf } from "./ChatScene";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
@@ -86,6 +87,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
   const scene = sceneOf(skin);
   const sceneSend = useRef<(() => void) | null>(null);
   const seq = entries?.at(-1)?.seq;
+  const call = useCallControls(status === null ? roomCallBot(state.bots) : undefined, hidden, { id: roomId, kind: "joined", name, lines });
   useEffect(() => {
     if (preview) return;
     const read = () => {
@@ -158,6 +160,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
               onStop={stoppable ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
               onSend={() => sceneSend.current?.()}
               chain={chain}
+              call={call}
             />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}
