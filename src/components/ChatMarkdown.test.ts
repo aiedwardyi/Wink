@@ -1008,12 +1008,13 @@ describe("relative file links", () => {
       expect(button()!.getAttribute("aria-label")).toBe("전체 화면 종료");
     });
 
-    it("sizes the touch target and keeps it off the seek bar", async () => {
+    it("sizes the touch target and keeps it off the browser's own controls along the bottom", async () => {
       await mount();
       const classes = button()!.className;
       expect(classes).toContain("h-11");
       expect(classes).toContain("w-11");
-      expect(classes).toContain("bottom-14");
+      expect(classes).toContain("top-2");
+      expect(classes).not.toMatch(/\bbottom-/);
     });
 
     it.each([
