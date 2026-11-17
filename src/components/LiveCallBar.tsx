@@ -18,7 +18,7 @@ import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -37,7 +37,6 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     unmute: "Unmute",
     end: "End",
     privacy: "Free Gemini: Google may use call audio to improve its products.",
-    captions: "Captions",
     you: "You",
     micBlocked: "Microphone is off for Wink.",
     micMissing: "No microphone found. Plug one in, or type in the chat instead.",
@@ -67,7 +66,6 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     unmute: "음소거 해제",
     end: "종료",
     privacy: "무료 Gemini: Google이 통화 음성을 제품 개선에 사용할 수 있습니다.",
-    captions: "자막",
     you: "나",
     micBlocked: "Wink에서 마이크가 꺼져 있습니다.",
     micMissing: "마이크를 찾을 수 없습니다. 마이크를 연결하거나 채팅으로 입력하세요.",
