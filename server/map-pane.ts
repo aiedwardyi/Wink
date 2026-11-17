@@ -1,10 +1,11 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
 import { latestMapFile, mapFileDiff, mapFiles, mapFork, mapGit, mapHead, mapRepoFiles, mapTrunkFork, mapWalkFiles } from "./map-git.ts";
 import type { Store } from "./store.ts";
+import { DATA_DIR } from "./config.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { parsePaneNote } from "../shared/pane-note.ts";
 import { z } from "zod";
@@ -45,6 +46,8 @@ export interface MapPaneDeps {
   reason?(botId: string, pane: MapPaneRecord, editedAt: number): string | undefined;
   subscribe(botId: string, listener: () => void, disconnected?: () => void): () => void;
   gh?: MapGh;
+  /** Where the last Git rows per checkout are kept across restarts. */
+  flows?: string;
 }
 
 // The bot's own row lasts while a file it wrote is still unshipped there: uncommitted, unpushed or on an unmerged branch.
@@ -60,7 +63,7 @@ export function createMapPane(deps: MapPaneDeps) {
   // The workers each bot's Map last saw, so a reopen paints before git has read them again.
   const known = new Map<string, Map<string, WatchedPane>>();
   const lists = new Map<string, string[]>();
-  const flows = createMapFlow(deps.gh);
+  const flows = createMapFlow(deps.gh, deps.flows);
 
   function live(res: ServerResponse, botId: string) {
     const panes = new Map<string, WatchedPane>();
@@ -231,6 +234,7 @@ export function createMapPane(deps: MapPaneDeps) {
     }
     if (route === "flow") {
       if (!record?.base) return json(res, 404, { error: "No such worker" });
+      if (url.searchParams.get("cached") === "1") return json(res, 200, await flows.last(record.root, record.fork ?? record.base));
       try { return json(res, 200, await flows.flow(record.root, record.fork ?? record.base)); }
       catch { return json(res, 503, { error: "Could not read git" }); }
     }
@@ -247,6 +251,7 @@ export function createMapPane(deps: MapPaneDeps) {
 
 export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess | null) {
   return createMapPane({
+    flows: join(DATA_DIR, "map-flows.json"),
     panes: async botId => {
       const bot = store.bot(botId);
       const task = bot && store.taskByThread(bot.id, bot.threadId);
