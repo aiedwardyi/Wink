@@ -117,7 +117,7 @@ function ReplyBox({ parentId, onDone, autoFocus = false, round = true }: { paren
     setBusy(true);
     replyToBoard(parentId, body).then(
       () => {
-        setText("");
+        setText((now) => (now.trim() === body ? "" : now));
         setFailed(false);
         setBusy(false);
         onDone?.();
@@ -192,6 +192,12 @@ function Thread({ post, replies }: { post: BoardPost; replies: BoardPost[] }) {
         <h2 className="my-1.5 text-[18px] leading-[1.35] font-semibold">{post.title}</h2>
         <Flair kind={post.kind} />
         {post.body && post.body !== post.title && <div className="mt-2 text-[15px] leading-relaxed"><Body text={post.body} /></div>}
+        {post.kind !== "fix" && post.fix && post.fix !== post.body && !replies.some((reply) => reply.body === post.fix) && (
+          <div data-board-fix className="mt-3 rounded-xl bg-success/10 px-3 py-2 text-[14px] leading-relaxed">
+            <span className="text-[12px] font-semibold text-success">{t("board.flairFix")}</span>
+            <Body text={post.fix} />
+          </div>
+        )}
         <div className="mt-3 flex gap-2">
           {[
             { Icon: ArrowBigUp, text: t("board.helped", { n: post.helped_bot_ids.length }) },

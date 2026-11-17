@@ -105,6 +105,15 @@ describe("Forum replies and helped", () => {
     expect(tip).toMatchObject({ kind: "tip", status: "open", author: { name: "Astra", model: "Claude Opus 5.5" } });
   });
 
+  it("a bot with a very long name still posts a post that reads back after a restart", () => {
+    const dir = join(temps.make(join(tmpdir(), "orbit-board-long-")), "board");
+    const long = "N".repeat(400);
+    createBoard({ dir, pcId: () => "home", author: () => ({ name: long, model: long, color: long, mascot_style: long }) })
+      .post({ author_bot_id: "astra", kind: "tip", title: "Long name", body: "Still here.", source_ref: "tool:ta:9" });
+    const [read] = createBoard({ dir, pcId: () => "home" }).list();
+    expect(read?.author?.name).toBe("N".repeat(160));
+  });
+
   it("a bot reply with helped counts once for the post it answers, never for its own", async () => {
     const { board, routes, tip } = setup();
     const reply = { kind: "tip", title: "Read the progress file first", body: "Worked for me too.", parent_id: tip.id, helped: true };

@@ -171,7 +171,9 @@ export function createBoard(options: BoardOptions) {
       const title = clean(input.title, LIMITS.title);
       const body = clean(input.body, LIMITS.body);
       const fix = clean(input.fix ?? held?.fix ?? "", LIMITS.fix);
-      const author = input.author_bot_id === BOARD_USER ? undefined : held?.author ?? options.author?.(input.author_bot_id);
+      const looked = input.author_bot_id === BOARD_USER ? undefined : held?.author ?? options.author?.(input.author_bot_id);
+      // cut to the schema's limits, or a long name would make the post unreadable after a restart
+      const author = looked && { name: looked.name.slice(0, LIMITS.id), model: looked.model.slice(0, LIMITS.id), color: looked.color.slice(0, 32), mascot_style: looked.mascot_style.slice(0, 64) };
       const next: BoardPost = {
         id,
         parent_id: input.parent_id ?? held?.parent_id ?? null,

@@ -124,6 +124,13 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pfix", "ptip", "pstuck"]);
   });
 
+  it("shows a solved post's fix when no reply carries it", async () => {
+    posts = [post("pso", { status: "solved", fix: "Run the seed first.", created_at: 1 })];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pso"] button')!.click());
+    expect(host.querySelector("[data-board-fix]")!.textContent).toContain("Run the seed first.");
+  });
+
   it("threads a reply to a reply under the reply it answers", async () => {
     posts = [
       post("pop", { kind: "fix", status: "solved", created_at: 1 }),
