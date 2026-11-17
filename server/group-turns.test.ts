@@ -177,7 +177,7 @@ describe("a tapped question card in a group", () => {
     await routes.postMessage(Readable.from([JSON.stringify({ text: "Yes", cardId: card.id })]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
     expect(steer).not.toHaveBeenCalled();
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, card.id, []);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, []);
   });
 
   it("runs the asking bot under a lead rule", async () => {
@@ -214,11 +214,11 @@ describe("a typed answer to an open question in a group", () => {
       from: { botId: ray.id, name: ray.name, color: ray.color },
       card: { title: "Question", subtitle: "Which color?", options: [], askUser: true },
     });
-    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, ray.id, undefined, []);
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, ray.id, []);
   });
 
   it("keeps the room's rule when no question is open", async () => {
-    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, undefined, []);
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, []);
   });
 });
 

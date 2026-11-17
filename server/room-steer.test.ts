@@ -44,13 +44,6 @@ describe("steerRoomSend", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("marks a tapped choice steered into the asker's turn with its card", async () => {
-    const { deps, group, steer } = setup();
-    const row = await steerRoomSend(deps, group, "Sure", undefined, "send-2", "ask");
-    expect(steer).toHaveBeenCalledWith("room-t", "Sure", undefined, { fromUser: true });
-    expect(row).toMatchObject({ text: "Sure", steered: true, answersCard: "ask" });
-  });
-
   it("leaves the line to the room's next turn when it can't steer", async () => {
     for (const opts of [{ queueing: false }, { steered: false }]) {
       const { deps, group, rows } = setup(opts);

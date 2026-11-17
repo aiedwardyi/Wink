@@ -42,12 +42,6 @@ describe("withAcceptedMessages", () => {
     expect(withAcceptedMessages([settledReply], [])).toEqual([settledReply]);
   });
 
-  it("hides a tapped choice's placeholder like its line", () => {
-    const pending = withAcceptedMessages([settledReply], [{ sendId: "s1", kind: "thinking", text: "Sure", answersCard: "ask" }]);
-    expect(pending[1]).toMatchObject({ text: "Sure", placeholder: true, answersCard: "ask" });
-    expect(withAcceptedMessages([settledReply], [{ sendId: "s2", kind: "thinking", text: "hi" }])[1]?.answersCard).toBeUndefined();
-  });
-
   it("keeps the accepted time on every repaint", () => {
     const accepted = [{ sendId: "s1", kind: "sends-next" as const, text: "extra", at: 42 }];
     expect(withAcceptedMessages([settledReply], accepted).at(-1)?.at).toBe(42);

@@ -625,7 +625,7 @@ describe("steer-queue module", () => {
   it("a steering engine's drain-started turn takes the sends waiting behind its first", () => {
     const bot = fakeBot("bot-fold-steer", "thread-fold-steer", false);
     const store = fakeStore([bot]);
-    queueSteeredMessage(bot.id, bot.threadId, "Yes, build it", { answersCard: "card-1" });
+    queueSteeredMessage(bot.id, bot.threadId, "Yes, build it");
     queueSteeredMessage(bot.id, bot.threadId, "typed after the tap", { sendId: "send_typedafterthetap1" });
     queueSteeredMessage(bot.id, bot.threadId, "and one more", { sendId: "send_andonemoreline12" });
 
@@ -636,7 +636,7 @@ describe("steer-queue module", () => {
 
     expect(folds).toEqual([["typed after the tap", "and one more"]]);
     expect(store.messages).toMatchObject([
-      { text: "Yes, build it", answersCard: "card-1" },
+      { text: "Yes, build it" },
       { text: "typed after the tap", sendId: "send_typedafterthetap1", queueId: expect.any(String), steered: true },
       { text: "and one more", sendId: "send_andonemoreline12", queueId: expect.any(String), steered: true },
     ]);
