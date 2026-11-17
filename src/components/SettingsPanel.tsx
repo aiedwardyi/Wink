@@ -30,7 +30,7 @@ import { BotAvatar } from "./Avatar";
 import { BotAlarms } from "./BotAlarms";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEditButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryDoneButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
@@ -494,14 +494,14 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
     </>
   );
-  const edits = !loading && !loadFailed && !conflict ? startEdit : undefined;
+  const done = editing && !loading && !loadFailed && !conflict ? () => startEdit(false) : undefined;
 
   return (
     <div ref={card} className="mm-wrap relative flex flex-col gap-3">
       {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={loading} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={edits && <MemoryEditButton editing={editing} onEdit={edits} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={loading} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={done && <MemoryDoneButton onDone={done} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -512,7 +512,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} save={inFold ? status : undefined} open={expanded} editing={editing} onEdit={inFold ? edits : undefined} onToggle={() => openFile(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={loading} save={inFold ? status : undefined} open={expanded} onDone={inFold ? done : undefined} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={inFold}>
           <div className="px-4 pb-4 pt-3">
