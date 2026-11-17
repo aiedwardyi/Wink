@@ -53,10 +53,11 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
   };
   const events = {
     ready: ({ id, pid }) => handles.get(id)?.started(pid),
-    exit: ({ id, exitCode, error }) => handles.get(id)?.ended(exitCode, error),
+    // An end that reaches an attach before its reply was sent before the host took it; the host tells it again after the ring.
+    exit: ({ id, exitCode, error }) => { if (!handles.get(id)?.replaying) handles.get(id)?.ended(exitCode, error); },
     gone({ id }) {
       const handle = handles.get(id);
-      if (!handle && !orphans.delete(id)) return;
+      if (handle?.replaying || (!handle && !orphans.delete(id))) return;
       handles.delete(id);
       handle?.gone();
       void peer.request("forget", [{ id }]).catch(() => {});
@@ -160,6 +161,7 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
         if (seq >= last) caughtUp();
       },
       replayed,
+      get replaying() { return replaying; },
       // The reply names the last output the pane had made; the replay is over once that has been handed on.
       replays(seq) {
         last = seq;
