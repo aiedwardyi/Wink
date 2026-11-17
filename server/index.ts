@@ -372,7 +372,7 @@ import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } fr
 import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
-import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
+import { effectiveModelDial } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
 import { TeamReports } from "./team-reports.ts";
@@ -610,7 +610,6 @@ const phoneVisits = new PhoneVisits(DATA_DIR);
 // Absent unless phoneRelay.base is configured and enabled; it starts only
 // once handleRequest exists, so early static serving is never reachable.
 let relayPresenceHost: string | null = null;
-let relayModelDial = false;
 const phoneAccess: PhoneAccess = new PhoneAccess({
   dataDir: DATA_DIR,
   env: process.env,
@@ -628,11 +627,6 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
   room: handleRoomDoor,
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
-    const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
-    if (dial !== relayModelDial) {
-      relayModelDial = dial;
-      broadcast({ kind: "config", ...configStatus() });
-    }
     const host = phoneAccess.presenceHost();
     void teamSnags?.sync();
     if (host === relayPresenceHost) return;
@@ -7784,7 +7778,7 @@ function configStatus() {
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
       terminalLive: true,
-      modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
+      modelDial: effectiveModelDial(cfg),
     },
   };
 }
