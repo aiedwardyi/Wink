@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Download, ExternalLink, FileText, Folder, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
@@ -93,8 +93,14 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
       {tab === "map" && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
     </aside>
   );
-  // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons.
-  return phone ? createPortal(pane, document.body) : pane;
+  // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons. One portal box moves between the dock and the body, so crossing the phone width keeps the pane mounted.
+  const [box] = useState(() => Object.assign(document.createElement("div"), { style: "display: contents" }));
+  const place = useCallback((slot: HTMLDivElement | null) => {
+    if (!slot) return;
+    (phone ? document.body : slot).append(box);
+    return () => box.remove();
+  }, [phone, box]);
+  return <><div ref={place} className="contents" />{createPortal(pane, box)}</>;
 }
 
 function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) {

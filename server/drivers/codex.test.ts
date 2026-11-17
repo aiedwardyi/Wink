@@ -541,6 +541,22 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(await sandboxOf("thread/resume", "codex-thread-9")).toBe(fresh);
   });
 
+  it.each([false, true])("runs a read-only turn in the read-only sandbox, every escalation sent to Wink (fullAuto %s)", async (fullAuto) => {
+    await create({ mode: "resume", fullAuto });
+    const policyOf = async (method: string, resumeCursor?: string) => {
+      const dump = join(scratch, `read-only-${method.replace("/", "-")}-${fullAuto}.json`);
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId: `t-read-only-${method}`, text: "write it", resumeCursor, approval: "auto", readOnly: true });
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === `t-read-only-${method}`);
+      const { sandbox, approvalPolicy, approvalsReviewer } = JSON.parse(readFileSync(dump, "utf8")).calls.find((c: { method: string }) => c.method === method).params;
+      return { sandbox, approvalPolicy, approvalsReviewer };
+    };
+    const locked = { sandbox: "read-only", approvalPolicy: "untrusted", approvalsReviewer: "user" };
+    expect(await policyOf("thread/start")).toEqual(locked);
+    expect(await policyOf("thread/resume", "codex-thread-9")).toEqual(locked);
+    expect(instance.adapter.access!({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
+  });
+
   it("offers the approval chip unless fullAuto means nothing ever asks", async () => {
     await create();
     expect(instance.adapter.capabilities.askApproval).toBe(true);
@@ -1201,6 +1217,19 @@ describe("CodexDriver turns (fake app-server)", () => {
 
     expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
     expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ decision: "approved" });
+  });
+
+  it("sends a read-only turn's escalation to Wink instead of auto-approving it on a full-auto instance", async () => {
+    await create({ mode: "approval", fullAuto: true });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-read-only-escalate", text: "clean up", approval: "auto", readOnly: true });
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    await instance.adapter.respondToRequest("t-read-only-escalate", opened.requestId!, { behavior: "deny" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ decision: "denied" });
   });
 
   it("rejects a second turn while one is in flight", async () => {

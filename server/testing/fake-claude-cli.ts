@@ -92,6 +92,10 @@
 //                      answers only once <dir>/<name> exists
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
+//   FAKE_CLAUDE_HOOKS  1: run SessionStart (once per process) and UserPromptSubmit
+//                      command hooks loaded the way 2.1.326 loads them: each
+//                      --setting-sources file (the last flag wins; user,project,local
+//                      when none), enabled installed plugins, --plugin-dir and --settings
 //   FAKE_CLAUDE_FORK_MODE / FAKE_CLAUDE_FORK_FIXTURE  what a --fork-session
 //                      process plays in place of FAKE_CLAUDE_MODE (default
 //                      happy) / FAKE_CLAUDE_REPLY_FIXTURE
@@ -101,7 +105,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { execSync, spawn } from "node:child_process";
 import { connect, createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const forked = process.argv.includes("--fork-session");
@@ -433,6 +437,36 @@ const askBroker = (socketPath: string, tool: string, input: { [key: string]: Jso
     conn.write(JSON.stringify({ t: "ask", id: randomUUID(), tool, input }) + "\n");
   });
 
+type HookLayer = { hooks?: { [event: string]: Array<{ hooks?: Array<{ type?: string; command?: string }> }> }; enabledPlugins?: { [id: string]: boolean } };
+const readLayer = (path: string): HookLayer | null => {
+  try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; }
+};
+let sessionHooksRan = false;
+const runSettingHooks = () => {
+  if (process.env.FAKE_CLAUDE_HOOKS !== "1") return;
+  const at = argv.lastIndexOf("--setting-sources");
+  const sources = (at === -1 ? "user,project,local" : argv[at + 1] ?? "").split(",").filter(Boolean);
+  const userDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+  const files: { [source: string]: string } = { user: join(userDir, "settings.json"), project: join(process.cwd(), ".claude", "settings.json"), local: join(process.cwd(), ".claude", "settings.local.json") };
+  const layers = sources.flatMap((source) => readLayer(files[source] ?? "") ?? []);
+  const inline = argAfter("--settings");
+  if (inline) layers.push(JSON.parse(inline));
+  const enabled: { [id: string]: boolean } = Object.assign({}, ...layers.map((layer) => layer.enabledPlugins ?? {}));
+  const installed = (readLayer(join(userDir, "plugins", "installed_plugins.json")) as { plugins?: { [id: string]: Array<{ installPath: string }> } } | null)?.plugins ?? {};
+  const pluginDirs = [
+    ...Object.keys(enabled).filter((id) => enabled[id]).flatMap((id) => (installed[id] ?? []).map((entry) => entry.installPath)),
+    ...argv.flatMap((arg, i) => (arg === "--plugin-dir" ? [argv[i + 1] ?? ""] : [])),
+  ];
+  const all = [...layers, ...pluginDirs.flatMap((dir) => readLayer(join(dir, "hooks", "hooks.json")) ?? [])];
+  const events = sessionHooksRan ? ["UserPromptSubmit"] : ["SessionStart", "UserPromptSubmit"];
+  sessionHooksRan = true;
+  for (const event of events) {
+    for (const hook of all.flatMap((layer) => layer.hooks?.[event] ?? []).flatMap((entry) => entry.hooks ?? [])) {
+      if (hook.type === "command" && hook.command) execSync(hook.command, { input: JSON.stringify({ session_id: sessionId, hook_event_name: event, cwd: process.cwd() }), windowsHide: true });
+    }
+  }
+};
+
 // --settings PreToolUse hooks run before the permission check; a deny wins.
 const hookDecision = (tool: string, input: { [key: string]: JsonValue }): string | null => {
   const settings = argAfter("--settings");
@@ -674,6 +708,7 @@ const playTurn = (prompt: JsonValue, held = false) => {
     finishIfDone();
     return;
   }
+  runSettingHooks();
   if (!dumped && process.env.FAKE_CLAUDE_DUMP) {
     dumped = true;
     const configPath = argAfter("--mcp-config");

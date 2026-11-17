@@ -45,6 +45,7 @@ export const CALL_ID = /^c-[0-9a-f]{12}$/;
 
 /** `voice` marks the voice's speech, `notice` the app's own line in the voice's place (never sent to the bot), `order` a confirmed work order, `ask` a quick ask. A call's first row gets `ms` on hang-up, and `summary` when one came back. */
 export type CallTag = { id: string; voice?: true; notice?: true; order?: true; ask?: true; ms?: number; summary?: string };
+export type CallRoom = { id: string; kind: "host" | "joined" };
 export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number };
 
 // Korean trails off mid-thought (음, 그러니까...), so both ends are LOW and the pause is long.
