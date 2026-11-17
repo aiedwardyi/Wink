@@ -11,8 +11,9 @@
 // backstop for the obvious catastrophes. Real containment is the
 // sandbox and the bot's own computer, not a regex.
 
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const DESTRUCTIVE = [
   /\brm\s+(-[a-z]*\s+)*-[a-z]*[rf]/i, // rm -rf, rm -fr, rm -r -f
@@ -163,36 +164,107 @@ const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "set-location", "sl"]);
 const expandHome = (path: string) => path.replace(/^~(?=[\\/]|$)/, homedir());
 const isRooted = (path: string) => isAbsolute(path) || /^~(?:[\\/]|$)/.test(path);
 
-/** The first path a delete removes outside `workspace`, following cd across the command. */
-function pathOutside(tool: string, summary: string, workspace: string): string | null {
-  const root = resolve(workspace);
-  const outside = (path: string, dir: string | null) => {
-    // a relative path under a folder we lost track of could be anywhere
-    if (dir === null && !isRooted(path)) return true;
-    const rel = relative(root, resolve(dir ?? root, expandHome(path)));
-    return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
-  };
-  const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
-  // an ACP title, not a command line; only a word that is plainly a path counts
-  if (DELETE_TOOLS.has(bare)) return argWords(summary).filter(looksLikePath).find((path) => outside(path, root)) ?? null;
-  if (!COMMAND_TOOLS.has(bare)) return null;
-  let dir: string | null = root;
-  for (const segment of summary.split(/[;&|\n\r]+/)) {
-    const words = argWords(segment);
-    let i = 0;
-    while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
-    const program = programName(words[i] ?? "");
-    const args = words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word));
-    if (CD_PROGRAMS.has(program)) {
-      const target = args[0];
-      dir = target === undefined ? homedir() : /[$%]/.test(target) || words[i + 1] === "-" ? null : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
-      continue;
-    }
-    if (!DELETE_PROGRAMS.has(program)) continue;
-    const hit = args.find((path) => outside(path, dir));
-    if (hit) return hit;
+/** Where worker panes keep their worktrees. */
+export const worktreeRoot = () => process.env.ORBIT_WORKTREE_ROOT || join(homedir(), "orbit-wt");
+
+const within = (root: string, path: string) => {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+
+/** The real path, through links, of a path that may not exist yet. */
+function realPath(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    const parent = dirname(path);
+    if (parent === path) return null;
+    const real = realPath(parent);
+    return real && join(real, basename(path));
   }
-  return null;
+}
+
+function holdsLink(dir: string): boolean {
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || (entry.isDirectory() && holdsLink(join(dir, entry.name)))) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** True when `path` sits in a linked worktree registered to a repo inside `workspace`. */
+function inOwnedWorktree(path: string, workspace: string): boolean {
+  for (let dir = path; ; dir = dirname(dir)) {
+    const dotGit = lstatSync(join(dir, ".git"), { throwIfNoEntry: false });
+    if (dotGit?.isDirectory()) return false;
+    if (dotGit?.isFile()) {
+      try {
+        const gitdir = resolve(dir, readFileSync(join(dir, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim());
+        const back = realPath(resolve(gitdir, readFileSync(join(gitdir, "gitdir"), "utf8").trim()));
+        const repo = realPath(dirname(dirname(dirname(gitdir))));
+        return basename(dirname(gitdir)) === "worktrees" && back === join(dir, ".git") && !!repo && within(workspace, repo);
+      } catch {
+        return false;
+      }
+    }
+    if (dirname(dir) === dir) return false;
+  }
+}
+
+/** A stale worktree a routine may clear: never a link, never one holding a link, never the live checkout. */
+function cleanable(path: string, workspace: string): boolean {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat?.isSymbolicLink() || (stat?.isDirectory() && holdsLink(path))) return false;
+  const real = realPath(path);
+  const live = realPath(workspace);
+  if (!real || !live || within(real, live)) return false;
+  const root = realPath(worktreeRoot());
+  return (!!root && real !== root && within(root, real)) || inOwnedWorktree(real, live);
+}
+
+/**
+ * Checks an unattended request's deletes against `workspace`, following cd
+ * across the command. `outside` is the first path removed outside it that
+ * is not a cleanable worktree; `rest` is the request without the deletes
+ * that only clear worktrees, for the destructive rule.
+ */
+function checkDeletes(tool: string, summary: string, workspace: string): { outside: string | null; rest: string } {
+  const root = resolve(workspace);
+  // a relative path under a folder we lost track of could be anywhere
+  const place = (path: string, dir: string | null) => (dir === null && !isRooted(path) ? null : resolve(dir ?? root, expandHome(path)));
+  const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
+  const segments: { text: string; paths: { word: string; at: string | null }[] }[] = [];
+  if (DELETE_TOOLS.has(bare)) {
+    // an ACP title, not a command line; only a word that is plainly a path counts
+    segments.push({ text: summary, paths: argWords(summary).filter(looksLikePath).map((word) => ({ word, at: place(word, root) })) });
+  } else if (COMMAND_TOOLS.has(bare)) {
+    let dir: string | null = root;
+    for (const text of summary.split(/[;&|\n\r]+/)) {
+      const words = argWords(text);
+      let i = 0;
+      while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
+      const program = programName(words[i] ?? "");
+      const args = words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word));
+      if (CD_PROGRAMS.has(program)) {
+        const target = args[0];
+        dir = target === undefined ? homedir() : /[$%]/.test(target) || words[i + 1] === "-" ? null : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+      }
+      segments.push({ text, paths: DELETE_PROGRAMS.has(program) ? args.map((word) => ({ word, at: place(word, dir) })) : [] });
+    }
+  } else {
+    return { outside: null, rest: summary };
+  }
+  let outside: string | null = null;
+  const rest: string[] = [];
+  for (const { text, paths } of segments) {
+    const clears = paths.length > 0 && paths.every(({ at }) => at !== null && cleanable(at, root));
+    if (!clears) rest.push(text);
+    outside ??= clears ? null : (paths.find(({ at }) => at === null || !within(root, at))?.word ?? null);
+  }
+  return { outside, rest: rest.length === segments.length ? summary : rest.join(" ; ") };
 }
 
 export function approvalKey(tool: string, summary: string, scope?: "local-computer"): string | null {
@@ -296,7 +368,8 @@ export function autoVerdict(
     // a file tool's summary carries the file's text, which runs nothing
     const runs = !FILE_TOOLS.has(tool.replace(/^mcp__[^_]+__/, "").toLowerCase());
     // no folder (an API engine, a cloud run): only the destructive rule applies
-    const rule = (runs ? destructive : null) ?? (context.workspace ? pathOutside(tool, summary, context.workspace) : null);
+    const { outside, rest } = context.workspace ? checkDeletes(tool, summary, context.workspace) : { outside: null, rest: summary };
+    const rule = (runs ? (rest === summary ? destructive : (matchDestructive(rest) ?? matchDestructive(tool))) : null) ?? outside;
     if (rule) return { approve: null, source: "unattended-deny", rule };
   }
   if (context?.unattended && !bot.autoApprove) {

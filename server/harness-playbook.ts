@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
 
+import { worktreeRoot as defaultWorktreeRoot } from "./auto-approve.ts";
 import { PACKAGED_FILES } from "./proxy-paths.ts";
 
 // orbit-msg is installed on Windows only (electron/terminal-mailbox.mjs).
@@ -20,7 +20,7 @@ asked for.`;
 
 export function loadHarnessPlaybook(
   file: string = PACKAGED_FILES.harnessPlaybook,
-  worktreeRoot = process.env.ORBIT_WORKTREE_ROOT || join(homedir(), "orbit-wt"),
+  worktreeRoot = defaultWorktreeRoot(),
   platform: NodeJS.Platform = process.platform,
 ): string {
   let text: string;
