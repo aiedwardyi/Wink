@@ -8085,7 +8085,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/") && !(method === "GET" && path === "/api/health") && !credentials.phoneSession &&
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)) {
-      return remoteCookieAuthorized(req.headers.cookie, credentials.remoteKey) ? json(res, 403, { error: "forbidden" }) : json(res, 401, { error: "unauthorized" });
+      if (remoteCookieAuthorized(req.headers.cookie, credentials.remoteKey)) return json(res, 403, { error: "forbidden" });
+      return json(res, 401, { error: "unauthorized" });
     }
     const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
     if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
