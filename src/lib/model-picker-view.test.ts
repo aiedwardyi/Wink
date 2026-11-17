@@ -5,7 +5,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("model picker view", () => {
   it("defaults to the dial for missing and invalid preferences", () => {
-    for (const value of [null, "unknown", "dial"]) {
+    for (const value of [null, "unknown", "dial", "machine"]) {
       vi.stubGlobal("localStorage", { getItem: () => value });
       expect(loadModelPickerView()).toBe("dial");
     }
@@ -36,21 +36,11 @@ describe("model picker view", () => {
 
 describe("model picker style rotation", () => {
   it("steps to the next style and wraps", () => {
-    const styles = ["dial", "list", "chart", "machine"] as const;
-    expect(styles.map((style) => nextPickerStyle(styles, style))).toEqual(["list", "chart", "machine", "dial"]);
+    const styles = ["dial", "list", "chart"] as const;
+    expect(styles.map((style) => nextPickerStyle(styles, style))).toEqual(["list", "chart", "dial"]);
   });
 
   it("starts from the first style when the shown one is not offered", () => {
-    expect(nextPickerStyle(["list", "machine"], "dial")).toBe("list");
-  });
-
-  it("remembers the Machine as a style", () => {
-    const values = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => values.set(key, value),
-    });
-    saveModelPickerView("machine");
-    expect(loadModelPickerView()).toBe("machine");
+    expect(nextPickerStyle(["list"], "dial")).toBe("list");
   });
 });

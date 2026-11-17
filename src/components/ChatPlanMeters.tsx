@@ -10,7 +10,7 @@ import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore, type InstanceInfo } from "@/state/store";
 import { engineName, windowFacts } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
-import { barSlots, LOW_USED, WindowBar } from "./UsageBars";
+import { barSlots, WindowBar } from "./UsageBars";
 import "./UsageDesk.css";
 import { trackScreen } from "@/lib/usage-stats";
 
@@ -116,12 +116,9 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
   const button = useRef<HTMLButtonElement>(null);
   const signedOut = target?.account.signIn === "signed-out";
   const shown = meterWindows(target ?? null, windows, clock);
-  const slots = barSlots(target?.engine.engine ?? "", { windows: shown }, t);
-  // Plenty left is noise over the message box; the line, and Alt+U's quick view on it, come back once a window runs low.
-  const low = slots.some((slot) => slot.window.usedPercent >= LOW_USED);
-  const quick = Boolean(!hidden && target && board?.board && (low || signedOut));
+  const quick = Boolean(!hidden && target && board?.board && (shown.length > 0 || signedOut));
   const [open, setOpen] = useQuickToggle(quick, identity);
-  if (!signedOut && !low) return null;
+  if (shown.length === 0 && !signedOut) return null;
   return (
     <div className="px-5 pb-1">
       <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => { if (!open) trackScreen("usage-quick"); setOpen(!open); } : onOpen}
@@ -133,7 +130,7 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
             <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{t("usage.chat.signedOut")}
           </span>
         </span> : <span className="usage-chat-windows" data-windows={shown.length}>
-          {slots.map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
+          {barSlots(target?.engine.engine ?? "", { windows: shown }, t).map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
         </span>}
       </button>
       <Presence open={Boolean(open && target && board?.board)}>

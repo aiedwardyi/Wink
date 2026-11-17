@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,8 @@ import {
   parseSyncOperationText,
   readSyncAvatarAsset,
   readSyncOperations,
+  readSyncOperationsAsync,
+  readSyncOperationsFor,
   resolveSyncAvatarPath,
   saveProfileSyncSettings,
   serializeSyncOperation,
@@ -42,6 +45,7 @@ import {
 } from "./profile-sync.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
+vi.mock("node:fs/promises", async (original) => ({ ...await original<typeof import("node:fs/promises")>() }));
 
 const roots: string[] = [];
 
@@ -278,6 +282,42 @@ describe("profile sync operations", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("reads a long change log off the event loop with a bounded number of files open", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-bounded-"));
+    roots.push(root);
+    for (let index = 0; index < 200; index++) writeSyncOperation(root, operation({ operationId: `op-${index}`, sequence: index + 1 }));
+    const readFile = fsp.readFile;
+    let open = 0;
+    let most = 0;
+    vi.spyOn(fsp, "readFile").mockImplementation(async (...args: Parameters<typeof readFile>) => {
+      most = Math.max(most, ++open);
+      try {
+        return await readFile(...args);
+      } finally {
+        open--;
+      }
+    });
+    try {
+      const read = await readSyncOperationsAsync(root);
+      expect(read).toEqual(readSyncOperations(root));
+      expect(read.operations).toHaveLength(200);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(most).toBeLessThanOrEqual(32);
+  });
+
+  it("drops a change log read when the sync target moves during it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-moved-"));
+    roots.push(root);
+    writeSyncOperation(root, operation());
+    let target = "folder-a\nworkspace-a";
+    expect(await readSyncOperationsFor(root, () => target)).toEqual(readSyncOperations(root));
+    const moved = readSyncOperationsFor(root, () => target);
+    target = "folder-b\nworkspace-b";
+    expect(await moved).toBeNull();
+  });
+
   it("detects an arriving auto notes record without another bot edit", () => {
     const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-notes-arrival-"));
     roots.push(root);
@@ -295,35 +335,52 @@ describe("profile sync operations", () => {
     expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots["bot-1"]?.memoryNotes).toBe(false);
   });
 
-  it("answers status like a full read and rereads only when the change folder moves", () => {
+  it("answers status like a full read and rereads only when the change folder moves", async () => {
     const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
     roots.push(root);
     const full = () => {
       const read = readSyncOperations(root);
       return { operations: read.operations.length, invalidFiles: read.invalidFiles };
     };
-    const reads = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fsp, "readFile");
     try {
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       const first = writeSyncOperation(root, operation());
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       reads.mockClear();
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
       expect(reads).not.toHaveBeenCalled();
       const second = operation({ operationId: "op-2", sequence: 2 });
       const arrived = join(root, "changes", syncOperationFileName(second));
       writeFileSync(arrived, "{");
-      expect(syncOperationsStatus(root)).toEqual(full());
-      expect(syncOperationsStatus(root).invalidFiles).toEqual([syncOperationFileName(second)]);
+      expect(await syncOperationsStatus(root)).toEqual(full());
+      expect(reads).toHaveBeenCalled();
+      expect((await syncOperationsStatus(root)).invalidFiles).toEqual([syncOperationFileName(second)]);
       writeFileSync(arrived, serializeSyncOperation(second));
-      expect(syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
       writeSyncOperation(root, { ...operation(), changes: { name: "Renamed" } });
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       unlinkSync(first);
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
     } finally {
       reads.mockRestore();
+    }
+  });
+
+  it("reads the change log once for status asks that arrive together", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
+    roots.push(root);
+    writeSyncOperation(root, operation());
+    const syncReads = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fsp, "readFile");
+    try {
+      expect(await Promise.all([syncOperationsStatus(root), syncOperationsStatus(root), syncOperationsStatus(root)])).toEqual(Array(3).fill({ operations: 1, invalidFiles: [] }));
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(syncReads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      syncReads.mockRestore();
     }
   });
 

@@ -183,6 +183,19 @@ describe("worker chip liveness", () => {
       }
     });
 
+    it("keeps every open pane in the badge, past sixteen, so the sidebar matches the chip", async () => {
+      const many = Array.from({ length: 24 }, (_, index) => `m${String(index).padStart(2, "0")}mmmmm-${index}`);
+      const wide = bot("chip-wide", "Wide", []);
+      const { host, unmount } = await mountChat(wide, remoteTerminal("chip-wide", { ids: many }));
+      try {
+        await act(async () => seedBadge({ "chip-wide": many.map((id) => `L-${id}`) }));
+        await vi.waitFor(() => expect(chipLabel(host)).toBe("24 working, 0 waiting, 0 failed, 0 done. Show workers"));
+        expect(badgeOf("chip-wide")).toHaveLength(24);
+      } finally {
+        await unmount();
+      }
+    });
+
     it("lists the badge's panes when the loaded page has no runs", async () => {
       const bare = bot("chip-bare", "Bare", []);
       const { host, unmount } = await mountChat(bare, remoteTerminal("chip-bare", { ids }));

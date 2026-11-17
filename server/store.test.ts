@@ -15,7 +15,7 @@ import { peerAllowKey } from "./peer-approval-key.ts";
 import { applyResolvedProjectFolder } from "./project-folder.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
-import { agentRoster, Store, titleFromMessage, type BotRecord } from "./store.ts";
+import { agentRoster, Store, titleFromMessage, type BotRecord, type StoreChange } from "./store.ts";
 import { nextWinkAvatar } from "../shared/bot-avatar.ts";
 import * as taskState from "./task-state.ts";
 import { readTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
@@ -2315,5 +2315,25 @@ describe("agentRoster", () => {
       { id: "peer", section: "Orbit" },
     ];
     expect(agentRoster(bots, self).map((bot) => bot.id)).toEqual(["home", "peer", "work", "loose"]);
+  });
+});
+
+
+describe("removeSyncNotices", () => {
+  it("tells clients the new parents and leaf of a chat they already painted", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const base = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "base" });
+    const notice = store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "error: notice", ok: false } });
+    const child = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "after" });
+    const tip = store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "error: notice", ok: false } });
+    store.flushSaves();
+    const changes: StoreChange[] = [];
+    store.onChange((change) => { changes.push(change); });
+    store.removeSyncNotices(bot.threadId, [notice.id, tip.id]);
+    expect(changes).toEqual([
+      { type: "message.patch", threadId: bot.threadId, message: expect.objectContaining({ id: child.id, parentId: base.id }) },
+      { type: "thread", threadId: bot.threadId, activeLeafId: child.id },
+    ]);
   });
 });
