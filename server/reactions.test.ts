@@ -306,7 +306,7 @@ describe("bot self-reactions", () => {
     let toggled = false;
     let reacted = "";
     const deps = {
-      deps: { answeredLine: () => room?.answered },
+      deps: { answeredLine: () => room?.answered }, // becomes the `deps` param of the eval'd route function
       readBody: async () => ({ fromBotId: "bot-1", fromThreadId: "thread-1", emoji }),
       req: {}, res: {}, EXTENDED_REACTIONS,
       json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
