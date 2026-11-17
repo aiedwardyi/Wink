@@ -30,6 +30,16 @@ describe("applyPicks", () => {
     expect(currentPicks(merged).find(({ key }) => key === "palette")?.picked).toBe("Amber");
     expect(mergeTimelines(merged, text)).toBe(merged);
   });
+  it("never lets a card tap from another PC replace a typed pick", () => {
+    const typed = applyPicks("", [pick("theme", "Dark", "dark", at(17, 10))])!.text;
+    const tapped = applyPicks("", [pick("theme", "Light", "light", at(17, 10) + 5_000, { tapped: true })])!.text;
+    const merged = mergeTimelines(typed, tapped)!;
+    expect(currentPicks(merged).map(({ picked }) => picked)).toEqual(["Dark"]);
+    expect(parseTimeline(merged).entries).toHaveLength(2);
+    expect(mergeTimelines(tapped, typed)).toBe(merged);
+    expect(mergeTimelines(merged, typed)).toBe(merged);
+    expect(mergeTimelines(merged, merged)).toBe(merged);
+  });
   it("keeps the later choice when two PCs pick within the same minute", () => {
     const early = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10) + 5_000)])!.text;
     const late = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10) + 10_000)])!.text;
