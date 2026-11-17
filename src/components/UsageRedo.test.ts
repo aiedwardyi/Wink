@@ -53,9 +53,6 @@ beforeEach(() => {
   persistPreference("en");
   vi.useFakeTimers({ now: usageBoardNow, toFake: ["Date", "setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"] });
   h.board = structuredClone(usageBoardFixture);
-  // The chat line shows only once a window runs low.
-  h.board.engines[0]!.accounts[0]!.windows[0]!.usedPercent = 80;
-  h.board.engines[1]!.accounts[0]!.windows[0]!.usedPercent = 80;
   h.instances = h.board.engines.flatMap((engine) => engine.accounts.map((account) => ({
     instanceId: account.id, accountOf: engine.base, driverKind: engine.engine === "codex" ? "codex" : `${engine.engine}Agent`,
     snapshot: { authenticated: true, state: "available", account: `account-${account.number}@example.com` },
@@ -78,7 +75,7 @@ it("folds to Main's bars and reset, without another account's windows", async ()
   await click('[data-usage-engine="claude"] [data-engine-fold]');
   const summary = q('[data-usage-engine="claude"] [data-engine-summary]')!;
   expect(summary.querySelectorAll("[data-cells]")).toHaveLength(2);
-  expect(summary.textContent).toContain("20%");
+  expect(summary.textContent).toContain("34%");
   expect(summary.textContent).toContain("40m");
   expect(summary.textContent).not.toContain("Limit reached");
 });
@@ -107,19 +104,19 @@ it("persists the count choice and animates numbers with their cells", async () =
   await mount();
   await click('[data-count-mode="used"]');
   await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-  expect(q('[data-account-row="claude"] [data-left]')!.textContent).toContain("80%");
-  expect(q('[data-account-row="claude"] [data-cells]')!.getAttribute("data-cells")).toBe("8");
+  expect(q('[data-account-row="claude"] [data-left]')!.textContent).toContain("66%");
+  expect(q('[data-account-row="claude"] [data-cells]')!.getAttribute("data-cells")).toBe("7");
   await remount();
   expect(q('[data-count-mode="used"]')!.getAttribute("aria-pressed")).toBe("true");
   await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
   await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
   const quick = document.querySelector('[data-usage-quick] [data-account-row="claude"]');
-  expect(quick?.querySelector("[data-left]")?.textContent).toContain("80%");
-  expect(quick?.querySelector("[data-cells]")?.getAttribute("data-cells")).toBe("8");
+  expect(quick?.querySelector("[data-left]")?.textContent).toContain("66%");
+  expect(quick?.querySelector("[data-cells]")?.getAttribute("data-cells")).toBe("7");
   await mount();
   await click('[data-count-mode="remaining"]');
   await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-  expect(q('[data-account-row="claude"] [data-left]')!.textContent).toContain("20%");
+  expect(q('[data-account-row="claude"] [data-left]')!.textContent).toContain("34%");
 });
 
 it("keeps one red cell for one percent and says Limit reached at zero", async () => {
@@ -429,7 +426,7 @@ it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a sig
 });
 
 it("draws chat bars as shared shapes without the desktop hover row or mini phone cells", async () => {
-  await mount(createElement(ChatPlanMeters, { windows: [{ id: "five_hour", usedPercent: 80, resetsAt: usageBoardNow + 60_000 }], now: usageBoardNow, onOpenUsage: () => {} }));
+  await mount(createElement(ChatPlanMeters, { windows: [{ id: "five_hour", usedPercent: 20, resetsAt: usageBoardNow + 60_000 }], now: usageBoardNow, onOpenUsage: () => {} }));
   expect(q("[data-usage-meter]")!.className).not.toContain("hover:bg");
   expect(q("[data-cells]")!.tagName.toLowerCase()).toBe("svg");
   expect(q("[data-cells]")!.classList).not.toContain("usage-cells-mini");
