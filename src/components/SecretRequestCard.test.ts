@@ -44,6 +44,21 @@ describe("SecretRequestCard", () => {
     expect(html).not.toContain("Get API key");
   });
 
+  it("shows the call key card's title and steps in the app language", () => {
+    const card = { target: "geminiApiKey" as const, label: "Gemini API Key", description: "Open Get API key, sign in, click Create API key (top right), paste it here.", requestKey: "call-0011223344556677" };
+    expect(render(card)).toContain("Open Get API key, sign in");
+    // no provider: the card reads the applied locale
+    applyLocale("ko");
+    const html = renderToStaticMarkup(createElement(SecretRequestCard, {
+      botId: "bot", threadId: "thread", message: { id: "m1", kind: "secret", secret: { placeholder: "", helpUrl: "", ...card } } as Message,
+    }));
+    applyLocale("en");
+    expect(html).not.toContain("Gemini API Key");
+    expect(html).not.toContain("Open Get API key");
+    expect(html).toContain("Gemini API 키");
+    expect(html).toMatch(/Create API key|API 키 만들기/);
+  });
+
   it("keeps built-in cards unchanged", () => {
     const html = render({});
     expect(html).not.toContain("will only be sent to");

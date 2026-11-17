@@ -8,9 +8,11 @@ import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, repairModelContext, repairTarget } from "./context-compaction.ts";
 import { _resetPending, discardDelegations, discardOrphanedDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt, updateReceipt } from "./delegations.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { recoverHandedMail } from "./mail-index.ts";
 import { mailForTurn, markMailRead, markPaneMailRead, settleMail, toolMailResult, unreadMail } from "./mail.ts";
 import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
 import { Store, type BotRecord, type Message } from "./store.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
 
 let store: Store;
@@ -124,6 +126,7 @@ it("repairs handovers without loading transcripts that have no handed mail", () 
   store.createGroup("Room", [from.id, target.id]);
   const messagesFor = vi.spyOn(store, "messagesFor");
   discardOrphanedDelegations(bus());
+  recoverHandedMail(store, bootRowsNow().handed);
   expect(messagesFor).not.toHaveBeenCalled();
 });
 
@@ -169,6 +172,7 @@ function response() {
 function routes(askBotAndWait = vi.fn(), resolveCommsCaller?: Parameters<typeof createInternalRoutes>[0]["resolveCommsCaller"]) {
   return createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
+    checkedGroupResponder: () => ({ kind: "everyone" }),
     createdBotSelection: (chief: BotRecord["modelSelection"]) => ({ ok: true, selection: { ...chief } }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     delegationWatch: new Map(), askBotAndWait, resolveCommsCaller,

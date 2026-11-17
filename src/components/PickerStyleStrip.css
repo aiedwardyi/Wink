@@ -1,5 +1,4 @@
-.model-cross-header .picker-style-button,
-.vm-sign .picker-style-button {
+.model-cross-header .picker-style-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -14,9 +13,6 @@
 
 .model-cross-header .picker-style-button[aria-expanded="true"] { background: #ffffff14; color: #f2f3f5; }
 @media (hover: hover) { .model-cross-header .picker-style-button:hover { color: #f2f3f5; } }
-
-.vm-sign .picker-style-button { flex: none; height: 32px; border-color: rgba(59, 36, 65, .2); background: rgba(255, 255, 255, .35); color: #6a4660; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.vm-sign .picker-style-button[aria-expanded="true"] { background: rgba(255, 255, 255, .7); color: #241a26; }
 
 .picker-style-strip {
   --pss-ground: #121318;
@@ -132,11 +128,6 @@
   .pss-tiles { gap: 6px; }
   .pss-tile { padding: 4px; gap: 4px; border-radius: 10px; }
   .pss-name { font-size: 11px; }
-}
-
-@media (max-width: 900px), (max-height: 700px) {
-  .vm-sign .picker-style-button { height: 28px; margin-left: auto; }
-  .vm-sign .picker-style-button + .vm-close { margin-left: 0; }
 }
 
 @scope (.model-cross-backdrop[data-light]) {

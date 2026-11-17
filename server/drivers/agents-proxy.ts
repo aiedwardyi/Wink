@@ -423,7 +423,7 @@ const TOOLS = [
   {
     name: "create_channel",
     description:
-      "Create a shared channel (room) with existing bots. Use this when the user asks to start a two-bot channel, a group chat, or a room. Never scan ports, environment variables, or localhost APIs — call this tool. Include the other bot(s) in member_ids; you are added automatically if omitted. After create_bot, call this so the user talks in the room rather than only in the new bot's 1:1. ask_bot remains the way to talk to a peer this turn.",
+      "Create a shared channel (room) with existing bots. Use this when the user asks to start a two-bot channel, a group chat, or a room. Never scan ports, environment variables, or localhost APIs — call this tool. Include the other bot(s) in member_ids; you are added automatically if omitted. After create_bot, call this so the user talks in the room rather than only in the new bot's 1:1. ask_bot remains the way to talk to a peer this turn. Every member answers a plain message unless you set answers.",
     inputSchema: {
       type: "object",
       properties: {
@@ -434,6 +434,10 @@ const TOOLS = [
           description: "Bot ids to include (from list_bots or create_bot). You are added automatically if omitted.",
         },
         bulletin: { type: "string", description: "Optional shared instructions for everyone in the room." },
+        answers: {
+          type: "string",
+          description: 'Who answers a message that @mentions no one: "everyone" (default), "mentions" (only who is @mentioned), or one member bot id.',
+        },
       },
       required: ["name", "member_ids"],
     },
@@ -961,6 +965,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       memberIds,
     };
     if (typeof args.bulletin === "string") body.bulletin = args.bulletin;
+    if (args.answers !== undefined) body.answers = args.answers;
     const r = await api("/api/internal/create-channel", { method: "POST", body: JSON.stringify(body) });
     const members = Array.isArray(r.memberIds) ? (r.memberIds as string[]).join(", ") : memberIds.join(", ");
     return {

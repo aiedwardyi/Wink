@@ -429,10 +429,8 @@ describe("comms e2e (fake ACP fleet)", () => {
       expect(room.memberIds).toContain(helper.id);
       // a bot may not file a room outside its own section
       expect(room.section).toBe("RoomScope");
-      // the room is usable straight away, but the bot that opened it does
-      // not make itself the one who answers in it
       expect(room.setupCompletedAt).toBeTruthy();
-      expect(room.defaultResponder).toEqual({ kind: "member", botId: helper.id });
+      expect(room.defaultResponder).toEqual({ kind: "everyone" });
     },
     45_000,
   );

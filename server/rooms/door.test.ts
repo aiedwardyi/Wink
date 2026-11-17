@@ -632,7 +632,7 @@ describe("snapshot and stream", () => {
     expect(res.body.entries[0]).toEqual({ seq: 6, id: expect.any(String), at: expect.any(Number), author: { kind: "host", id: "host", name: "Edward" }, text: "line 6" });
     expect(res.body.state).toEqual({
       version: expect.any(Number), roomName: "Team", instructions: "Be kind", host: "Edward",
-      me: { id: personId, name: "Mina" }, people: [{ id: personId, name: "Mina" }], bots: [], teamBots: [], myAsks: [],
+      me: { id: personId, name: "Mina" }, people: [{ id: personId, name: "Mina", works: false }], bots: [], teamBots: [], myAsks: [],
     });
     for (let i = 1; i < 30; i += 1) expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).status).toBe(200);
     expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).body).toEqual({ error: "rate-limited" });
@@ -1177,6 +1177,21 @@ describe("reactions", () => {
       expect(store.messagesFor(group.threadId).find((row) => row.id === message.id)?.reactions).toBeUndefined();
       store.toggleReaction(group.threadId, message.id, "❤️", "user");
       for (const stream of streams) await stream.until((frames) => marksOf(frames, entry.id)?.[0]?.by === "host");
+    } finally {
+      await Promise.all(streams.map(shut));
+    }
+  });
+
+  it("carries a bot's reaction on a teammate's line to every joined teammate as that bot", async () => {
+    const group = peopleRoom();
+    const bot = store.createBot();
+    const mina = await joined(group, "Mina Park");
+    const seoyeon = await joined(group, "이서연");
+    const { entry, message } = writeRoomEntry(store, group, { author: { kind: "person", id: mina.personId, name: "Mina Park" }, text: "배포 끝났어요" });
+    const streams = await Promise.all([openStream(group.hosted.roomId, mina.key, 0, true), openStream(group.hosted.roomId, seoyeon.key, 0, true)]);
+    try {
+      store.toggleReaction(group.threadId, message.id, "🎉", bot.id);
+      for (const stream of streams) await stream.until((frames) => marksOf(frames, entry.id)?.[0]?.by === `bot:${bot.id}`);
     } finally {
       await Promise.all(streams.map(shut));
     }

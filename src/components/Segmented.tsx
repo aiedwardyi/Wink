@@ -96,7 +96,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
           disabled={disabled?.(option.id) ?? false}
           onClick={() => onChange(option.id)}
           className={cn(
-            "relative shrink-0 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_3px))] px-2 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus disabled:opacity-40",
+            "relative shrink-0 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_3px))] px-2 py-1 text-[12.5px] font-medium focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus disabled:opacity-40",
             value === option.id ? "text-ink" : "text-ink-secondary enabled:hover:text-ink",
           )}
         >
