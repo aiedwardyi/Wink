@@ -345,7 +345,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     await act(async () => rowButton("Staging").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number) }]);
   });
 
   it("glows once when it arrives, then never again", async () => {
@@ -445,7 +445,7 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number) }]);
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
