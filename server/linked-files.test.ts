@@ -351,6 +351,35 @@ describe("linked files", () => {
     }
   });
 
+  it("in the owner's own chat opens any file the bot linked or the person attached, seeking in a clip, and a room keeps the limit", async () => {
+    const root = temp("linked-own-", process.cwd());
+    const clip = join(root, "clip.mp4");
+    const code = join(root, "main.py");
+    const unlinked = join(root, "unlinked.mp4");
+    for (const file of [clip, code, unlinked]) writeFileSync(file, "0123456789abcdef");
+    const options: ServeLinkedFileOptions = {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [
+        { id: "m1", role: "user", text: `<attached-file path="${clip}" name="clip.mp4" size="16" />` },
+        { id: "m2", role: "bot", text: `Run [main.py](<${code}>).` },
+      ],
+      writerDeviceId: () => null, rootsFor: () => [],
+    };
+    const own = await listen((req, res) => serveLinkedFile(req, res, { ...options, own: true }));
+    const room = await listen((req, res) => serveLinkedFile(req, res, options));
+    try {
+      const open = (server: { url: string }, path: string, range = "bytes=0-0") => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`, { headers: { Range: range } });
+      const seek = await open(own, clip, "bytes=2-5");
+      expect([seek.status, seek.headers.get("content-range"), await seek.text()]).toEqual([206, "bytes 2-5/16", "2345"]);
+      expect((await open(own, code)).status).toBe(206);
+      expect((await open(own, unlinked)).status).toBe(404);
+      expect(await (await open(room, code)).json()).toEqual({ error: "not found", reason: "outside" });
+      expect((await open(room, clip)).status).toBe(404);
+    } finally {
+      await Promise.all([own.close(), room.close()]);
+    }
+  });
+
   it("serves a picture the user attached by path, but not another file type or an unattached picture", async () => {
     const root = temp("linked-attached-", process.cwd());
     const picture = join(root, "image (3).png");

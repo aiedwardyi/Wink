@@ -530,7 +530,7 @@ export const Transcript = memo(function Transcript({
                         {translation && <RoomTranslationText translation={translation} markdown={false} />}
                       </div>
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={group.threadId} className={cn(attachedImages.display && "mt-2")} />}
-                      {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
+                      {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} threadId={group.threadId} className={cn(m.text && "mt-2")} />}
                       {(folded || unfolded.has(m.id)) && <FoldToggle expanded={!folded} onToggle={() => toggleFold(m.id)} />}
                     </>
                   ) : markdownText.trim() ? (

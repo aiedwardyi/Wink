@@ -5,7 +5,8 @@ import type { VerifyCardData } from "../../shared/live-verify";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { mediaFile, type MediaSource } from "@/lib/show-media";
-import { lastShown, linkedFileSrc, linkedFolder, saveFile, showCheck, showItem, showMap, showMedia, showName, takeFolder, usePanePulse, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { openOutside, saveFile } from "@/lib/open-file";
+import { lastShown, linkedFileSrc, linkedFolder, showCheck, showItem, showMap, showMedia, showName, takeFolder, usePanePulse, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
 import { MediaFiles, ShowMedia } from "./ShowMedia";
@@ -140,11 +141,7 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
     return () => { alive = false; };
   }, [item.kind, src, loads]);
 
-  const open = () => {
-    const openFile = item.src ? undefined : window.ogb?.openFile;
-    if (openFile) void openFile(item.path).catch(() => {});
-    else window.open(src, "_blank", "noopener,noreferrer");
-  };
+  const open = () => openOutside(src, item.src ? undefined : item.path);
   const reload = () => { setReady(false); setFailed(false); setPageSrc(undefined); setLoads(loads + 1); };
 
   return (

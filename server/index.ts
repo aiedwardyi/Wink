@@ -8627,6 +8627,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         threadId,
         messages,
         deviceId: profileSyncSettings.deviceId,
+        own: !group?.hosted && !joinedRoomThreads.has(threadId),
         writerDeviceId: (messageId) => threadSyncGate.enabled ? threadSyncV2?.messageWriter(threadId, messageId) ?? null : messageWriter(DATA_DIR, threadId, messageId),
         rootsFor: (message) => {
           if (bot) return botOutputRoots(bot, threadId);

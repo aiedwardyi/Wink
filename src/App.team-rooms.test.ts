@@ -536,11 +536,9 @@ describe("Team rooms for the host", () => {
     expect([...rows].map((row) => row.getAttribute("data-team-room-line"))).toEqual(["mine", "theirs"]);
     expect($('[data-team-room="host"]')!.textContent).toContain("Mina");
     expect($<HTMLImageElement>('[data-team-room-line="theirs"] img')!.getAttribute("src")).toBe(`/api/rooms/r1/files/${"P".repeat(24)}/preview`);
-    const download = $<HTMLAnchorElement>('[data-team-room-line="theirs"] a[download]')!;
-    expect(download.getAttribute("href")).toBe(`/api/rooms/r1/files/${"D".repeat(24)}`);
-    expect(download.getAttribute("download")).toBe("plan.pdf");
-    expect(download.textContent).toContain("plan.pdf");
-    expect(download.textContent).toContain("4.0 KB");
+    const plan = $<HTMLButtonElement>('[data-team-room-line="theirs"] [data-room-file]')!;
+    expect(plan.textContent).toContain("plan.pdf");
+    expect(plan.textContent).toContain("4.0 KB");
 
     const box = $<HTMLTextAreaElement>('[data-team-room="host"] textarea')!;
     await type(box, "hello");
@@ -761,7 +759,10 @@ describe("Team rooms for a teammate", () => {
     await vi.waitFor(() => expect(asked("POST", "/api/joined/rooms/r9/send")).toHaveLength(1));
     expect([...main().querySelectorAll("[data-team-room-line]")].map((row) => row.getAttribute("data-team-room-line"))).toEqual(["theirs", "mine"]);
     expect(main().querySelector("img")!.getAttribute("src")).toBe(`/api/joined/rooms/r9/files/${"F".repeat(24)}/preview`);
-    expect(main().querySelector("a[download]")!.getAttribute("href")).toBe(`/api/joined/rooms/r9/files/${"G".repeat(24)}`);
+    const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    await act(async () => main().querySelector<HTMLButtonElement>("[data-room-file]")!.click());
+    expect((saved.mock.contexts as HTMLAnchorElement[]).map((link) => link.getAttribute("href"))).toEqual([`/api/joined/rooms/r9/files/${"G".repeat(24)}`]);
+    saved.mockRestore();
 
     view = joinedView("joined", "offline");
     await joinedFrame("r9");

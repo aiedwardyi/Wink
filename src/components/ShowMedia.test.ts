@@ -268,8 +268,9 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   await click(tab("Files"));
   const sheet = row("sheet.xlsx");
   expect(sheet.getAttribute("data-media-key")).toBe(id(1));
-  expect(sheet.getAttribute("href")).toBe(`/api/rooms/r1/files/${id(1)}`);
-  expect(sheet.hasAttribute("download")).toBe(true);
+  const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  await click(sheet);
+  expect((saved.mock.contexts as HTMLAnchorElement[]).map((link) => [link.getAttribute("href"), link.download])).toEqual([[`/api/rooms/r1/files/${id(1)}`, "sheet.xlsx"]]);
   await click(row("plan.pdf"));
   expect(shown).toEqual({ threadId: "r-thread", path: "plan.pdf", kind: "pdf", src: `/api/rooms/r1/files/${id(2)}` });
 });
@@ -689,7 +690,7 @@ it("a linked folder shows in Show, and its pictures step with the arrow keys", a
   expect(viewed()).toBe(linked(listing.files[1]!.path));
 });
 
-it("a linked folder's page shows in Show, other files download, and it says how many more", async () => {
+it("a linked folder's page and text show in Show, and it says how many more", async () => {
   folderFetch(listing);
   await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
   await render(chat);
@@ -697,12 +698,15 @@ it("a linked folder's page shows in Show, other files download, and it says how 
   await click(tab("Files"));
   expect(names()).toEqual(["forum-look-mock-2.html", "notes.txt"]);
   expect(host.querySelector("[data-folder-more]")?.textContent).toBe("2 more files");
-  expect(row("notes.txt").getAttribute("href")).toBe(linked(listing.files[4]!.path));
-  expect(row("notes.txt").hasAttribute("download")).toBe(true);
   await click(row("forum-look-mock-2.html"));
   await settle();
   expect(shown).toEqual({ threadId: "t1", path: listing.files[3]!.path, kind: "page" });
   expect(host.querySelector('.show-frame[data-kind="page"] .show-frame-name')?.textContent).toBe("forum-look-mock-2.html");
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await settle();
+  await click(row("notes.txt"));
+  await settle();
+  expect(shown).toEqual({ threadId: "t1", path: listing.files[4]!.path, kind: "text" });
 });
 
 it("a folder its link just listed draws without asking again, and says so when it can't list", async () => {

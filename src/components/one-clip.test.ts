@@ -37,6 +37,7 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) host.remove();
   document.body.innerHTML = "";
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("one clip at a time", () => {
@@ -69,8 +70,9 @@ describe("one clip at a time", () => {
     const phone = chat.querySelector("video")!;
     playing(phone);
     const tile = await render(createElement(MediaClip, { src: "hover.mp4", name: "hover", children: "tile" }));
+    vi.useFakeTimers();
     await act(async () => { tile.firstElementChild!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    await act(async () => { vi.advanceTimersByTime(300); });
     expect(tile.querySelector("video")).not.toBeNull();
     expect(phone.pause).not.toHaveBeenCalled();
   });
