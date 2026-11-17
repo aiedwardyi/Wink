@@ -516,7 +516,7 @@ export function useLivePanes(botId: string, enabled: boolean, paneKey: string, s
             rememberLabels(botId, body.panes);
             rememberChanges(botId, body.panes);
             const open = body.panes.filter((p: { main?: boolean; exited?: boolean }) => !p.main && !p.exited);
-            const labels = open.slice(0, 16).map((p: { label?: string | null }) => p.label ?? "");
+            const labels = open.map((p: { label?: string | null }) => p.label ?? "");
             wrote.current = paneLabelsKey(labels);
             dispatch?.({ type: "setBotTerminalPanes", botId, labels });
             save(new Set(open.map((p: { sessionId: string }) => p.sessionId)));
