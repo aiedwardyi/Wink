@@ -21,12 +21,10 @@ import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
 import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { ROW_BUTTON } from "./SettingsPrimitives";
-import { Segmented } from "./Segmented";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] text-ink";
-// every menu row: label left, control right, one height
-const ROW = "flex min-h-9 items-center justify-between gap-3";
+const PILL = "rounded-[max(0px,calc(var(--radius-lg)_-_3px))]";
 const SLIDER = cn(
   "h-8 min-w-0 flex-1 cursor-pointer appearance-none bg-transparent focus-visible:outline-none",
   "[&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-accent)_var(--fill),color-mix(in_srgb,var(--color-ink)_14%,transparent)_var(--fill))]",
@@ -34,7 +32,6 @@ const SLIDER = cn(
   "[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-ink/15 [&::-moz-range-progress]:h-2 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-accent [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white",
 );
 const LANGUAGES = [{ id: "en", name: "English" }, { id: "ko", name: "한국어" }] as const;
-type CallLang = (typeof LANGUAGES)[number]["id"];
 
 function useCallPrefs(bot: Bot) {
   const { state, dispatch } = useStore();
@@ -92,7 +89,7 @@ function Slider({ label, value, range, text, onChange }: {
 }) {
   const fill = ((value - range.min) / (range.max - range.min)) * 100;
   return (
-    <div className={ROW}>
+    <div className="flex items-center gap-3">
       <span className={cn(LABEL, "w-14")}>{label}</span>
       <input type="range" aria-label={label} aria-valuetext={text} min={range.min} max={range.max} step={range.step} value={value}
         onChange={(event) => onChange(Number(event.target.value))}
@@ -110,15 +107,6 @@ function CallLanguage({ bot }: { bot: Bot }) {
       select={(id) => set({ language: id === "en" || id === "ko" ? id : undefined })}
       className="shrink-0" triggerClassName="w-auto gap-1.5 rounded-full bg-transparent px-3 py-1 text-[13px] ring-1 ring-hairline max-md:min-h-8"
       accounts={[{ id: "", name: t("callMenu.auto") }, ...LANGUAGES]} />
-  );
-}
-
-function MenuRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className={ROW}>
-      <span className={LABEL}>{label}</span>
-      {children}
-    </div>
   );
 }
 
@@ -168,7 +156,7 @@ export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
   );
 }
 
-/** The per-bot call panel: voice, captions, then style and language (how the bot sounds), then speed and volume (this device). */
+/** The per-bot call panel: speed, volume (this device), style, voice and language. */
 export function CallSettings({ bot, language = true, className }: { bot: Bot; language?: boolean; className?: string }) {
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
@@ -178,25 +166,33 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
-      <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
-        badge={<BotAvatar bot={bot} state="happy" size={20} />} />
-      <MenuRow label={t("callMenu.captions")}>
+      <div className="flex items-center justify-between gap-3">
+        <span className={LABEL}>{t("callMenu.captions")}</span>
         <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
-      </MenuRow>
-      <MenuRow label={t("callMenu.style")}>
-        <Segmented<CallStyle> label={t("callMenu.style")} value={prefs.style} onChange={(style) => prefs.set({ style })}
-          options={CALL_STYLES.map((style) => ({ id: style, label: t(`callMenu.style.${style}`) }))} />
-      </MenuRow>
-      {language && (
-        <MenuRow label={t("callMenu.language")}>
-          <Segmented<"" | CallLang> label={t("callMenu.language")} value={prefs.language ?? ""}
-            onChange={(id) => prefs.set({ language: id === "" ? undefined : id })}
-            options={[{ id: "", label: t("callMenu.auto") }, ...LANGUAGES.map(({ id, name }) => ({ id, label: name }))]} />
-        </MenuRow>
-      )}
+      </div>
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
+      <div className="flex items-center justify-between gap-3">
+        <span className={LABEL}>{t("callMenu.style")}</span>
+        <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
+          {CALL_STYLES.map((style) => (
+            <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
+              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8", PILL,
+                style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
+              {t(`callMenu.style.${style}`)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
+        badge={<BotAvatar bot={bot} state="happy" size={20} />} />
+      {language && (
+        <div className="flex items-center justify-between gap-3">
+          <span className={LABEL}>{t("callMenu.language")}</span>
+          <CallLanguage bot={bot} />
+        </div>
+      )}
     </div>
   );
 }

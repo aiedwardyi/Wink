@@ -905,6 +905,15 @@ describe("agents-proxy MCP surface", () => {
     expect(lastCreateBody).toMatchObject({ model: "grok-4.6", effort: "xhigh" });
   });
 
+  it("create_bot has no per-turn cap", async () => {
+    for (let i = 0; i < 6; i++) {
+      lastCreateBody = null;
+      const res = await callTool("create_bot", { name: `Pixel ${i}`, role: "Designer", instructions: "Draw things." });
+      expect(res.result.isError).toBeFalsy();
+      expect(lastCreateBody).toMatchObject({ name: `Pixel ${i}` });
+    }
+  });
+
   it("create_channel tells the model to call the tool instead of scanning localhost", async () => {
     const list = await rpc("tools/list");
     const tool = list.result.tools.find((t: { name: string }) => t.name === "create_channel");
@@ -939,6 +948,14 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toMatch(/ask_bot/i);
     expect(res.result.content[0].text).toMatch(/1:1/);
     expect(res.result.isError).toBeFalsy();
+  });
+
+  it("forwards who answers in a channel", async () => {
+    lastCreateChannelBody = null;
+    await callTool("create_channel", { name: "Panel", member_ids: ["bot-designer"], answers: "mentions" });
+    expect(lastCreateChannelBody).toMatchObject({ answers: "mentions" });
+    await callTool("create_channel", { name: "Panel", member_ids: ["bot-designer"] });
+    expect(lastCreateChannelBody).not.toHaveProperty("answers");
   });
 
   it("rejects create_channel without a name or members before calling the harness", async () => {

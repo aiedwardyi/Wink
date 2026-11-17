@@ -60,11 +60,12 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { forgetTrayMedia } from "@/lib/tray-media";
 import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, PendingQuestionPanel } from "./PendingQuestion";
+import { PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -91,7 +92,7 @@ import { RainbowRing } from "./RainbowRing";
 import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { asksForTyping, chatMovedOn, useShownQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -283,12 +284,8 @@ export function Composer({
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
-  const pinned = pinnedQuestion(chatMessages, threadMessages);
-  const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show an older open question until a newer one arrives
-  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
-  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
-  const questionIndex = question ? questions.indexOf(question) : -1;
+  const shownQuestion = useShownQuestion(chatMessages, threadMessages);
+  const { question } = shownQuestion;
   const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
   const questionAsker = question
     ? group
@@ -367,6 +364,7 @@ export function Composer({
         dropRoomFile(id);
       // a finished file may already be in a sent message, so only unfinished uploads are cancelled
       } else if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
+      forgetTrayMedia(id);
       editAttachments((prev) => prev.filter((a) => a.id !== id));
     },
     [editAttachments, peopleRoom, roomSending],
@@ -404,15 +402,21 @@ export function Composer({
       }),
     [attachments, jobs, peopleRoom],
   );
-  const uploadErrors = attachments
+  // why an upload is stuck or failed goes in the notice above the box, not only on its small chip
+  const uploadProblems = attachments
     .flatMap((a) => {
-      const error = a.kind === "upload" ? jobs.get(a.id)?.error : undefined;
-      return error && a.kind === "upload" ? [t(error, { name: a.name })] : [];
+      const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
+      const key = job?.phase === "resuming" ? "composer.uploadStuck" : job?.error;
+      return key && a.kind === "upload" ? [t(key, { name: a.name })] : [];
     })
     .join(" ");
+  const shownProblems = useRef("");
   useEffect(() => {
-    if (uploadErrors) showNotice(uploadErrors);
-  }, [uploadErrors, showNotice]);
+    const last = shownProblems.current;
+    shownProblems.current = uploadProblems;
+    if (uploadProblems) showNotice(uploadProblems);
+    else if (last) setAttachmentNotice((notice) => (notice === last ? null : notice));
+  }, [uploadProblems, showNotice]);
   const repickInput = useRef<HTMLInputElement>(null);
   const repickTarget = useRef<string | null>(null);
   const repick = (file: File | undefined) => {
@@ -842,6 +846,7 @@ export function Composer({
       const pending = { text: t, replyToId: replyTo?.id, at: Date.now(), draft: sentDraft };
       commitQueued([...queuedRef.current, pending]);
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       onConsumeReply?.();
       onSend?.();
@@ -871,6 +876,7 @@ export function Composer({
       });
     }
     setText("");
+    for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
     setAttachments([]);
     onConsumeReply?.();
     onSend?.();
@@ -916,6 +922,7 @@ export function Composer({
       });
       if (inputRef.current) inputRef.current.value = "";
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       setTerminalSendPreview(null);
     } catch (cause) {
@@ -1226,14 +1233,9 @@ export function Composer({
             key={question.id}
             message={question}
             askerName={questionAsker}
-            count={questions.length}
-            index={questionIndex}
-            onStep={(step) => {
-              const next = questions[questionIndex + step];
-              if (!next || !pinned) return;
-              foldQuestion(next.id);
-              setQuestionPick({ id: next.id, newest: pinned.id });
-            }}
+            count={shownQuestion.count}
+            index={shownQuestion.index}
+            onStep={shownQuestion.step}
             typed={text}
             attached={attachments.length}
             replying={Boolean(replyTo)}
@@ -1438,7 +1440,7 @@ export function Composer({
               ? t("composer.finishSetup")
               : recording
               ? t("composer.listening")
-              : pinned && !pinned.card?.options.length
+              : asksForTyping(question)
               ? t("ask.typeAnswer")
               : busyChrome.placeholder
           }

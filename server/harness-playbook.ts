@@ -72,8 +72,18 @@ function readCardFile(path: string): string | undefined {
   }
 }
 
-/** The card a standard launch names, when it exists and its `## Already built` section is missing or blank. */
-function cardWithoutPriorWork(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined): string | undefined {
+// Loose on purpose: a build card held by mistake costs one line under ## Undo first.
+const FIX_CARD = /\b(?:fix(?:e[sd]|ing)?|bugs?|broke|broken|regression|regressed)\b/i;
+const UNDONE = /\brevert\s+(?:PR\s*#?\d+|#\d+|[0-9a-f]{7,40})\b|\bno earlier change caused this \(searched: [^)\s][^)]*\)|\bnew code: ["“][^"”]+["”] \([^)\s][^)]*\)/i;
+
+function cardSection(lines: string[], heading: string): string {
+  const at = lines.findIndex((line) => new RegExp(`^##\\s+${heading}\\s*$`, "i").test(line));
+  const end = at < 0 ? -1 : lines.findIndex((line, index) => index > at && /^#{1,2}\s/.test(line));
+  return at < 0 ? "" : lines.slice(at + 1, end < 0 ? undefined : end).join("\n").trim();
+}
+
+/** Why the card a standard launch names, when it exists, is not ready: no prior-work search, or a fix card that names no change to undo. */
+function cardHold(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined): string | undefined {
   const named = CARD_LAUNCH.exec(command)?.[1]?.replace(/^["'`]+|["'`]+$/g, "");
   const absolute = (path: string) => isAbsolute(path) || win32.isAbsolute(path);
   // A relative card lives in the pane's cwd, never the server's.
@@ -81,10 +91,9 @@ function cardWithoutPriorWork(command: string, cwd: string | undefined, readCard
   const card = path ? readCard(path) : undefined;
   if (card === undefined) return undefined;
   const lines = card.split(/\r?\n/);
-  const at = lines.findIndex((line) => /^##\s+Already built\s*$/i.test(line));
-  const end = at < 0 ? -1 : lines.findIndex((line, index) => index > at && /^#{1,2}\s/.test(line));
-  const section = at < 0 ? "" : lines.slice(at + 1, end < 0 ? undefined : end).join("").trim();
-  return section ? undefined : path;
+  if (!cardSection(lines, "Already built")) return `Held: ${path} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`;
+  if (FIX_CARD.test(cardSection(lines, "Purpose")) && !UNDONE.test(cardSection(lines, "Undo first"))) return `Held: ${path} is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`;
+  return undefined;
 }
 
 /** Provider sessions that were handed the on-demand part; a worker launch waits for it. */
@@ -99,9 +108,7 @@ export function createPlaybookGate(body = harnessPlaybookBody(), readCard = read
     hold(session: string, command: string, cwd?: string): string | undefined {
       if (!body || !WORKER_COMMAND.test(command)) return undefined;
       if (!read.has(session)) return "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
-      const card = cardWithoutPriorWork(command, cwd, readCard);
-      if (card) return `Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`;
-      return undefined;
+      return cardHold(command, cwd, readCard);
     },
   };
 }
