@@ -2331,6 +2331,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           queueing: true,
           steerConsumed: true,
           readOnlyTurns: true,
+          laneTurns: true,
           pinnedSystem: true,
           localComputerMcp: config.permissionMode !== "bypassPermissions",
           askApproval: config.permissionMode !== "bypassPermissions",

@@ -6785,7 +6785,7 @@ async function runGroupMemberTurn(
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   // the lane runs beside the 1:1 in its folder, so only an engine that can deny edits and shell gets one
   const lane = !hands && botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
-    botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
+    botAccounts.instance(bot, threadId)?.adapter.capabilities.laneTurns === true && roomLanes.claim(botId, threadId);
   if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands, chainAsk);
   }
@@ -7044,7 +7044,7 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   // automatic routing can resolve to an engine that cannot run read-only
-  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
+  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.laneTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority, hands, chainAsk);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
