@@ -54,8 +54,6 @@ export function RoomFileRows({ base, files, threadId, className }: { base: strin
               type="button"
               data-room-file
               onClick={() => openFile({ threadId, path: file.name, src: roomFileUrl(base, file, false) })}
-              aria-label={t("viewer.download", { name: file.name })}
-              title={t("viewer.downloadTitle")}
               className="block w-full rounded-lg text-left hover:bg-raised/50"
             >
               <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />

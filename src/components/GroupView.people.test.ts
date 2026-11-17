@@ -20,6 +20,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 
 import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { lastShown } from "@/lib/show-pane";
 import { Transcript } from "./GroupView";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -68,7 +69,8 @@ describe("people in a shared group's chat", () => {
     const host = await show([{ ...theirs, text: "", roomFiles: files }]);
     const row = host.querySelector('[data-mid="u2"]')!;
     expect(row.querySelector("img[alt='board.png']")?.getAttribute("src")).toBe("/api/rooms/r1/files/f1/preview");
-    expect(row.querySelector('a[download="plan.pdf"]')?.getAttribute("href")).toBe("/api/rooms/r1/files/f2");
+    await act(async () => row.querySelector<HTMLButtonElement>("[data-room-file]")!.click());
+    expect(lastShown("t1")).toStrictEqual({ threadId: "t1", path: "plan.pdf", kind: "pdf", src: "/api/rooms/r1/files/f2" });
   });
 
   it("names a teammate on a reaction, not as a bot", async () => {
