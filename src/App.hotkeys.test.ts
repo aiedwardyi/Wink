@@ -7,22 +7,33 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
 import {
+  DRAWER_BADGE,
   DRAWER_BUTTON_LEFT,
   DRAWER_BUTTON_RIGHT,
   DRAWER_HEADER_LEFT,
   DRAWER_HEADER_RIGHT,
 } from "@/lib/drawer-button";
+import { PHONE_HEADER_MENU_GAP, PHONE_MENU_BUTTON_PX } from "@/lib/phone-header";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_IDS, nextSkin, type SkinId } from "@/lib/skins";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "App.tsx"), "utf8");
 /** Every page whose header keeps the drawer button's corner clear. */
 const HEADERS = [
+  "BoardView.tsx",
   "ChatView.tsx",
   "GroupView.tsx",
+  "JoinedRoomView.tsx",
   "RemoteTerminalView.tsx",
+  "TeamRoomView.tsx",
   "TerminalWorkspace.tsx",
 ];
+/** A Tailwind spacing class in px (one step is 4px), e.g. "max-md:pl-13" is 52 and "-right-1" is -4. */
+const spacing = (classes: string, name: string) => {
+  const match = new RegExp(String.raw`(?:^|\s)(-?)(?:max-md:)?${name}-(\d+(?:\.\d+)?)(?:\s|$)`).exec(classes);
+  if (!match) throw new Error(`no ${name}- in "${classes}"`);
+  return (match[1] ? -1 : 1) * Number(match[2]) * 4;
+};
 
 const MENU_LABEL = 'aria-label={menuQuestion ? t("ask.openBotList") : menuRoutine ? t("routine.openBotList") : t("chrome.openBotList")}';
 const menuButtonSource = () => app.slice(app.indexOf(MENU_LABEL), app.indexOf("</button>", app.indexOf(MENU_LABEL)));
@@ -39,13 +50,21 @@ describe("phone drawer menu button", () => {
   });
 
   it("centers on the same leading row every page header reserves", () => {
-    expect(DRAWER_HEADER_LEFT).toBe(DRAWER_HEADER_RIGHT.replace("pr-11", "pl-11"));
+    expect(DRAWER_HEADER_LEFT).toBe(DRAWER_HEADER_RIGHT.replace("pr-", "pl-"));
     // 30px button centered on the row: 15 + 15 + 30 = 60.
     expect(DRAWER_HEADER_LEFT).toContain("max-md:min-h-[60px]");
     for (const header of HEADERS) {
       const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "components", header), "utf8");
       expect(source, header).toContain("sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT");
     }
+  });
+
+  it("keeps the unread badge clear of every page title", () => {
+    const badgeReach = PHONE_MENU_BUTTON_PX - spacing(DRAWER_BADGE, "right");
+    expect(badgeReach).toBe(48);
+    expect(spacing(DRAWER_HEADER_LEFT, "pl")).toBeGreaterThanOrEqual(badgeReach + PHONE_HEADER_MENU_GAP);
+    expect(spacing(DRAWER_HEADER_RIGHT, "pr")).toBeGreaterThanOrEqual(badgeReach + PHONE_HEADER_MENU_GAP);
+    expect(menuButtonSource()).toContain("absolute ${DRAWER_BADGE}");
   });
 
   it("badges other unread chats, excluding the open one", () => {
