@@ -99,6 +99,9 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <div role="list" aria-label={t("board.list")} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
           {failed && <div role="alert" className="text-[13px] text-danger">{t("errors.request")}</div>}
+          {!posts && !failed && (
+            <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
+          )}
           {posts && !threads.length && (
             <div data-board-empty className="flex flex-col items-center justify-center gap-3 py-24 text-center">
               <MessagesSquare size={40} className="text-ink-secondary" aria-hidden />

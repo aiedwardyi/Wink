@@ -73,6 +73,17 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pnew", "pold"]);
   });
 
+  it("says it is loading while the server has not answered yet", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    await render(BoardView);
+    expect(host.querySelector("[data-board-loading]")?.textContent).toBe("Loading posts…");
+    await act(async () => answer(new Response(JSON.stringify({ posts: [post("p1", {})] }), { headers: { "content-type": "application/json" } })));
+    await settle();
+    expect(host.querySelector("[data-board-loading]")).toBeNull();
+    expect(rows()).toEqual(["p1"]);
+  });
+
   it("keeps a reply to a reply in its thread", async () => {
     posts = [
       post("phand", { kind: "handoff", title: "Map tests half done", body: "Map tests half done", created_at: 1 }),
