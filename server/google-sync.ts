@@ -524,7 +524,7 @@ export function createGoogleSync(options: Options) {
     kick,
     /** Another PC uploaded: one pass now, or one more after the running one. A rate-limit wait stands. */
     poked(): void {
-      if (!running && rateLimited) return;
+      if (rateLimited) return;
       void kick();
     },
     /** Settles once no pass is running or due right away. */
