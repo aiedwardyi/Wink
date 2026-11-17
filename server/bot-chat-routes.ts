@@ -330,7 +330,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const call = parseCallTag(body.call);
       const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
-      const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
+      const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
+      // Send now on a held send: the user acted when they queued it
+      const actedAt = (queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId)?.actedAt : undefined) ?? sentAt;
       // a retry of a saved send replays its receipt below
       const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(() => store.activePath(threadId), text);
       if (again) return json(res, 409, { error: "question already settled", message: clientMessage(again) });
