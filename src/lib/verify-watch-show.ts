@@ -35,7 +35,7 @@ function checkRow(value: unknown): Row {
 
 export type Rect = { x: number; y: number; w: number; h: number };
 export type Part = "loads" | "links" | "phone";
-export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "between" | "done" | "expired" | "failed";
+export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "between" | "done" | "unavailable" | "failed";
 
 export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number; hold: number }
 export interface Cursor { checker: string; tile: VerifyTile; extra?: number; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
@@ -262,7 +262,7 @@ export class VerifyWatchShow {
 
   /** A replay still playing, which is when the chat card shows its lanes. */
   get showing() {
-    return !this.live && !["after", "done", "expired", "failed"].includes(this.phase);
+    return !this.live && !["after", "done", "unavailable", "failed"].includes(this.phase);
   }
 
   pin(tile: VerifyTile) {
@@ -358,7 +358,7 @@ export class VerifyWatchShow {
     this.set("play");
   }
 
-  expire() { this.set("expired"); }
+  unavailable() { this.set("unavailable"); }
   fail() { this.set("failed"); }
 
   /** Moves the clock; false while nothing changed. */
@@ -388,7 +388,7 @@ export class VerifyWatchShow {
 
   /** Resolves when the run's end has played out (reel or "No problems"). */
   async settled(): Promise<void> {
-    while (!["after", "expired", "failed"].includes(this.phase)) await this.waitFor(50);
+    while (!["after", "unavailable", "failed"].includes(this.phase)) await this.waitFor(50);
   }
 
   waitFor(ms: number): Promise<void> {

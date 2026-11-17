@@ -28,7 +28,7 @@ beforeEach(() => {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => {
     calls.push({ url, signal: init.signal! });
-    if (url.includes("old-")) return Promise.resolve(new Response(null, { status: 404 }));
+    if (url.includes("old-")) return Promise.resolve(Response.json({ error: "not-here" }, { status: 404 }));
     return Promise.resolve(new Response(new ReadableStream({ start(controller) { init.signal!.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError"))); } })));
   }));
   host = document.createElement("div");
@@ -59,12 +59,13 @@ it("streams live only while the chat is shown and the window is visible, abortin
   root = createRoot(host);
 });
 
-it("plays the card's kept runs from the replay route and says Replay expired on 404", async () => {
+it.each([["en", "Replay unavailable on this PC"], ["ko", "이 PC에서 다시보기를 사용할 수 없어요"]] as const)("shows an unavailable replay on this PC in %s", async (locale, message) => {
+  applyLocale(locale);
   await render({ live: false, hidden: false });
   await act(async () => { await new Promise(r => setTimeout(r, 20)); });
   expect(calls.map(c => c.url)).toEqual(["/api/verify/runs/old-1/replay"]);
   await act(async () => { await new Promise(r => setTimeout(r, 60)); });
-  expect(host.textContent).toContain("Replay expired");
+  expect(host.textContent).toContain(message);
   expect(host.querySelector(".verify-watch-url")?.textContent).toBe("luna/index.html");
   expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
 });
