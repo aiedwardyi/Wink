@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
-import { closeShow, useMapThread } from "@/lib/show-pane";
+import { closeShow, useMapThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
 import type { SceneModule } from "@/scenes/scene-host";
 
@@ -57,7 +57,7 @@ vi.stubGlobal(
 
 const { default: WhatsNewCard } = await import("./WhatsNewCard");
 
-const RELEASE = Object.keys(WHATS_NEW)[0];
+const RELEASE = "1.0.263";
 
 describe("whats new card", () => {
   let host: HTMLElement;
@@ -139,10 +139,15 @@ describe("whats new card", () => {
     expect(tile.textContent).toBe(text);
   });
 
-  it("explains Live Verify in place, since it starts on its own", () => {
-    const { tile } = showMe("1.0.246", "Live Verify checks your site");
-    expect(tile.querySelector(".whats-new-show")!.getAttribute("aria-expanded")).toBe("true");
-    expect(tile.textContent).toContain("Starts on its own when a bot builds a page.");
+  it("opens this chat's side pane on the workers list from its Show me", () => {
+    const { tile, text } = showMe("1.0.278", "Workers live in the side pane");
+    let listed: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((listed = useWorkersThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(listed).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -223,7 +228,7 @@ describe("whats new card", () => {
     expect(button("확인")).toBeTruthy();
     expect(host.textContent).toContain(WHATS_NEW[RELEASE].title.ko);
     for (const entry of Object.values(WHATS_NEW)) {
-      for (const copy of [entry.title, entry.more, ...entry.tiles.flatMap((tile) => [tile.title, tile.line, ...("how" in tile ? [tile.how] : [])])]) {
+      for (const copy of [entry.title, entry.more, ...entry.tiles.flatMap((tile) => [tile.title, tile.line])]) {
         expect(copy.ko.trim()).not.toBe("");
       }
     }
