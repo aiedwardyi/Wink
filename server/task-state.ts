@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -498,19 +498,20 @@ function clipText(text: string, max: number): string {
   return `${cut.trimEnd()}…`;
 }
 
+const NETWORK_PATH = /^[\\/]{2}/;
+
 function groundedTaskArtifact(cwd: string, ref: string): string | null {
+  // a share can block the event loop, so refuse before any fs call
+  if (NETWORK_PATH.test(ref)) return null;
   try {
-    const root = realpathSync(cwd);
-    const candidate = realpathSync(resolve(root, ref));
-    const fromRoot = relative(root, candidate);
-    if (fromRoot.startsWith("..") || isAbsolute(fromRoot) || !statSync(candidate).isFile()) return null;
-    return candidate;
+    const candidate = realpathSync(resolve(cwd, ref));
+    return !NETWORK_PATH.test(candidate) && statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }
 }
 
-/** Keeps the artifacts that are files inside the task folder, resolved to their real path. */
+/** Keeps the artifacts that are local files, resolved to their real path; relative refs start at the task folder. */
 export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
   const kept: TaskArtifact[] = [];
   const dropped: string[] = [];
@@ -524,9 +525,9 @@ export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
 }
 
 /** One line for the bot when an update saved with something clipped or dropped. Empty on a clean save. */
-export function taskStateNotice(clipped: string[], dropped: string[], cwd: string): string {
+export function taskStateNotice(clipped: string[], dropped: string[]): string {
   const parts: string[] = [];
   if (clipped.length) parts.push(`Clipped to fit: ${clipped.join(", ")}.`);
-  if (dropped.length) parts.push(`Dropped artifacts that are not files inside ${cwd}: ${dropped.join(", ")}.`);
+  if (dropped.length) parts.push(`Dropped artifacts that are not files: ${dropped.join(", ")}.`);
   return parts.join(" ");
 }

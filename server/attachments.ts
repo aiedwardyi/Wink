@@ -129,14 +129,16 @@ export function sniffImageMime(bytes: Buffer): string | null {
   return null;
 }
 
-// Reject network paths before fs access, which can block on a share.
-export function resolveLocalFile(path: string, roots: readonly string[], kind = "file"): { path: string; size: number } {
+// Reject network paths before fs access, which can block on a share. Null roots: any local path.
+export function resolveLocalFile(path: string, roots: readonly string[] | null, kind = "file"): { path: string; size: number } {
   const fail = (status: number, msg: string) => Object.assign(new Error(msg), { status });
-  const folders = roots.join(", ") || "none set";
-  const outside = `${path}: ${kind} must be inside your project or workspace folder (${folders}); save it there first`;
+  const folders = roots?.join(", ") || "none set";
+  const outside = roots
+    ? `${path}: ${kind} must be inside your project or workspace folder (${folders}); save it there first`
+    : `${path}: network and device paths aren't supported`;
   const missing = `${path}: file not found`;
   if (/^[\\/]{2}/.test(path)) throw fail(403, outside);
-  if (!isAbsolute(path)) throw fail(400, `${path}: path must be absolute, inside ${folders}`);
+  if (!isAbsolute(path)) throw fail(400, roots ? `${path}: path must be absolute, inside ${folders}` : `${path}: path must be absolute`);
   let real: string;
   try {
     real = realpathSync.native(path);
@@ -144,7 +146,7 @@ export function resolveLocalFile(path: string, roots: readonly string[], kind = 
     throw fail(404, missing);
   }
   if (/^[\\/]{2}/.test(real)) throw fail(403, outside);
-  if (!roots.some((root) => under(root, real) !== null)) throw fail(403, outside);
+  if (roots && !roots.some((root) => under(root, real) !== null)) throw fail(403, outside);
   let size: number;
   try {
     const stat = statSync(real);
@@ -178,7 +180,7 @@ export function sharableLocalFile(path: string, roots: readonly string[]): { pat
   return file;
 }
 
-export function importLocalImage(path: string, roots: readonly string[]): SavedAttachment & { name: string } {
+export function importLocalImage(path: string, roots: readonly string[] | null): SavedAttachment & { name: string } {
   const { path: real, size } = resolveLocalFile(path, roots, "image");
   const fail = (status: number, msg: string) => Object.assign(new Error(msg), { status });
   if (size === 0) throw fail(400, "empty image");

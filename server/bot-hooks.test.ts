@@ -71,11 +71,12 @@ async function call(route: (req: IncomingMessage, res: ServerResponse) => Promis
   return { status, raw, body: JSON.parse(raw) };
 }
 
-function routes(group = false) {
+function routes(group = false, readOnly = false) {
   return createInternalRoutes({
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ ...(group ? { group: { id: "group" } } : {}) }),
     botOutputRoots: () => [folder],
+    readOnlyTurn: () => readOnly,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 }
 
@@ -108,6 +109,15 @@ async function refused(reason: string) {
 }
 
 describe("picture gate routes", () => {
+  it.each([[false, 201], [true, 403]])("a picture outside the bot's folders: read-only turn %s answers %s", async (readOnly, status) => {
+    const away = mkdtempSync(join(DATA_DIR, "away-"));
+    const picture = join(away, "pic.gif");
+    writeFileSync(picture, pixels);
+    const result = await call(routes(false, readOnly).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path: picture });
+    expect(result.status).toBe(status);
+    expect(appendMessage).toHaveBeenCalledTimes(status === 201 ? 1 : 0);
+  });
+
   it.each(["working folder", "workspace"])("refuses stamps inside the bot's %s in PATCH", async (root) => {
     gate();
     const hooks = bot.hooks;

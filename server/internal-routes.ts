@@ -213,7 +213,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, ...wakeNotes, board?.notice].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped), asks?.note, ...wakeNotes, board?.notice].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {
@@ -488,7 +488,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       ].filter((root): root is string => Boolean(root));
       let saved: ReturnType<typeof importLocalImage>;
       try {
-        saved = importLocalImage(String(body.path ?? ""), roots);
+        saved = importLocalImage(String(body.path ?? ""), deps.readOnlyTurn(from.id, fromThreadId) ? roots : null);
       } catch (e) {
         return json(res, (e as { status?: number }).status ?? 400, { error: (e as Error).message });
       }

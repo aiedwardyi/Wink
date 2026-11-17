@@ -226,13 +226,30 @@ describe("importLocalImage", () => {
     expect(() => importLocalImage(big, roots)).toThrow(/exceeds/);
   });
 
-  it("rejects UNC and device paths before touching the filesystem", () => {
+  it.each([["scoped", roots], ["unscoped", null]] as const)("rejects UNC and device paths before touching the filesystem (%s)", (_, scope) => {
     const calls = [fs.realpathSync, fs.realpathSync.native, fs.statSync, fs.readFileSync].map((fn) => vi.mocked(fn));
     for (const path of ["\\\\server\\share\\a.png", "//server/share/a.png", "\\\\?\\C:\\a.png", "\\\\.\\C:\\a.png"]) {
       calls.forEach((fn) => fn.mockClear());
-      expect(() => importLocalImage(path, roots)).toThrow(expect.objectContaining({ status: 403 }));
+      expect(() => importLocalImage(path, scope)).toThrow(expect.objectContaining({ status: 403 }));
       calls.forEach((fn) => expect(fn).not.toHaveBeenCalled());
     }
+  });
+
+  it("takes an image from any folder when unscoped, stored as an attachment copy", () => {
+    const file = join(outside, "pic.png");
+    writeFileSync(file, PNG);
+    const saved = importLocalImage(file, null);
+    expect(dirname(saved.path)).toBe(ATTACHMENTS_DIR);
+    expect(readAttachment(saved.name)?.bytes.equals(PNG)).toBe(true);
+    expect(() => importLocalImage(file, roots)).toThrow(expect.objectContaining({ status: 403 }));
+  });
+
+  it("still wants an absolute path, existing file and real image when unscoped", () => {
+    expect(() => importLocalImage("pic.png", null)).toThrow(/absolute/);
+    expect(() => importLocalImage(join(outside, "nope.png"), null)).toThrow(/file not found/);
+    const fake = join(outside, "fake.png");
+    writeFileSync(fake, "hello");
+    expect(() => importLocalImage(fake, null)).toThrow(/not a PNG, JPEG, GIF, or WebP/);
   });
 
   it("rejects a file outside every root with a 403 that says where to save", () => {
@@ -291,7 +308,7 @@ describe("show-image route", () => {
 
   it("publishes into the sender's own thread as a screen message", () => {
     expect(route).toContain("connectorThread(from.id, fromThreadId)");
-    expect(route).toContain("importLocalImage(String(body.path ?? \"\"), roots)");
+    expect(route).toContain("importLocalImage(String(body.path ?? \"\"), deps.readOnlyTurn(from.id, fromThreadId) ? roots : null)");
     expect(route).toContain("workspaceDir(from.id)");
     expect(route).toContain('kind: "screen"');
     expect(route).toContain("image: saved.name,");
