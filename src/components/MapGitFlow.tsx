@@ -45,8 +45,20 @@ const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "clo
 const BOTS: Record<string, string> = { "chatgpt-codex-connector": "codex", "copilot-pull-request-reviewer": "copilot" };
 const person = (login: string) => BOTS[login] ?? login;
 
-function useFlows(base: string | undefined, key: string, active: boolean) {
+const same = (a: MapFlow | undefined, b: MapFlow) => JSON.stringify(a) === JSON.stringify(b);
+
+function useFlows(base: string | undefined, key: string, open: boolean, active: boolean) {
   const [flows, setFlows] = useState<Record<string, MapFlow>>({});
+  // The rows this checkout showed last paint with the tree; the read after the tree and the code swaps in only what changed.
+  useEffect(() => {
+    const ids = key ? key.split("\0") : [];
+    if (!base || !open || !ids.length) return;
+    const controller = new AbortController();
+    for (const id of ids) void request(`${base}/flow?${new URLSearchParams({ worker: id, cached: "1" })}`, { signal: controller.signal }).then((flow: MapFlow | null) => {
+      if (!controller.signal.aborted && flow && Array.isArray(flow.commits)) setFlows(current => current[id] ? current : { ...current, [id]: flow });
+    }, () => {});
+    return () => controller.abort();
+  }, [base, key, open]);
   useEffect(() => {
     const ids = key ? key.split("\0") : [];
     if (!base || !active || !ids.length) return;
@@ -60,7 +72,7 @@ function useFlows(base: string | undefined, key: string, active: boolean) {
       await Promise.all(ids.filter(id => !finished.has(id)).map(id => request(`${base}/flow?${new URLSearchParams({ worker: id })}`, { signal: controller.signal }).then((flow: MapFlow) => {
         if (controller.signal.aborted || !Array.isArray(flow?.commits)) return;
         if (ended(flow.pr)) finished.add(id);
-        setFlows(current => ({ ...current, [id]: flow }));
+        setFlows(current => same(current[id], flow) ? current : { ...current, [id]: flow });
       }, () => {})));
       running = false;
       if (!controller.signal.aborted && !document.hidden && ids.some(id => !finished.has(id))) timer = setTimeout(poll, EVERY);
@@ -90,7 +102,7 @@ function stops(item: MapWorker, flow: MapFlow, stages: MapStage[], c: Copy): Sto
     { key: "pr", state: pr ? "on" : undefined, url: pr?.url, tip: pr ? [`#${pr.number} ${pr.title}`, c.into(pr.into)] : [c.noPr] },
     { key: "checks", state: checks?.total ? checks.tone : undefined, url: checks?.url,
       tip: checks?.fail ? checks.detail.map(c.failTip) : checks?.pending ? checks.detail.map(c.runTip) : [checks?.total ? c.passed(checks.total) : c.noChecks] },
-    { key: "review", state: review?.tone === "bad" ? "bad" : review?.tone === "ok" ? "on" : review?.on || review?.threads ? "half" : undefined, url: pr ? `${pr.url}/files` : undefined,
+    { key: "review", state: review?.tone === "bad" ? "bad" : review?.tone === "ok" ? "on" : review?.on || review?.threads ? "half" : undefined, url: review?.url,
       tip: pr ? [...pr.reviews.map(each => `${person(each.login)} · ${c.reviewed[each.state]}`), ...pr.threads ? [c.threads(pr.threads)] : []].concat(pr.reviews.length ? [] : [c.noReviews]) : [c.noReviews] },
     { key: "merge", state: merge?.on ? merge.tone : undefined, url: pr?.url,
       tip: [merge?.tone === "closed" ? c.closedTip : merge?.on ? c.mergedInto(pr!.into, merge.at ? new Date(merge.at).toLocaleString() : "") : c.openTip] },
@@ -123,11 +135,11 @@ function rowTone(flow: MapFlow): string | undefined {
   return pr.state === "open" ? stages.find(stage => stage.key === "review")?.tone === "bad" ? "bad" : stages.find(stage => stage.key === "checks")?.tone ?? "open" : pr.state;
 }
 
-export function MapGitFlow({ base, workers, slots, worker, all, active }: { base?: string; workers: MapWorker[]; slots: ReadonlyMap<string, number>; worker: string; all: boolean; active: boolean }) {
+export function MapGitFlow({ base, workers, slots, worker, all, open = false, active }: { base?: string; workers: MapWorker[]; slots: ReadonlyMap<string, number>; worker: string; all: boolean; open?: boolean; active: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
   const shown = (all ? workers : workers.filter(item => item.id === worker)).filter(item => item.git);
-  const flows = useFlows(base, shown.map(item => item.id).join("\0"), active);
+  const flows = useFlows(base, shown.map(item => item.id).join("\0"), open, active);
   // The files a worker shares with another worker, as the Map marks them on the tree.
   const shared = useMemo(() => {
     const nick = new Map(workers.map(item => [item.id, item.nick]));

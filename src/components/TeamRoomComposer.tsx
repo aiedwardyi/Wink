@@ -5,6 +5,7 @@ import type { Message } from "@/state/store-types";
 
 import { CallWidgetSlot } from "./CallSlots";
 import { Composer, type RoomBotStatus, type RoomPerson } from "./Composer";
+import type { useCallControls } from "./CallControls";
 
 export function useTeamRoomReply(base: string, draftId: string, messages: Message[]) {
   const preview = useChatPreview();
@@ -13,16 +14,18 @@ export function useTeamRoomReply(base: string, draftId: string, messages: Messag
   return reply;
 }
 
-export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop, chain, onSend }: {
+export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop, chain, onSend, call }: {
   name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean;
   onConsumeReply: () => void; onRestoreReply: (message: Message, threadId: string) => void;
   status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number; onSend?: () => void;
+  call?: ReturnType<typeof useCallControls>;
 }) {
   const preview = useChatPreview();
   return (
     <ChatPeekPart part="composer">
+      {call?.bar}
       {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} focusBlocked={preview} replyTo={replyTo} onSend={onSend} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
+      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} focusBlocked={preview} replyTo={replyTo} onSend={onSend} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} {...call?.composer} />
     </ChatPeekPart>
   );
 }

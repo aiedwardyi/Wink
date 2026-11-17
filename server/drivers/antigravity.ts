@@ -453,6 +453,7 @@ export function estimateWin32CmdlineLength(command: string, args: string[]): num
 
 /** Print mode never asks: skip-permissions runs everything, accept-edits denies run_command, the default denies both. */
 export function antigravityAccess(argv: readonly string[]): TurnAccess {
+  if (argv.includes("--mode") && argv[argv.indexOf("--mode") + 1] === "plan") return { edits: "off", commands: "off" };
   if (argv.includes("--dangerously-skip-permissions")) return FREE_ACCESS;
   return { edits: argv.includes("accept-edits") ? "free" : "off", commands: "off" };
 }
@@ -462,6 +463,7 @@ export interface AntigravityTurnArgvInput {
   cwd: string;
   model?: string | null;
   resumeCursor?: string | null;
+  readOnly?: boolean;
 }
 
 /** Print-mode argv with the prompt on stdin — never on --print. */
@@ -476,7 +478,9 @@ export function buildAntigravityTurnArgv(input: AntigravityTurnArgvInput): strin
     "--add-dir",
     input.cwd,
   ];
-  if (input.fullAuto) args.push("--dangerously-skip-permissions");
+  // plan, never agy's default mode: the user's own agy settings can make the default edit and run commands
+  if (input.readOnly) args.push("--mode", "plan");
+  else if (input.fullAuto) args.push("--dangerously-skip-permissions");
   else {
     args.push("--mode", "accept-edits");
   }
@@ -711,6 +715,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         cwd,
         model: turn.model,
         resumeCursor,
+        readOnly: turn.readOnly,
       });
       // Remaining argv (paths, model, conversation id) can still blow the
       // Windows CreateProcess ceiling even with the prompt on stdin.
@@ -1163,9 +1168,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           agentsMcp: true,
           // nothing in print mode can ask, so Ask for approval would be a no-op
           askApproval: false,
+          readOnlyTurns: true,
         },
         sendTurn,
-        access: () => antigravityAccess(buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd: "" })),
+        access: (turn) => antigravityAccess(buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd: "", readOnly: turn.readOnly })),
         interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
         respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
         hasSession: (threadId) => active.has(threadId),
