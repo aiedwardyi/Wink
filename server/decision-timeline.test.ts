@@ -160,16 +160,64 @@ describe("decision timeline", () => {
 
   it("grounds a late card tap in the card it answers", async () => {
     const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Forum", subtitle: "Which forum look?", options: ["A - plain list", "B - tiles", "C - Reddit cards"], askUser: true } });
-    say("I choose A");
-    bot("A it is. Should the theme be 1) Dark or 2) Light?");
+    bot("Should the theme be 1) Dark or 2) Light?");
     await vi.advanceTimersByTimeAsync(1_000);
     store.appendMessage("t1", { role: "user", kind: "text", text: "C", answersCard: card.id, actedAt: Date.now() });
-    reply(
-      { kind: "decision", key: "forum", fact: "A - plain list", quote: "I choose A" },
-      { kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "C" },
-    );
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "C" });
     await settle();
     expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+  });
+
+  describe("typed answers beat card taps", () => {
+    const swapCard = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Marketing", subtitle: "Swap the marketing bot or keep it?", options: ["Yes, swap", "Keep marketing bot"], askUser: true } });
+    const swap = { kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" };
+    const keep = { kind: "decision", key: "marketing bot", fact: "Keep marketing bot", quote: "Keep marketing bot" };
+
+    it("keeps typing when the tap is delivered after it with no click time", async () => {
+      const card = swapCard();
+      await vi.advanceTimersByTimeAsync(2_000);
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Keep marketing bot" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Yes, swap", answersCard: card.id });
+      reply(keep, swap);
+      await settle();
+      expect(currentPicks(timeline())[0]?.picked).toBe("Keep marketing bot");
+    });
+
+    it("keeps typing when the tap really is later", async () => {
+      const card = swapCard();
+      await vi.advanceTimersByTimeAsync(1_000);
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Keep marketing bot", actedAt: NOW + 1_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Yes, swap", answersCard: card.id, actedAt: NOW + 2_000 });
+      reply(keep, swap);
+      await settle();
+      expect(currentPicks(timeline())[0]?.picked).toBe("Keep marketing bot");
+    });
+
+    it("keeps typing saved in an earlier pass when a later tap arrives", async () => {
+      const card = swapCard();
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Keep marketing bot" });
+      reply(keep);
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Yes, swap", answersCard: card.id, actedAt: Date.now() });
+      reply(swap);
+      await settle();
+      expect(currentPicks(timeline())[0]?.picked).toBe("Keep marketing bot");
+    });
+
+    it("replaces a tap saved in an earlier pass with typing clicked before it", async () => {
+      const card = swapCard();
+      await vi.advanceTimersByTimeAsync(1_000);
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Yes, swap", answersCard: card.id, actedAt: NOW + 2_000 });
+      reply(swap);
+      await settle();
+      store.appendMessage("t1", { role: "user", kind: "text", text: "Keep marketing bot", actedAt: NOW + 1_000 });
+      reply(keep);
+      await settle();
+      expect(currentPicks(timeline())[0]?.picked).toBe("Keep marketing bot");
+    });
   });
 
   it("keeps newer typing when an earlier Yes swap tap arrives afterward", async () => {

@@ -24,7 +24,7 @@ const HEADER = `Current picks, newest first: the user's own, each beating older 
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -44,6 +44,8 @@ export type PickEntry = {
   over: string[];
   overPictures: Picture[];
   said?: string;
+  /** Picked by tapping a card; a typed pick on the question always beats it. */
+  tapped?: boolean;
   files: string[];
   tweaks: Tweak[];
   extra: string[];
@@ -61,6 +63,7 @@ export type PickChange =
       picture?: Picture;
       overPictures?: Picture[];
       files?: string[];
+      tapped?: boolean;
       legacy?: { day: string; line: string };
     }
   | { kind: "tweak"; at: number; key: string; said: string };
@@ -131,6 +134,7 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Said") entry.said = value.replace(/^"(.*)"$/, "$1");
     else if (field === "Files") entry.files = list(value);
     else if (field === "Source" && /^[a-f0-9]{64}$/.test(value)) entry.source = value;
+    else if (field === "Tapped" && value === "yes") entry.tapped = true;
     else if (field === "At" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) entry.at = Number(value);
     else entry.extra.push(line);
   }
@@ -150,6 +154,7 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.files.length ? [`- Files: ${entry.files.join(SEPARATOR)}`] : []),
       ...(entry.source ? [`- Source: ${entry.source}`] : []),
       ...(entry.at === undefined ? [] : [`- At: ${entry.at}`]),
+      ...(entry.tapped ? ["- Tapped: yes"] : []),
       ...entry.tweaks.map(({ at, said }) => `- Tweak ${at}: "${said}"`),
       ...entry.extra,
     ].join("\n"),
@@ -179,6 +184,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
   let picks = 0;
   let tweaks = 0;
   let replaced = 0;
+  let retyped = false;
   // a tweak said with its pick lands after it
   for (const change of [...changes].sort((a, b) => a.at - b.at || Number(a.kind === "tweak") - Number(b.kind === "tweak"))) {
     const asked = clip(change.key.replace(/\|/g, "/"), KEY_MAX);
@@ -187,8 +193,12 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const key = current?.key ?? asked;
     const said = clip(change.said, SAID_MAX);
     const stamp = pickStamp(change.at);
+    const tapped = change.kind === "pick" && Boolean(change.tapped);
+    // a typed pick beats a tapped one whenever either was said, so it skips the replay guard below
+    const overTap = change.kind === "pick" && !tapped && current?.tapped;
     // a replayed batch from before the current pick never lands on it
-    if (current && change.at < entryTime(current)) continue;
+    if (current && change.at < entryTime(current) && !overTap) continue;
+    if (tapped && current && !current.tapped) continue;
     if (change.kind === "tweak") {
       const last = current?.tweaks.at(-1);
       // a retried batch or an ask said twice in a row adds nothing; asking again after a reversal does
@@ -198,7 +208,14 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       continue;
     }
     const picked = clip(change.picked, PICKED_MAX);
-    if (!picked || (current && sameOption(current.picked, picked))) continue;
+    if (!picked) continue;
+    if (current && sameOption(current.picked, picked)) {
+      if (overTap) {
+        delete current.tapped;
+        retyped = true;
+      }
+      continue;
+    }
     const id = fresh(stamp);
     if (change.legacy) {
       entries.push({ id: fresh(change.legacy.day), key, replacedBy: id, picked: clip(change.legacy.line, PICKED_MAX), over: [], overPictures: [], files: [], tweaks: [], extra: [] });
@@ -218,11 +235,12 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       extra: [],
     };
     if (change.picture) entry.picture = change.picture;
+    if (tapped) entry.tapped = true;
     if (change.at % 60_000) entry.at = change.at;
     entries.push(entry);
     picks += 1;
   }
-  if (!picks && !tweaks) return null;
+  if (!picks && !tweaks && !retyped) return null;
   return { text: renderTimeline({ head: timelineHead(head), entries }), picks, tweaks, replaced };
 }
 

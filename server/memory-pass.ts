@@ -57,7 +57,7 @@ export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: Usag
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
-export type UserLine = { text: string; context?: string; pictures?: Picture[]; files?: string[]; at?: number };
+export type UserLine = { text: string; context?: string; pictures?: Picture[]; files?: string[]; at?: number; tap?: boolean };
 export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
@@ -549,6 +549,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       if (picture) pick.picture = picture;
       if (overPictures.length) pick.overPictures = overPictures;
       if (files.length) pick.files = files;
+      if (own.length && own.every((line) => line.tap)) pick.tapped = true;
       if (target) pick.legacy = { day: old?.[2] ?? day(at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
       const note: Note = { line: named, kind: "decision", pick };
       if (target) note.replaces = target;
@@ -815,12 +816,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const row = rows.get(id);
       // a pasted tag cannot open or close a prompt block
       const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
-      return text ? [{ id, text, at: row!.actedAt ?? row!.at, files: attachedImages(row!.text ?? "") }] : [];
+      return text ? [{ id, text, at: row!.actedAt ?? row!.at, tap: Boolean(row!.answersCard), files: attachedImages(row!.text ?? "") }] : [];
     });
     const contexts = replyContexts(messages, typed.map(({ id }) => id));
     const shown = replyPictures(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
-    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, files }) => {
+    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
       const line: UserLine = { text, at };
+      if (tap) line.tap = true;
       const context = contexts.get(id);
       const pictures = shown.get(id);
       if (context) line.context = context;

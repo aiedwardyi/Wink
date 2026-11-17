@@ -76,6 +76,23 @@ describe("applyPicks", () => {
     expect(currentPicks(next.text)).toMatchObject([{ picked: "C - Reddit cards", tweaks: [{ at: "2026-11-17 10:41", said: "make the header smaller" }] }]);
   });
 
+  it("never lets a card tap replace a typed pick, however late", () => {
+    const typed = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10))])!.text;
+    expect(applyPicks(typed, [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true })])).toBeNull();
+    expect(applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true }), pick("forum", "A - plain list", "a", at(17, 10))])!.text).toContain("- Picked: A - plain list");
+  });
+  it("lets typing replace a card tap even when the tap is stamped later", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true })])!.text;
+    expect(parseTimeline(tapped).entries[0]?.tapped).toBe(true);
+    const next = applyPicks(tapped, [pick("forum", "A - plain list", "a", at(17, 10))])!.text;
+    expect(currentPicks(next).map(({ picked }) => picked)).toEqual(["A - plain list"]);
+    expect(currentPicks(next)[0]?.tapped).toBeUndefined();
+  });
+  it("makes a tap's option typed when the user types the same option", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
+    expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 12), { tapped: true })])).toBeNull();
+  });
   it("changes nothing for a restated pick, a repeated tweak or a tweak with no pick", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
     expect(applyPicks(first.text, [pick("Forum Look", "C - Reddit cards", "c again", at(17, 12)), tweak("forum look", "make the header smaller", at(17, 13))])).toBeNull();
