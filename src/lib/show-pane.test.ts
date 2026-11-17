@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, PANE_TAB_KEY, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, PANE_TAB_KEY, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -273,4 +273,40 @@ it("keeps the pick for the session when storage refuses it", async () => {
   await act(async () => togglePane("t13", "idle"));
   expect(map).toBe("t13");
   refuse.mockRestore();
+});
+
+it("pulses only when a click lands on the file already showing", async () => {
+  let pulses = -1;
+  const Pulses = () => { pulses = usePanePulse(); return null; };
+  await act(async () => root.render(createElement(Pulses)));
+  const start = pulses;
+  await act(async () => showItem({ ...pdf, threadId: "t14" }));
+  expect(pulses).toBe(start);
+  await act(async () => showItem({ ...pdf, threadId: "t14" }));
+  expect(pulses).toBe(start + 1);
+  await act(async () => showItem({ ...pdf, threadId: "t14", path: "C:\\w\\other.pdf" }));
+  expect(pulses).toBe(start + 1);
+});
+
+it("never pulses under reduced motion, so the glow class cannot get stuck", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {} }));
+  let pulses = -1;
+  const Pulses = () => { pulses = usePanePulse(); return null; };
+  await act(async () => root.render(createElement(Pulses)));
+  const start = pulses;
+  await act(async () => showItem({ ...pdf, threadId: "t16" }));
+  await act(async () => showItem({ ...pdf, threadId: "t16" }));
+  expect(pulses).toBe(start);
+});
+
+it("switches a link click to Show from the Map tab without pulsing", async () => {
+  let seen: unknown[] = [];
+  const Tabs = () => { seen = [useShowItem(), useMapThread(), usePanePulse()]; return null; };
+  await act(async () => root.render(createElement(Tabs)));
+  const start = seen[2];
+  await act(async () => showItem({ ...pdf, threadId: "t15" }));
+  await act(async () => showMap("t15"));
+  expect(seen).toEqual([{ ...pdf, threadId: "t15" }, "t15", start]);
+  await act(async () => showItem({ ...pdf, threadId: "t15" }));
+  expect(seen).toEqual([{ ...pdf, threadId: "t15" }, null, start]);
 });

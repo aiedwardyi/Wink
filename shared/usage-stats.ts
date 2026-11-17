@@ -47,7 +47,7 @@ export const MODELS = [
 export const SCREENS = [
   "chat", "room", "room-setup", "members", "room-instructions", "sidebar-search", "new-menu", "new-bot", "new-room", "find",
   "model-picker", "model-dial", "model-chart", "workers", "terminal", "remote-terminal", "details", "memory", "avatar",
-  "settings-account", "settings-general", "settings-advanced", "settings-connections", "settings-themes", "settings-more-themes",
+  "settings-account", "settings-about-you", "settings-general", "settings-advanced", "settings-connections", "settings-themes", "settings-more-themes",
   "settings-shortcuts", "settings-devices", "settings-usage", "settings-team", "settings-model-index", "settings-sync",
   "palette", "inspector", "watch", "usage-quick", "teams-library", "archived", "call", "live-call", "room-alerts",
   "message-menu", "attachment-preview", "no-engines", "whats-new",

@@ -174,7 +174,7 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("general");
     const nav = html.slice(html.indexOf("<nav"), html.indexOf("</nav>"));
     expect([...nav.matchAll(/<button[^>]*aria-label="([^"]+)"/g)].map((match) => match[1])).toEqual([
-      "Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
+      "Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
   });
 

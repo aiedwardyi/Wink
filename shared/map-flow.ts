@@ -20,6 +20,7 @@ export interface MapPr {
   reviews: MapReview[];
   decision: "approved" | "changes" | "";
   threads: number | null;
+  reviewUrl?: string;
   mergedAt?: number;
 }
 
@@ -72,7 +73,7 @@ export function mapFlowStages(flow: MapFlow): MapStage[] {
     { key: "pr", on: true, tone: pr.state, url: pr.url, detail: [pr.title, pr.into] },
     { key: "checks", on: fail.length > 0 || counted.length > 0 && !pending.length, tone: fail.length ? "bad" : pending.length ? "run" : counted.length ? "ok" : undefined, url: `${pr.url}/checks`,
       detail: (fail.length ? fail : pending).map(check => check.name), pass, fail: fail.length, pending: pending.length, total: counted.length },
-    { key: "review", on: pr.reviews.length > 0, tone: changes ? "bad" : pr.decision === "approved" ? "ok" : pr.threads ? "run" : undefined, url: pr.url,
+    { key: "review", on: pr.reviews.length > 0, tone: changes ? "bad" : pr.decision === "approved" ? "ok" : pr.threads ? "run" : undefined, url: pr.reviewUrl ?? pr.url,
       detail: pr.reviews.map(review => `${review.login} ${review.state}`), who: pr.reviews.map(review => review.login), threads: pr.threads },
     { key: "merge", on: pr.state === "merged" || pr.state === "closed", tone: pr.state === "merged" || pr.state === "closed" ? pr.state : undefined, url: pr.url, detail: [pr.into], at: pr.mergedAt },
   );

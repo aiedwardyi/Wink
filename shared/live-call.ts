@@ -20,6 +20,8 @@ export const CALL_STYLES = ["calm", "normal", "lively"] as const;
 export type CallStyle = (typeof CALL_STYLES)[number];
 export const CALL_SPEED = { min: 0.7, max: 1.3, step: 0.1 } as const;
 export type CallPrefs = { voice?: LiveVoice; speed?: number; style?: CallStyle; language?: "en" | "ko" };
+// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps.
+export const OUTPUT_GAIN = 0.7;
 // Calm plays 4.4 dB under normal; lively 1 dB over, still under -3 dBTP.
 export const STYLE_GAIN: Record<CallStyle, number> = { calm: 0.6, normal: 1, lively: 1.12 };
 export const STYLE_LINES: Partial<Record<CallStyle, string>> = {
@@ -37,6 +39,7 @@ export const CALL_ID = /^c-[0-9a-f]{12}$/;
 
 /** `voice` marks the voice's speech, `notice` the app's own line in the voice's place (never sent to the bot), `order` a confirmed work order, `ask` a quick ask. A call's first row gets `ms` on hang-up, and `summary` when one came back. */
 export type CallTag = { id: string; voice?: true; notice?: true; order?: true; ask?: true; ms?: number; summary?: string };
+export type CallRoom = { id: string; kind: "host" | "joined" };
 export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number };
 
 // Korean trails off mid-thought (음, 그러니까...), so both ends are LOW and the pause is long.

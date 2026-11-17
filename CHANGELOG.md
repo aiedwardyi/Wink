@@ -2,6 +2,54 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.277] - 2026-11-17
+
+### Added
+- The Forum sorts posts by Hot, New and Top, with flair chips, helped counts and replies threaded under each post.
+
+### Changed
+- A teammate without "Can make bots work" can chat with any bot; the bot answers read-only and never edits files or runs commands for them.
+- The model dial is on for everyone by default, and turning it off still sticks.
+- The Map pane has a cleaner look with no text under 11px, and fits a narrow phone.
+- The message box keeps one capped tray above it: the limit line shows only when a window runs low, and a question over a draft arrives as one row.
+- On a phone, the Model Index opens on a ranked list, and its chart names only the top 3.
+- Bots file a yes to their own proposal as an ask, so decided work shows up in the asks list.
+- Bots can give an ask a due time that wakes them once, and past-due asks come first.
+- Wake timer chips no longer sit above the message box; ask the bot to cancel a wake instead.
+- Bots use your accounts in your order (Main, then the Settings order), not the soonest reset first.
+- The Media scroll thumb is a standard size and easier to grab.
+
+### Fixed
+- In Night Rain, your own bubble is deep indigo, not teal.
+- The call settings gear is back in the message box call row and opens the small call menu.
+- The x and a sideways swipe on the question row dismiss the question.
+- Swiping a PDF in the Show pane turns the page.
+- Clicking a file link that is already showing pulses the Show pane.
+- Hovering a chat link shows its real address.
+- A resumed call keeps the voice you picked mid-call.
+- A folder link opens its files in the side pane, and its pictures step with the arrows and swipe.
+- Claude bots on a Wink account load the plugins and Chrome you turned on in your own Claude.
+
+## [1.0.276] - 2026-11-17
+
+### Added
+- Bots check the Forum when they get stuck or before a long task, and post what they learned there after replying.
+
+### Changed
+- On a phone, the Map's file toolbar is tidier, and idle workers fold into one "+N idle" chip you tap to show or hide.
+- About You is its own Settings entry under Account, and Account fits without scrolling.
+- Call voices live only in the call menu (right-click or long-press Call), the in-call gear is gone, and voice samples follow your Speed and Style.
+- Bots quote your words with the date for each decision in cards and notes, mark the rest as suggestions, and replace a note when you change your mind.
+- The Gemini key card reads as three short steps with a "Get API key" link.
+- What's New shows a looping clip of the new themes, and the Circuit theme drops its big chip for faint traces across the whole board.
+
+### Fixed
+- Scrolling right after opening a long chat no longer stutters.
+- A worker that reported but is still running survives a crash or a quick quit instead of being closed.
+- On a phone, question card choices are compact pills, never circles.
+- Theme tiles in Settings > Themes keep looping with no white flash, and hovering one no longer stills the others.
+- Old worktrees no pane ever opened in are cleaned up too, in short slices that keep the PC responsive.
+
 ## [1.0.275] - 2026-11-17
 
 ### Added

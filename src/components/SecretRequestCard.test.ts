@@ -41,13 +41,14 @@ describe("SecretRequestCard", () => {
     });
     expect(html).toContain("This key will only be sent to api.acme.dev");
     expect(html).toContain("text-[17px]");
-    expect(html).not.toContain("Where to get this key");
+    expect(html).not.toContain("Get API key");
   });
 
   it("keeps built-in cards unchanged", () => {
     const html = render({});
     expect(html).not.toContain("will only be sent to");
-    expect(html).toContain("Where to get this key");
+    expect(html).toContain("Get API key");
+    expect(html).not.toContain("never added to chat");
   });
 });
 

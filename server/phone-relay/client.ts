@@ -14,6 +14,7 @@ import {
   PROTOCOL_VERSION,
   encodeFrame,
   signAuth,
+  type AuthMessage,
   type RelayMessage,
   type TeamSnag,
 } from "../../shared/relay-protocol.ts";
@@ -94,6 +95,8 @@ export interface RelayClientOptions {
   account?(): { account: string; name: string; person?: string } | null | undefined;
   /** The relay sent a refreshed wka1. */
   onAccount?(account: string): void;
+  /** Another PC of this Google account uploaded a change. Set, auth asks the relay for poked frames. */
+  onPoked?(): void;
   /** Something in snapshot() changed. */
   onChange(): void;
 }
@@ -124,6 +127,7 @@ interface Session {
   roomCodes: boolean;
   roomCodeWaits: Map<string, (minted: { code: string; exp: number } | null) => void>;
   active: boolean;
+  pokes: boolean;
   reportOwner?: string;
   channels: Set<DataChannel>;
   cancels: Set<Cancel>;
@@ -204,6 +208,12 @@ export class RelayClient {
       session.roomCodeWaits.set(id, settle);
       this.send(session.socket, { type: "roomcode", id });
     });
+  }
+
+  /** This PC uploaded a change. Only after a ready that offered pokes: an older relay closes the channel on one. */
+  poke(): void {
+    const session = this.session;
+    if (session?.ready && session.pokes) this.send(session.socket, { type: "poke" });
   }
 
   /** Only after a ready that offered it: an older relay closes the channel on one. */
@@ -303,6 +313,7 @@ export class RelayClient {
       roomCodes: false,
       roomCodeWaits: new Map(),
       active: false,
+      pokes: false,
       channels: new Set(),
       cancels: new Set(),
     };
@@ -352,7 +363,9 @@ export class RelayClient {
         const { label, pk, privateKey } = this.opts.identity;
         const entry = this.opts.account?.();
         const account = entry === undefined ? {} : entry === null ? { account: null } : entry;
-        this.send(session.socket, { type: "auth", label, pk, ticket: this.ticket, sig: signAuth(privateKey, msg.nonce, label), ...account });
+        const auth: AuthMessage = { type: "auth", label, pk, ticket: this.ticket, sig: signAuth(privateKey, msg.nonce, label), ...account };
+        if (this.opts.onPoked) auth.pokes = true;
+        this.send(session.socket, auth);
         session.authSent = true;
         return;
       }
@@ -361,6 +374,7 @@ export class RelayClient {
         session.snags = msg.snags === true;
         session.roomCodes = msg.roomCodes === true;
         session.active = msg.active === true;
+        session.pokes = msg.pokes === true;
         session.reportOwner = msg.reportOwner;
         this.onReady(session, msg.session, msg.poolToken, msg.pool.min, msg.pool.max, msg.ticket);
         if (session.active && this.activeAt !== null && this.clock.now() - this.activeAt < ACTIVE_HOLD_MS) this.send(session.socket, { type: "active" });
@@ -383,6 +397,10 @@ export class RelayClient {
         return;
       case "snagged":
         if (session.snagWait?.id === msg.id) session.snagWait.settle(true);
+        return;
+      case "poked":
+        if (!session.ready || !this.opts.onPoked) throw new Error("unexpected poked");
+        this.opts.onPoked();
         return;
       case "roomcoded":
         session.roomCodeWaits.get(msg.id)?.(msg.code && msg.exp ? { code: msg.code, exp: msg.exp } : null);

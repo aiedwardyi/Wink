@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
+import { useJoinedRoom } from "@/lib/joined-rooms";
+import { hostLines, isTeamRoom, joinedLines, roomTeamBots, type RoomLine } from "@/lib/team-rooms";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
@@ -17,8 +19,9 @@ import { CallIntro, seenIntro } from "./CallIntro";
 import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
+const ROOM_PRIVACY_SEEN = "wink.liveCall.roomPrivacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -48,6 +51,10 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     hushed: "Quiet · tap to talk",
     micSilent: "Can't hear your mic. Check your sound input.",
     soundInput: "sound input",
+    roomPrivacy: "This call reads the room chat and sends it to Google on your Gemini key.",
+    postRoom: "Post in {room}?",
+    postFailed: "Couldn't post. Try again.",
+    keyChat: "Add a Gemini key in {bot}'s chat to call.",
   },
   ko: {
     starting: "연결 중…",
@@ -78,6 +85,10 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     hushed: "조용히 하는 중 · 탭해서 말하기",
     micSilent: "마이크 소리가 안 들려요. 입력 장치를 확인해 주세요.",
     soundInput: "입력 장치",
+    roomPrivacy: "이 통화는 채팅방 대화를 읽고 내 Gemini 키로 Google에 전송합니다.",
+    postRoom: "{room}에 올릴까요?",
+    postFailed: "올리지 못했습니다. 다시 시도하세요.",
+    keyChat: "통화하려면 {bot} 채팅에서 Gemini 키를 추가하세요.",
   },
 };
 
@@ -105,9 +116,9 @@ async function post(path: string, body: object): Promise<Posted> {
   return { status: res.status, data: ((await responseBody(res)) ?? {}) as Record<string, any> };
 }
 
-function seenPrivacy(): boolean {
+function seenPrivacy(key = PRIVACY_SEEN): boolean {
   try {
-    return Boolean(localStorage.getItem(PRIVACY_SEEN));
+    return Boolean(localStorage.getItem(key));
   } catch {
     return false;
   }
@@ -176,6 +187,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       post,
       opener: active.opener,
       prefs: bot.call,
+      room: active.room && { id: active.room.id, kind: active.room.kind },
     });
     return { call, level: (mic) => audio.level(mic) };
   });
@@ -250,7 +262,35 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const volume = useCallVolume();
   useEffect(() => call.retune(picks ?? {}, volume), [call, picks?.voice, picks?.speed, picks?.style, picks?.language, volume]);
 
-  return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
+  return (
+    <>
+      {active.room?.kind === "host" && <HostRoomFeed call={call} roomId={active.room.id} />}
+      {active.room?.kind === "joined" && <JoinedRoomFeed call={call} roomId={active.room.id} />}
+      {introShown.mounted && <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />}
+    </>
+  );
+}
+
+// The room a call was placed from keeps reaching the voice whatever screen is open.
+function useRoomFeed(call: LiveCall, lines: readonly RoomLine[] | undefined) {
+  useEffect(() => {
+    if (lines) call.observeRoom(lines);
+  }, [call, lines]);
+}
+
+function HostRoomFeed({ call, roomId }: { call: LiveCall; roomId: string }) {
+  const { state } = useStore();
+  const group = state.groups.find((candidate) => isTeamRoom(candidate) && candidate.hosted.roomId === roomId);
+  const messages = group?.messages;
+  const teamBots = group && roomTeamBots(group);
+  useRoomFeed(call, useMemo(() => messages && hostLines(messages, teamBots), [messages, teamBots]));
+  return null;
+}
+
+function JoinedRoomFeed({ call, roomId }: { call: LiveCall; roomId: string }) {
+  const room = useJoinedRoom(roomId);
+  useRoomFeed(call, useMemo(() => room ? joinedLines(room.entries, [...(room.state?.bots ?? []), ...(room.state?.teamBots ?? [])], room.me.id) : undefined, [room]));
+  return null;
 }
 
 const TARGET = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
@@ -275,6 +315,26 @@ export function OrderCard({ bot, live, narrow = false }: { bot: Bot; live: Live;
   );
 }
 
+function PostCard({ live, room }: { live: Live; room: string }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  const { call } = live;
+  const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
+  return (
+    <div data-live-call-post className="mb-2 rounded-2xl border border-hairline/50 bg-card p-3 shadow-sm">
+      <div className="flex items-center gap-2 max-md:flex-wrap">
+        <div className="min-w-0 flex-1 text-sm text-ink max-md:basis-full">
+          <p>{words.postRoom.replace("{room}", () => room)}</p>
+          <p className="font-medium whitespace-pre-wrap break-words">{snap.postOffer?.text}</p>
+          {snap.postFailed && <p role="alert" className="mt-1 text-xs text-danger">{words.postFailed}</p>}
+        </div>
+        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost(true)} className={cn(TARGET, "bg-accent text-accent-ink disabled:opacity-40")}>{words.yes}</button>
+        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost(false)} className={cn(TARGET, "bg-control text-ink disabled:opacity-40")}>{words.no}</button>
+      </div>
+    </div>
+  );
+}
+
 export function ResumeButton({ live }: { live: Live }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
@@ -285,17 +345,20 @@ export function ResumeButton({ live }: { live: Live }) {
   );
 }
 
-/** The call's notes and order card in its own chat. */
+/** The call's notes and order card in its own chat or the team room it was placed from. */
 export function LiveCallBar({ bot }: { bot: Bot }) {
   const live = useLive(bot.id);
   return live ? <Bar bot={bot} live={live} /> : null;
 }
 
 function Bar({ bot, live }: { bot: Bot; live: Live }) {
+  const { dispatch } = useStore();
+  const room = useActiveCall()?.room;
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const snap = useSyncExternalStore(live.call.subscribe, live.call.state, live.call.state);
   const [privacy] = useState(() => !seenPrivacy());
+  const [roomPrivacy] = useState(() => Boolean(room) && !seenPrivacy(ROOM_PRIVACY_SEEN));
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
   const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? failedText(snap, locale) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
 
@@ -309,15 +372,30 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
     }
   }, [note, words.privacy]);
 
+  useEffect(() => {
+    if (!roomPrivacy) return;
+    try {
+      localStorage.setItem(ROOM_PRIVACY_SEEN, "1");
+    } catch {
+      // shown again next time
+    }
+  }, [roomPrivacy]);
+
   return (
     <div data-live-call={snap.status} className="px-5 max-md:px-3">
+      {roomPrivacy && <p data-live-call-room-privacy className="px-1 pb-2 text-xs text-ink-secondary">{words.roomPrivacy}</p>}
+      <Fold open={Boolean(snap.postOffer)} soft keep>
+        <PostCard live={live} room={room?.name ?? ""} />
+      </Fold>
       <Fold open={Boolean(snap.pending)} soft keep>
         <OrderCard bot={bot} live={live} />
       </Fold>
       {snap.status === "paused" && <ResumeButton live={live} />}
       {note && (
         <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
-          {note}
+          {room && snap.status === "needsKey"
+            ? <button type="button" onClick={() => dispatch({ type: "select", id: bot.id })} className="text-left text-accent hover:underline">{words.keyChat.replace("{bot}", () => bot.name)}</button>
+            : note}
           {micBlocked && window.ogb?.permOpenSettings && (
             <button type="button" onClick={() => void window.ogb?.permOpenSettings("mic")} className="ml-2 font-medium text-accent hover:underline">{words.openSettings}</button>
           )}

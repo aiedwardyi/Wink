@@ -8,6 +8,8 @@ import { reducedMotion } from "@/lib/phone-swipe";
 import { useUsageMode, type UsageMode } from "@/lib/usage-preferences";
 
 const CELLS = 10;
+/** Used percent from which a window reads as running low: the cells turn warning and the chat's limit line shows. */
+export const LOW_USED = 75;
 /** How far each segment leans right per unit of height, as the old parallelogram glyph did. */
 const SLANT = 0.3;
 /** Engines that report a 5h and a 7d window; the rest show their own windows (Gemini its daily one). */
@@ -113,7 +115,7 @@ function Cells({ percent, used, mini = false }: { percent: number; used: number;
   const cell = Math.max(0, (width - gap * (CELLS - 1) - lean) / CELLS);
   return (
     <svg ref={ref} aria-hidden="true" data-cells={filled} viewBox={width && height ? `0 0 ${width} ${height}` : undefined} preserveAspectRatio="none"
-      shapeRendering="geometricPrecision" style={{ "--dpr": ratio } as CSSProperties} className={cn("usage-cells", mini && "usage-cells-mini", used >= 90 ? "text-danger" : used >= 75 ? "text-warning" : "text-accent")}>
+      shapeRendering="geometricPrecision" style={{ "--dpr": ratio } as CSSProperties} className={cn("usage-cells", mini && "usage-cells-mini", used >= 90 ? "text-danger" : used >= LOW_USED ? "text-warning" : "text-accent")}>
       {Array.from({ length: CELLS }, (_, index) => {
         const x = index * (cell + gap);
         return <polygon key={index} data-cell={index < filled ? "on" : "off"} points={`${x},${height} ${x + cell},${height} ${x + cell + lean},0 ${x + lean},0`} />;

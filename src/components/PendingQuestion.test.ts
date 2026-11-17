@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +51,12 @@ async function swipe(dx: number, dy: number, scrollTop = 0) {
   await act(async () => { touch("touchstart", 100, 100); touch("touchend", 100 + dx, 100 + dy); });
 }
 
+// Tailwind spacing in px: n * 4, or an arbitrary [npx]
+const size = (cls: string, name: string, variant = "") => {
+  const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
+  return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
+};
+
 afterEach(async () => {
   vi.restoreAllMocks();
   if (root) await act(async () => root!.unmount());
@@ -88,6 +97,26 @@ describe("question folding", () => {
     root = undefined;
     await render("fold-kept");
     expect(pill()).not.toBeNull();
+  });
+
+  it("dismisses through the one onDismiss from the card's x, the row's x and a sideways swipe across the row", async () => {
+    await render("dismiss-same");
+    await act(async () => button("Dismiss question").click());
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await fold();
+    expect(host.querySelector("[data-question-row]")).not.toBeNull();
+    expect(host.querySelectorAll('button[aria-label="Dismiss question"]')).toHaveLength(1);
+    await act(async () => button("Dismiss question").click());
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    const row = host.querySelector<HTMLElement>("[data-question-row]")!;
+    const touch = (type: string, x: number) => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: 100 }] }, changedTouches: { value: [{ clientX: x, clientY: 100 }] } });
+      row.dispatchEvent(event);
+    };
+    await act(async () => { touch("touchstart", 100); touch("touchmove", 200); touch("touchend", 300); });
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+    expect(onPick).not.toHaveBeenCalled();
   });
 
   it("folds on a downward swipe", async () => {
@@ -131,11 +160,6 @@ describe("question folding", () => {
   });
 
   it("gives the chevron and x 44px touch targets at 392 that split their gap and never overlap", async () => {
-    // Tailwind spacing in px: n * 4, or an arbitrary [npx]
-    const size = (cls: string, name: string, variant = "") => {
-      const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
-      return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
-    };
     const ICON = 14;
     const FRAME_PAD = 16;
     const boxes = (scope: Element) => {
@@ -165,6 +189,40 @@ describe("question folding", () => {
     expect(x.right).toBeLessThanOrEqual(392);
   });
 
+  it("draws the card's choices as pills of one height on desktop and phone, a 1-letter one wider than tall", async () => {
+    // happy-dom has no layout: a 13px glyph is at most 13px wide, a line 20px tall, the border 2px
+    const box = (choice: HTMLButtonElement, coarse: boolean) => {
+      const cls = choice.className;
+      const height = Math.max(2 + 2 * size(cls, "py") + (size(cls, "leading") || 20), coarse ? size(cls, "min-h", "pointer-coarse:") : 0);
+      const width = Math.max(2 + 2 * size(cls, "px") + Math.max(13, 8 * choice.textContent!.length), size(cls, "min-w"));
+      return { width, height, target: height - 2 * (coarse ? size(cls, "inset-y", "pointer-coarse:after:") : 0) };
+    };
+    await render("choice-pills", ["A", "Neither", "Keep both for now"]);
+    const choices = [...host.querySelectorAll<HTMLButtonElement>("[data-term-choices] button")];
+    const list = choices[0].parentElement!.className;
+    const [desktop, phone] = [false, true].map((coarse) => choices.map((choice) => box(choice, coarse)));
+    for (const [letter, word, words] of [desktop, phone]) {
+      expect(letter.width).toBeGreaterThan(letter.height);
+      expect([word.height, words.height]).toEqual([letter.height, letter.height]);
+    }
+    expect(phone.map(({ height }) => height)).toEqual(desktop.map(({ height }) => height));
+    // the phone's 44px target reaches past the pill only into half the gap to the next row
+    expect(phone[0].target).toBeGreaterThanOrEqual(44);
+    expect(phone[0].target - phone[0].height).toBeLessThanOrEqual(size(list, "gap-y", "pointer-coarse:") || size(list, "gap"));
+    expect(choices.every((choice) => choice.classList.contains("text-center"))).toBe(true);
+  });
+
+  it("keeps the terminal skins' numbered choices left-aligned, in 44px touch rows that never overlap", async () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "styles.css"), "utf8");
+    const terminal = css.slice(css.indexOf('@scope (:is([data-skin="terminal"]')).split(/\r?\n\}/)[0];
+    expect(terminal).toMatch(/\[data-term-choices\] \{[^}]*gap: 0;/);
+    expect(terminal).toMatch(/\[data-term-choices\] > button \{[^}]*min-width: 0;[^}]*text-align: left;/);
+    // the list has no gap for a hit area to reach into, so each choice is its whole 44px target
+    expect(terminal).toMatch(/@media \(pointer: coarse\) \{\s*\[data-ask-choices\] > button \{ min-height: 44px; \}\s*\[data-ask-choices\] > button::after \{ inset-block: 0; \}/);
+    await render("terminal-choices", ["A", "Neither"]);
+    expect(host.querySelector("[data-term-choices]")?.matches("[data-ask-choices]")).toBe(true);
+  });
+
   it("localizes folding and reopening in Korean", async () => {
     applyLocale("ko");
     await render("fold-korean");
@@ -172,7 +230,7 @@ describe("question folding", () => {
     await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
-    expect(button("질문 숨기기")).not.toBeNull();
+    expect(button("질문 닫기")).not.toBeNull();
     expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
     expect(pill()).toBeNull();

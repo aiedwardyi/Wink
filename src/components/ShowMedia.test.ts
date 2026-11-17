@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { forgetMedia, type MediaWire } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
-import { closeShow, showItem, showMedia, useMediaThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showFolder, showItem, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
@@ -353,6 +353,49 @@ it("dragging the scroll thumb shows the month beside it until 600 ms after relea
   expect(bubble()?.hasAttribute("data-shown")).toBe(false);
 });
 
+const GRAB = 44;
+const ruleOf = (css: string, selector: string) => css.match(new RegExp(`\\n\\s*${selector.replace(/[.:]/g, "\\$&")} \\{([^}]*)\\}`))?.[1] ?? "";
+const px = (rule: string, prop: string) => Number(new RegExp(`(?:^|[ ;])${prop}: (\\d+)px`).exec(rule)?.[1] ?? 0);
+
+it("keeps the scroll thumb a grabbable height on a long chat, and none on a short one", async () => {
+  media.t1 = shots(2_000);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  expect(parseFloat(host.querySelector<HTMLElement>("[data-media-thumb]")!.style.height)).toBeGreaterThanOrEqual(GRAB);
+  media.t1 = shots(4);
+  forgetMedia();
+  await act(async () => closeShow());
+  await act(async () => showMedia("t1"));
+  await settle();
+  expect(host.querySelector("[data-media-thumb]")).toBeNull();
+});
+
+it("drags the scroll thumb to both ends of a long chat", async () => {
+  media.t1 = shots(2_000);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  const thumb = host.querySelector("[data-media-thumb]")!;
+  await pointer(thumb, "pointerdown", 0);
+  await pointer(thumb, "pointermove", 100_000);
+  const bottom = scroller().scrollTop;
+  expect(bottom).toBeGreaterThan(40_000);
+  await pointer(thumb, "pointermove", -100_000);
+  expect(scroller().scrollTop).toBe(0);
+  await pointer(thumb, "pointerup", -100_000);
+});
+
+it("sizes the scroll thumb to grab: 44px to catch on a phone, a wider bar on a desktop", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  const bar = px(ruleOf(css, ".show-media-thumb::before"), "width");
+  const desktop = px(ruleOf(css, ".show-media-rail"), "width");
+  const phone = px(/max-width: 767px\) \{[\s\S]*?\.show-media-rail \{([^}]*)\}/.exec(css)?.[1] ?? "", "width");
+  expect(bar).toBeGreaterThanOrEqual(8);
+  expect(desktop).toBeGreaterThanOrEqual(bar);
+  expect(phone).toBeGreaterThanOrEqual(GRAB);
+});
+
 it("closing with X neither asks again nor touches the grid", async () => {
   media.t1 = shots(200);
   await act(async () => showMedia("t1"));
@@ -586,4 +629,102 @@ it("a video whose frame can't be read keeps its play icon and name", async () =>
   expect(tile.querySelector("img")).toBeNull();
   expect(tile.querySelector(".lucide-play")).not.toBeNull();
   expect(tile.querySelector(".truncate")!.textContent).toBe("broken.mov");
+});
+
+const mock = String.raw`C:\cards\forum-look-mock-2`;
+const listing = {
+  files: [
+    ...["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"].map((name, n) => ({ name, path: `${mock}\\${name}`, size: 10, modified: NOVEMBER - n })),
+    { name: "forum-look-mock-2.html", path: `${mock}\\forum-look-mock-2.html`, size: 21_525, modified: NOVEMBER - 10 },
+    { name: "notes.txt", path: `${mock}\\notes.txt`, size: 8, modified: NOVEMBER - 11 },
+  ],
+  more: 2,
+};
+const folderFetch = (answer: FolderListing | null) => vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+  calls.push(url);
+  if (url.includes("/linked-folder?")) return answer ? Response.json(answer) : Response.json({ error: "not found" }, { status: 404 });
+  return new Response(null, { status: 206 });
+}));
+const linked = (path: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`;
+const viewed = () => document.querySelector("[data-media-viewer] img")?.getAttribute("src");
+const key = (name: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true })); });
+
+it("a linked folder shows in Show, and its pictures step with the arrow keys", async () => {
+  folderFetch(listing);
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await render(chat);
+  await settle();
+  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector(".show-frame-name")?.textContent).toBe("forum-look-mock-2");
+  expect(calls).toContain(`/api/threads/t1/linked-folder?path=${encodeURIComponent(mock)}`);
+  expect(tiles()).toEqual(["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"]);
+  await click(host.querySelector('[data-media-grid] [title="icon-31-wink.png"]'));
+  expect(viewed()).toBe(linked(listing.files[0]!.path));
+  await key("ArrowRight");
+  expect(viewed()).toBe(linked(listing.files[1]!.path));
+  await key("ArrowRight");
+  expect(viewed()).toBe(linked(listing.files[2]!.path));
+  await key("ArrowRight");
+  expect(viewed()).toBe(linked(listing.files[2]!.path));
+  await key("ArrowLeft");
+  expect(viewed()).toBe(linked(listing.files[1]!.path));
+});
+
+it("a linked folder's page shows in Show, other files download, and it says how many more", async () => {
+  folderFetch(listing);
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await render(chat);
+  await settle();
+  await click(tab("Files"));
+  expect(names()).toEqual(["forum-look-mock-2.html", "notes.txt"]);
+  expect(host.querySelector("[data-folder-more]")?.textContent).toBe("2 more files");
+  expect(row("notes.txt").getAttribute("href")).toBe(linked(listing.files[4]!.path));
+  expect(row("notes.txt").hasAttribute("download")).toBe(true);
+  await click(row("forum-look-mock-2.html"));
+  await settle();
+  expect(shown).toEqual({ threadId: "t1", path: listing.files[3]!.path, kind: "page" });
+  expect(host.querySelector('.show-frame[data-kind="page"] .show-frame-name')?.textContent).toBe("forum-look-mock-2.html");
+});
+
+it("a folder its link just listed draws without asking again, and says so when it can't list", async () => {
+  folderFetch(listing);
+  await act(async () => showFolder("t1", `${mock}-new`, listing));
+  await render(chat);
+  await settle();
+  expect(tiles()).toHaveLength(3);
+  expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
+  act(() => closeShow());
+  folderFetch(null);
+  applyLocale("ko");
+  await act(async () => showItem({ threadId: "t1", path: `${mock}-gone`, kind: "folder" }));
+  await settle();
+  expect(host.querySelector('[data-kind="folder"] [role="status"]')?.textContent).toBe("이 폴더를 열 수 없어요");
+});
+
+it("an empty linked folder says so in Korean", async () => {
+  folderFetch({ files: [], more: 0 });
+  applyLocale("ko");
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await render(chat);
+  await settle();
+  expect(host.querySelector(".show-media-empty")?.textContent).toBe("이 폴더에는 파일이 없어요");
+});
+
+it("clicking an open folder's link again draws the fresh listing, even behind another tab", async () => {
+  folderFetch(listing);
+  const folder = `${mock}-again`;
+  const added = { ...listing, files: [{ name: "icon-37-job-code.png", path: `${folder}/icon-37-job-code.png`, size: 10, modified: NOVEMBER + 1 }, ...listing.files] };
+  await act(async () => showFolder("t1", folder, listing));
+  await render(chat);
+  await settle();
+  expect(tiles()).toHaveLength(3);
+  await act(async () => showFolder("t1", folder, added));
+  await settle();
+  expect(tiles()).toEqual(["icon-37-job-code.png", ...listing.files.slice(0, 3).map((file) => file.name)]);
+  await click(tab("Media"));
+  await act(async () => showFolder("t1", folder, listing));
+  await settle();
+  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tiles()).toHaveLength(3);
+  expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
 });

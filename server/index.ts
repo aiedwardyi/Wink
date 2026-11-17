@@ -372,7 +372,7 @@ import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } fr
 import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
-import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
+import { effectiveModelDial } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
 import { TeamReports } from "./team-reports.ts";
@@ -483,6 +483,7 @@ import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost }
 import { createRoomThreads } from "./room-thread-sync.ts";
 import { syncHold } from "./sync-hold.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
+import { roomTail } from "./rooms/voice-tail.ts";
 import { isVoiceLine, LIVE_VOICE, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
@@ -522,7 +523,18 @@ const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
 const crashCount = crashCounter({ origin: crashOrigin, project: process.env.WINK_CRASH_PROJECT?.trim() || null, key: () => (crashOrigin ? cfg.customKeys?.[new URL(crashOrigin).host] : null) });
 let profileSyncSettings: ProfileSyncSettings = loadProfileSyncSettings(DATA_DIR);
-const board = createBoard({ dir: join(DATA_DIR, BOARD_DIR), pcId: () => profileSyncSettings.deviceId, changed: () => broadcast({ kind: "board" }) });
+const board = createBoard({
+  dir: join(DATA_DIR, BOARD_DIR),
+  pcId: () => profileSyncSettings.deviceId,
+  changed: () => broadcast({ kind: "board" }),
+  author: (botId) => {
+    const bot = store.bot(botId);
+    if (!bot) return undefined;
+    const { instanceId, model } = bot.modelSelection;
+    const label = registry.get(instanceId)?.models.options.find((option) => option.id === model)?.label ?? model;
+    return { name: bot.name, model: label, color: bot.color ?? "", mascot_style: bot.mascotStyle ?? "" };
+  },
+});
 const threadSyncGate = createThreadSyncV2Gate(DATA_DIR);
 if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
@@ -599,7 +611,6 @@ const phoneVisits = new PhoneVisits(DATA_DIR);
 // Absent unless phoneRelay.base is configured and enabled; it starts only
 // once handleRequest exists, so early static serving is never reachable.
 let relayPresenceHost: string | null = null;
-let relayModelDial = false;
 const phoneAccess: PhoneAccess = new PhoneAccess({
   dataDir: DATA_DIR,
   env: process.env,
@@ -617,11 +628,6 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
   room: handleRoomDoor,
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
-    const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
-    if (dial !== relayModelDial) {
-      relayModelDial = dial;
-      broadcast({ kind: "config", ...configStatus() });
-    }
     const host = phoneAccess.presenceHost();
     void teamSnags?.sync();
     if (host === relayPresenceHost) return;
@@ -4878,7 +4884,7 @@ const SHOW_IMAGE_GUIDANCE =
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
   " When reporting after time away, in a summary or wrap-up, or after helpers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
   " If the user answers an open card in their own words, close the card." +
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, check and follow existing work and decisions (feature list, status board, decision notes, memory). Say first if your plan would redo or contradict them. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, follow existing work and decisions (feature list, status board, decision notes, memory); say first if your plan would redo or contradict them. In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date, like: \"use cards\" (Nov 17). Mark everything else 'suggestion, not agreed' and ask before building it. When the user changes their mind, replace the old note; never keep two that disagree. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (role description and user requests override it, including length and teaching style): answer first, 2-5 short lines, the few key points unless asked for every option, plain words, a few bullets over paragraphs, warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. Work out questions before answering. Skip preamble, recaps and generic closing offers; needed questions and asking before acting are not padding. Give code, plans, drafts, commands and anything to paste or follow step by step in full. Otherwise go longer only when asked or needed, still verdict first.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -4893,8 +4899,10 @@ const PLAIN_WORDS_INSTRUCTIONS =
   " Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
+const FORUM_INSTRUCTIONS =
+  " When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
 // One block for every route, so none can carry one rule set without the other.
-const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + modelPicksPrompt();
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -5938,7 +5946,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const routinePrompt = canMessage
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation. For a one-off later step in this chat, call wake_me instead of a countdown in a terminal pane."
         : "";
-      const taskStatePrompt = integrations.agents
+      const taskStatePrompt = integrations.agents && !readOnly
         ? ` Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`
         : "";
       const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
@@ -6783,7 +6791,7 @@ async function runGroupMemberTurn(
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   // the lane runs beside the 1:1 in its folder, so only an engine that can deny edits and shell gets one
   const lane = !hands && botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
-    botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
+    botAccounts.instance(bot, threadId)?.adapter.capabilities.laneTurns === true && roomLanes.claim(botId, threadId);
   if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands, chainAsk);
   }
@@ -7042,7 +7050,7 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   // automatic routing can resolve to an engine that cannot run read-only
-  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
+  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.laneTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority, hands, chainAsk);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
@@ -7771,7 +7779,7 @@ function configStatus() {
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
       terminalLive: true,
-      modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
+      modelDial: effectiveModelDial(cfg),
     },
   };
 }
@@ -7828,18 +7836,22 @@ const groupRoutes = createGroupRoutes({
   },
   syncSettled: (threadId) => threadSyncGate.enabled ? syncHold.settle(threadId) : Promise.resolve(),
 });
+function readOnlyRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
+}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
   roomTurn: ({ botId, threadId }) => {
-    const hosted = store.groupByThread(threadId)?.hosted;
-    if (readOnlyTurnThreads.has(threadId) || (hosted && readOnlyAskTurn(hosted.roomId, threadId, botId))) return "read-only";
-    return hosted || joinedRoomThreads.has(threadId) ? "room" : null;
+    if (readOnlyRoomTurn(botId, threadId)) return "read-only";
+    return store.groupByThread(threadId)?.hosted || joinedRoomThreads.has(threadId) ? "room" : null;
   },
 });
 const internalRoutes = createInternalRoutes({
+  readOnlyTurn: readOnlyRoomTurn,
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
@@ -7947,7 +7959,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId) });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId), roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   firstTurnLaunch,
@@ -8476,6 +8488,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     // ── device picker: PCs in the sync folder ──
     if (method === "GET" && path === BOARD_ROUTES.list) return boardRoutes.list(res);
+    if (method === "POST" && path === BOARD_ROUTES.reply) return await boardRoutes.reply(req, res);
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];

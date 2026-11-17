@@ -2,7 +2,7 @@
 // The pinned ask_user question over the composer, against the real store:
 // it arrives as the full card and shrinks to one row once the person types,
 // attaches or the chat moves on; a tap goes out exactly the way a typed answer
-// would, the row's x only hides it, and the open card's x settles it.
+// would, and the x on the row and on the open card both dismiss it.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,9 +10,11 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
+import { needsYou } from "@/lib/open-question";
+import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
 
 import { Composer } from "./Composer";
+import { Sidebar } from "./Sidebar";
 
 class FakeEventSource {
   static current: FakeEventSource | null = null;
@@ -24,7 +26,7 @@ class FakeEventSource {
   }
 }
 
-// Fold and hide state lives per question id, so every test asks a fresh one.
+// Fold state lives per question id, so every test asks a fresh one.
 let asked = 0;
 let question: Message;
 const ask = (card: Partial<NonNullable<Message["card"]>> = {}): Message => ({
@@ -104,6 +106,8 @@ const pinButton = (name: string) => {
   return found;
 };
 const row = () => host!.querySelector<HTMLElement>("[data-question-row]");
+// the x on the row, whatever it is labelled
+const rowX = () => [...row()!.querySelectorAll("button")].find((button) => /hide|dismiss/i.test(button.getAttribute("aria-label") ?? ""))!;
 const card = () => host!.querySelector<HTMLElement>('[role="region"][data-pending-question]');
 const rowButton = (name: string) => {
   const found = [...(row()?.querySelectorAll("button") ?? [])].find(
@@ -112,7 +116,20 @@ const rowButton = (name: string) => {
   if (!found) throw new Error(`no ${name} button on the row`);
   return found;
 };
-const dot = () => host!.querySelector<HTMLButtonElement>("[data-hidden-question]");
+// what the store still holds as waiting on the person, and the composer's corner count
+let waiting: () => number = () => 0;
+function Waiting({ id }: { id: string }) {
+  const { state } = useStore();
+  waiting = () => needsYou(state.bots.find((bot) => bot.id === id)?.messages ?? []).questions.length;
+  return null;
+}
+const withSidebar = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null,
+  createElement(Waiting, { id: "asker" }),
+  createElement(Composer, props),
+  createElement(Sidebar, { open: false, onClose: () => {} }),
+)));
+const asking = () => host!.querySelector('[data-sidebar-row-id="asker"] [role="button"], [data-sidebar-row-id="asker"] button');
+const count = () => host!.querySelector("[data-orbit-composer-frame] > .bg-accent");
 // the row and the card fold past each other; wait out the closing one
 const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
 const type = (value: string) => act(async () => {
@@ -238,7 +255,8 @@ describe("pinned ask_user question", () => {
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
-    await mount({ bot: bot([question]) });
+    // its own thread, so the typed draft stays out of the next test's box
+    await mount({ bot: { ...bot([question]), threadId: "typed-thread" } });
     await type("S");
     expect(row()).not.toBeNull();
     await type("");
@@ -318,7 +336,7 @@ describe("pinned ask_user question", () => {
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
     expect([...row()!.querySelectorAll("[data-row-choices] button:not([hidden])")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
     expect(rowButton("Prod").className).toContain("whitespace-nowrap");
-    expect(pinButton("Hide question")).toBeTruthy();
+    expect(pinButton("Dismiss question")).toBeTruthy();
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
@@ -348,9 +366,6 @@ describe("pinned ask_user question", () => {
     expect(card()!.closest(".arrival-glow")).not.toBeNull();
     await act(async () => pinButton("Fold question").click());
     await settle();
-    expect(host!.querySelector(".arrival-glow")).toBeNull();
-    await act(async () => pinButton("Hide question").click());
-    await act(async () => dot()!.click());
     expect(host!.querySelector(".arrival-glow")).toBeNull();
     await expand();
     expect(host!.querySelector(".arrival-glow")).toBeNull();
@@ -399,13 +414,13 @@ describe("pinned ask_user question", () => {
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
-  it("outlines the choices in secondary ink with a 44px touch height", async () => {
+  it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
     expect(choice).toContain("rounded-full");
     expect(choice).toContain("bg-control");
     expect(choice).toContain("border-ink-secondary ");
-    expect(choice).toContain("pointer-coarse:min-h-11");
+    expect(choice).toContain("pointer-coarse:after:-inset-y-[5px]");
   });
 
   it("gives the open card's x a 44px touch target without growing the card", async () => {
@@ -434,14 +449,15 @@ describe("pinned ask_user question", () => {
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
-    await mount({ bot: bot([ask({ options: [] })]) });
+    // its own thread, so the unsent answer restored to the box stays out of the next test's
+    await mount({ bot: { ...bot([ask({ options: [] })]), threadId: "answer-thread" } });
     const input = textarea()!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Staging");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "asker-thread" })]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "answer-thread" })]);
   });
 
   it("dismisses with the open card's x", async () => {
@@ -451,48 +467,48 @@ describe("pinned ask_user question", () => {
     expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
   });
 
-  it("hides with the row's x without dismissing, and the composer's dot brings it back", async () => {
+  it("dismisses with the row's x like the card's: nothing waiting, no count, no glow", async () => {
     await mount({ bot: bot([question]) });
+    await withSidebar({ bot: bot([question]) });
+    expect(asking()?.className).toContain("needs-you-glow");
     await shrink();
-    await act(async () => pinButton("Hide question").click());
-    expect(pin()).toBeNull();
-    expect(calls).toEqual([]);
-    expect(dot()?.textContent).toBe("1");
-    expect(dot()?.getAttribute("aria-label")).toBe("Show question");
-    expect(dot()!.closest("[data-orbit-composer-frame]")).not.toBeNull();
-    await act(async () => dot()!.click());
-    expect(row()).not.toBeNull();
-    expect(dot()).toBeNull();
-    expect(calls).toEqual([]);
+    await act(async () => rowX().click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    expect(waiting()).toBe(0);
+    expect(count()).toBeNull();
+    expect(asking()?.className).not.toContain("needs-you-glow");
   });
 
-  it("hides on a sideways swipe across the row without dismissing", async () => {
+  it("dismisses on a sideways swipe across the row", async () => {
     await mount({ bot: bot([question]) });
+    await withSidebar({ bot: bot([question]) });
     await shrink();
     expect(row()!.className).toContain("touch-pan-y");
     await swipe(row()!, 4, 60);
     expect(row()).not.toBeNull();
     await swipe(row()!, 200);
-    expect(row()).toBeNull();
-    expect(dot()?.textContent).toBe("1");
-    expect(calls).toEqual([]);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    expect(waiting()).toBe(0);
+    expect(asking()?.className).not.toContain("needs-you-glow");
   });
 
-  it("counts two open questions as 2 on the row and the dot", async () => {
+  it("dismisses only the question on the row, so the other still shows and glows", async () => {
     const first = ask({ subtitle: "Which region?", staysOpen: true });
     const second = ask({ subtitle: "Which plan?", staysOpen: true });
     await mount({ bot: bot([first, second]) });
+    await withSidebar({ bot: bot([first, second]) });
     await shrink();
     expect(row()!.textContent).toContain("2/2");
     expect(row()!.textContent).toContain("Which plan?");
-    await act(async () => pinButton("Hide question").click());
-    expect(dot()?.textContent).toBe("2");
+    await act(async () => rowX().click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${second.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    expect(waiting()).toBe(1);
+    expect(asking()?.className).toContain("needs-you-glow");
   });
 
   it("leaves once the person has sent a later message", async () => {
     await mount({ bot: bot([question, { id: "u1", role: "user", kind: "text", at: 4, text: "Staging" }]) });
     expect(pin()).toBeNull();
-    expect(dot()).toBeNull();
   });
 
   it("waits behind a pending approval and leaves the box typeable", async () => {
@@ -519,5 +535,31 @@ describe("pinned ask_user question", () => {
     expect(sent("POST", "/api/groups/room/messages").map((call) => call.body)).toEqual([
       expect.objectContaining({ text: "Staging", threadId: "room-thread", sendId: expect.any(String) }),
     ]);
+  });
+});
+
+describe("one tray over the message box", () => {
+  const replied: Message = { id: "said-1", role: "bot", kind: "text", text: "Staging is ready", at: 1 };
+
+  it("arrives as the row while the box holds a reply, and a tap still opens it", async () => {
+    await mount({ bot: { ...bot([question]), threadId: "reply-thread" }, replyTo: replied });
+    expect(card()).toBeNull();
+    expect(row()).not.toBeNull();
+    await expand();
+    expect(card()?.getAttribute("aria-label")).toBe("Ada asks");
+  });
+
+  it("puts the reply quote and the pictures on one row inside the capped tray", async () => {
+    const shot = { kind: "image", path: "/tmp/shot.png", size: 3, mime: "image/png" };
+    localStorage.setItem("omb-draft-attachments", JSON.stringify({
+      "bot:asker:tray-thread": [{ ...shot, id: "one", name: "one.png" }, { ...shot, id: "two", name: "two.png" }],
+    }));
+    await mount({ bot: { ...bot([]), threadId: "tray-thread" }, replyTo: replied });
+    const tray = host!.querySelector("[data-composer-tray]");
+    expect(tray?.className).toContain("max-h-[35dvh]");
+    expect(tray?.className).toContain("overflow-y-auto");
+    const together = tray?.querySelector('[data-attachment-tray="row"]');
+    expect(together?.textContent).toContain("Replying to Ada");
+    expect(together?.querySelectorAll('[aria-label="Remove image"]')).toHaveLength(2);
   });
 });

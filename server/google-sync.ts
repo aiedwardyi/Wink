@@ -88,6 +88,8 @@ type Options = {
   picture?: (name: string) => void;
   /** A pass just downloaded a peer's memory snapshot for that bot. */
   memory?: (botSyncId: string) => void;
+  /** A pass uploaded files, so peers can pull now. */
+  uploaded?: () => void;
   openThread?: () => string | null;
   ownIds?: () => DriveOwnIds;
   fetch?: typeof fetch;
@@ -419,6 +421,7 @@ export function createGoogleSync(options: Options) {
     }
     problem = null;
     lastSyncAt = now();
+    if (summary.uploaded.length) options.uploaded?.();
     if (bound.phase === "ready" && summary.retryAfterMs === null && !summary.failed.some((path) => path.startsWith("threads-v2"))) chatFirst = false;
     if (!summary.driveFull) {
       fullStrikes = 0;
@@ -519,6 +522,11 @@ export function createGoogleSync(options: Options) {
     read,
     start,
     kick,
+    /** Another PC uploaded: one pass now, or one more after the running one. A rate-limit wait stands. */
+    poked(): void {
+      if (rateLimited) return;
+      void kick();
+    },
     /** Settles once no pass is running or due right away. */
     idle: async () => { while (running || soon) await (running ?? new Promise((done) => setTimeout(done, 1))); },
     /** Null while the catch-up has not listed Drive yet. */

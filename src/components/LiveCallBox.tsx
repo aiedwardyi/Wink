@@ -1,25 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Captions, Loader2, Mic, MicOff, PhoneOff, Settings } from "lucide-react";
+import { Loader2, Mic, MicOff, PhoneOff, Settings } from "lucide-react";
 
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { CallState } from "@/lib/live-call/controller";
+import { useCallCaptions } from "@/lib/live-call/captions";
 import { reducedMotion } from "@/lib/phone-swipe";
-import { useBackLayer } from "@/lib/use-back-layer";
-import { CallSettings } from "./CallSettings";
+import { CallSettingsHold } from "./CallSettings";
 import { clock, useLive, WORDS, type Live } from "./LiveCallBar";
 
-const CAPTIONS = "wink.liveCall.captions";
 const BARS = [0.55, 1, 0.75, 0.45];
-
-function captionsOn(): boolean {
-  try {
-    return localStorage.getItem(CAPTIONS) === "1";
-  } catch {
-    return false;
-  }
-}
 
 function VoiceBars({ live, muted }: { live: Live; muted: boolean }) {
   const bars = useRef<Array<HTMLSpanElement | null>>([]);
@@ -68,25 +59,14 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
   const words = WORDS[locale] ?? WORDS.en;
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
-  const [captions, setCaptions] = useState(captionsOn);
-  const [menu, setMenu] = useState(false);
+  const captions = useCallCaptions();
   const [now, setNow] = useState(() => Date.now());
-  useBackLayer(menu, () => setMenu(false));
 
   useEffect(() => {
     if (!snap.startedAt) return;
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [snap.startedAt]);
-
-  const toggleCaptions = () => {
-    setCaptions(!captions);
-    try {
-      localStorage.setItem(CAPTIONS, captions ? "0" : "1");
-    } catch {
-      // stays for this call only
-    }
-  };
 
   const talking = snap.status === "listening" || snap.status === "speaking" || snap.status === "working";
   const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
@@ -111,24 +91,22 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
             </>}
         </p>
         <span className="ml-auto" />
-        <button type="button" aria-expanded={menu} aria-label={t("callMenu.open")} title={t("callMenu.open")} onClick={() => setMenu(!menu)} className={cn(icon, menu ? "bg-control text-ink" : "text-ink-secondary hover:bg-control hover:text-ink")}>
-          <Settings size={17} />
-        </button>
+        <CallSettingsHold bot={bot} tap>
+          <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(icon, "text-ink-secondary hover:bg-control hover:text-ink")}>
+            <Settings size={17} />
+          </button>
+        </CallSettingsHold>
         {talking && (
-          <>
-            <button type="button" aria-pressed={captions} aria-label={words.captions} title={words.captions} onClick={toggleCaptions} className={cn(icon, captions ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-control hover:text-ink")}>
-              <Captions size={17} />
-            </button>
-            <button type="button" aria-pressed={snap.muted} aria-label={snap.muted ? words.unmute : words.mute} title={snap.muted ? words.unmute : words.mute} onClick={() => call.mute(!snap.muted)} className={cn(icon, snap.muted ? "bg-control text-ink" : "text-ink-secondary hover:bg-control hover:text-ink")}>
-              {snap.muted ? <MicOff size={17} /> : <Mic size={17} />}
-            </button>
-          </>
+          <button type="button" aria-pressed={snap.muted} aria-label={snap.muted ? words.unmute : words.mute} title={snap.muted ? words.unmute : words.mute} onClick={() => call.mute(!snap.muted)} className={cn(icon, snap.muted ? "bg-control text-ink" : "text-ink-secondary hover:bg-control hover:text-ink")}>
+            {snap.muted ? <MicOff size={17} /> : <Mic size={17} />}
+          </button>
         )}
-        <button type="button" aria-label={words.end} title={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
-          <PhoneOff size={16} />
-        </button>
+        <CallSettingsHold bot={bot}>
+          <button type="button" aria-label={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
+            <PhoneOff size={16} />
+          </button>
+        </CallSettingsHold>
       </div>
-      {menu && <CallSettings bot={bot} className="col-span-full row-start-4 mt-2 max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain border-t border-hairline/60 px-1 pt-3" />}
     </>
   );
 }

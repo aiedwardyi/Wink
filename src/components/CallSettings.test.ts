@@ -23,7 +23,7 @@ import { MENU_CLASS } from "./MessageMenu";
 
 const ada = { id: "bot-1", name: "Ada", color: "iris", messages: [] } as unknown as Bot;
 const tuned = { ...ada, call: { voice: "Puck", speed: 1.2 } } as Bot;
-const clips: Array<{ src: string; paused: boolean; fail: boolean }> = [];
+const clips: Array<{ src: string; paused: boolean; fail: boolean; volume: number; playbackRate: number }> = [];
 
 let root: ReturnType<typeof createRoot> | null = null;
 
@@ -32,6 +32,8 @@ beforeEach(() => {
   vi.stubGlobal("Audio", class {
     paused = true;
     fail = false;
+    volume = 1;
+    playbackRate = 1;
     onended: (() => void) | null = null;
     constructor(public src: string) { clips.push(this); }
     play() { this.paused = false; return this.fail ? Promise.reject(new Error("missing")) : Promise.resolve(); }
@@ -43,7 +45,7 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   root = null;
   applyLocale("en");
-  store.dispatch.mockClear();
+  store.dispatch.mockReset();
   store.bots = [];
   store.config = {};
   clips.length = 0;
@@ -229,6 +231,42 @@ it("plays one preview at a time and a second tap stops it", async () => {
   expect(clips[1]!.paused).toBe(true);
   expect(host.querySelectorAll('button[aria-pressed="true"]')).toHaveLength(0);
   expect(store.dispatch).not.toHaveBeenCalled();
+});
+
+async function playJenn() {
+  setCallVolume(1);
+  store.bots = [ada];
+  store.dispatch.mockImplementation(({ patch }) => void (store.bots = [{ ...store.bots[0]!, ...patch }]));
+  const panel = () => createElement(CallSettings, { bot: ada });
+  const host = await render(panel());
+  await act(async () => button(host, "Play Jenn")!.click());
+  // the mocked store does not re-render on dispatch
+  const moved = async (change: () => Promise<void>) => {
+    await change();
+    await act(async () => root!.render(panel()));
+  };
+  return { host, clip: clips[0]!, moved };
+}
+
+it("Speed changes the sample while it plays and the next one", async () => {
+  const { host, clip, moved } = await playJenn();
+  expect(clip.playbackRate).toBe(1);
+  await moved(() => slide(host.querySelector<HTMLInputElement>('input[aria-label="Speed"]')!, 1.3));
+  expect(clip.playbackRate).toBe(1.3);
+  expect(clip.paused).toBe(false);
+  await act(async () => button(host, "Play Eddie")!.click());
+  expect(clips[1]!.playbackRate).toBe(1.3);
+});
+
+it("Style changes the sample's level while it plays, as on a call", async () => {
+  const { host, clip, moved } = await playJenn();
+  await moved(() => act(async () => radio(host, "Lively").click()));
+  expect(clip.volume).toBeCloseTo(0.7 * 1.12);
+  await moved(() => act(async () => radio(host, "Calm").click()));
+  expect(clip.volume).toBeCloseTo(0.7 * 0.6);
+  expect(clip.paused).toBe(false);
+  await act(async () => button(host, "Play Eddie")!.click());
+  expect(clips[1]!.volume).toBeCloseTo(0.7 * 0.6);
 });
 
 it("resets the preview button when the clip will not play, and stops on unmount", async () => {

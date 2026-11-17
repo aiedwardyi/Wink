@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { z } from "zod";
+import { agoText } from "@/lib/ago";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 import { useBarTip } from "./BarTip";
@@ -189,11 +190,5 @@ function PersonCard({ person, days, now, locale }: { person: TeamPerson; days: s
 }
 
 function seenText(lastSeen: number | null, now: number, t: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
-  if (lastSeen == null) return "-";
-  const minutes = Math.floor(Math.max(0, now - lastSeen) / 60000);
-  if (minutes < 1) return t("team.justNow");
-  if (minutes < 60) return t("team.minutesAgo", { n: minutes });
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return t("team.hoursAgo", { n: hours });
-  return t("team.daysAgo", { n: Math.floor(hours / 24) });
+  return lastSeen == null ? "-" : agoText(lastSeen, now, t);
 }

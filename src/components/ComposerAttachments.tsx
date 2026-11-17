@@ -2,7 +2,7 @@
 // file drop that creates them. A long paste collapses into a card of its
 // first lines instead of flooding the composer; a file dropped anywhere
 // on the window attaches by path.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ClipboardPaste, File as FileIcon, Image as ImageIcon, MessageSquareText, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -43,6 +43,7 @@ export function ComposerAttachments({
   onDropFiles,
   dropLabel,
   roomCopy,
+  quote,
 }: {
   disabled?: boolean;
   items: Attachment[];
@@ -61,6 +62,8 @@ export function ComposerAttachments({
   dropLabel?: string;
   /** A hosted room's copy of a desktop file, for teammates. */
   roomCopy?: (file: File) => Promise<string | undefined>;
+  /** The reply quote; beside attachments that are only pictures and files, they share one row of small thumbs. */
+  quote?: ReactNode;
 }) {
   const { t } = useI18n();
   const [preview, setPreview] = useState<PreviewImage | null>(null);
@@ -80,10 +83,12 @@ export function ComposerAttachments({
     // A concurrent intake's notice must survive this drop.
     if (message) onNotice(message);
   }, [onAdd, allowImages, onNotice, onDropFiles, roomCopy, t]), disabled);
+  const row = Boolean(quote) && items.length > 0 && items.every((a) => a.kind === "image" || a.kind === "file" || (a.kind === "upload" && localFile?.(a.id)));
 
   return (
     <>
       {dragging && <FileDropOverlay label={dropLabel ?? "Drop to attach \u2014 the bot gets the file path"} />}
+      {quote && !row && <div className="mb-2 px-1">{quote}</div>}
 
       {notice && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
@@ -99,14 +104,16 @@ export function ComposerAttachments({
       )}
 
       {items.length > 0 && (
-        <div className="mb-2 flex gap-2 overflow-x-auto pr-1.5 pt-1.5">
+        <div data-attachment-tray={row ? "row" : ""} className={cn("mb-2", row && "flex items-end gap-3 px-1")}>
+        {row && <div className="min-w-0 flex-1">{quote}</div>}
+        <div className={cn("flex gap-2 overflow-x-auto pr-1.5 pt-1.5", row && "max-w-[50%] shrink-0 gap-2.5")}>
           {items.map((a) => {
             const local = a.kind === "upload" ? localFile?.(a.id) : undefined;
             return a.kind === "upload" && local?.picture ? (
-              <LocalPictureChip key={a.id} name={a.name} size={a.size} blob={local.file} onRemove={() => onRemove(a.id)} onPreview={setPreview} />
+              <LocalPictureChip key={a.id} name={a.name} size={a.size} blob={local.file} onRemove={() => onRemove(a.id)} onPreview={setPreview} small={row} />
             ) : a.kind === "upload" && local ? (
-              <Chip key={a.id} kind="FILE" title={a.name} onRemove={() => onRemove(a.id)}>
-                <FileBody name={a.name} size={a.size} />
+              <Chip key={a.id} kind="FILE" title={a.name} onRemove={() => onRemove(a.id)} small={row}>
+                <FileBody name={a.name} size={a.size} small={row} />
               </Chip>
             ) : a.kind === "paste" ? (
               <Chip
@@ -134,21 +141,21 @@ export function ComposerAttachments({
                 </button>
               </Chip>
             ) : a.kind === "image" ? (
-              <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)}>
+              <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)} small={row}>
                 <button
                   type="button"
                   onClick={() => { trackScreen("attachment-preview"); setPreview(previewImage(a.path)); }}
-                  className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                  className={cn(PICTURE, row ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}
                   aria-label={`Preview ${a.name}`}
                 >
                   <img
                     src={attachmentImageUrl(a.path) ?? undefined}
                     alt={a.name}
                     loading="lazy"
-                    className="max-h-[76px] max-w-full object-contain"
+                    className={row ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"}
                   />
                 </button>
-                <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>
+                {!row && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>}
               </Chip>
             ) : a.kind === "upload" ? (
               <Chip
@@ -161,11 +168,12 @@ export function ComposerAttachments({
                 <UploadBody upload={a} onRetry={() => onRetryUpload?.(a.id)} onRepick={() => onRepickUpload?.(a.id)} />
               </Chip>
             ) : (
-              <Chip key={a.id} kind="FILE" title={a.path} onRemove={() => onRemove(a.id)}>
-                <FileBody name={a.name} size={a.size} />
+              <Chip key={a.id} kind="FILE" title={a.path} onRemove={() => onRemove(a.id)} small={row}>
+                <FileBody name={a.name} size={a.size} small={row} />
               </Chip>
             );
           })}
+        </div>
         </div>
       )}
       {previewPresence.value && (
@@ -175,7 +183,11 @@ export function ComposerAttachments({
   );
 }
 
-function FileBody({ name, size }: { name: string; size: number }) {
+const PICTURE = "flex items-center justify-center overflow-hidden bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50";
+const SMALL_PICTURE = "size-full rounded-[inherit]";
+
+function FileBody({ name, size, small = false }: { name: string; size: number; small?: boolean }) {
+  if (small) return <div className="flex size-full items-center justify-center"><FileIcon size={16} className="text-ink-secondary" /></div>;
   return (
     <div className="flex h-[76px] items-center gap-2">
       <FileIcon size={16} className="shrink-0 text-ink-secondary" />
@@ -187,20 +199,20 @@ function FileBody({ name, size }: { name: string; size: number }) {
   );
 }
 
-function LocalPictureChip({ name, size, blob, onRemove, onPreview }: { name: string; size: number; blob: File; onRemove: () => void; onPreview: (image: PreviewImage) => void }) {
+function LocalPictureChip({ name, size, blob, onRemove, onPreview, small = false }: { name: string; size: number; blob: File; onRemove: () => void; onPreview: (image: PreviewImage) => void; small?: boolean }) {
   const url = useMemo(() => URL.createObjectURL(blob), [blob]);
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
   return (
-    <Chip kind="IMAGE" title={name} onRemove={onRemove}>
+    <Chip kind="IMAGE" title={name} onRemove={onRemove} small={small}>
       <button
         type="button"
         onClick={() => onPreview({ src: url, name })}
-        className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        className={cn(PICTURE, small ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}
         aria-label={`Preview ${name}`}
       >
-        <img src={url} alt={name} className="max-h-[76px] max-w-full object-contain" />
+        <img src={url} alt={name} className={small ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"} />
       </button>
-      <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>
+      {!small && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>}
     </Chip>
   );
 }
@@ -250,12 +262,15 @@ function Chip({
   title,
   onRemove,
   removeLabel,
+  small = false,
 }: {
   children: React.ReactNode;
   kind: "PASTED" | "FILE" | "IMAGE";
   title: string;
   onRemove: () => void;
   removeLabel?: string;
+  /** a 40px thumb with no kind line, for the row beside a reply quote */
+  small?: boolean;
 }) {
   const { t } = useI18n();
   const Icon = kind === "PASTED" ? ClipboardPaste : kind === "IMAGE" ? ImageIcon : FileIcon;
@@ -264,24 +279,29 @@ function Chip({
     <div
       title={title}
       className={cn(
-        "group relative w-[172px] shrink-0 rounded-xl border border-hairline/40 bg-raised px-2.5 py-2",
+        "group relative shrink-0 rounded-xl border border-hairline/40 bg-raised",
+        small ? "size-10 rounded-lg" : "w-[172px] px-2.5 py-2",
         "hover:border-hairline",
       )}
     >
       {children}
-      <div className="mt-1 flex items-center gap-1">
+      {!small && <div className="mt-1 flex items-center gap-1">
         <Icon size={11} className="text-ink-secondary/70" />
         <span className="rounded border border-hairline/60 px-1 py-px text-[9.5px] font-medium tracking-wide text-ink-secondary">
           {label}
         </span>
-      </div>
+      </div>}
       {/* hover reveals it, but so must focus: `hidden` would take the only
           way to drop a chip out of reach of the keyboard. Touch has no hover, so
           it always shows there. */}
       <button
         onClick={onRemove}
         aria-label={removeLabel ?? t(kind === "PASTED" ? "composer.removePasted" : kind === "IMAGE" ? "composer.removeImage" : "composer.removeFile")}
-        className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border border-hairline/60 bg-panel text-ink-secondary opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:right-1 pointer-coarse:top-1 pointer-coarse:size-6 pointer-coarse:opacity-100"
+        className={cn(
+          "absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border border-hairline/60 bg-panel text-ink-secondary opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
+          // a small thumb keeps its x on the corner, so the picture under it stays tappable
+          small ? "z-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-2" : "pointer-coarse:right-1 pointer-coarse:top-1 pointer-coarse:size-6",
+        )}
       >
         <X size={11} />
       </button>

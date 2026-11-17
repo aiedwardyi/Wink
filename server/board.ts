@@ -10,7 +10,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { redactSecretsInText } from "./redact.ts";
 
 export const BOARD_DIR = "board";
-export const BOARD_KINDS = ["stuck", "fix", "handoff"] as const;
+export const BOARD_KINDS = ["stuck", "fix", "handoff", "tip"] as const;
 export const BOARD_USER = "user";
 /** A post written on a team room turn starts its source_ref with this: people outside this PC shaped it. */
 export const ROOM_REF = "room:";
@@ -19,6 +19,8 @@ export const fromRoom = (post: Pick<BoardPost, "source_ref">) => post.source_ref
 const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const;
 
 const idSchema = z.string().regex(/^p[0-9a-f]{24}$/);
+/** The author as it looked when it posted, so another PC can show a bot it does not have. */
+const authorSchema = z.object({ name: z.string().max(LIMITS.id), model: z.string().max(LIMITS.id), color: z.string().max(32), mascot_style: z.string().max(64) });
 const postSchema = z.object({
   id: idSchema,
   parent_id: idSchema.nullable(),
@@ -35,8 +37,10 @@ const postSchema = z.object({
   created_at: z.number().int().nonnegative(),
   updated_at: z.number().int().nonnegative(),
   pc_id: z.string().max(LIMITS.id),
+  author: authorSchema.optional(),
 });
 
+export type BoardAuthor = z.infer<typeof authorSchema>;
 export type BoardPost = z.infer<typeof postSchema>;
 export type BoardKind = BoardPost["kind"];
 export type NewBoardPost = Pick<BoardPost, "author_bot_id" | "kind" | "title" | "body" | "source_ref"> & Partial<Pick<BoardPost, "parent_id" | "project_id" | "error_sig" | "status" | "fix">>;
@@ -122,6 +126,7 @@ export interface BoardOptions {
   pcId: () => string;
   now?: () => number;
   changed?: () => void;
+  author?: (botId: string) => BoardAuthor | undefined;
 }
 
 export function createBoard(options: BoardOptions) {
@@ -166,6 +171,9 @@ export function createBoard(options: BoardOptions) {
       const title = clean(input.title, LIMITS.title);
       const body = clean(input.body, LIMITS.body);
       const fix = clean(input.fix ?? held?.fix ?? "", LIMITS.fix);
+      const looked = input.author_bot_id === BOARD_USER ? undefined : held?.author ?? options.author?.(input.author_bot_id);
+      // cut to the schema's limits, or a long name would make the post unreadable after a restart
+      const author = looked && { name: looked.name.slice(0, LIMITS.id), model: looked.model.slice(0, LIMITS.id), color: looked.color.slice(0, 32), mascot_style: looked.mascot_style.slice(0, 64) };
       const next: BoardPost = {
         id,
         parent_id: input.parent_id ?? held?.parent_id ?? null,
@@ -183,6 +191,7 @@ export function createBoard(options: BoardOptions) {
         updated_at: at,
         pc_id: options.pcId(),
       };
+      if (author) next.author = author;
       write(next);
       // a room's fix stays a note; it never solves a post a call would be held on
       const parent = next.kind === "fix" && next.parent_id && !fromRoom(next) ? posts().get(next.parent_id) : undefined;

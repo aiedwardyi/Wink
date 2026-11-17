@@ -346,38 +346,30 @@ describe("Moving tiles", () => {
     for (const run of running) expect(run.frames).toBe(3);
   });
 
-  it("stills every tile a few seconds after Themes opens", async () => {
+  it("keeps every tile looping while Themes stays open", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await open();
     await painted();
+    await act(async () => void vi.advanceTimersByTime(60_000));
+    flush(5);
     expect(live()).toHaveLength(animated.length);
-    await act(async () => void vi.advanceTimersByTime(2900));
-    expect(live()).toHaveLength(animated.length);
-    await act(async () => void vi.advanceTimersByTime(100));
-    expect(live()).toHaveLength(0);
-    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(0);
+    for (const run of live()) expect(run.frames).toBe(5);
+    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(animated.length);
   });
 
-  it.each(["mouse", "touch"])("replays a tile from the start while a %s pointer stays on it, and only that tile", async (pointerType) => {
+  it.each(["mouse", "touch"])("leaves every tile looping, none restarted, while a %s pointer comes and goes", async (pointerType) => {
     await open();
     await painted();
-    await point("warp", "pointerover", pointerType);
-    expect(live()).toHaveLength(0);
-    await painted();
-    expect(live().map((run) => run.skin)).toEqual(["warp"]);
-    expect(live()[0].events).toEqual(["loop"]);
+    flush(2);
+    for (const skin of ["warp", "precision", "warp"]) {
+      await point(skin, "pointerover", pointerType);
+      await painted();
+      await point(skin, "pointerout", pointerType);
+      await painted();
+    }
     flush(3);
-    expect(live()[0].frames).toBe(3);
-    await point("warp", "pointerout", pointerType);
-    expect(live()).toHaveLength(0);
-    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(0);
-    await point("warp", "pointerover", pointerType);
-    await painted();
-    expect(live().map((run) => [run.skin, run.frames])).toEqual([["warp", 0]]);
-    await point("warp", "pointerout", pointerType);
-    await point("precision", "pointerover", pointerType);
-    await painted();
-    expect(live()).toHaveLength(0);
+    expect(running).toHaveLength(animated.length);
+    for (const run of running) expect([run.stopped, run.frames]).toEqual([false, 11]);
   });
 
   it("leaves the still tiles alone under reduced motion", async () => {

@@ -1143,6 +1143,41 @@ describe("linked folders", () => {
     }
   });
 
+  it.each(["other-PC", "phone"])("a page in a linked folder loads its pictures and fonts on the %s, and nothing past its folder", async (client) => {
+    const root = temp("linked-folder-page-");
+    const folder = join(root, "forum-look-mock-2");
+    mkdirSync(join(folder, "avatars"), { recursive: true });
+    mkdirSync(join(folder, "fonts"));
+    writeFileSync(join(folder, "forum-look-mock-2.html"), '<img src="avatars/icon-31-wink.png"><style>@font-face { src: url("fonts/Manrope-Variable.woff2"); }</style>');
+    writeFileSync(join(folder, "avatars", "icon-31-wink.png"), "png-bytes");
+    writeFileSync(join(folder, "fonts", "Manrope-Variable.woff2"), "font-bytes");
+    writeFileSync(join(root, "beside.png"), "beside");
+    const phone = client === "phone";
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      ...(phone ? requestCredentials(true, true, false, "k") : { bearerOk: false, remoteKey: "k" }),
+      holder: phone ? "phone-1" : undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", text: `[forum-look-mock-2](${folder})` }],
+      writerDeviceId: () => null, rootsFor: () => [root],
+    }));
+    try {
+      const page = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(folder, "forum-look-mock-2.html"))}`, { headers: phone ? {} : { cookie: "orbit_remote=k" } });
+      expect([page.status, page.headers.get("content-type")]).toEqual([200, "text/html; charset=utf-8"]);
+      expect(page.url.split("/").at(-2)).toContain(phone ? ".phone-1." : `.${PC_HOLDER}.`);
+      // The sandboxed page carries no sign-in; its grant alone loads what sits beside it.
+      const png = await fetch(new URL("avatars/icon-31-wink.png", page.url));
+      expect([png.status, png.headers.get("content-type"), await png.text()]).toEqual([200, "image/png", "png-bytes"]);
+      const font = await fetch(new URL("fonts/Manrope-Variable.woff2", page.url), { headers: { origin: "null" } });
+      expect([font.status, font.headers.get("content-type"), await font.text()]).toEqual([200, "font/woff2", "font-bytes"]);
+      for (const asset of ["../beside.png", "%2e%2e/beside.png", "%2e%2e%5cbeside.png", "avatars/../../beside.png", `${encodeURIComponent(join(root, "beside.png"))}`]) {
+        const denied = await fetch(`${page.url}${asset}`);
+        expect(denied.status, asset).toBe(404);
+        expect(await denied.text()).not.toContain("beside");
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("a folder outside the roots is refused", async () => {
     const outside = temp("linked-folder-outside-");
     writeFileSync(join(outside, "secret.txt"), "secret");
