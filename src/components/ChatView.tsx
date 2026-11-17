@@ -116,7 +116,7 @@ import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
-import { isAskUserCard, useShownQuestionId } from "@/lib/open-question";
+import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
@@ -644,7 +644,6 @@ const MessagesList = memo(function MessagesList({
   const shownRows = useChatPeekRows();
   const streamingMessage = shownRows ? streamingRow : null;
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
-  const shownQuestionId = useShownQuestionId(bot.messages, visibleMessages(bot));
   // Fold finished tool chips into runs, so a stretch of them cannot bury
   // what the bot actually said. Hidden unless Settings → Tool calls is on.
   const listedItems = useMemo(() => {
@@ -798,12 +797,13 @@ const MessagesList = memo(function MessagesList({
                 return <ApprovalCard bot={bot} message={m} />;
               }
               if (m.card && isAskUserCard(m)) {
+                const pinned = pinnedQuestion(bot.messages, visibleMessages(bot))?.id === m.id;
                 return (
                   <AskUserRecord
                     message={m}
                     transcript={transcript}
                     askerName={bot.name}
-                    pinned={shownQuestionId === m.id}
+                    pinned={pinned}
                     onPick={(answer) => dispatch({ type: "answerCard", botId: bot.id, messageId: m.id, answer })}
                   />
                 );

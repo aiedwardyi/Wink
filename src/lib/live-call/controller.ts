@@ -1179,7 +1179,7 @@ export class LiveCall {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
-      // a card answer that does not land is said again on the card, never resent bare at hang-up
+      this.open.add(this.stats.userLines, text);
       const at = this.now();
       void this.send(`${card.prefix}${text}`, { ask: true }).then((result) => {
         if (reached(result)) {

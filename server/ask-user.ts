@@ -6,7 +6,7 @@
 // activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { ANSWERED_IN_CHAT, askStates, cardsToClose, isAskUserCard, isSentByPerson, quotedCard, quotesCard, scanQuestion, typedPastCard } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, askStates, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -79,7 +79,9 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   if (!question) return { status: 400, body: { error: "question required" } };
   if (request.close) {
     let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
-    for (const message of cardsToClose(deps.activePath(request.fromThreadId), question, owner.group ? from.id : undefined)) {
+    for (const [message, state] of askStates(deps.activePath(request.fromThreadId))) {
+      if (state.state !== "waiting" || message.card!.subtitle.trim() !== question) continue;
+      if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
       closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: ANSWERED_IN_CHAT } })) || closed;
     }
     return { status: 200, body: { closed } };
@@ -103,31 +105,35 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
 }
 
+const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
+const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
+
 /** The stored row of a question already answered, dismissed or closed: it takes no second answer, such as a tap from a screen that missed the close. */
 export function settledAsk(messages: readonly Message[], messageId: string): Message | null {
   for (const [message, state] of askStates(messages)) if (message.id === messageId) return state.state === "waiting" ? null : message;
   return null;
 }
 
-/** The settled card a quoted answer names: a tap or an earlier line already answered it, so this send would be a second answer. */
-export function answeredAgain(path: () => readonly Message[], text: string): Message | null {
-  if (!quotesCard(text)) return null;
-  const messages = path();
-  const quoted = quotedCard(messages, text);
-  return quoted ? settledAsk(messages, quoted.id) : null;
-}
-
 /** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
 export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
   const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
-  if (end < 0 || (closerId !== undefined && !isSentByPerson(messages[end]!))) return [];
+  if (end < 0 || (closerId !== undefined && !sentByPerson(messages[end]!))) return [];
   const before = messages.slice(0, end);
   return [...closedNote(before, text, botId), ...openAsksNote(before, text, botId)];
 }
 
 function closedNote(messages: readonly Message[], text: string, botId?: string): string[] {
-  const card = typedPastCard(messages, text, botId)?.card;
-  return card ? [`[Your question card ("${replyExcerpt(card.subtitle, CLOSED_QUESTION_CHARS)}") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]`] : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (sentByPerson(message)) return [];
+    if (!isAskUserCard(message)) continue;
+    const card = message.card!;
+    // a tapped choice can arrive before its answered patch
+    if (card.answered || card.dismissed || card.options.includes(text.trim())) return [];
+    if ((botId && message.from?.botId !== botId) || card.staysOpen) return [];
+    return [`[Your question card ("${replyExcerpt(card.subtitle, CLOSED_QUESTION_CHARS)}") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]`];
+  }
+  return [];
 }
 
 // full questions, not excerpts: closing one needs its exact text
@@ -146,7 +152,7 @@ export function memberClosedAskNotes(messages: readonly Message[], botId: string
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
     if (message.from?.botId === botId) return [];
-    if (isSentByPerson(message)) return closedAskNotes(messages, message.text ?? "", message.id, botId);
+    if (sentByPerson(message)) return closedAskNotes(messages, message.text ?? "", message.id, botId);
   }
   return [];
 }
@@ -169,7 +175,7 @@ export function watchSkippedQuestions(
       const path = store.activePath(change.threadId);
       const card = skippedQuestion(path.at(-1)?.id === change.message.id ? path.slice(0, -1) : path, change.message)?.card;
       if (card) update(change.threadId, (book) => addQuestionAsk(book, card.subtitle, card.options, now()));
-    } else if (change.type === "message" && !change.imported && isSentByPerson(change.message)) {
+    } else if (change.type === "message" && !change.imported && sentByPerson(change.message)) {
       // a typed answer leaves no patch; only a thread with a filed question pays for the walk
       update(change.threadId, (book) => {
         const asks = book?.asks;

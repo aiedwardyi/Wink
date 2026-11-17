@@ -19,7 +19,7 @@ import {
 import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
 import { answerText } from "../../shared/open-question";
-import { answerPatch, canAnswerCard, settledBy, typedAnswer } from "@/lib/open-question";
+import { canAnswerCard, typedAnswer } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -107,10 +107,11 @@ export function visibleMessages(bot: Pick<Bot, "messages" | "activeLeafId" | "ha
 
 /** Undoes a rejected send's settlement, unless something settled the card since. */
 function reopenCard(state: AppState, threadId: string, settles: { cardId: string; answered: string }): AppState {
+  const settledHere = (messages: readonly Message[]) => messages.some((message) => message.id === settles.cardId && message.card?.answered === settles.answered);
   const bot = state.bots.find((candidate) => candidate.threadId === threadId);
-  if (bot && settledBy(bot.messages, settles)) return patchCard(state, bot.id, settles.cardId, { answered: undefined });
+  if (bot && settledHere(bot.messages)) return patchCard(state, bot.id, settles.cardId, { answered: undefined });
   const group = state.groups.find((candidate) => candidate.threadId === threadId);
-  return group && settledBy(group.messages, settles) ? patchGroupCard(state, group.id, settles.cardId, { answered: undefined }) : state;
+  return group && settledHere(group.messages) ? patchGroupCard(state, group.id, settles.cardId, { answered: undefined }) : state;
 }
 
 /** The open question a typed send settles in chat; a queued line's Send now was typed before. */
@@ -352,7 +353,11 @@ export function reducer(state: AppState, action: Action): AppState {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
       const card = bot?.messages.find((message) => message.id === action.messageId)?.card;
       if (bot && !canAnswerCard(visibleMessages(bot), action.messageId)) return state;
-      return withMascotMotion(patchCard(state, action.botId, action.messageId, answerPatch(card, action.answer)), action.botId, "working");
+      const patch: Partial<OptionCardData> = { answered: action.answer };
+      // talking past the first-run quiz hides it; live asks stay until
+      // resolved, and an ask_user question reads as answered, not dismissed
+      if (!card?.requestId && !card?.askUser) patch.dismissed = true;
+      return withMascotMotion(patchCard(state, action.botId, action.messageId, patch), action.botId, "working");
     }
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
@@ -1636,8 +1641,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }).catch(showError);
           } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
             const asked = bot?.messages.find((m) => m.id === action.messageId);
-            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined });
-            void holdReload(persistCard(action.botId, action.messageId, answerPatch(card, action.answer))
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined });
+            void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
               .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
           break;
@@ -1660,7 +1665,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const messages = room?.messages ?? [];
           if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
-          const text = asked ? answerText(asked, action.answer) : action.answer;
+          const text = asked ? answerText(messages, asked, action.answer) : action.answer;
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
             .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId }); }));
           break;

@@ -268,7 +268,7 @@ describe("hang-up keeps his words, review cases", () => {
     expect(sent(posts).map((body) => body.text)).toEqual(["Open the Orbit folder.", "Open the Orbit folder. Yes."]);
   });
 
-  it("never resends an answer to the bot's question bare on hang-up", async () => {
+  it("sends an answer to the bot's question that never reached it on hang-up", async () => {
     let tries = 0;
     const { call, engine, posts, tick } = await live({ responses: { "/messages": () => (tries++ ? ACCEPTED : { status: 409, data: { error: "switched tasks" } }) } });
     call.observe({ busy: false, messages: [{ id: "ask", role: "bot", kind: "options", at: 6_000, card: { title: "q", subtitle: "Ship 1.0.264 now?", options: ["Ship it", "Wait"], askUser: true } } as never] });
@@ -279,7 +279,7 @@ describe("hang-up keeps his words, review cases", () => {
     await tick(0);
     call.end();
     await tick(1_100);
-    expect(sent(posts).map((body) => body.text)).toEqual(["Re: “Ship 1.0.264 now?”\nShip it."]);
+    expect(sent(posts).map((body) => body.text)).toEqual(["Re: “Ship 1.0.264 now?”\nShip it.", "Ship it."]);
   });
 
   it("leaves a Not sent line, before the call ends, when the hang-up message fails", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerPrefix, answerText, isSentByPerson, scanQuestion, typedReply } from "./open-question.ts";
+import { answerText, isSentByPerson, scanQuestion, typedReply } from "./open-question.ts";
 
 const ask = { role: "bot", kind: "options", card: { askUser: true as const } };
 
@@ -53,8 +53,8 @@ describe("an answer to an older question", () => {
   it("names its question only when a newer question follows", () => {
     const older = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship\n it?", staysOpen: true as const } };
     const newer = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const } };
-    expect(answerText(older, "Yes")).toBe("Re: “Ship it?”\nYes");
-    expect(answerText(newer, "main")).toBe(`${answerPrefix(newer)}main`);
+    expect(answerText([older, newer], older, "Yes")).toBe("Re: “Ship it?”\nYes");
+    expect(answerText([older, newer], newer, "main")).toBe("main");
   });
 });
 
