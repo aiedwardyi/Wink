@@ -79,8 +79,7 @@ export function PhoneVideo({ src }: { src: string }) {
         aria-label={label}
         title={label}
         data-phone-video-fullscreen
-        // The browser draws the clip's own controls along the bottom, so ours stays clear of them.
-        className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/40"
+        className="absolute bottom-14 right-2 flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/40"
       >
         {full ? <Minimize size={20} aria-hidden="true" /> : <Maximize size={20} aria-hidden="true" />}
       </button>
