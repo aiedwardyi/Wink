@@ -742,11 +742,15 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
 
       // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
       // owns the process-group vs windowsHide difference (see procs.ts)
+      // The link reader reads this to refuse private addresses on a turn another person started.
+      const childEnv: Record<string, string | undefined> = { ...env, ...identity };
+      if (turn.readOnly) childEnv.OMB_READ_ONLY_TURN = "1";
+      else delete childEnv.OMB_READ_ONLY_TURN;
       let child: ReturnType<typeof spawnCli>;
       try {
         child = spawnCli(config.cli, args, {
           cwd,
-          env: { ...env, ...identity },
+          env: childEnv,
           stdio: ["pipe", "pipe", "pipe"], // prompt on stdin as stream-json NDJSON
         });
       } catch (error) {

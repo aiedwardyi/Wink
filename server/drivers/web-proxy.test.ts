@@ -4,10 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { guardedLookup, htmlToText, PUBLIC_ONLY, readUrl, TOOLS } from "./web-proxy.ts";
+import { guardedLookup, htmlToText, OPEN, PUBLIC_ONLY, readUrl, turnPolicy, TOOLS } from "./web-proxy.ts";
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "web-proxy.ts");
-const ANY = { blocks: () => false };
+const ANY = OPEN;
 
 let site: Server;
 let base = "";
@@ -85,7 +85,7 @@ describe("read_url", () => {
     const out = await readUrl(`${base}/to-file`, ANY);
     expect(out).toMatchObject({ isError: true });
     expect(out.text).toContain("Only http and https");
-    const hop = await readUrl(`${base}/hop`, { blocks: (address) => address === "127.0.0.1" });
+    const hop = await readUrl(`${base}/hop`, { ...OPEN, blocks: (address) => address === "127.0.0.1" });
     expect(hop).toMatchObject({ isError: true });
   });
 
@@ -93,7 +93,7 @@ describe("read_url", () => {
     const lookup = guardedLookup(PUBLIC_ONLY, ((_host: string, _options: unknown, done: (e: null, a: { address: string; family: number }[]) => void) =>
       done(null, [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.7", family: 4 }])) as never);
     const error = await new Promise<Error | null>((resolve) => lookup("evil.example.com", {}, (e) => resolve(e)));
-    expect(error?.message).toContain("private or local");
+    expect(error?.message).toContain("another person started");
     const good = await new Promise<unknown>((resolve) =>
       guardedLookup(PUBLIC_ONLY, ((_h: string, _o: unknown, done: (e: null, a: { address: string; family: number }[]) => void) =>
         done(null, [{ address: "93.184.216.34", family: 4 }])) as never)("example.com", {}, (_e, a) => resolve(a)),
@@ -106,7 +106,39 @@ describe("read_url", () => {
   });
 });
 
+describe("who started the turn", () => {
+  it("opens localhost and LAN names in the user's own chat, refuses them on another person's room turn", async () => {
+    expect(turnPolicy({})).toBe(OPEN);
+    expect(turnPolicy({ OMB_READ_ONLY_TURN: "1" })).toBe(PUBLIC_ONLY);
+    for (const url of [`${base}/page`, "http://[::1]:1/", "http://printer.local/", "http://intranet/"]) {
+      const own = await readUrl(url, turnPolicy({}));
+      expect(own.text, url).not.toMatch(/another person started/);
+    }
+    expect((await readUrl(`${base}/page`, turnPolicy({}))).text).toContain("Title: Example & Co");
+    const guest = await readUrl(`${base}/page`, turnPolicy({ OMB_READ_ONLY_TURN: "1" }));
+    expect(guest).toMatchObject({ isError: true });
+    expect(guest.text).toBe("Private and local addresses can't be opened on a turn another person started in a room. Public links work, or the host can ask in their own chat.");
+  });
+
+  it("a name that resolves private is refused with the same line on a guest turn only", async () => {
+    const answer = ((_h: string, _o: unknown, done: (e: null, a: { address: string; family: number }[]) => void) => done(null, [{ address: "10.0.0.7", family: 4 }])) as never;
+    const guest = await new Promise<Error | null>((resolve) => guardedLookup(PUBLIC_ONLY, answer)("lan.example.com", {}, (e) => resolve(e)));
+    expect(guest?.message).toContain("another person started");
+    const own = await new Promise<unknown>((resolve) => guardedLookup(OPEN, answer)("lan.example.com", {}, (_e, a) => resolve(a)));
+    expect(own).toBe("10.0.0.7");
+  });
+});
+
 describe("web-proxy stdio", () => {
+  const ask = async (env: Record<string, string>, url: string) => {
+    const child = spawn(process.execPath, [PROXY], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, OMB_READ_ONLY_TURN: "", ...env } });
+    const reply = new Promise<any>((resolve) => child.stdout.once("data", (chunk) => resolve(JSON.parse(String(chunk)))));
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_url", arguments: { url } } })}\n`);
+    const message = await reply;
+    child.kill();
+    return message.result;
+  };
+
   it("lists read_url as the only tool, marked read-only", async () => {
     const child = spawn(process.execPath, [PROXY], { stdio: ["pipe", "pipe", "inherit"] });
     const reply = new Promise<any>((resolve) => child.stdout.once("data", (chunk) => resolve(JSON.parse(String(chunk)))));
@@ -115,5 +147,14 @@ describe("web-proxy stdio", () => {
     child.kill();
     expect(message.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["read_url"]);
     expect(TOOLS[0].annotations.readOnlyHint).toBe(true);
+  });
+
+  it("reads a localhost page in an own chat and refuses it on a read-only room turn", async () => {
+    const own = await ask({}, `${base}/page`);
+    expect(own.isError).toBe(false);
+    expect(own.content[0].text).toContain("Title: Example & Co");
+    const guest = await ask({ OMB_READ_ONLY_TURN: "1" }, `${base}/page`);
+    expect(guest.isError).toBe(true);
+    expect(guest.content[0].text).toContain("another person started");
   });
 });

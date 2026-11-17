@@ -1531,6 +1531,27 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("tells the link reader when another person started the turn, and only then", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-readonly-env-"));
+    const instance = await createIn(home, "readonly-env", { FAKE_AGY_DUMP: join(home, "env.json"), OMB_READ_ONLY_TURN: "1" });
+    const recorder = recordEvents(instance.adapter);
+    const dumped = () => JSON.parse(readFileSync(join(home, "env.json"), "utf8")).env.OMB_READ_ONLY_TURN;
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-own", text: "one" });
+      await recorder.until((event) => event.type === "turn.completed");
+      expect(dumped()).toBeUndefined();
+      await instance.adapter.sendTurn({ threadId: "t-guest", text: "two", readOnly: true });
+      await recorder.until((event) => event.type === "turn.completed" && event.threadId === "t-guest");
+      expect(dumped()).toBe("1");
+    } finally {
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a computer turn exclusive, and queues later turns behind a waiting one", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
