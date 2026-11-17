@@ -655,7 +655,7 @@ it("a folder its link just listed draws without asking again, and says so when i
   applyLocale("ko");
   await act(async () => showItem({ threadId: "t1", path: `${mock}-gone`, kind: "folder" }));
   await settle();
-  expect(host.querySelector('[data-kind="folder"] [role="status"]')?.textContent).toBe("이 파일을 보여줄 수 없어요");
+  expect(host.querySelector('[data-kind="folder"] [role="status"]')?.textContent).toBe("이 폴더를 열 수 없어요");
 });
 
 it("an empty linked folder says so in Korean", async () => {
@@ -665,4 +665,23 @@ it("an empty linked folder says so in Korean", async () => {
   await render(chat);
   await settle();
   expect(host.querySelector(".show-media-empty")?.textContent).toBe("이 폴더에는 파일이 없어요");
+});
+
+it("clicking an open folder's link again draws the fresh listing, even behind another tab", async () => {
+  folderFetch(listing);
+  const folder = `${mock}-again`;
+  const added = { ...listing, files: [{ name: "icon-37-job-code.png", path: `${folder}/icon-37-job-code.png`, size: 10, modified: NOVEMBER + 1 }, ...listing.files] };
+  await act(async () => showFolder("t1", folder, listing));
+  await render(chat);
+  await settle();
+  expect(tiles()).toHaveLength(3);
+  await act(async () => showFolder("t1", folder, added));
+  await settle();
+  expect(tiles()).toEqual(["icon-37-job-code.png", ...listing.files.slice(0, 3).map((file) => file.name)]);
+  await click(tab("Media"));
+  await act(async () => showFolder("t1", folder, listing));
+  await settle();
+  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tiles()).toHaveLength(3);
+  expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
 });

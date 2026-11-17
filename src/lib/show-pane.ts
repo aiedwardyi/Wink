@@ -36,6 +36,7 @@ const folderSchema = z.object({
 export type FolderListing = z.infer<typeof folderSchema>;
 
 const listed = new Map<string, FolderListing>();
+const folderViews = new Map<string, (listing: FolderListing) => void>();
 
 /** A linked folder's files from this PC's server, or null when it won't list them. */
 export async function linkedFolder(threadId: string, path: string): Promise<FolderListing | null> {
@@ -46,8 +47,20 @@ export async function linkedFolder(threadId: string, path: string): Promise<Fold
 
 /** Shows a folder its link just listed, so the pane draws that listing without asking again. */
 export function showFolder(threadId: string, path: string, listing: FolderListing) {
-  listed.set(`${threadId}\n${path}`, listing);
+  const key = `${threadId}\n${path}`;
+  const view = folderViews.get(key);
+  if (view) view(listing);
+  else listed.set(key, listing);
   showItem({ threadId, path, kind: "folder" });
+}
+
+/** An open folder takes each listing its link hands over, since showItem keeps the same item as it is. */
+export function watchFolder(threadId: string, path: string, take: (listing: FolderListing) => void): () => void {
+  const key = `${threadId}\n${path}`;
+  folderViews.set(key, take);
+  return () => {
+    if (folderViews.get(key) === take) folderViews.delete(key);
+  };
 }
 
 export function takeFolder(threadId: string, path: string): FolderListing | null {

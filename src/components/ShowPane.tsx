@@ -4,7 +4,7 @@ import { Download, ExternalLink, FileText, Folder, Globe, Image as ImageIcon, Ma
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import { mediaFile, type MediaSource } from "@/lib/show-media";
-import { lastShown, linkedFileSrc, linkedFolder, saveFile, showCheck, showItem, showMap, showMedia, showName, takeFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { lastShown, linkedFileSrc, linkedFolder, saveFile, showCheck, showItem, showMap, showMedia, showName, takeFolder, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
 import { MediaFiles, ShowMedia } from "./ShowMedia";
@@ -175,6 +175,11 @@ function ShowFolder({ item, maximized }: { item: ShowItem; maximized: boolean })
   const [failed, setFailed] = useState(false);
   const name = showName(item.path.replace(/[\\/]+$/, ""));
 
+  useEffect(() => watchFolder(item.threadId, item.path, (got) => {
+    setFailed(false);
+    setListing(got);
+  }), [item.threadId, item.path]);
+
   // Reopened from the Show tab, the folder lists again.
   useEffect(() => {
     if (listing) return;
@@ -196,7 +201,7 @@ function ShowFolder({ item, maximized }: { item: ShowItem; maximized: boolean })
         <span className="show-frame-name" title={item.path}>{name}</span>
       </div>
       {failed
-        ? <div className="verify-watch-banner" role="status">{t("show.failed")}</div>
+        ? <div className="verify-watch-banner" role="status">{t("show.folderFailed")}</div>
         : <MediaFiles files={files} pickFor={`${item.threadId}\n${item.path}`} empty="chat.folder.empty">
           {listing && listing.more > 0 && <p data-folder-more className="show-media-empty">{t(listing.more === 1 ? "chat.folder.moreOne" : "chat.folder.more", { count: listing.more })}</p>}
         </MediaFiles>}
