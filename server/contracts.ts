@@ -337,6 +337,8 @@ export interface ProviderAdapter {
     steerConsumed?: boolean;
     /** True when the driver honours SendTurnInput.readOnly. */
     readOnlyTurns?: boolean;
+    /** True when a busy bot can answer a room on a second, read-only lane beside its 1:1. */
+    laneTurns?: boolean;
     /** True only when local MCP calls can reach the human approval channel.
      * Full-auto/bypass provider instances must leave this false. */
     localComputerMcp?: boolean;

@@ -89,6 +89,19 @@ export function bareYes(said: string): boolean {
   return afterYes(said).split(/[\s,.!~…]+/).filter(Boolean).every((word) => ["어", "은", "음", ...YES_KO].includes(koWords(word)[0]!));
 }
 
+// What a yes to a room post may add and still only answer it: "Yes, post it", "응, 올려줘".
+const POST_WORDS = new Set("post share put send it that this there here in on to the room chat go ahead do please now 올려 올려줘 공유 공유해 공유해줘 거기 거기에 방 방에 그거".split(" "));
+
+/** A yes to posting and nothing more: "Okay, check Firefox too" asks for new work. */
+export function yesToPost(said: string): boolean {
+  if (bareYes(said)) return true;
+  if (consentOf(said) !== "yes") return false;
+  return afterYes(said).split(/[\s,.!~…]+/).filter(Boolean).every((word) => {
+    const ko = koWords(word)[0]!.toLowerCase();
+    return ["어", "은", "음", ...YES_KO].includes(ko) || POST_WORDS.has(ko);
+  });
+}
+
 const DONE_EN = /\b(it'?s|is|all|i'?m|i'?ve|we'?re) (done|finished|fixed|complete|merged|pushed|live)\b/i;
 const DONE_KO = /(완료(했|됐)|끝났|다 했|고쳤|수정했|보냈|머지했|푸시했)/;
 

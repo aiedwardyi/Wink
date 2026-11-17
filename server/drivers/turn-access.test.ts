@@ -44,6 +44,16 @@ describe("turn access", () => {
     expect(antigravityAccess(buildAntigravityTurnArgv({ fullAuto: false, cwd: "" }))).toEqual({ edits: "free", commands: "off" });
   });
 
+  it("runs a read-only turn in each engine's own read-only mode, never a full-permission one", () => {
+    const agy = buildAntigravityTurnArgv({ fullAuto: true, cwd: "", readOnly: true });
+    expect(agy).toEqual(expect.arrayContaining(["--mode", "plan"]));
+    expect(agy).not.toContain("--dangerously-skip-permissions");
+    expect(antigravityAccess(agy)).toEqual({ edits: "off", commands: "off" });
+    const grok = grokSupport.spawnArgs({ cli: "grok", fullAuto: true }, { threadId: "", text: "", approval: "auto", readOnly: true });
+    expect(grok.slice(0, 2)).toEqual(["--permission-mode", "plan"]);
+    expect(grokSupport.grants!({ cli: "grok", fullAuto: true }, { approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
+  });
+
   it("says each grant in plain words and names only the Wink tools mounted", () => {
     const text = accessRules({ edits: "free", commands: "off" }, { agents, terminal: agents });
     expect(text).toContain("You can read files. You can edit files without asking; you cannot run commands.");
@@ -63,5 +73,17 @@ describe("turn access", () => {
     // the box agent's own box never asks, so accessRules' FREE_ACCESS default is its grant
     const missing = starters.filter((file) => file !== "drivers/boxagent.ts" && !/^\s+access[:(]/m.test(readFileSync(join(server, file), "utf8")));
     expect(missing, "add access(turn) to the adapter, read off the values its sendTurn launches with").toEqual([]);
+  });
+
+  it("every engine runs a read-only turn, so a teammate without Can make bots work still gets an answer", () => {
+    const drivers = dirname(fileURLToPath(import.meta.url));
+    // SAFETY: readdirSync without withFileTypes lists names as strings
+    const starters = (readdirSync(drivers, { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && /^\s+sendTurn[,:]/m.test(readFileSync(join(drivers, file), "utf8")))
+      .map((file) => file.replaceAll("\\", "/"));
+    expect(starters.length).toBeGreaterThan(4);
+    // the box agent is a full agent on the bot's cloud computer with no read-only mode: it keeps the can't-work line
+    const missing = starters.filter((file) => file !== "boxagent.ts" && !/^\s+readOnlyTurns: true,/m.test(readFileSync(join(drivers, file), "utf8")));
+    expect(missing, "set capabilities.readOnlyTurns: true and make sendTurn honour turn.readOnly with the engine's own read-only mode (sandbox, plan mode, or tools off), never a full-permission turn").toEqual([]);
   });
 });
