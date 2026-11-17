@@ -287,13 +287,22 @@ export function mergeTimelines(a: string, b: string): string | null {
       const ordered = Boolean(entry.tapped) === Boolean(entry.replacedBy && byId.get(entry.replacedBy)?.tapped);
       if (next && next !== key && ordered) parents.set(next, new Set([...(parents.get(next) ?? []), key]));
       const before = merged.get(key);
-      merged.set(key, before ? {
+      if (!before) {
+        merged.set(key, { ...entry, source: key, replacedBy: undefined });
+        continue;
+      }
+      const both: PickEntry = {
         ...before,
         picture: before.picture ?? entry.picture,
         over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
         files: union(before.files, entry.files), tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
-        ...(before.tapped && !entry.tapped ? { tapped: undefined, at: entry.at } : {}),
-      } : { ...entry, source: key, replacedBy: undefined });
+      };
+      // one PC saw the tap retyped
+      if (before.tapped && !entry.tapped) {
+        delete both.tapped;
+        both.at = entry.at;
+      }
+      merged.set(key, both);
     }
   }
   const pending = [...merged.entries()].sort(([a, x], [b, y]) => entryTime(x) - entryTime(y) || compare(a, b));
