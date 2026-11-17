@@ -2,12 +2,13 @@
 import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
+import type { CallRoom } from "../../../shared/live-call";
 import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 import { callAudio } from "./warm-audio";
 
-/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about. */
-export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext; opener?: string };
+/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about; `room` the team room it was placed from. */
+export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext; opener?: string; room?: CallRoom & { name: string } };
 
 let calls = 0;
 let call: ActiveCall | null = null;
@@ -31,8 +32,8 @@ export function callsSupported(): boolean {
   return typeof AudioContext !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
-export function placeCall(bot: Bot, ctx: AudioContext, opener?: string): ActiveCall {
-  call = { id: ++calls, botId: bot.id, bot, ctx, opener };
+export function placeCall(bot: Bot, ctx: AudioContext, opener?: string, room?: ActiveCall["room"]): ActiveCall {
+  call = { id: ++calls, botId: bot.id, bot, ctx, opener, room };
   releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;

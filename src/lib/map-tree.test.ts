@@ -98,8 +98,12 @@ it("runs a parent's line straight into a kid that sits under it, at every width"
     for (let width = 320; width <= 1000; width += 7) {
       const { items } = treeLayout(treeIndex("zlife-audit-fixes", paths), opts(width, changed, { phone: width < 480 }, px));
       for (const parent of items.filter(it => it.kids?.length)) {
-        const [[x, , bus], ...kids] = [...treeEdges([parent], it => it).matchAll(/M([\d.]+) ([\d.]+)V([\d.]+)/g)].map(match => match.slice(1).map(Number));
-        for (const [kid, y] of kids) if (y === bus && kid !== x && Math.abs(kid - x) <= 4) jags.push(`run ${run} width ${width} ${parent.id}: ${x} -> ${kid}`);
+        const legs = treeEdges([parent], it => it).split("M").filter(Boolean).map(leg => ({ straight: leg.includes("V"), at: leg.match(/[\d.]+/g)!.map(Number) }));
+        const [x, y] = legs[0].at;
+        for (const { straight, at } of legs) {
+          const kid = straight ? at[0] : at.at(-2)!;
+          if (at[0] === x && at[1] === y && kid !== x && Math.abs(kid - x) <= 4) jags.push(`run ${run} width ${width} ${parent.id}: ${x} -> ${kid}`);
+        }
       }
       for (const path of changed) {
         const climb = treeClimb(items, path, it => it) ?? [];

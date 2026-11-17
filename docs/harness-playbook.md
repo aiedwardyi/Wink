@@ -48,7 +48,7 @@ Keep one line per feature, doc, deck or page in `built.md` (project notes, else 
 
 Usage percentages in Wink are what is LEFT;
 always say "X% left".
-Account, burn-order and limit answers come from usage_status, never memory; spend first what resets first.
+Account, burn-order and limit answers come from usage_status, never memory; use Main, then Settings order.
 
 An app update or restart closes every pane mid-run: before suggesting one, tell the user which of your workers it would stop; after one, respawn each as before, on the same engine. A pane's servers and test browsers can outlive it; close only the ones you can prove it started (parent process, start time): other bots run them too.
 
@@ -63,10 +63,11 @@ worker with `Read <card path> and do it.`
 # NICKNAME | MODEL | EFFORT | FRESH|CURRENT
 
 ## Purpose
-What to build or fix, and why. Two to five lines. Quote the user's latest words verbatim.
+What to build or fix, and why. 2-5 lines. Quote the user's latest words verbatim.
 
 ## Acceptance
-- Checkable outcomes: behavior, tests that must pass, typecheck clean.
+- Checkable outcomes: behavior, tests that must pass, typecheck clean. Each is
+  backed by the user's words in Purpose or marked "suggestion, ask first".
 
 ## Constraints
 - Worktree path and branch. What not to touch. Push remote and
@@ -104,12 +105,11 @@ The exact shape of its final message, plus one line: what it reused.
 - NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`); `<name>` below is it in lowercase.
 - FRESH: a new worker with no context. CURRENT: reuse a live pane that already
   has the context; send it the card path with terminal_send.
-- One card, one branch, one worktree. Keep scope tight; the worker does
-  exactly what the card says.
+- One card, one branch, one worktree. The worker does exactly what the card says.
 - A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
   Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
 - A repeat mistake gets a failing check, not a rule line. Automate a job (routine, fan-out) only after one run passes Verify before push.
-- Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.
+- Launch only cards that serve the current goal or that the user asked for.
 - Parallel cards: split shared ids, routes and names between them up front.
 - If their branches must work together, end with one INTEGRATE card: merge the
   named branches in a scratch worktree, run the checks, report like a worker.

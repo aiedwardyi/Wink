@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, use
 import { File as FileIcon, FileArchive, FileAudio, FileCode, FileSpreadsheet, FileText, Play, Presentation, type LucideIcon } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
-import { localeTag, useI18n } from "@/lib/i18n";
+import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { FILE_ROW, GAP, HEAD, PAD, monthAt, useMediaGrid, type GridLayout, type GridMonth } from "@/lib/media-grid";
 import { heldMedia, loadMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
@@ -11,10 +11,12 @@ import { showItem } from "@/lib/show-pane";
 import { MediaClip } from "./MediaClip";
 import { MediaMenu } from "./MediaMenu";
 import { MediaViewer } from "./MediaViewer";
-import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved } from "./RoomMedia";
+import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved, type RoomFiles } from "./RoomMedia";
 
 const ROW = "flex w-full min-w-0 items-center gap-3 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 const BUBBLE_MS = 600;
+// the shortest thumb a fingertip can catch
+const GRAB = 44;
 const KINDS: MediaKind[] = ["photos", "files"];
 const ICONS: Array<[RegExp, LucideIcon]> = [
   [/\.(pdf|docx?|txt|md|rtf|odt)$/i, FileText],
@@ -43,12 +45,21 @@ function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
 }
 
 export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
-  const { t, locale } = useI18n();
   const { files, room } = useMediaFiles(source);
+  return (
+    <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
+      <MediaFiles files={files} room={room} pickFor={source.threadId} roomId={source.roomId} />
+    </div>
+  );
+});
+
+/** The Photos and Files list, for a chat's Media tab or a linked folder in Show. `pickFor` keeps its own Photos or Files pick. */
+export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.empty", children }: { files: MediaFile[] | null; room?: RoomFiles | null; pickFor: string; roomId?: string; empty?: MessageKey; children?: ReactNode }) {
+  const { t, locale } = useI18n();
   const photos = useMemo(() => files?.filter((file) => file.image || file.video) ?? [], [files]);
   const others = useMemo(() => files?.filter((file) => !file.image && !file.video) ?? [], [files]);
   const [, repaint] = useReducer((n: number) => n + 1, 0);
-  const kind: MediaKind = others.length && (!photos.length || pickedKind(source.threadId, source.roomId) === "files") ? "files" : "photos";
+  const kind: MediaKind = others.length && (!photos.length || pickedKind(pickFor, roomId) === "files") ? "files" : "photos";
   const months = useMemo(() => mediaMonths(kind === "photos" ? photos : others, locale), [kind, photos, others, locale]);
   const day = useMemo(() => new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }), [locale]);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
@@ -61,13 +72,13 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
   const { layout, viewport, from, to } = useMediaGrid(scroller, months);
   const choose = (next: MediaKind) => {
     if (next === kind) return;
-    pickKind(source.threadId, source.roomId, next);
+    pickKind(pickFor, roomId, next);
     scroller.current!.scrollTop = 0;
     repaint();
   };
 
   return (
-    <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
+    <>
       {room && <RoomFilesNotice list={room} />}
       {photos.length > 0 && others.length > 0 && (
         <div role="tablist" data-media-kinds className="show-media-kinds">
@@ -76,7 +87,7 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
       )}
       <div className="show-media-body">
         <div ref={scroller} className="show-media-scroll">
-          {files?.length === 0 && <p className="show-media-empty">{t("show.empty")}</p>}
+          {files?.length === 0 && <p className="show-media-empty">{t(empty)}</p>}
           {layout.height > 0 && (
             <div data-media-grid style={{ height: layout.height }}>
               {layout.months.map((month) => month.top < to && month.top + month.height > from && (
@@ -84,6 +95,7 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
               ))}
             </div>
           )}
+          {children}
         </div>
         <MediaScrollThumb scroller={scroller} layout={layout} viewport={viewport} />
       </div>
@@ -91,11 +103,11 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
         <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpenKey(null)} previous={at > 0} next={at < images.length - 1}
           onNavigate={(step) => setOpenKey(images[at + step]?.key ?? open.key)} />
       )}
-      <MediaMenu frame={scroller} files={files} roomId={source.roomId} readOnly={Boolean(room?.error)} />
-      {source.roomId && room && <RoomMedia list={room} />}
-    </div>
+      <MediaMenu frame={scroller} files={files} roomId={roomId} readOnly={Boolean(room?.error)} />
+      {roomId && room && <RoomMedia list={room} />}
+    </>
   );
-});
+}
 
 const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, day, onOpen }: { month: GridMonth; layout: GridLayout; from: number; to: number; day: Intl.DateTimeFormat; onOpen: (file: MediaFile) => void }) {
   const { columns, cell } = layout;
@@ -140,7 +152,7 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
   const [label, setLabel] = useState("");
   const [shown, setShown] = useState(false);
   const content = layout.height + PAD * 2;
-  const size = viewport > 0 && content > viewport ? Math.max(32, viewport * viewport / content) : 0;
+  const size = viewport > 0 && content > viewport ? Math.max(GRAB, viewport * viewport / content) : 0;
   const track = viewport - size;
   const range = content - viewport;
 

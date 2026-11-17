@@ -1,6 +1,7 @@
 // One AudioContext per call: worklet capture out, 24 kHz voice in, dropped at once on barge-in.
 import { boop } from "./call-sounds";
 import { CAPTURE_WORKLET } from "./capture-worklet";
+import { OUTPUT_GAIN } from "../../../shared/live-call";
 import { Stretch } from "./stretch";
 
 const VOICE_RATE = 24_000;
@@ -9,8 +10,6 @@ const PIECE = VOICE_RATE / 5;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
-// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps.
-const OUTPUT_GAIN = 0.7;
 
 export class CallAudio {
   private stream: MediaStream | null = null;

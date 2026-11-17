@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 12, 9, 0).getTime();
@@ -57,6 +57,24 @@ describe("task asks", () => {
     expect(asksNudge(asks, NOW, "thanks")).toBe("");
   });
 
+  it("tells every bot to file a yes to its own proposal as an ask not started yet", () => {
+    expect(TASK_ASKS_PROMPT).toContain("Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet.");
+  });
+
+  it("keeps a decided ask not started under newer ones and reopens a declined one by id", () => {
+    const decided = saved(mergeTaskAsks(undefined, [{ ask: "Fold decided work into asks", status: "open" }, { ask: "Old idea", status: "declined" }], NOW - 2 * HOUR));
+    let asks: TaskAsk[] = decided.asks;
+    for (let index = 0; index < 45; index += 1) asks = saved(mergeTaskAsks({ asks, lastAskId: index + 2 }, [{ ask: `newer ${index}`, status: "open" }], NOW)).asks;
+    expect(asks[0]).toEqual({ id: "A1", ask: "Fold decided work into asks", status: "open", at: NOW - 2 * HOUR, changedAt: NOW - 2 * HOUR });
+    expect(asks.map((item) => item.id)).not.toContain("A2");
+    expect(asksBlock(asks, NOW)).toMatch(/\+41 more open$/);
+    expect(asksBlock(asks, NOW, true)).toContain("- A1 open 11-12: Fold decided work into asks");
+    const declined = [ask(1), ask(2, { status: "declined" })];
+    const reopened = saved(mergeTaskAsks({ asks: declined }, [{ id: "A2", status: "open" }], NOW)).asks;
+    expect(reopened[1]).toEqual(ask(2, { changedAt: NOW }));
+    expect(saved(mergeTaskAsks({ asks: declined }, [{ ask: "ask number 2", status: "open" }], NOW)).asks.map((item) => [item.id, item.status])).toEqual([["A1", "open"], ["A2", "declined"], ["A3", "open"]]);
+  });
+
   it("refuses an unknown id and a new ask with no words", () => {
     expect(mergeTaskAsks({ asks: [ask(1)] }, [{ id: "A9", status: "done" }], NOW)).toEqual({ error: "Unknown ask id A9. Open asks: A1." });
     expect(mergeTaskAsks({ asks: [ask(1)] }, [{ status: "open" }], NOW)).toEqual({ error: "A new ask needs ask, the user's words in brief; send id to update one." });
@@ -110,7 +128,7 @@ describe("task asks", () => {
     const fresh = ask(1, { status, changedAt: NOW - ASK_STALE_MS + 1 });
     const stale = ask(2, { status, changedAt: NOW - ASK_STALE_MS });
     const block = asksBlock([fresh, stale], NOW);
-    expect(block).toContain(`- A2 ${status} stale 11-12`);
+    expect(block.split("\n").at(-1)).toBe("1 stale (A2): no change in 6+ hours, so raise it with the user now, then update it.");
     expect(block).toContain(`- A1 ${status} 11-12`);
     expect(asksNudge([fresh], NOW, "thanks")).toBe("");
     expect(asksNudge([fresh, stale], NOW, "thanks")).toBe(block);
@@ -123,14 +141,51 @@ describe("task asks", () => {
     expect(asksNudge(old, NOW, "status?")).toBe("");
   });
 
-  it("lists stale asks first, then the oldest, five at most", () => {
-    const asks = [...Array.from({ length: 6 }, (_, index) => ask(index + 1)), ask(7, { changedAt: 0, ref: "PR #7" })];
+  it("lists the newest open asks first, five at most, and counts the stale ones last", () => {
+    const asks = Array.from({ length: 7 }, (_, index) => ask(index + 1, { at: NOW - (7 - index) * HOUR, ...(index ? {} : { changedAt: 0, ref: "PR #1" }) }));
     expect(asksBlock(asks, NOW).split("\n")).toEqual([
-      "[Wink asks list - 7 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it.]",
-      "- A7 open stale 11-12: ask number 7 (PR #7)",
-      ...[1, 2, 3, 4].map((id) => `- A${id} open 11-12: ask number ${id}`),
+      "[Wink asks list - 7 open.]",
+      ...[7, 6, 5, 4, 3].map((id) => `- A${id} open 11-12: ask number ${id}`),
       "+2 more open",
+      "1 stale (A1): no change in 6+ hours, so raise it with the user now, then update it.",
     ]);
+    expect(asksBlock([ask(2), ask(1)], NOW).split("\n").slice(1)).toEqual(["- A2 open 11-12: ask number 2", "- A1 open 11-12: ask number 1"]);
+  });
+
+  it("lists past-due asks not started first under the due line, then the newest", () => {
+    const asks = [
+      ask(1, { at: NOW - 3 * HOUR, due: NOW - 90 * 60_000, ask: "phone Model Index designs" }),
+      ask(2, { at: NOW - 2 * HOUR }),
+      ask(3, { at: NOW - HOUR, status: "building", due: NOW - HOUR }),
+      ask(4, { at: NOW - 30 * 60_000, due: NOW + HOUR }),
+      ask(5, { status: "done", due: NOW - HOUR }),
+    ];
+    expect(asksBlock(asks, NOW).split("\n")).toEqual([
+      "[Wink asks list - 4 open.]",
+      "[Due time passed, not started: 1. Start now or set a new due time.]",
+      "- A1 open 11-12 due 11-12 07:30: phone Model Index designs",
+      "- A4 open 11-12 due 11-12 10:00: ask number 4",
+      "- A3 building 11-12 due 11-12 08:00: ask number 3",
+      "- A2 open 11-12: ask number 2",
+    ]);
+    expect(asksNudge(asks, NOW, "thanks")).toBe(asksBlock(asks, NOW));
+    expect(asksNudge(asks.slice(1), NOW, "thanks")).toBe("");
+  });
+
+  it("names at most five stale ids however many went stale", () => {
+    const asks = Array.from({ length: 30 }, (_, index) => ask(index + 1, { changedAt: 0 }));
+    expect(asksBlock(asks, NOW).split("\n").at(-1)).toBe("30 stale (A1, A2, A3, A4, A5, +25): no change in 6+ hours, so raise them with the user now, then update them.");
+    expect(asksBlock(asks, NOW, true).split("\n").at(-1)).toBe("30 stale (A1, A2, A3, A4, A5, +25): no change in 6+ hours, so raise them with the user now, then update them.");
+  });
+
+  it("keeps a due time on the ask and clears it with null", () => {
+    const due = NOW + HOUR;
+    const added = saved(mergeTaskAsks(undefined, [{ ask: "Phone designs", status: "open", due }], NOW)).asks;
+    expect(added).toEqual([{ id: "A1", ask: "Phone designs", status: "open", due, at: NOW, changedAt: NOW }]);
+    const moved = saved(mergeTaskAsks({ asks: added }, [{ id: "A1", status: "open", due: due + HOUR }], NOW)).asks;
+    expect(moved[0]?.due).toBe(due + HOUR);
+    expect(saved(mergeTaskAsks({ asks: moved }, [{ id: "A1", status: "building" }], NOW)).asks[0]?.due).toBe(due + HOUR);
+    expect(saved(mergeTaskAsks({ asks: moved }, [{ id: "A1", status: "open", due: null }], NOW)).asks[0]).not.toHaveProperty("due");
   });
 
   it("lists every open ask on a status turn", () => {

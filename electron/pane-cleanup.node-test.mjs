@@ -889,6 +889,7 @@ test("a link in a worktree root renamed aside and recreated still blocks its del
   await f.cleanup.sweep();
   assert.equal(fs.existsSync(aside), true);
   assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => [line.reason, line.cause]), [["doubt", "moved"]]);
   assert.deepEqual(f.warnings, []);
   fs.unlinkSync(link);
 });
@@ -1852,7 +1853,7 @@ test("a crash before removal never deletes a different worktree at the same path
   f.advance(4 * DAY_MS);
   await restarted.sweep();
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "unrelated");
-  assert.deepEqual(f.ledger(), []);
+  assert.deepEqual(f.ledger().map((entry) => [fs.realpathSync.native(entry.cwd), entry.closedAt]), [[fs.realpathSync.native(target), f.options.now()]]);
   assert.deepEqual(f.warnings, []);
 });
 
@@ -2083,7 +2084,22 @@ test("a failing link watcher costs one walk, not one per row", { skip: process.p
   t.diagnostic(`dirs walked ${stats.dirs} for ${tree}`);
   assert.deepEqual(rows.filter((row) => !fs.existsSync(row)), []);
   assert.ok(stats.dirs <= tree, `${stats.dirs} dirs walked for ${tree}`);
-  assert.deepEqual([...new Set(events(f).filter((line) => line.kind === "kept").map((line) => line.reason))], ["doubt"]);
+  assert.deepEqual([...new Set(events(f).filter((line) => line.kind === "kept").map((line) => `${line.reason} ${line.cause}`))], ["doubt lost"]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("an unknown watch event keeps the row and names its cause", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const rows = await scratchRows(f, ["ROW-A"]);
+  const watch = fs.watch;
+  t.mock.method(fs, "watch", (...args) => {
+    const watcher = watch(...args);
+    if (args[0] === f.worktreeRoot) setImmediate(() => watcher.emit("change", "other", "x"));
+    return watcher;
+  });
+  await f.cleanup.sweep();
+  assert.deepEqual(rows.filter((row) => !fs.existsSync(row)), []);
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => [line.reason, line.cause]), [["doubt", "event"]]);
   assert.deepEqual(f.warnings, []);
 });
 
@@ -2142,7 +2158,7 @@ test("a linked worktree is kept without statting its files", async (t) => {
   await f.cleanup.sweep();
   assert.equal(files, 0);
   assert.equal(fs.existsSync(path.join(src, "file-0")), true);
-  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["linked"]);
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => [line.reason, line.link]), [["linked", link]]);
   assert.deepEqual(f.warnings, []);
   fs.unlinkSync(link);
 });
@@ -2166,7 +2182,7 @@ test("a link walk that fails partway cannot clear a later row", async (t) => {
   await f.cleanup.sweep();
   assert.equal(failed, true);
   assert.equal(fs.existsSync(second), true);
-  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["doubt"]);
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => [line.reason, line.cause]), [["doubt", "error"]]);
   assert.deepEqual(f.warnings, []);
   fs.unlinkSync(link);
 });
@@ -2214,6 +2230,82 @@ test("a fresh reflog keeps an otherwise idle worktree", async (t) => {
   fs.utimesSync(path.join(git(target, "rev-parse", "--absolute-git-dir"), "logs", "HEAD"), future, future);
   await f.cleanup.sweep();
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(events(f).filter((line) => line.kind === "hold").map((line) => line.reason), ["written"]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a worktree held by an open pane or a recent row logs why, once", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  f.open([{ id: "other", label: "OTHER", cwd: path.join(target, "src") }]);
+  await f.cleanup.sweep();
+  await f.cleanup.sweep();
+  f.open([]);
+  const session = { ...f.session, id: "pane-2" };
+  f.cleanup.opened(session);
+  await f.cleanup.closed(session, true);
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(events(f).filter((line) => line.kind === "hold").map((line) => [line.reason, fs.realpathSync.native(line.path)]), [["busy", fs.realpathSync.native(target)], ["recent", fs.realpathSync.native(target)]]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("sweeps a clean pushed worktree that was never a pane cwd", async (t) => {
+  const f = fixture(t);
+  const { main, target } = repo(f);
+  const orphan = path.join(f.worktreeRoot, "orphan");
+  git(main, "worktree", "add", "--quiet", "-b", "test-orphan", orphan);
+  const stranger = path.join(f.home, "stranger");
+  fs.mkdirSync(stranger);
+  git(stranger, "init", "--quiet");
+  git(stranger, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--quiet", "--allow-empty", "-m", "stranger");
+  git(stranger, "update-ref", "refs/remotes/test/main", "HEAD");
+  const unknown = path.join(f.worktreeRoot, "unknown");
+  git(stranger, "worktree", "add", "--quiet", "-b", "test-unknown", unknown);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.equal(fs.existsSync(orphan), true);
+  f.advance(2 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(orphan), false, f.warnings.map(String).join("\n"));
+  assert.equal(fs.existsSync(unknown), true);
+  assert.doesNotMatch(git(main, "worktree", "list"), /orphan/);
+  assert.deepEqual(events(f).filter((line) => line.kind === "worktree").map((line) => path.basename(line.path)), ["worker", "orphan"]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a worktree beside a kept one in the same folder is still found", async (t) => {
+  const f = fixture(t);
+  const { main, target } = repo(f);
+  git(main, "worktree", "remove", target);
+  const known = path.join(f.worktreeRoot, "group", "known");
+  const orphan = path.join(f.worktreeRoot, "group", "orphan");
+  git(main, "worktree", "add", "--quiet", "-b", "test-known", known);
+  git(main, "worktree", "add", "--quiet", "-b", "test-orphan", orphan);
+  fs.writeFileSync(path.join(known, "dirty"), "");
+  f.session.cwd = known;
+  await eligible(f);
+  await f.cleanup.sweep();
+  f.advance(2 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(known), true);
+  assert.equal(fs.existsSync(orphan), false, f.warnings.map(String).join("\n"));
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a worktree first seen without a row waits a day like a closed pane", async (t) => {
+  const f = fixture(t);
+  const { main } = repo(f);
+  await eligible(f);
+  const orphan = path.join(f.worktreeRoot, "orphan");
+  git(main, "worktree", "add", "--quiet", "-b", "test-orphan", orphan);
+  const old = new Date(Date.now() - 8 * DAY_MS);
+  for (const file of [orphan, path.join(orphan, "file"), path.join(git(orphan, "rev-parse", "--absolute-git-dir"), "HEAD"), path.join(git(orphan, "rev-parse", "--absolute-git-dir"), "logs", "HEAD")]) fs.utimesSync(file, old, old);
+  await f.cleanup.sweep();
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(orphan), true);
   assert.deepEqual(f.warnings, []);
 });
 

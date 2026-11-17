@@ -80,18 +80,18 @@ describe("Account settings", () => {
     await render();
     const buttons = [...host.querySelectorAll("nav button")];
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
+      "Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
     expect(buttons.map((button) => button.querySelector("svg")?.classList.item(1))).toEqual([
-      "lucide-user", "lucide-settings", "lucide-key-round", "lucide-coins", "lucide-monitor-smartphone", "lucide-palette", "lucide-chart-scatter", "lucide-keyboard",
+      "lucide-user", "lucide-import", "lucide-settings", "lucide-key-round", "lucide-coins", "lucide-monitor-smartphone", "lucide-palette", "lucide-chart-scatter", "lucide-keyboard",
     ]);
   });
 
   it("keeps Profile and Sync in one band without phone sections or their requests", async () => {
     const pane = await render();
     const cards = [...pane.children];
-    expect(cards).toHaveLength(2);
-    expect(cards[1].textContent).toContain("About You");
+    expect(cards).toHaveLength(1);
+    expect(pane.textContent).not.toContain("About You");
     expect(cards[0].querySelector("#settings-profile-name")).not.toBeNull();
     expect(cards[0].querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
     expect(cards[0].textContent).not.toContain("Profile");
@@ -121,6 +121,19 @@ describe("Account settings", () => {
     expect(pane.textContent).toContain("Language");
     expect(pane.textContent).not.toContain("Work Steps");
     expect(pane.textContent).toContain("Advanced");
+  });
+
+  it("gives About You its own entry, right under Account", async () => {
+    const pane = await render("about-you");
+    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("About You");
+    expect(pane.textContent).toContain("Copy Prompt");
+    expect(pane.querySelector("#settings-profile-name")).toBeNull();
+  });
+
+  it("leaves the call voices to the call menu, not General", async () => {
+    const pane = await render("general");
+    expect(pane.querySelector("[data-call-voices]")).toBeNull();
+    expect(pane.textContent).not.toContain("Call voice");
   });
 
   it("leaves General without the Memory card", async () => {

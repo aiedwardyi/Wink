@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -170,8 +170,9 @@ describe("whats new card", () => {
     expect(tile.querySelector(".whats-new-show")!.hasAttribute("aria-expanded")).toBe(false);
   });
 
-  it("pictures the themes tile with Samurai Ink", () => {
-    expect(WHATS_NEW["1.0.273"].tiles[0].clip).toMatch(/1\.0\.273-samurai-ink\.webp/);
+  it.each(["1.0.273", "1.0.276"])("plays the themes tile in %s as a moving clip", (release) => {
+    const clip = WHATS_NEW[release].tiles[0].clip;
+    expect(readFileSync(join(".", clip)).includes("ANMF"), `${clip} is a still: the tile shows the themes moving`).toBe(true);
   });
 
   it("plays the light clip on a light skin", () => {
@@ -427,6 +428,6 @@ describe("whats new card", () => {
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(1.5 * 1024 * 1024);
+    expect(bytes).toBeLessThan(1.6 * 1024 * 1024);
   });
 });

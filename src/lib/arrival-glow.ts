@@ -130,7 +130,7 @@ function arrivalOwner(threadId: string | undefined, chats: ArrivalChats) {
   return null;
 }
 
-function prefersReducedMotion(): boolean {
+export function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&

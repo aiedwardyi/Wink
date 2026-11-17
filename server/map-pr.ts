@@ -1,15 +1,22 @@
 import { execFile } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { open, readFile, stat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { MapCheck, MapFlow, MapPr, MapReview } from "../shared/map-flow.ts";
+import { writeFileAtomic } from "./atomic.ts";
 import { scrubbedEnv } from "./config.ts";
 import { mapGit } from "./map-git.ts";
 
 export type MapGh = (cwd: string, args: string[]) => Promise<string>;
 
 const FIELDS = "number,state,isDraft,url,title,baseRefName,statusCheckRollup,reviews,reviewDecision,mergedAt";
-const THREADS = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}";
+const REVIEWS = "reviews(first:100,after:$after,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){pageInfo{hasNextPage endCursor} nodes{url submittedAt}}";
+const THREADS = `query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}} ${REVIEWS}}}}`;
+const MORE_REVIEWS = `query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){${REVIEWS}}}}`;
 const OPEN_FOR = 25_000;
 const MISSING_FOR = 120_000;
+const KEEP = 200;
 
 const viewSchema = z.object({
   number: z.number(), state: z.enum(["OPEN", "MERGED", "CLOSED"]), isDraft: z.boolean().optional(), url: z.string().startsWith("https://"), title: z.string().optional(),
@@ -17,7 +24,16 @@ const viewSchema = z.object({
   statusCheckRollup: z.array(z.object({ name: z.string().optional(), context: z.string().optional(), status: z.string().optional(), conclusion: z.string().nullish(), state: z.string().optional() })).nullish(),
   reviews: z.array(z.object({ author: z.object({ login: z.string() }).nullish(), state: z.string(), submittedAt: z.string().nullish() })).nullish(),
 });
-const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }) }) }) }) });
+const reviewsSchema = z.object({
+  pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }),
+  nodes: z.array(z.object({ url: z.string(), submittedAt: z.string().nullish() }).nullable()).nullish().transform(nodes => nodes?.filter(node => node !== null) ?? []),
+});
+const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }), reviews: reviewsSchema.nullish() }) }) }) });
+const lastSchema = z.record(z.string(), z.object({
+  at: z.number(),
+  flow: z.object({ branch: z.string(), commits: z.array(z.object({ sha: z.string(), subject: z.string() })), total: z.number(), pushed: z.number(), web: z.string().optional(), pr: z.object({ number: z.number(), url: z.string(), state: z.enum(["open", "draft", "merged", "closed"]) }).passthrough().nullable() }),
+}));
+const moreReviewsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviews: reviewsSchema }) }) }) });
 
 const GH_AUTH_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
 
@@ -95,8 +111,22 @@ async function gitFlow(root: string, base: string) {
   };
 }
 
-export function createMapFlow(gh: MapGh = ghRun) {
+// A checkout's last rows belong to its folder, its .git and first reflog line (a repo made again there is another, even where ext4 reuses the inode and has no birthtime), the worker's base and HEAD, read with no git spawn.
+async function lastKey(root: string, base: string) {
+  const dot = join(root, ".git");
+  const own = await stat(dot);
+  const dir = own.isDirectory() ? dot : resolve(root, /^gitdir:\s*(.+)$/m.exec(await readFile(dot, "utf8"))?.[1].trim() ?? "");
+  const log = await open(join(dir, "logs", "HEAD")).catch(() => null);
+  const first = log ? await log.read(Buffer.alloc(256), 0, 256, 0).then(({ buffer, bytesRead }) => buffer.toString("utf8", 0, bytesRead).split("\n")[0]).finally(() => log.close()) : "";
+  return `${resolve(root)}\0${own.ino}:${own.birthtimeMs}\0${first}\0${base}\0${(await readFile(join(dir, "HEAD"), "utf8")).trim()}`;
+}
+
+export function createMapFlow(gh: MapGh = ghRun, file?: string) {
   const known = new Map<string, { key: string; at: number; pr: Promise<MapPr | null> }>();
+  let saved: Promise<Map<string, { at: number; flow: MapFlow }>> | undefined;
+  let folder = false;
+  // SAFETY: the file holds only flows this module wrote, and the schema checks every field the rows read.
+  const load = () => saved ??= (file ? readFile(file, "utf8").then(text => new Map(Object.entries(lastSchema.parse(JSON.parse(text)) as Record<string, { at: number; flow: MapFlow }>))) : Promise.reject(new Error("no file"))).catch(() => new Map());
 
   async function ask(root: string): Promise<MapPr | null> {
     try {
@@ -104,13 +134,21 @@ export function createMapFlow(gh: MapGh = ghRun) {
       const pr = mapPr(raw, null);
       const repo = pr && /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\//.exec(pr.url);
       if (!pr || !repo) return pr;
-      const threads = await gh(root, ["api", "graphql", "-f", `query=${THREADS}`, "-F", `owner=${repo[1]}`, "-F", `name=${repo[2]}`, "-F", `number=${pr.number}`])
-        .then(text => threadsSchema.parse(JSON.parse(text)).data.repository.pullRequest.reviewThreads.nodes.filter(node => !node.isResolved).length).catch(() => null);
-      return { ...pr, threads };
+      const graph = (query: string, after?: string) => gh(root, ["api", "graphql", "-f", `query=${query}`, "-F", `owner=${repo[1]}`, "-F", `name=${repo[2]}`, "-F", `number=${pr.number}`, ...after ? ["-f", `after=${after}`] : []]);
+      const extra = await graph(THREADS).then(text => threadsSchema.parse(JSON.parse(text)).data.repository.pullRequest).catch(() => null);
+      // GitHub lists reviews by when they were started, so the one submitted last can sit on any page: a page that fails leaves the link on the PR.
+      let reviews = extra?.reviews?.nodes ?? null;
+      for (let page = extra?.reviews?.pageInfo; reviews && page?.hasNextPage;) {
+        const next = page.endCursor ? await graph(MORE_REVIEWS, page.endCursor).then(text => moreReviewsSchema.parse(JSON.parse(text)).data.repository.pullRequest.reviews).catch(() => null) : null;
+        reviews = next && [...reviews, ...next.nodes];
+        page = next?.pageInfo;
+      }
+      const latest = reviews?.filter(node => node.url.startsWith(`${pr.url}#pullrequestreview-`)).toSorted((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? "")).at(-1);
+      return { ...pr, threads: extra ? extra.reviewThreads.nodes.filter(node => !node.isResolved).length : null, ...latest && { reviewUrl: latest.url } };
     } catch { return null; }
   }
 
-  async function flow(root: string, base: string): Promise<MapFlow> {
+  async function read(root: string, base: string): Promise<MapFlow> {
     const { key, remote, ...git } = await gitFlow(root, base);
     if (!remote) return { ...git, pr: null };
     const now = Date.now();
@@ -121,5 +159,23 @@ export function createMapFlow(gh: MapGh = ghRun) {
     return { ...git, pr: await entry.pr };
   }
 
-  return { flow };
+  async function flow(root: string, base: string): Promise<MapFlow> {
+    const key = await lastKey(root, base).catch(() => null);
+    const result = await read(root, base);
+    // A branch switched mid-read would file these rows under the wrong branch.
+    if (!key || key !== await lastKey(root, base).catch(() => null)) return result;
+    const flows = await load();
+    flows.delete(key);
+    flows.set(key, { at: Date.now(), flow: result });
+    for (const old of [...flows.keys()].slice(0, Math.max(0, flows.size - KEEP))) flows.delete(old);
+    if (file) try { if (!folder) { mkdirSync(dirname(file), { recursive: true }); folder = true; } writeFileAtomic(file, JSON.stringify(Object.fromEntries(flows))); } catch { /* the rows still show; only the next open waits */ }
+    return result;
+  }
+
+  async function last(root: string, base: string): Promise<MapFlow | null> {
+    const key = await lastKey(root, base).catch(() => null);
+    return key ? (await load()).get(key)?.flow ?? null : null;
+  }
+
+  return { flow, last };
 }
