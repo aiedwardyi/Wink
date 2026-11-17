@@ -29,7 +29,7 @@ export interface Lease {
   /** Idempotent. */
   release(reason: string): void;
 }
-export type WarmMatch = { engine?: string; instanceId?: string; incarnation?: string };
+export type WarmMatch = { engine?: string; instanceId?: string; threadId?: string; incarnation?: string };
 
 /** `kept`: a host that just served a turn. The caps hold it; the free-RAM floor for new warms does not. */
 type Kind = "speculative" | "handshake" | "kept";
@@ -86,6 +86,7 @@ const sameCaptured = (a: Captured, b: Captured) => a.generation === b.generation
 const matches = (match: WarmMatch, entry: Entry) =>
   (match.engine === undefined || match.engine === entry.lease.key.engine)
   && (match.instanceId === undefined || match.instanceId === entry.lease.key.instanceId)
+  && (match.threadId === undefined || match.threadId === entry.lease.key.threadId)
   && (match.incarnation === undefined || match.incarnation === entry.lease.captured.incarnation);
 
 export class WarmPool {
