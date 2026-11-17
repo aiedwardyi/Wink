@@ -1853,7 +1853,7 @@ test("a crash before removal never deletes a different worktree at the same path
   f.advance(4 * DAY_MS);
   await restarted.sweep();
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "unrelated");
-  assert.deepEqual(f.ledger().map((entry) => [path.resolve(entry.cwd), entry.closedAt]), [[target, f.options.now()]]);
+  assert.deepEqual(f.ledger().map((entry) => [fs.realpathSync.native(entry.cwd), entry.closedAt]), [[fs.realpathSync.native(target), f.options.now()]]);
   assert.deepEqual(f.warnings, []);
 });
 
@@ -2247,7 +2247,7 @@ test("a worktree held by an open pane or a recent row logs why, once", async (t)
   await f.cleanup.closed(session, true);
   await f.cleanup.sweep();
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
-  assert.deepEqual(events(f).filter((line) => line.kind === "hold").map((line) => [line.reason, path.resolve(line.path)]), [["busy", target], ["recent", target]]);
+  assert.deepEqual(events(f).filter((line) => line.kind === "hold").map((line) => [line.reason, fs.realpathSync.native(line.path)]), [["busy", fs.realpathSync.native(target)], ["recent", fs.realpathSync.native(target)]]);
   assert.deepEqual(f.warnings, []);
 });
 
