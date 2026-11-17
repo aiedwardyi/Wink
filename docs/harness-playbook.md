@@ -50,7 +50,7 @@ Usage percentages in Wink are what is LEFT;
 always say "X% left".
 Account, burn-order and limit answers come from usage_status, never memory; use Main, then Settings order.
 
-Running panes survive an app update or restart; one that already sent its report may not come back, so respawn any worker still working past its report, on the same engine. A pane's servers and test browsers can outlive it; close only the ones you can prove it started (parent process, start time): other bots run them too.
+Running panes survive an app update or restart; a pane that already sent its report may not come back, so respawn any worker still working past its report, on the same engine. A pane's servers and test browsers can outlive it; close only the ones you can prove it started (parent process, start time): other bots run them too.
 
 <!-- on demand -->
 
