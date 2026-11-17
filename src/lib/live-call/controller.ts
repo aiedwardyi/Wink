@@ -1,6 +1,6 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { callStatus, clip, OPTION_CHARS } from "../../../shared/call-status";
-import { isVoiceLine, LIVE_VAD, liveVoiceNames, ORDER_EXPIRY_MS, STYLE_GAIN, type CallLine, type CallPrefs, type CallRoom, type LiveVoice } from "../../../shared/live-call";
+import { callPace, isVoiceLine, LIVE_VAD, liveVoiceNames, ORDER_EXPIRY_MS, type CallLine, type CallPrefs, type CallRoom, type LiveVoice } from "../../../shared/live-call";
 import { answerPrefix, isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
 import { openQuestion } from "@/lib/open-question";
@@ -202,6 +202,15 @@ function cardNotice(botName: string, card: Message["card"]): string {
   return options
     ? `[Wink] ${botName} asks: ${question} Options: ${options}. Read it out with the options, then wait for their answer.`
     : `[Wink] ${botName} asks: ${question} Read it out, then wait for their answer.`;
+}
+
+// Code or markdown in the voice's words (a fence, a rule, `ticks`, std::fs, run(), =>): never speech, whatever the model wrote.
+// A marker needs the space after it: "PR #" can end a chunk before "1811".
+const CODE = /`|(?:^|\s)(?:-{3,}|\*{3,}|_{3,}|#{1,6})(?=\s)|\w::\w|\w\(\)|=>/;
+const NO_CODE = "[Wink] Cut: you started reading code or markdown aloud, and they never hear that. Carry on with them in one short spoken line, plain words only.";
+
+function heardPart(full: string, share: number): string {
+  return share < 1 ? `${full.slice(0, Math.max(1, Math.round(full.length * share))).trimEnd()}…` : full;
 }
 
 /** Transcript text without the model's markers ("<no speech>", "{pause}", a "{instruction:none" left open); empty if nothing speakable is left. */
@@ -453,7 +462,7 @@ export class LiveCall {
 
   /** Picks from the call menu: speed and level reach the next words heard; a new voice, style or language swaps the session. */
   retune(prefs: CallPrefs, volume = 1) {
-    this.deps.audio.tune(prefs.speed ?? 1, STYLE_GAIN[prefs.style ?? "normal"] * volume);
+    this.deps.audio.tune(callPace(prefs), volume);
     this.prefs = prefs;
     this.restyle();
   }
@@ -645,6 +654,15 @@ export class LiveCall {
         this.stir();
         if (this.dropping) return;
         this.saidBuf += text;
+        const code = CODE.exec(this.saidBuf);
+        if (code) {
+          // What came before it stays the line as far as it played; the rest of the turn never plays.
+          const share = this.echo || !this.turnHadAudio ? 0 : this.deps.audio.heardShare();
+          const before = spokenText(this.saidBuf.slice(0, code.index));
+          this.drop(NO_CODE);
+          this.saidBuf = share && before ? heardPart(before, share) : "";
+          return;
+        }
         if (this.ackEcho) return;
         const words = spokenText(this.saidBuf);
         if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
@@ -1211,7 +1229,7 @@ export class LiveCall {
     this.saidBuf = "";
     this.lineIds.voice = 0;
     if (!full) return;
-    const text = share < 1 ? `${full.slice(0, Math.max(1, Math.round(full.length * share))).trimEnd()}…` : full;
+    const text = heardPart(full, share);
     this.lastSaid = full;
     this.stats.voiceLines += 1;
     this.postLines([{ who: "voice", text, at: this.now() }]);

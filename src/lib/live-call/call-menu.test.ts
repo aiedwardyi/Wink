@@ -75,9 +75,67 @@ describe("call menu picks mid-call", () => {
     call.retune({ speed: 0.8 });
     call.retune({ speed: 0.8, style: "calm" });
     call.retune({ speed: 0.8, style: "calm" }, 0.5);
-    expect(audio.tunes.slice(-3)).toEqual([[0.8, 1], [0.8, 0.6], [0.8, 0.3]]);
+    expect(audio.tunes.slice(-3)).toEqual([[0.8, 1], [0.7, 1], [0.7, 0.5]]);
     await flush();
     expect(posts.filter((post) => post.body.swap)).toHaveLength(1);
+  });
+
+  it("c-3a2c5539c0ea every style plays at one level, each at its own pace", async () => {
+    const { call, audio } = await started();
+    for (const style of ["calm", "normal", "lively"] as const) call.retune({ style });
+    expect(audio.tunes.slice(-3)).toEqual([[0.88, 1], [1, 1], [1.1, 1]]);
+    call.retune({ speed: 1.3, style: "lively" });
+    call.retune({ speed: 0.7, style: "calm" });
+    expect(audio.tunes.slice(-2)).toEqual([[1.3, 1], [0.7, 1]]);
+  });
+
+  it("a voice picked between lines is the voice of the next line", async () => {
+    const { call, engines, posts, audio } = await started();
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    engines[1]!.events.ready();
+    expect(engines[0]!.closed).toBe(true);
+    audio.frame(new Int16Array(480).fill(5_000).buffer);
+    expect(engines[1]!.audio).toBe(1);
+    expect(engines[0]!.audio).toBe(0);
+    engines[1]!.events.heard("Say something.");
+    engines[1]!.events.answering();
+    engines[1]!.events.said("Hi, it's Eddie now.");
+    engines[1]!.events.turnDone();
+    await flush();
+    const said = posts.filter((post) => post.path.endsWith("/call/lines")).flatMap((post) => post.body.lines);
+    expect(said.at(-1)).toMatchObject({ who: "voice", text: "Hi, it's Eddie now." });
+  });
+
+  it("a voice picked mid-line takes over when that line ends, so the next line is new", async () => {
+    const { call, engines, audio } = await started();
+    engines[0]!.events.answering();
+    audio.playing = true;
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    engines[1]!.events.ready();
+    engines[0]!.events.said("The build is green.");
+    engines[0]!.events.turnDone();
+    expect(engines[0]!.closed).toBe(false);
+    audio.playing = false;
+    audio.onIdle();
+    expect(engines[0]!.closed).toBe(true);
+    audio.frame(new Int16Array(480).fill(5_000).buffer);
+    expect(engines[1]!.audio).toBe(1);
+  });
+
+  it("switching around fast, the last pick is the next line's voice and no older one plays", async () => {
+    const { call, engines, posts } = await started();
+    call.retune({ voice: "Alnilam" });
+    await flush();
+    call.retune({ voice: "Fenrir" });
+    await flush();
+    expect(engines[1]!.closed).toBe(true);
+    engines[1]!.events.ready();
+    expect(engines[0]!.closed).toBe(false);
+    engines[2]!.events.ready();
+    expect(engines[0]!.closed).toBe(true);
+    expect(posts.filter((post) => post.body.swap).map((post) => post.body.call.voice)).toEqual(["Alnilam", "Fenrir"]);
   });
 
   it("a new voice opens beside the live session and takes over when it is quiet, with no gap", async () => {
