@@ -291,6 +291,33 @@ const ASK_SETTINGS = JSON.stringify({
 
 const ownDefaultModeSchema = z.object({ permissions: z.object({ defaultMode: z.string() }) });
 
+const enabledPluginsSchema = z.object({ enabledPlugins: z.record(z.string(), z.unknown()) });
+const installedPluginsSchema = z.object({ plugins: z.record(z.string(), z.array(z.object({ scope: z.string().optional(), installPath: z.string() }))) });
+const chromeDefaultSchema = z.object({ claudeInChromeDefaultEnabled: z.boolean() });
+
+function readSetting<T>(file: string, schema: z.ZodType<T>): T | undefined {
+  try {
+    const parsed = schema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// An account home starts without the plugins and Chrome default the user turned on in their own Claude setup.
+// The account home itself is never read here; the CLI applies its own "<name>@inline": false and dedupes installed copies.
+function userSetupArgs(baseHome: string, baseConfig: string): string[] {
+  const enabled = readSetting(join(baseHome, "settings.json"), enabledPluginsSchema)?.enabledPlugins ?? {};
+  const installed = readSetting(join(baseHome, "plugins", "installed_plugins.json"), installedPluginsSchema)?.plugins ?? {};
+  const args = Object.entries(enabled).flatMap(([id, on]) => {
+    if (on !== true) return [];
+    const entry = installed[id]?.find((each) => each.scope === "user" && statSync(each.installPath, { throwIfNoEntry: false })?.isDirectory());
+    return entry ? ["--plugin-dir", entry.installPath] : [];
+  });
+  if (readSetting(baseConfig, chromeDefaultSchema)?.claudeInChromeDefaultEnabled === true) args.push("--chrome");
+  return args;
+}
+
 function hasOwnDefaultMode(configDir: string, cwd: string): boolean {
   return [join(configDir, "settings.json"), join(cwd, ".claude", "settings.json"), join(cwd, ".claude", "settings.local.json")].some((file) => {
     try {
@@ -773,7 +800,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
-    const turnPolicy = input.account ? { ...launchPolicy, accountBaseHome: baseAccount(input.account.of, DRIVER_KIND, { ...process.env, ...input.environment }).home } : launchPolicy;
+    const baseEnvironment = { ...process.env, ...input.environment };
+    const baseHome = input.account ? baseAccount(input.account.of, DRIVER_KIND, baseEnvironment).home : undefined;
+    const turnPolicy = input.account ? { ...launchPolicy, accountBaseHome: baseHome } : launchPolicy;
+    // the CLI keeps its global config beside the home only when CLAUDE_CONFIG_DIR names it
+    const baseConfig = baseEnvironment.CLAUDE_CONFIG_DIR ? join(baseEnvironment.CLAUDE_CONFIG_DIR, ".claude.json") : join(homedir(), ".claude.json");
     let admitted = !input.account;
     let accountBlocked = false;
     let helpers = 0;
@@ -1116,6 +1147,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
       if (turn.leanStartup === true) args.push("--setting-sources", "project");
+      else if (baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless

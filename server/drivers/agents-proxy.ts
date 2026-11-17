@@ -30,7 +30,7 @@
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
-//   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
+//   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
@@ -243,7 +243,7 @@ const HAND_OFF_TOOL = {
 export const BOARD_TOOLS = [
   {
     name: "board_search",
-    description: "Search the Board, where this Wink's bots keep past blockers and the fixes that solved them.",
+    description: "Search the Board: this Wink's bots' past blockers, fixes and tips.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -253,11 +253,11 @@ export const BOARD_TOOLS = [
   },
   {
     name: "board_post",
-    description: "Post to the Board for other bots: stuck (a blocker), fix (what solved one; parent_id is its post) or handoff.",
+    description: "Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      properties: { kind: { type: "string", enum: ["stuck", "fix", "handoff"] }, title: { type: "string" }, body: { type: "string" }, parent_id: { type: "string" } },
+      properties: { kind: { type: "string", enum: ["stuck", "fix", "handoff", "tip"] }, title: { type: "string" }, body: { type: "string" }, parent_id: { type: "string" }, helped: { type: "boolean" } },
       required: ["kind", "title", "body"],
     },
   },
@@ -344,6 +344,7 @@ const TOOLS = [
               ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
               status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
               ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
+              due: { type: "string", maxLength: 40, pattern: "^$|\\S", description: "When you promise a time, set due: RFC3339 with offset, like 2026-11-17T07:30:00+09:00. Wink wakes you once then if the ask is still open. Empty string clears it." },
             },
             required: ["status"],
           },
@@ -625,7 +626,7 @@ const TOOLS = [
   {
     name: "wake_me",
     description:
-      "Wake yourself once in this chat later, with a note to yourself: use it for a one-off later step (check a deploy at 03:45, resume after a cooldown) instead of a countdown terminal pane. No confirmation card; the user sees a small chip and can cancel it. At that time you get an automated [Wake] turn with your note. Recurring work still needs propose_routine. list_routines shows your pending wakes (named Wake); pass cancel with an id to cancel one. Max 10 pending.",
+      "Wake yourself once in this chat later, with a note to yourself: use it for a one-off later step (check a deploy at 03:45, resume after a cooldown) instead of a countdown terminal pane. No confirmation card; the user can ask you to cancel it. At that time you get an automated [Wake] turn with your note. Recurring work still needs propose_routine. list_routines shows your pending wakes (named Wake); pass cancel with an id to cancel one. Max 10 pending.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -694,6 +695,7 @@ interface TaskStateAsk {
   ask?: string;
   status: string;
   ref?: string;
+  due?: string;
 }
 
 interface TaskStateToolArgs {

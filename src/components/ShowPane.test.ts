@@ -6,22 +6,22 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, showItem, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPane } from "./ShowPane";
 
-const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown }));
+const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: {},
   getDocument: (params: unknown) => (pdf.params = params, {
-    promise: Promise.resolve({
+    promise: pdf.gate.then(() => ({
       numPages: 8,
       getPage: async (n: number) => {
         pdf.pages.push(n);
         return { getViewport: ({ scale }: { scale: number }) => ({ width: 960 * scale, height: 540 * scale }), render: () => ({ promise: Promise.resolve(), cancel() {} }) };
       },
       destroy() {},
-    }),
+    })),
     destroy() {},
   }),
 }));
@@ -37,6 +37,7 @@ let host: HTMLElement;
 
 beforeEach(() => {
   pdf.pages = [];
+  pdf.gate = Promise.resolve();
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     const response = new Response(null, { status: url.includes("linked-file") ? 206 : 404 });
     Object.defineProperty(response, "url", { value: url });
@@ -93,6 +94,66 @@ it("pages a PDF one page at a time", async () => {
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("2 / 8"));
   expect(host.querySelector("[data-show-pager]")?.textContent).toContain("2 / 8");
   expect(pdf.pages).toEqual([1, 2]);
+});
+
+let clock = 0;
+const touch = (type: string, points: [number, number][], target: Element = host.querySelector("canvas.show-pdf")!, dt = 40) => {
+  clock += dt;
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, { touches: { value: type === "touchend" || type === "touchcancel" ? [] : points.map(([clientX, clientY]) => ({ clientX, clientY })) }, timeStamp: { value: clock } });
+  return act(async () => { target.dispatchEvent(event); });
+};
+const swipe = async (from: [number, number], to: [number, number]) => {
+  await touch("touchstart", [from], undefined, 400);
+  await touch("touchmove", [[(from[0] + to[0]) / 2, (from[1] + to[1]) / 2]]);
+  await touch("touchmove", [to]);
+  await touch("touchend", []);
+};
+const counter = () => host.querySelector("[data-show-pager]")?.textContent;
+
+it("turns the PDF page with a horizontal swipe, and stops at either end", async () => {
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  await until(() => counter()?.includes("1 / 8"));
+  await swipe([100, 300], [300, 300]);
+  expect(counter()).toContain("1 / 8");
+  await swipe([300, 300], [100, 300]);
+  await until(() => counter()?.includes("2 / 8"));
+  expect(counter()).toContain("2 / 8");
+  await swipe([100, 300], [300, 300]);
+  await until(() => counter()?.includes("1 / 8"));
+  expect(counter()).toContain("1 / 8");
+  expect(pdf.pages).toEqual([1, 2, 1]);
+  for (let n = 0; n < 9; n++) await swipe([300, 300], [100, 300]);
+  await until(() => counter()?.includes("8 / 8"));
+  expect(counter()).toContain("8 / 8");
+});
+
+it("ignores a swipe while the PDF is still loading", async () => {
+  let open = () => {};
+  pdf.gate = new Promise<void>((resolve) => { open = resolve; });
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  await swipe([300, 300], [100, 300]);
+  await swipe([100, 300], [300, 300]);
+  await act(async () => open());
+  await until(() => counter()?.includes("1 / 8"));
+  expect(counter()).toContain("1 / 8");
+  expect(pdf.pages).toEqual([1]);
+});
+
+it("leaves a vertical drag and a two finger pinch to the browser", async () => {
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  await until(() => counter()?.includes("1 / 8"));
+  await swipe([200, 100], [220, 500]);
+  await touch("touchstart", [[100, 300], [300, 300]], undefined, 400);
+  await touch("touchmove", [[20, 300], [380, 300]]);
+  await touch("touchend", []);
+  expect(counter()).toContain("1 / 8");
+  expect(pdf.pages).toEqual([1]);
+});
+
+it("keeps the chat swipe off the PDF page", async () => {
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  expect(host.querySelector("canvas.show-pdf")!.closest("[data-no-swipe]")).not.toBeNull();
 });
 
 it("loads a PDF with the shipped CMaps, so fonts that are not embedded still draw Korean", async () => {
@@ -357,4 +418,24 @@ it("offers Open when the file can't be shown", async () => {
   } finally {
     Reflect.deleteProperty(window, "ogb");
   }
+});
+
+const settle = (name: string) => act(async () => { host.querySelector("aside")!.dispatchEvent(Object.assign(new Event("animationend", { bubbles: true }), { animationName: name })); });
+const lit = () => host.querySelector("aside")!.classList.contains("arrival-glow");
+
+it("pulses the pane once when its file is clicked again, and not when a click only switches to it", async () => {
+  const shown = item("C:\\w\\timeline-mock.html", "page");
+  await render({ item: shown, hidden: false });
+  await act(async () => showItem(shown));
+  expect(lit()).toBe(false);
+  await act(async () => showItem(shown));
+  expect(lit()).toBe(true);
+  expect(host.querySelectorAll("iframe")).toHaveLength(1);
+  await settle("panel-slide");
+  expect(lit()).toBe(true);
+  await settle("arrival-glow-once");
+  expect(lit()).toBe(false);
+  await act(async () => showMap("t1"));
+  await act(async () => showItem(shown));
+  expect(lit()).toBe(false);
 });

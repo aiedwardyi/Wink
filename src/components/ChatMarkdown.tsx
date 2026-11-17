@@ -10,7 +10,7 @@ import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy, PanelRight } from "lucide-react";
-import { LinkedFolderLink } from "./LinkedFolderSheet";
+import { LinkedFolderLink } from "./LinkedFolderLink";
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
 import { ReadableImage } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
@@ -614,7 +614,7 @@ function PhoneFile({
   if (phase === "desktop") {
     return kind
       ? <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>
-      : <LinkedFolderLink folderPath={filePath} threadId={threadId} fileSrc={(path) => linkedFileSrc(threadId, path)}>{children}</LinkedFolderLink>;
+      : <LinkedFolderLink folderPath={filePath} threadId={threadId}>{children}</LinkedFolderLink>;
   }
   if (phase === "remote" && remote) {
     return (
@@ -851,6 +851,7 @@ function ChatMarkdownComponent({
       return (
         <a
           href={href}
+          title={href}
           target="_blank"
           rel="noreferrer"
           className="break-words text-accent underline decoration-accent/40 hover:decoration-accent"
