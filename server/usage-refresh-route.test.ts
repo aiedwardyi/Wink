@@ -73,8 +73,9 @@ beforeAll(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
   home = mkdtempSync(join(tmpdir(), "omb-usage-refresh-route-"));
   mkdirSync(join(home, ".orbit"), { recursive: true });
+  const reset = new Date(Date.now() + 3_600_000).toISOString();
   writeFileSync(join(home, "claude-usage.json"), JSON.stringify({ rate_limits_available: true, rate_limits: {
-    five_hour: { utilization: 42, resets_at: "2026-10-01T12:00:00.000Z" }, seven_day: { utilization: 19, resets_at: "2026-10-01T12:00:00.000Z" },
+    five_hour: { utilization: 42, resets_at: reset }, seven_day: { utilization: 19, resets_at: reset },
   } }));
   writeFileSync(
     join(home, ".orbit", "config.json"),

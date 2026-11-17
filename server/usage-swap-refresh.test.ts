@@ -83,7 +83,7 @@ describe("usage swap refresh", () => {
     let used = 100;
     const claude = vi.fn(async () => [{ id: "seven_day", usedPercent: used, resetsAt: null }]);
     const refresh = createUsageRefresh({ claude, platform: "linux" });
-    const options = { instanceId: "claude", environment: { CLAUDE_CODE_OAUTH_TOKEN: "fixture-only" } };
+    const options = { instanceId: "claude", environment: {} };
     expect((await refresh("claudeAgent", options)).report?.windows[0].usedPercent).toBe(100);
     used = 40;
     refresh.invalidate("claude");

@@ -15,7 +15,7 @@ const window = z.object({
 });
 const usage = z.object({
   rate_limits_available: z.literal(true),
-  rate_limits: z.object({ five_hour: window.nullable(), seven_day: window.nullable() }),
+  rate_limits: z.looseObject({ five_hour: window.nullable(), seven_day: window.nullable() }),
 });
 const response = z.object({
   type: z.literal("control_response"),
@@ -71,10 +71,14 @@ export function readClaudeUsage(cli: string, env: NodeJS.ProcessEnv, account?: A
           send({ subtype: "get_usage", skip_behaviors: true });
         } else {
           const limits = usage.parse(message.response).rate_limits;
-          finish(Object.entries(limits).flatMap(([id, value]) => value ? [{
-            id, usedPercent: value.utilization, resetsAt: value.resets_at === null ? null : Date.parse(value.resets_at),
-            windowMinutes: id === "five_hour" ? 300 : 10080,
-          }] : []));
+          // Model weeks (seven_day_opus) gate limit waits on that model; a malformed one is skipped, not fatal.
+          finish(Object.entries(limits).flatMap(([id, value]) => {
+            const parsed = id === "five_hour" || id.startsWith("seven_day") ? window.safeParse(value) : undefined;
+            return parsed?.success ? [{
+              id, usedPercent: parsed.data.utilization, resetsAt: parsed.data.resets_at === null ? null : Date.parse(parsed.data.resets_at),
+              windowMinutes: id === "five_hour" ? 300 : 10080,
+            }] : [];
+          }));
         }
       } catch { finish(); }
     });

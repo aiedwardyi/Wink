@@ -62,6 +62,13 @@ it("keeps a weekly-only get_usage response when five_hour is null", async () => 
   expect(await f.pending).toEqual([{ id: "seven_day", usedPercent: 98, resetsAt: null, windowMinutes: 10080 }]);
 });
 
+it("keeps the CLI's model-specific weekly windows and skips entries that are not windows", async () => {
+  const f = childFixture(true, null);
+  f.respond("usage", { ...payload, rate_limits: { ...payload.rate_limits, seven_day_opus: { utilization: 61, resets_at: null }, seven_day_sonnet: null,
+    seven_day_oauth_apps: { utilization: "x" }, extra_usage: { is_enabled: false } } });
+  expect(await f.pending).toEqual([...windows, { id: "seven_day_opus", usedPercent: 61, resetsAt: null, windowMinutes: 10080 }]);
+});
+
 it.each([
   { ...payload, rate_limits_available: false },
   { ...payload, rate_limits: { ...payload.rate_limits, five_hour: { utilization: "35", resets_at: null } } },
