@@ -98,8 +98,7 @@ it.each([["en", "Replay unavailable on this PC"], ["ko", "이 PC에서 다시보
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ replay: ["run-123456"] }), threadId: "thread", live: false, hidden: false, onClose() {} })));
-  await act(async () => { await new Promise(done => setTimeout(done, 50)); });
-  expect(host.querySelector("[data-current]")?.textContent).toBe(message);
+  await act(async () => { await vi.waitFor(() => expect(host.querySelector("[data-current]")?.textContent).toBe(message)); });
   expect(host.querySelector(".verify-watch-url")?.textContent).toBe("script.md");
   await act(async () => root.unmount());
 });
