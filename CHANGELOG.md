@@ -2,6 +2,20 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.275] - 2026-11-17
+
+### Added
+- Bot details > Avatar has three Wink brand presets, and the preset grid stays open after you upload your own image.
+- Settings > Account > About You: copy one prompt into your other AI, paste its reply, and every bot knows those facts about you (secret-looking lines are left out).
+
+### Changed
+- On a phone, swiping between chats shows the next chat while you drag and lands on it, rooms included.
+- A worker that was running when Wink quit, updated or crashed keeps running and comes back in its pane; one that finished while Wink was closed shows as finished.
+
+### Fixed
+- On a phone, Back inside a Forum post returns to the Forum list instead of closing the Forum.
+- A room's working clock no longer shows the previous message's age for its first moment.
+
 ## [1.0.274] - 2026-11-17
 
 ### Added
