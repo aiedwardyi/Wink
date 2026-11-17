@@ -31,6 +31,7 @@ import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
+import { askPreallowedOps, type BuiltinServer } from "./builtin-ops.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 
 import type {
@@ -1158,6 +1159,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // acceptEdits run silently denies anything unlisted)
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
+      // Ask preallows a built-in's read and chat ops by name; its side effects reach the Ask card
+      const builtinAllowed = (server: BuiltinServer) =>
+        asks && !turn.readOnly ? askPreallowedOps(server).map((op) => `mcp__${server}__${op}`) : [`mcp__${server}`];
       // Orbit's own servers skip ToolSearch deferral; a fresh CLI session
       // would otherwise re-fetch their schemas every time. A tool can still
       // opt out with _meta "anthropic/alwaysLoad": false (deferOptional).
@@ -1193,19 +1197,19 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (turn.integrations?.agents) {
         const agents = experimentalAgents(turn.integrations.agents);
         mcpServers.agents = { ...agents, env: { ...agents.env, OMB_WINK_TOOL_DEFER: "1" }, ...orbitOwned };
-        allowed.push("mcp__agents");
+        allowed.push(...builtinAllowed("agents"));
       }
       if (turn.integrations?.phone) {
         mcpServers.phone = { ...turn.integrations.phone, ...orbitOwned };
-        allowed.push("mcp__phone");
+        allowed.push(...builtinAllowed("phone"));
       }
       if (turn.integrations?.browser) {
         mcpServers.browser = { ...turn.integrations.browser, ...orbitOwned };
-        allowed.push("mcp__browser");
+        allowed.push(...builtinAllowed("browser"));
       }
       if (turn.integrations?.terminal) {
         mcpServers.terminal = { ...turn.integrations.terminal, ...orbitOwned };
-        allowed.push("mcp__terminal__terminal_read", "mcp__terminal__terminal_playbook");
+        allowed.push(...askPreallowedOps("terminal").map((op) => `mcp__terminal__${op}`));
       }
       // dweb network daemon (status / repo / opencode model access) via
       // server/drivers/dweb-proxy.ts — points at the configured dweb instance
