@@ -18,8 +18,6 @@ import { Fold } from "./Fold";
 // Newest release first: the grid opens on these, ahead of the older featured themes. Precision Dimmed stays under More themes.
 const NEW_SKIN_IDS: readonly SkinId[] = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night", "precision-dimmed", "bronze", "dim-sand"];
 const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook"];
-// Themes opens with every animated tile playing this long; after that only a hovered or pressed tile plays.
-const TILE_PLAY_MS = 3000;
 
 /** An animated theme's own scene, looping in its tile while mounted; a still tile under reduced motion. */
 function MiniScene({ scene }: { scene: SceneId }) {
@@ -126,12 +124,6 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
   const [picked, setPicked] = useState<SkinId | null>(null);
   const moreId = useId();
   const [tried, setTried] = useState(readTriedSkins);
-  const [opening, setOpening] = useState(true);
-  const [hovered, setHovered] = useState<SkinId | null>(null);
-  useEffect(() => {
-    const timer = setTimeout(() => setOpening(false), TILE_PLAY_MS);
-    return () => clearTimeout(timer);
-  }, []);
   useEffect(() => {
     if (!reveal?.length) return;
     const tile = grid.current?.querySelector(reveal.map((id) => `[data-skin-tile="${id}"]`).join(", "));
@@ -178,12 +170,6 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
                 setPicked(folded ? skin.id : null);
               }}
               aria-pressed={selected}
-              // A touch enters on press and leaves on release or scroll, so a held tile plays too.
-              onPointerEnter={() => {
-                setOpening(false);
-                setHovered(skin.id);
-              }}
-              onPointerLeave={() => setHovered((was) => (was === skin.id ? null : was))}
               className={cn(
                 "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
                 selected
@@ -191,8 +177,7 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
                   : "border-hairline/60 hover:border-hairline hover:bg-control/50",
               )}
             >
-              {/* A new key on hover: the scene plays again from its start. */}
-              <Miniature key={hovered === skin.id ? "hover" : "rest"} skin={skin.id} still={hovered ? hovered !== skin.id : !opening} />
+              <Miniature skin={skin.id} />
               <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
                 {/* A long name wraps inside its own box, so the New tag never drops under it or covers it. */}
                 <div className="min-w-0 flex-1 break-words">

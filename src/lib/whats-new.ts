@@ -5,7 +5,7 @@ import hydrogenClip from "@/assets/whats-new/1.0.263-hydrogen.webp";
 import hydrogenLightClip from "@/assets/whats-new/1.0.263-hydrogen-light.webp";
 import mapClip from "@/assets/whats-new/1.0.263-map.webp";
 import mapLightClip from "@/assets/whats-new/1.0.263-map-light.webp";
-import themesClip from "@/assets/whats-new/1.0.273-samurai-ink.webp";
+import themesClip from "@/assets/whats-new/1.0.276-themes.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -19,6 +19,13 @@ export type WhatsNewTarget = "memory" | "map" | "models" | { skins: SkinId[] };
 export type WhatsNewTile = { clip: string; lightClip?: string; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
 
 export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile] | [WhatsNewTile, WhatsNewTile]; more: Copy };
+
+const themesTile: WhatsNewTile = {
+  clip: themesClip,
+  title: { en: "Four new themes that move", ko: "움직이는 새 테마 4개" },
+  line: { en: "Samurai Ink, Night Rain, Warp and Circuit.", ko: "사무라이 잉크, 나이트 레인, 워프, 서킷." },
+  show: { skins: ["samurai-ink", "night-rain", "warp", "circuit"] },
+};
 
 // One entry per release that has notes; a release with no entry shows the newest earlier one still unseen.
 export const WHATS_NEW: Record<string, WhatsNewEntry> = {
@@ -66,14 +73,12 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
   },
   "1.0.273": {
     title: { en: "New in Wink 1.0.273", ko: "Wink 1.0.273 새 기능" },
-    tiles: [
-      {
-        clip: themesClip,
-        title: { en: "Four new themes that move", ko: "움직이는 새 테마 4개" },
-        line: { en: "Samurai Ink, Night Rain, Warp and Circuit.", ko: "사무라이 잉크, 나이트 레인, 워프, 서킷." },
-        show: { skins: ["samurai-ink", "night-rain", "warp", "circuit"] },
-      },
-    ],
+    tiles: [themesTile],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.276": {
+    title: { en: "New in Wink 1.0.276", ko: "Wink 1.0.276 새 기능" },
+    tiles: [themesTile],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
 };

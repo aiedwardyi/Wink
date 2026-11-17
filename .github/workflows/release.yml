@@ -10,6 +10,7 @@
 #                                 /api/health stayed green
 #   - relay setup smoke        -> 1.0.146 could not load the lazily imported
 #                                 relay client while /api/health stayed green
+#   - What's New check         -> 1.0.275 showed the 1.0.273 notes again
 #   - staple, THEN hash        -> stapling rewrites bytes; stale feeds make
 #                                 electron-updater reject every update
 #   - blockmap regeneration    -> stale differential maps waste every updater's
@@ -53,6 +54,8 @@ jobs:
         run: |
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Refuse a release whose What's New is older
+        run: node scripts/check-whats-new.mjs
       - name: Refuse to overwrite a published release
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT }}
