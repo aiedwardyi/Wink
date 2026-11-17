@@ -381,7 +381,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             // a call order waited for a yes; it goes to the bot, never to Quick answers
             if (!call?.order && quick && !switchHeld(currentAtStart) && routesQuick({
               bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
-              deliverAfter: after, replyTo, queueId, answersCard, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
+              deliverAfter: after, replyTo, queueId, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             })) {
               const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call, answersCard });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");

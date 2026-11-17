@@ -114,10 +114,10 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
   return states;
 }
 
-/** What the person's typed `text` answers `card` with, or null past its choices: that card waits for a tap, X or the bot's close. */
-export function typedReply(card: Row, text: string): string | null {
+/** What the person's typed `text` answers `card` with: their own words, or "Answered in chat" past its choices. */
+export function typedReply(card: Row, text: string): string {
   const { staysOpen, options } = card.card!;
-  return !staysOpen || !options?.length || options.includes(text.trim()) ? firstLine(text) : null;
+  return !staysOpen || !options?.length || options.includes(text.trim()) ? firstLine(text) : ANSWERED_IN_CHAT;
 }
 
 /** True when the person's line `text`, landing next, settles `card` by itself: the server then takes no second answer for it. */

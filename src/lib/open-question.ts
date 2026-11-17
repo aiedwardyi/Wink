@@ -45,9 +45,7 @@ export function openQuestions(messages: readonly Message[]): readonly Message[] 
 /** The open question a typed `text` settles at once, what with, and whether the line alone settles it once it lands. */
 export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string; byLine: boolean } | null {
   const question = openQuestion(messages);
-  if (!question) return null;
-  const answered = typedReply(question, text);
-  return answered === null ? null : { question, answered, byLine: lineSettles(messages, question, text) };
+  return question ? { question, answered: typedReply(question, text), byLine: lineSettles(messages, question, text) } : null;
 }
 
 /** An open permission ask: it takes the composer over, so it hides the pin. */
