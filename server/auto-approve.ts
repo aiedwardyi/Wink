@@ -1,15 +1,18 @@
 // Auto mode: when a bot may answer its own permission requests.
 //
 // Auto mode answers every permission request, destructive-looking ones
-// included, whether or not a person started the turn. Local-computer
-// requests keep the guard below even with auto mode on, and are skipped
-// when nobody started the turn.
+// included, in a turn a person started. When nobody started the turn it
+// still answers ordinary work, but skips destructive commands, deletes
+// outside the turn's folder, and local-computer requests.
 //
 // The guard is deliberately tiny and literal. It is NOT a security
 // boundary (an agent set on damage has a thousand spellings for `rm`);
 // it is a "you probably didn't mean to hand THIS one over unattended"
 // backstop for the obvious catastrophes. Real containment is the
 // sandbox and the bot's own computer, not a regex.
+
+import { homedir } from "node:os";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const DESTRUCTIVE = [
   /\brm\s+(-[a-z]*\s+)*-[a-z]*[rf]/i, // rm -rf, rm -fr, rm -r -f
@@ -148,6 +151,39 @@ function matchDestructive(text: string): string | null {
   return matchFirst(DESTRUCTIVE, text) ?? matchPowerOffCommand(text);
 }
 
+const DELETE_PROGRAMS = new Set(["rm", "rmdir", "unlink", "del", "erase", "rd", "remove-item", "ri"]);
+// ACP kinds; Claude deletes and moves through Bash
+const DELETE_TOOLS = new Set(["delete", "move"]);
+// a quoted path keeps its spaces; a cmd switch (/q, /s) is not a path
+const argWords = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]).filter(Boolean);
+const CMD_SWITCH = /^\/[A-Za-z](?::\S*)?$/;
+const looksLikePath = (word: string) => /^(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$))/.test(word) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(word);
+
+/** Paths a delete removes, as far as the summary shows them. */
+function deletedPaths(tool: string, summary: string): string[] {
+  const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
+  // an ACP title, not a command line; only a word that is plainly a path counts
+  if (DELETE_TOOLS.has(bare)) return argWords(summary).filter(looksLikePath);
+  if (!COMMAND_TOOLS.has(bare)) return [];
+  const paths: string[] = [];
+  for (const segment of summary.split(/[;&|\n\r]+/)) {
+    const words = argWords(segment);
+    let i = 0;
+    while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
+    if (!DELETE_PROGRAMS.has(programName(words[i] ?? ""))) continue;
+    paths.push(...words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word)));
+  }
+  return paths;
+}
+
+function pathOutside(tool: string, summary: string, workspace: string): string | null {
+  const root = resolve(workspace);
+  for (const path of deletedPaths(tool, summary)) {
+    const rel = relative(root, resolve(root, path.replace(/^~(?=[\\/]|$)/, homedir())));
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return path;
+  }
+  return null;
+}
 
 export function approvalKey(tool: string, summary: string, scope?: "local-computer"): string | null {
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
@@ -171,6 +207,10 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
 export const AWAY_DESKTOP_DENY_NOTE =
   "Wink: desktop control needs the user present. Skip this step and continue with the rest.";
 
+/** The deny for an Auto bot's destructive step or out-of-folder delete in a turn nobody started. */
+export const UNATTENDED_DENY_NOTE =
+  "Wink: nobody started this turn, so destructive commands and deletes outside the project folder are off. Skip this step and say so in your report.";
+
 /** The deny for a helper's ask that only a person could approve, once its turn has ended. */
 export const BACKGROUND_DENY_NOTE =
   "Wink: this needs the user's approval, and the turn that started you has ended. Skip it and say so in your report.";
@@ -188,6 +228,7 @@ export type AutoVerdictSource =
   | "auto-mode"
   | "unattended-block"
   | "away-desktop-deny"
+  | "unattended-deny"
   | "local-computer-block"
   | "destructive-guard"
   | "sensitive-guard"
@@ -218,6 +259,8 @@ export function autoVerdict(
     unattended?: boolean;
     /** the request controls the user's active desktop */
     scope?: "local-computer";
+    /** the folder the turn runs in; unattended deletes stay inside it */
+    workspace?: string;
   },
 ): AutoVerdict {
   // the guards outrank the grants, so an "always allow" can never widen
@@ -238,6 +281,10 @@ export function autoVerdict(
   if (context?.unattended && bot.autoApprove && context.scope === "local-computer") {
     // nobody can answer a desktop card, so skip the step instead of stalling the turn
     return { approve: null, source: "away-desktop-deny" };
+  }
+  if (context?.unattended && bot.autoApprove) {
+    const rule = destructive ?? (context.workspace ? pathOutside(tool, summary, context.workspace) : null);
+    if (rule) return { approve: null, source: "unattended-deny", rule };
   }
   if (context?.unattended && !bot.autoApprove) {
     // Auto mode covers a turn nobody started, but an Ask bot's grants wait
@@ -264,8 +311,8 @@ export function autoVerdict(
     if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
     return { approve: `auto-approved ${tool}`, source: "auto-mode" };
   }
-  // Auto mode answers even a destructive-looking request instead of carding
-  // it. Ask mode keeps the guard.
+  // In a turn a person started, Auto mode answers even a destructive-looking
+  // request instead of carding it. Ask mode keeps the guard.
   if (bot.autoApprove) return { approve: `auto-approved ${tool}`, source: "auto-mode" };
   if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
   if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
@@ -283,6 +330,7 @@ export function autoDecision(
     unattended?: boolean;
     /** the request controls the user's active desktop */
     scope?: "local-computer";
+    workspace?: string;
   },
 ): string | null {
   return autoVerdict(bot, tool, summary, context).approve;

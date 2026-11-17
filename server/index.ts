@@ -21,7 +21,7 @@ import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
-import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNATTENDED_DENY_NOTE } from "./auto-approve.ts";
 import { requestReview, resolveAutoReviewMode, shouldReview } from "./auto-review.ts";
 import {
   resolveAutomaticSelection,
@@ -3507,6 +3507,9 @@ function staleTurnEvent(threadId: string, turnId: string | undefined): boolean {
 const unattendedBots = new Map<string, number>();
 const UNATTENDED_TTL_MS = 30 * 60_000;
 
+// The folder each thread's last turn was sent to; unattended deletes stay inside it.
+const turnCwdByThread = new Map<string, string>();
+
 function markUnattended(botId: string) {
   unattendedBots.set(botId, Date.now());
 }
@@ -3886,17 +3889,18 @@ bus.subscribe((event: RuntimeEvent) => {
         });
         break;
       }
-      // A background ask comes only from work an Auto turn started, and the
-      // driver kept desktop asks to attended ones; the mark may have aged since.
-      const unattended = permission && asker && event.requestId && !event.background ? isUnattended(asker.id) : false;
+      // A background ask comes only from work an Auto turn started; the driver
+      // tags it with that turn's origin, since the bot's mark may have aged since.
+      const unattended = permission && asker && event.requestId ? event.unattended === true || (!event.background && isUnattended(asker.id)) : false;
       // Verdicts run on the original event. The bus redacts only the NDJSON
       // tee; SSE/broadcast (PR72) redacts the client copy. Masking first
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
+        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope, workspace: turnCwdByThread.get(event.threadId) })
         : null;
-      if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
+      if ((verdict?.source === "away-desktop-deny" || verdict?.source === "unattended-deny") && asker && event.requestId) {
+        const desktop = verdict.source === "away-desktop-deny";
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : botAccounts.instance(asker, event.threadId);
@@ -3905,7 +3909,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // answered at once: a desktop card nobody can see would stall the turn
         const deny = async () => {
           if (!instance) throw new Error("provider unavailable");
-          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: AWAY_DESKTOP_DENY_NOTE });
+          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: desktop ? AWAY_DESKTOP_DENY_NOTE : UNATTENDED_DENY_NOTE });
           if (outcome === "unavailable") throw new Error("the ask is no longer open");
         };
         void (async () => {
@@ -3915,7 +3919,7 @@ bus.subscribe((event: RuntimeEvent) => {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: `Skipped desktop control while you were away: ${summary.slice(0, 120)}`, ok: false },
+              tool: { name: `${desktop ? "Skipped desktop control" : "Skipped"} while you were away: ${summary.slice(0, 120)}`, ok: false },
             });
             appendDecision(DATA_DIR, {
               threadId: event.threadId,
@@ -3926,6 +3930,7 @@ bus.subscribe((event: RuntimeEvent) => {
               summary,
               decision: "auto-denied",
               source: verdict.source,
+              rule: verdict.rule,
               unattended: true,
             });
           } catch {
@@ -6128,6 +6133,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
         trace?.assembled(system, text);
+        if (cwd) turnCwdByThread.set(threadId, cwd);
+        else turnCwdByThread.delete(threadId);
         return live.adapter.sendTurn({
         ...(trace ? { trace } : {}),
         threadId,
@@ -7203,6 +7210,8 @@ async function runClaimedGroupMemberTurn(
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
       if (!lane) workerTurns.capture(bot.id, threadId, live);
       pendingInterruptThreads.started(threadId, turnKey, epoch);
+      if (cwd) turnCwdByThread.set(threadId, cwd);
+      else turnCwdByThread.delete(threadId);
       return live.adapter.sendTurn({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),

@@ -1387,7 +1387,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             return (desktop ? backgroundAutoAttended(s) : backgroundAuto(s)) ? "auto" : "denied";
           },
           onAsk: (ask) => {
-            const eventTurnId = sessions.get(threadId)?.turn?.turnId ?? turnId;
+            const s = sessions.get(threadId);
+            const eventTurnId = s?.turn?.turnId ?? turnId;
+            // a helper keeps the origin of the turn that started it
+            const unattended = s ? (ask.background ? !backgroundAutoAttended(s) : s.auto && !s.autoAttended) : false;
             askTools.set(ask.id, typeof ask.tool === "string" ? ask.tool : undefined);
             emit({
               ...base(threadId, eventTurnId),
@@ -1400,6 +1403,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               approvalScope: askScope(ask.tool),
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
               ...(ask.background ? { background: true } : {}),
+              ...(unattended ? { unattended: true } : {}),
             });
           },
           onResolve: (resolved) => {

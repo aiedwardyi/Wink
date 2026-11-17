@@ -267,13 +267,59 @@ describe("unattended turns", () => {
   const bot = { autoApprove: true, alwaysAllow: ["Bash:git"] };
   const askBot = { alwaysAllow: ["Bash:git"] };
 
-  it("keeps auto mode when nobody started the turn", () => {
+  const workspace = "/work/project";
+  const away = { unattended: true, workspace };
+
+  it("keeps auto mode for ordinary work when nobody started the turn", () => {
     expect(autoVerdict(bot, "Bash", "npm test", { unattended: true })).toEqual(autoVerdict(bot, "Bash", "npm test"));
-    expect(autoVerdict(bot, "Bash", "npm test", { unattended: true })).toMatchObject({
+    expect(autoVerdict(bot, "Bash", "npm test", away)).toMatchObject({
       approve: "auto-approved Bash",
       source: "auto-mode",
     });
-    expect(autoVerdict(bot, "Bash", "rm -rf dist", { unattended: true }).source).toBe("auto-mode");
+  });
+
+  it("denies a destructive command when nobody started the turn", () => {
+    expect(autoVerdict(bot, "Bash", "rm -rf dist", { unattended: true })).toMatchObject({ approve: null, source: "unattended-deny" });
+    expect(autoVerdict(bot, "Bash", "git push --force origin main", away)).toMatchObject({ approve: null, source: "unattended-deny" });
+  });
+
+  it("denies a delete outside the workspace when nobody started the turn", () => {
+    for (const [tool, summary] of [
+      ["Bash", "rm ~/.bashrc"],
+      ["Bash", "npm test && rm /work/other/data.db"],
+      ["Bash", "rm ../other-project/notes.md"],
+      ["powershell", "Remove-Item C:\\Users\\you\\Documents\\report.docx"],
+      ["delete", "Delete /work/other/data.db"],
+      ["Bash", 'rm "/work/my notes/old.md"'],
+    ]) {
+      expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ approve: null, source: "unattended-deny" });
+    }
+  });
+
+  it("keeps reads, edits and in-project deletes running when nobody started the turn", () => {
+    for (const [tool, summary] of [
+      ["Read", JSON.stringify({ file_path: "/etc/hosts" })],
+      // routines update notes kept outside the bot's folder
+      ["Write", JSON.stringify({ file_path: "/notes/vault/daily.md", content: "x" })],
+      ["Bash", "cat /etc/hosts"],
+      ["Write", JSON.stringify({ file_path: "/work/project/src/a.ts", content: "x" })],
+      ["Edit", JSON.stringify({ file_path: "src/a.ts", old_string: "a", new_string: "b" })],
+      ["Bash", "rm build/output.js"],
+      ["Bash", "rm /work/project/tmp/out.log"],
+      ["delete", "Delete src/old.ts"],
+      ["Bash", "del /q build\\out.js"],
+      ["Bash", 'rm "/work/project/my notes/old.md"'],
+      ["edit", "Edit src/a.ts"],
+      ["WebFetch", "https://example.com/docs"],
+    ]) {
+      expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ source: "auto-mode" });
+    }
+  });
+
+  it("leaves an attended Auto turn as it was", () => {
+    const here = { workspace };
+    expect(autoVerdict(bot, "Bash", "rm -rf dist", here)).toMatchObject({ approve: "auto-approved Bash", source: "auto-mode" });
+    expect(autoVerdict(bot, "Bash", "rm ~/.bashrc", here)).toMatchObject({ source: "auto-mode" });
   });
 
   it("does not let an Ask bot's always-allow grant answer for it", () => {
