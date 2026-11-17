@@ -447,7 +447,7 @@ import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from 
 import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
-import { linkedFileGrant, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
+import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -8685,6 +8685,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         threadId,
         messages,
         deviceId: profileSyncSettings.deviceId,
+        own: ownChat(threadId, Boolean(group?.hosted), joinedRoomThreads),
         writerDeviceId: (messageId) => threadSyncGate.enabled ? threadSyncV2?.messageWriter(threadId, messageId) ?? null : messageWriter(DATA_DIR, threadId, messageId),
         rootsFor: (message) => {
           if (bot) return botOutputRoots(bot, threadId);

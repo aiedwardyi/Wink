@@ -6,8 +6,9 @@ import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { FILE_ROW, GAP, HEAD, PAD, monthAt, useMediaGrid, type GridLayout, type GridMonth } from "@/lib/media-grid";
 import { heldMedia, loadMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
+import { openFile } from "@/lib/open-file";
 import { chatMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
-import { showItem } from "@/lib/show-pane";
+import { InlineAudio } from "./InlineAudio";
 import { MediaClip } from "./MediaClip";
 import { MediaMenu } from "./MediaMenu";
 import { MediaViewer } from "./MediaViewer";
@@ -230,14 +231,12 @@ function MediaRow({ file, top, day }: { file: MediaFile; top: number; day: Intl.
   );
 }
 
-/** Plays a clip in the viewer, shows what Show can draw, opens the rest in its app on the desktop, else downloads it. */
+/** A tap opens the file by the one rule: a clip in this list's viewer, audio in its row. A room's whole clip or audio could not seek, so it downloads. */
 function MediaOpen({ file, style, className, row, view, children }: { file: MediaFile; style: CSSProperties; className: string; row?: boolean; view?: () => void; children: ReactNode }) {
+  const [playing, setPlaying] = useState("");
   const props = { "data-media-file": row || undefined, "data-media-key": file.key, style, className };
-  const show = file.show;
-  const openFile = file.path ? window.ogb?.openFile : undefined;
-  if (view) return <button type="button" {...props} title={file.name} onClick={view}>{children}</button>;
-  if (show) return <button type="button" {...props} title={file.name} onClick={() => showItem(show)}>{children}</button>;
-  if (openFile) return <button type="button" {...props} title={file.path} onClick={() => void openFile(file.path!).catch(() => {})}>{children}</button>;
-  if (file.src) return <a href={file.src} download={file.name} {...props} title={file.name}>{children}</a>;
-  return <div {...props} title={file.name}>{children}</div>;
+  const tap = file.tap;
+  if (playing) return <div {...props} title={file.name}><InlineAudio src={playing} autoPlay /></div>;
+  if (!tap) return <div {...props} title={file.name}>{children}</div>;
+  return <button type="button" {...props} title={window.ogb && !tap.src ? file.path : file.name} onClick={() => openFile(tap, { view, play: file.whole ? undefined : setPlaying })}>{children}</button>;
 }

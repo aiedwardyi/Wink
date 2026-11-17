@@ -11,7 +11,7 @@ import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } 
 import { parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
 
-const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
+const pdf = vi.hoisted(() => ({ pages: [] as number[], broken: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: {},
   getDocument: (params: unknown) => (pdf.params = params, {
@@ -19,6 +19,7 @@ vi.mock("pdfjs-dist", () => ({
       numPages: 8,
       getPage: async (n: number) => {
         pdf.pages.push(n);
+        if (pdf.broken.includes(n)) throw new Error("bad page");
         return { getViewport: ({ scale }: { scale: number }) => ({ width: 960 * scale, height: 540 * scale }), render: () => ({ promise: Promise.resolve(), cancel() {} }) };
       },
       destroy() {},
@@ -38,6 +39,7 @@ let host: HTMLElement;
 
 beforeEach(() => {
   pdf.pages = [];
+  pdf.broken = [];
   pdf.gate = Promise.resolve();
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     const response = new Response(null, { status: url.includes("linked-file") ? 206 : 404 });
@@ -95,6 +97,16 @@ it("pages a PDF one page at a time", async () => {
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("2 / 8"));
   expect(host.querySelector("[data-show-pager]")?.textContent).toContain("2 / 8");
   expect(pdf.pages).toEqual([1, 2]);
+});
+
+it("says a page it could not draw could not be shown, not a blank or stale page", async () => {
+  pdf.broken = [2];
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("1 / 8"));
+  await act(async () => button("Next page")!.click());
+  await until(() => host.textContent?.includes("Could not show this file"));
+  expect(host.textContent).toContain("Could not show this file");
+  expect(host.querySelector("canvas.show-pdf")).toBeNull();
 });
 
 let clock = 0;

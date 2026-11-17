@@ -1,6 +1,6 @@
 import type { Message } from "@/state/store";
-import { mediaKey, messageRefs, showKind, type MediaRef } from "./chat-media";
-import type { ShowItem } from "./show-pane";
+import { linkedFileSrc, mediaKey, messageRefs, showKind, type MediaRef } from "./chat-media";
+import type { FileTap } from "./open-file";
 import { hostRoomBase, isRoomPicture, roomFileUrl, type RoomFile } from "./team-rooms";
 
 export interface MediaSource {
@@ -16,12 +16,12 @@ export interface MediaFile {
   name: string;
   /** epoch ms of the message or upload that brought it */
   at: number;
-  /** none for a file only its own PC holds, like an attached one */
   src?: string;
   image?: boolean;
   /** sits with the pictures, opened like a file */
   video?: boolean;
-  show?: ShowItem;
+  /** what a tap hands the open rule */
+  tap?: FileTap;
   /** a local path the desktop opens */
   path?: string;
   size?: number;
@@ -38,9 +38,10 @@ export function mediaFile(threadId: string, ref: MediaRef, at: number): MediaFil
   const { kind, name, size } = ref;
   if (kind === "a" || kind === "u") return { key, name, at, src: key, image: true };
   const video = VIDEO.test(ref.ref) || undefined;
-  if (kind === "f") return { key, name, at, path: ref.ref, size, video };
-  const show = showKind(ref.ref);
-  return show === "image" ? { key, name, at, src: key, path: ref.ref, image: true } : { key, name, at, src: key, path: ref.ref, size, video, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
+  // An attached file streams from its PC like a linked one, so a phone opens it too.
+  const src = kind === "f" ? linkedFileSrc(threadId, ref.ref) : key;
+  const tap = { threadId, path: ref.ref };
+  return showKind(ref.ref) === "image" ? { key, name, at, src, path: ref.ref, image: true, tap } : { key, name, at, src, path: ref.ref, size, video, tap };
 }
 
 const seen = new WeakMap<Message, MediaFile[]>();
@@ -70,8 +71,7 @@ export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray
   return files.map((file) => {
     if (isRoomPicture(file)) return { key: file.id, name: file.name, at: file.at, src: roomFileUrl(base, file, true), image: true };
     const src = roomFileUrl(base, file, false);
-    // A room previews only pictures; a PDF still draws from its bytes.
     return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined, whole: true,
-      show: showKind(file.name) === "pdf" ? { threadId, path: file.name, kind: "pdf", src } : undefined };
+      tap: { threadId, path: file.name, src } };
   });
 }

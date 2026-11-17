@@ -8,25 +8,12 @@ export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./
 
 export type PaneKind = ShowKind | "text" | "folder";
 
-/** What a click shows in the pane: the kinds that open on their own, and plain text. */
-export const paneKind = (path: string): PaneKind | null => showKind(path) ?? (/[^\\/]\.txt$/i.test(path) ? "text" : null);
-
 export interface ShowItem {
   threadId: string;
   path: string;
   kind: PaneKind;
   /** a room file's own URL; a bot's file goes through linked-file */
   src?: string;
-}
-
-/** The desktop app copies a bot's file through its save dialog; elsewhere the browser downloads it. */
-export function saveFile(src: string, name: string, path?: string) {
-  const save = path ? window.ogb?.saveFile : undefined;
-  if (save) return void save(path!).catch(() => {});
-  const link = document.createElement("a");
-  link.href = src;
-  link.download = name;
-  link.click();
 }
 
 const folderSchema = z.object({
