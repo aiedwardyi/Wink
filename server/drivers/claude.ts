@@ -1112,8 +1112,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const retryScale = Number(process.env.FAKE_CLAUDE_RETRY_SCALE ?? "1");
       const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
-      const asks = turn.approval === "ask" && config.permissionMode !== "bypassPermissions";
-      const auto = turn.approval === "auto";
+      // a read-only turn always asks, so full auto or a user's own defaultMode can't lift it
+      const asks = (turn.approval === "ask" && config.permissionMode !== "bypassPermissions") || turn.readOnly === true;
+      const auto = turn.approval === "auto" && !turn.readOnly;
       const autoAttended = auto && turn.attended === true;
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
@@ -1146,8 +1147,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const injected = input.account ? { model: turnModel, injected: false } : applyClaudeInject({ ...turnEnvironment }, turnModel);
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
-      if (turn.leanStartup === true) args.push("--setting-sources", "project");
+      // read-only: no user, project or local settings, so none of their hooks or enabled plugins run; --settings still applies
+      if (turn.readOnly) args.push("--setting-sources", "");
+      else if (turn.leanStartup === true) args.push("--setting-sources", "project");
       else if (baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
+      if (turn.readOnly) args.push("--strict-mcp-config", "--no-chrome");
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless
@@ -1224,7 +1228,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       let broker: ReturnType<typeof createPermissionBroker> | undefined;
       let socketPath: string | null = null;
       const ogbArgs = [PERM_PROXY_PATH, ""];
-      if (config.permissionMode !== "bypassPermissions") {
+      if (permissionMode !== "bypassPermissions") {
         socketPath = permissionSocketPath(threadId);
         ogbArgs[1] = socketPath;
         args.push("--permission-prompt-tool", "mcp__ogb__approve");
@@ -1237,6 +1241,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // through `ps` for the life of the turn, to any local process. The CLI
       // accepts a FILE for this flag, so the secrets go in a 0600 file that
       // is removed when the turn settles.
+      if (turn.readOnly) {
+        for (const name of Object.keys(mcpServers)) if (name !== "agents" && name !== "ogb") delete mcpServers[name];
+        allowed.splice(0, allowed.length, ...allowed.filter((tool) => tool === "mcp__agents" || tool === "mcp__ogb"));
+      }
       let mcpConfigPath: string | null = null;
       if (Object.keys(mcpServers).length || turn.system) {
         mcpConfigPath = join(mkdtempSync(join(tmpdir(), "omb-mcp-")), "mcp.json");
@@ -2363,6 +2371,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           queueing: true,
           steerConsumed: true,
           readOnlyTurns: true,
+          laneTurns: true,
           pinnedSystem: true,
           localComputerMcp: config.permissionMode !== "bypassPermissions",
           askApproval: config.permissionMode !== "bypassPermissions",

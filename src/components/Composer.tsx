@@ -64,7 +64,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -223,6 +223,7 @@ export function Composer({
   call,
   onCall,
   callButton,
+  callBot,
   heldSlot,
 }: {
   bot?: Bot;
@@ -245,6 +246,8 @@ export function Composer({
   /** Starts a call from the empty box's Send spot; absent where calls can't work. */
   onCall?: () => void;
   callButton?: ReactNode;
+  /** Who a room's call button calls; a bot chat calls its own bot. */
+  callBot?: Bot;
   /** The room transcript's tail, where Ctrl+Enter holds show as 1:1 queued bubbles. */
   heldSlot?: HTMLElement | null;
 }) {
@@ -255,6 +258,7 @@ export function Composer({
   const nativeSizing = phone && window.CSS?.supports?.("field-sizing", "content") === true;
   const { capabilities } = useDesktopCapabilities();
   const rainbow = useRainbowBox();
+  const caller = bot ?? callBot;
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
@@ -1291,7 +1295,6 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
-          {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
             disabled={locked}
@@ -1485,14 +1488,14 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <CallSettingsHold bot={bot}><button
+          {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
+            <CallSettingsHold bot={caller}><button
               type="button"
               onClick={onCall}
               onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
               onFocus={warmCallAudio}
-              aria-label={t("composer.call", { name: bot.name })}
-              title={t("composer.call", { name: bot.name })}
+              aria-label={t("composer.call", { name: caller.name })}
+              title={t("composer.call", { name: caller.name })}
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
             >
               <Phone size={16} />

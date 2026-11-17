@@ -585,6 +585,68 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(drivePaths(driveA()).filter((path) => path.startsWith("changes/"))).toHaveLength(1);
   });
 
+  it("signals peers once after a pass that uploaded, and a poked peer pulls the reply in one coalesced pass", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const signals = { home: 0, work: 0 };
+    let workPasses = 0;
+    home.sync.stop();
+    work.sync.stop();
+    home.sync = boot(home, { uploaded: () => { signals.home++; for (let poke = 0; poke < 5; poke++) work.sync.poked(); } });
+    work.sync = boot(work, { uploaded: () => { signals.work++; home.sync.poked(); }, prepare: () => { workPasses++; ensureMemorySyncDevice(work.ledger); } });
+    await settle(home);
+    await settle(work);
+    signals.home = signals.work = workPasses = 0;
+
+    const head = `threads-v2/${home.bots[0].syncId}/thread-Counsel/${home.writerId}/head.json`;
+    const reply = JSON.stringify({ thread: "thread-Counsel", cut: 2 });
+    write(home.folder!, head, reply);
+    await settle(home);
+    await work.sync.idle();
+    expect(readFileSync(join(work.folder!, ...head.split("/")), "utf8")).toBe(reply);
+    expect(signals).toEqual({ home: 1, work: 0 });
+    // One pass downloads for all five pokes, one more follows any pass that moved files.
+    expect(workPasses).toBe(2);
+  });
+
+  it("leaves a rate-limit wait standing when poked", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return url.pathname === `/drive/v3/files/${drive.root().id}` ? Promise.resolve(new Response(null, { status: 429 })) : fetch(input, init);
+    });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await settle(home);
+      const sent = requests.mock.calls.length;
+      const timers = schedule.mock.calls.length;
+      home.sync.poked();
+      await home.sync.idle();
+      expect(requests.mock.calls.length).toBe(sent);
+      expect(schedule.mock.calls.length).toBe(timers);
+    } finally {
+      requests.mockRestore();
+      schedule.mockRestore();
+    }
+  });
+
+  it("a poke on a PC signed in to another account reads nothing from either Drive", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    home.account.setSession(B);
+    const calls = driveA().calls.length;
+    home.sync.poked();
+    await home.sync.idle();
+    expect(drives.get(B.sub)!.calls).toEqual([]);
+    expect(driveA().calls.length).toBe(calls);
+  });
+
   it("journey 3: two PCs with weeks of data end with both sets, no duplicates, nothing overwritten", async () => {
     const home = makePC("home", { bots: [bot("Counsel"), bot("Clerk")], pictures: { "home.png": "home" } });
     const work = makePC("work", { bots: [bot("Research")], pictures: { "work.png": "work" } });

@@ -60,6 +60,7 @@ type InternalRouteDeps = {
   broadcast: (payload: Record<string, unknown>) => void;
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
+  readOnlyTurn: (botId: string, threadId: string) => boolean;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold">;
@@ -149,6 +150,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!bot) return json(res, 403, { error: "unknown sender" });
       const conversation = store.conversationForBot(bot.id, body.fromThreadId);
       if (!conversation) return json(res, 403, { error: "source conversation does not belong to sender" });
+      if (deps.readOnlyTurn(bot.id, body.fromThreadId)) {
+        return json(res, 403, { error: 'update_task_state is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
+      }
       const task = store.taskByThread(bot.id, body.fromThreadId);
       const groupTask = conversation.group
         ? store.groupTaskByThread(conversation.group.id, body.fromThreadId)
