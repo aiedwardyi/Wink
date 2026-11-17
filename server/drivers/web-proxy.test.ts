@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { gzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +31,15 @@ beforeAll(async () => {
       res.on("close", () => clearInterval(timer));
       return;
     }
+    if (req.url === "/cut") {
+      const zipped = gzipSync("hello ".repeat(50_000));
+      res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip" });
+      return res.write(zipped.subarray(0, zipped.length >> 1), () => res.destroy());
+    }
+    if (req.url === "/long-title") return res.writeHead(200, { "content-type": "text/html" }).end(`<title>${"t".repeat(100_000)}</title><p>hi</p>`);
+    if (req.url === "/latin") return res.writeHead(200, { "content-type": "text/plain; charset=iso-8859-1" }).end(Buffer.from("Fran\u00e7ais caf\u00e9", "latin1"));
+    if (req.url === "/ok-location") return res.writeHead(200, { "content-type": "text/plain", location: "/page" }).end("own body");
+    if (req.url === "/gone-location") return res.writeHead(404, { "content-type": "text/plain", location: "/page" }).end("nope");
     if (req.url === "/hop") return res.writeHead(302, { location: "/page" }).end();
     if (req.url === "/loop") return res.writeHead(302, { location: "/loop" }).end();
     if (req.url === "/to-file") return res.writeHead(302, { location: "file:///etc/passwd" }).end();
@@ -111,6 +121,15 @@ describe("read_url", () => {
     expect(good).toBe("93.184.216.34");
   });
 
+  it("follows Location only on a redirect status", async () => {
+    expect((await readUrl(`${base}/ok-location`, ANY)).text).toContain("own body");
+    expect(await readUrl(`${base}/gone-location`, ANY)).toMatchObject({ isError: true });
+  });
+
+  it("decodes the body with the charset the server declares", async () => {
+    expect((await readUrl(`${base}/latin`, ANY)).text).toContain("Fran\u00e7ais caf\u00e9");
+  });
+
   it("htmlToText keeps block breaks and decodes entities", () => {
     expect(htmlToText("<title>T&#33;</title><body><p>a&nbsp;b</p><p>c</p></body>")).toEqual({ title: "T!", text: "a b\n\nc" });
   });
@@ -125,6 +144,16 @@ describe("hostile pages", () => {
     expect(out.text).toContain("[truncated");
     expect(process.memoryUsage().rss - before).toBeLessThan(100_000_000);
   }, 30_000);
+
+  it("answers when a compressed response is cut off mid-body", async () => {
+    expect(await readUrl(`${base}/cut`, OPEN)).toMatchObject({ isError: true });
+  }, 5000);
+
+  it("counts a huge title against the output limit", async () => {
+    const out = await readUrl(`${base}/long-title`, OPEN);
+    expect(out.text.length).toBeLessThan(31_000);
+    expect(out.text).toContain("[truncated");
+  });
 
   it("gives up on a server that drips bytes past the whole-call deadline", async () => {
     const started = Date.now();
