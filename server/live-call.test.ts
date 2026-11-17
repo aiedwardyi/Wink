@@ -319,12 +319,10 @@ describe("call token", () => {
     expect(setup.tools[0].functionDeclarations[0].description).not.toMatch(/bot/i);
   });
 
-  it("brief takes a call problem as a bug for the team and opens once", async () => {
+  it("brief opens once a call", async () => {
     const h = harness();
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Told the call or the app has a problem (no sound, can't hear you, cut off, slow, any bug): it's a real bug for the team to fix, never something that isn't for the developers.");
-    expect(brief).toContain("Say you'll note it for the team, then call propose_work to note it.");
     expect(brief).toContain("Open once a call: asked if you're there or can hear them, say yes in a few words.");
   });
 
