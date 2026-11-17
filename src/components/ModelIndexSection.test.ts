@@ -13,7 +13,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 import { ModelIndexSection } from "./ModelIndexSection";
-import { placeNames } from "./ModelIndexPhone";
+import { dodge, placeNames } from "./ModelIndexPhone";
 
 let root: Root;
 let host: HTMLElement;
@@ -1160,6 +1160,48 @@ describe("chart layout", () => {
     });
     expect(labels.length).toBeGreaterThanOrEqual(3);
     expect(clash(labels, marks, [...efforts, ...leaders])).toEqual([]);
+  });
+
+  it("drops a desktop pick the next benchmark does not plot instead of dimming every model", async () => {
+    await render(false, 594);
+    const chart = () => host.querySelector("svg[role=img]")!;
+    const names = () => [...chart().querySelectorAll("text[data-mi-label]")].map((el) => el.textContent);
+    let checked = false;
+    for (let i = 0; !checked && i < chart().querySelectorAll("[data-mi-point]").length; i++) {
+      await mount();
+      const point = [...chart().querySelectorAll<SVGGElement>("[data-mi-point]")].filter((el) => el.querySelector("[data-mi-badge]"))[i];
+      if (!point) break;
+      const [x, y] = numbers(point.style.transform);
+      act(() => chart().querySelector("rect[fill=transparent]")!.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
+      const name = chart().querySelector('[data-mi-focus=""] text[data-mi-label]')?.textContent;
+      if (!name) continue;
+      pick("Benchmark", "Design");
+      if (names().includes(name)) continue;
+      expect(chart().querySelectorAll('[data-mi-focus="dim"]')).toHaveLength(0);
+      checked = true;
+    }
+    expect(checked).toBe(true);
+  });
+
+  it("drops a phone pick the next benchmark does not plot instead of lining another model", async () => {
+    await render(true, 358);
+    const chart = () => host.querySelector("[data-mi-phone-chart] svg[role=group]")!;
+    const design = new Set(MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "design").map((entry) => entry.model));
+    const efforts = (model: string) => MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === model && entry.cost).length;
+    const gone = [...chart().querySelectorAll("[data-mi-dot] [role=button]")].find((el) => {
+      const model = MODEL_INDEX_ENTRIES.find((entry) => entry.index === "intelligence" && el.getAttribute("aria-label")?.startsWith(`${entry.label} `))?.model;
+      return model && !design.has(model) && efforts(model) > 1;
+    });
+    expect(gone).toBeDefined();
+    act(() => gone!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(chart().querySelector("[data-mi-effort]")).not.toBeNull();
+    pick("Benchmark", "Design");
+    expect(chart().querySelector("[data-mi-effort]")).toBeNull();
+  });
+
+  it("keeps badges apart after pulling them inside the frame", () => {
+    const [a, b] = dodge([{ x: -50, y: 50 }, { x: -10, y: 50 }], 8, { left: 0, top: 0, right: 100, bottom: 100 });
+    expect(Math.hypot(a!.x - b!.x, a!.y - b!.y)).toBeGreaterThanOrEqual(19.9);
   });
 
   it("overlaps no name with another name or a marker on the desktop chart at 1440", async () => {

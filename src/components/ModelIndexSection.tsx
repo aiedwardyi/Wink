@@ -414,7 +414,9 @@ function Scatter({
   for (const point of plotted) if (point.score > (best.get(point.model)?.score ?? -Infinity)) best.set(point.model, point);
   const badges = new Set([...best.values()].map((point) => point.key));
   const rest = (): Spot => ({ x: left, y: bottom });
-  const focus = (hover ? marks.find((mark) => mark.key === hover)?.model : undefined) ?? picked;
+  // A pick outlives a benchmark switch; only honor it while that model is plotted.
+  const kept = plotted.some((point) => point.model === picked) ? picked : null;
+  const focus = (hover ? marks.find((mark) => mark.key === hover)?.model : undefined) ?? kept;
   const dim = (model: string) => (focus && focus !== model ? "dim" : "");
   const shown = (key: string, model: string) => badges.has(key) || model === focus;
   const tops = [...best.values()];
@@ -635,7 +637,7 @@ function Scatter({
           const frame = svgRef.current!.getBoundingClientRect();
           const nearest = nearestDot({ x: e.clientX - frame.left, y: e.clientY - frame.top });
           const model = nearest ? plotted.find((point) => point.key === nearest)!.model : null;
-          setPicked(model === picked ? null : model);
+          setPicked(model === kept ? null : model);
           if (full) onHover(nearest, nearest ? dots.current.get(nearest) : undefined, nearest ? avoidFor(nearest) : undefined);
         }}
         onMouseMove={(e) => {

@@ -295,7 +295,13 @@ export function dodge(spots: Spot[], r = BADGE, frame?: { left: number; top: num
         moved = true;
       }
     }
-    if (frame) for (const spot of out) [spot.x, spot.y] = [Math.min(Math.max(spot.x, frame.left + r), frame.right - r), Math.min(Math.max(spot.y, frame.top + r), frame.bottom - r)];
+    if (frame) {
+      for (const spot of out) {
+        const x = Math.min(Math.max(spot.x, frame.left + r), frame.right - r);
+        const y = Math.min(Math.max(spot.y, frame.top + r), frame.bottom - r);
+        if (x !== spot.x || y !== spot.y) [spot.x, spot.y, moved] = [x, y, true];
+      }
+    }
     if (!moved) break;
   }
   return out;
