@@ -6385,6 +6385,12 @@ routines = new RoutineManager({
     notify(buildNotification("routine-failed", bot, routineSourceThread(run) ?? run.threadId ?? bot.threadId, detail));
   },
 });
+// wake rows written before the card carried the flag
+for (const run of routines.listRuns()) {
+  if (!run.wake || !run.sourceThreadId) continue;
+  const row = store.messagesFor(run.sourceThreadId).find((message) => message.kind === "routine.run" && message.routineRun?.runId === run.id);
+  if (row?.routineRun && !row.routineRun.wake) store.patchMessage(run.sourceThreadId, row.id, { routineRun: { ...row.routineRun, wake: true } });
+}
 const recoveryOwners = routines.routineRequestReceiptOwners();
 if (recoveryOwners.length > 0) {
   // A normal launch has no crash-gap receipts, so it must not eagerly load

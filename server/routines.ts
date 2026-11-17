@@ -283,6 +283,7 @@ export function routineRunCard(run: RoutineRun): RoutineRunCardData {
   if (run.startedAt) card.startedAt = run.startedAt;
   if (run.finishedAt) card.finishedAt = run.finishedAt;
   if (run.threadId) card.executionThreadId = run.threadId;
+  if (run.wake) card.wake = true;
   if (summary) card.summary = summary;
   if (error) card.error = error;
   return card;

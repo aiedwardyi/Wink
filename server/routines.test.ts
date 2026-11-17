@@ -973,6 +973,12 @@ describe("RoutineManager", () => {
     });
   });
 
+  it("marks a wake's card so the chat can leave it out", () => {
+    const run = (wake?: true) => ({ id: "r", routineId: "x", routineName: "Wake", botId: "b", runOn: "maus", scheduledFor: 1, status: "completed", manual: false, createdAt: 1, ...(wake ? { wake } : {}) }) as Parameters<typeof routineRunCard>[0];
+    expect(routineRunCard(run(true)).wake).toBe(true);
+    expect(routineRunCard(run()).wake).toBeUndefined();
+  });
+
   it("falls back to the bot's chat when the source is deleted", async () => {
     const h = harness();
     const routine = h.manager.create({
