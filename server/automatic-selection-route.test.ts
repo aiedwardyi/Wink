@@ -64,7 +64,8 @@ beforeEach(async () => {
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
     instances: Object.fromEntries(["first", "second"].map((instanceId) => [instanceId, {
       driver: "claudeAgent", config: { cli: FAKE_CLI },
-      environment: { FAKE_CLAUDE_MODE: "happy", CLAUDE_CONFIG_DIR: join(home, instanceId), FAKE_CLAUDE_GET_USAGE: join(home, `${instanceId}.usage.json`) },
+      environment: { FAKE_CLAUDE_MODE: "happy", CLAUDE_CODE_OAUTH_TOKEN: "fixture-oauth", CLAUDE_CONFIG_DIR: join(home, instanceId),
+        FAKE_CLAUDE_GET_USAGE: join(home, `${instanceId}.usage.json`) },
     }])),
   }));
   const env: NodeJS.ProcessEnv = {

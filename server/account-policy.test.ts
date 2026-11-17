@@ -83,11 +83,12 @@ describe("account launch boundary", () => {
     const claude = vi.fn(async () => { throw new Error("old CLI"); });
     const refresh = createUsageRefresh({ claude });
     const options = { instanceId: account.id, account, environment: { CLAUDE_CODE_OAUTH_TOKEN: "fake-env-token", CLAUDE_CONFIG_DIR: account.home } };
-    const result = await refresh("claudeAgent", options);
-    request.mockRestore();
-    expect(request).not.toHaveBeenCalled();
-    expect(claude).toHaveBeenCalledOnce();
-    expect(result.status).toBe("no_observation");
+    try {
+      const result = await refresh("claudeAgent", options);
+      expect(request).not.toHaveBeenCalled();
+      expect(claude).toHaveBeenCalledOnce();
+      expect(result.status).toBe("no_observation");
+    } finally { request.mockRestore(); }
   });
 
   it("advertises the CLI usage read for Claude accounts on every platform", () => {
