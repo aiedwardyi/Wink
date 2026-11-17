@@ -697,11 +697,11 @@ describe("typing while a question is open", () => {
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
     expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe(answered);
     await act(async () => accept(Response.json({ ok: true, threadId: idle.threadId })));
-    expect(patches(fetch)).toEqual(options.length ? [["/api/bots/b1/cards/m-card", { answered }]] : []);
+    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered }]]);
   });
 
   it("a busy bot's server routes the typed reply while its question is still open", async () => {
-    const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const busy = { ...bot, busy: true, activity: "working", messages: [ask([])] } as Bot;
     let patchedBeforePost: unknown[] | undefined;
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => {
       patchedBeforePost = patches(fetch);
@@ -709,35 +709,7 @@ describe("typing while a question is open", () => {
     }, [busy]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "What happens to the existing data?", threadId: busy.threadId }));
     expect(patchedBeforePost).toEqual([]);
-    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Answered in chat" }]]);
-  });
-
-  it.each([
-    { name: "steered into a busy bot", busy: true, receipt: { ok: true, steered: true } },
-    { name: "started on an idle bot", busy: false, receipt: { ok: true } },
-  ])("a typed answer to a question without choices, $name, is settled by its line alone", async ({ busy, receipt }) => {
-    const chat = { ...bot, busy, activity: busy ? "working" : "idle", messages: [ask([])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ...receipt, threadId: chat.threadId }), [chat]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "Polaris", threadId: chat.threadId }));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Polaris");
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a tap after a typed reply to a busy bot sends no second answer", async () => {
-    const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: busy.threadId }));
-    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Sure" }));
-    await act(async () => {});
-    const posts = fetch.mock.calls.filter(([url, init]) => url === "/api/bots/b1/messages" && (init as RequestInit | undefined)?.method === "POST");
-    expect(posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).text)).toEqual(["maybe at 8"]);
-  });
-
-  it("a queued typed answer saves its question, since its line is not in the transcript yet", async () => {
-    const busy = { ...bot, busy: true, activity: "working", messages: [ask([])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "Polaris", threadId: busy.threadId }));
-    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Polaris" }]]));
+    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "What happens to the existing data?" }]]);
   });
 
   it("answers only the newest open question", async () => {
@@ -748,8 +720,7 @@ describe("typing while a question is open", () => {
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: idle.threadId, message: line }), [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "main", threadId: idle.threadId }));
     expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-folder");
-    expect(store.state.bots[0]!.messages.map((message) => message.card?.answered)).toEqual([undefined, "main", undefined]);
-    expect(patches(fetch)).toEqual([]);
+    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-branch", { answered: "main" }]]);
   });
 
   it("folds a room question at once", async () => {
@@ -760,15 +731,6 @@ describe("typing while a question is open", () => {
     expect(store.state.groups[0]?.messages[0]?.card?.answered).toBe("Answered in chat");
     await act(async () => accept(Response.json({ ok: true, threadId: room.threadId })));
     expect(patches(fetch)).toEqual([["/api/groups/g1/cards/m-card", { answered: "Answered in chat" }]]);
-  });
-
-  it("a room question without choices is settled by the typed line alone", async () => {
-    const room = { ...group, busyBotId: undefined, messages: [{ ...ask([]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
-    const line: Message = { id: "u1", at: 2, role: "user", kind: "text", text: "Polaris" };
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: room.threadId, message: line }), [bot], [room]);
-    await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "Polaris", threadId: room.threadId }));
-    expect(store.state.groups[0]?.messages[0]?.card?.answered).toBe("Polaris");
-    expect(patches(fetch)).toEqual([]);
   });
 
   it("a second typed reply answers the older question with its own words", async () => {

@@ -120,11 +120,6 @@ export function typedReply(card: Row, text: string): string {
   return !staysOpen || !options?.length || options.includes(text.trim()) ? firstLine(text) : ANSWERED_IN_CHAT;
 }
 
-/** True when the person's line `text`, landing next, settles `card` by itself: the server then takes no second answer for it. */
-export function lineSettles(messages: readonly Row[], card: Row, text: string): boolean {
-  return askStates([...messages, { role: "user", kind: "text", text }]).get(card)?.state === "answered";
-}
-
 /** The chat's newest waiting ask_user card, if any. */
 export function scanQuestion<T extends Row>(messages: readonly T[]): T | null {
   let newest: T | null = null;
