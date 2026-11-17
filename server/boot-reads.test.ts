@@ -39,6 +39,8 @@ function seed(): void {
   const store = new Store(() => ({ instanceId: "claude", model: "claude-fake" }));
   const bot = store.createBot({ name: "Big" }, { seedMessages: false });
   store.patchBot(bot.id, { notifications: false, composio: false });
+  const small = store.createBot({ name: "Small" }, { seedMessages: false });
+  store.patchBot(small.id, { notifications: false, composio: false });
   store.flushSaves();
   botId = bot.id;
   threadId = bot.threadId;
@@ -57,8 +59,9 @@ function seed(): void {
     { id: "mark-after-notice", role: "user", kind: "text", text: "after the notice" },
     { id: "mark-card", role: "bot", kind: "options", card: { title: "Ask Scout?", subtitle: "", options: ["Allow", "Deny"], requestId: "req-1", tool: "ask_bot" } },
     { id: "mark-handed", role: "bot", kind: "text", text: "handed mail", comm: { read: { state: "handed", upto: 5 } } as Message["comm"] },
-    { id: "mark-ask", role: "user", kind: "text", text: "quick question?", quick: { state: "asked" } },
   ];
+  // a resumed ask starts the turn the user asked for, which loads its chat; in the big chat that would hide any boot walk of it
+  const ask = { id: "mark-ask", at: Date.now() - 60_000, parentId: null, role: "user", kind: "text", text: "quick question?", quick: { state: "asked" } } satisfies Partial<Message>;
   const db = messageDatabase();
   const insert = db.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)");
   db.exec("BEGIN");
@@ -74,7 +77,10 @@ function seed(): void {
     insert.run(threadId, row.id, row.at, row.role!, row.kind!, row.text ?? null, JSON.stringify(row));
     parentId = row.id;
   }
-  db.prepare("INSERT INTO thread_state (thread_id, active_leaf_id) VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET active_leaf_id = excluded.active_leaf_id").run(threadId, parentId);
+  const leaf = db.prepare("INSERT INTO thread_state (thread_id, active_leaf_id) VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET active_leaf_id = excluded.active_leaf_id");
+  leaf.run(threadId, parentId);
+  insert.run(small.threadId, ask.id, ask.at, ask.role, ask.kind, ask.text, JSON.stringify(ask));
+  leaf.run(small.threadId, ask.id);
   const task = bot.tasks![0]!;
   db.prepare("INSERT INTO sync_v2_store VALUES (?, ?, ?, ?, ?, 0, 1, 0)").run(threadId, bot.id, "sync-big", task.title, task.createdAt);
   db.prepare("INSERT INTO sync_v2_notices VALUES (?, 0)").run(threadId);
@@ -140,7 +146,7 @@ function rows(): Map<string, Message> {
   const db = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });
   try {
     // SAFETY: json is the stored Message the server wrote.
-    const found = db.prepare("SELECT json FROM messages WHERE thread_id = ? AND id LIKE 'mark-%'").all(threadId) as Array<{ json: string }>;
+    const found = db.prepare("SELECT json FROM messages WHERE id LIKE 'mark-%'").all() as Array<{ json: string }>;
     // SAFETY: json is the stored Message the server wrote.
     return new Map(found.map((row): [string, Message] => { const message = JSON.parse(row.json) as Message; return [message.id, message]; }));
   } finally {
