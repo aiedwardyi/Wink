@@ -19,8 +19,11 @@ const viewSchema = z.object({
   statusCheckRollup: z.array(z.object({ name: z.string().optional(), context: z.string().optional(), status: z.string().optional(), conclusion: z.string().nullish(), state: z.string().optional() })).nullish(),
   reviews: z.array(z.object({ author: z.object({ login: z.string() }).nullish(), state: z.string(), submittedAt: z.string().nullish() })).nullish(),
 });
-const reviewsSchema = z.object({ pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }), nodes: z.array(z.object({ url: z.string(), submittedAt: z.string().nullish() })) });
-const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }), reviews: reviewsSchema.optional() }) }) }) });
+const reviewsSchema = z.object({
+  pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }),
+  nodes: z.array(z.object({ url: z.string(), submittedAt: z.string().nullish() }).nullable()).nullish().transform(nodes => nodes?.filter(node => node !== null) ?? []),
+});
+const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }), reviews: reviewsSchema.nullish() }) }) }) });
 const moreReviewsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviews: reviewsSchema }) }) }) });
 
 const GH_AUTH_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
@@ -110,14 +113,14 @@ export function createMapFlow(gh: MapGh = ghRun) {
       if (!pr || !repo) return pr;
       const graph = (query: string, after?: string) => gh(root, ["api", "graphql", "-f", `query=${query}`, "-F", `owner=${repo[1]}`, "-F", `name=${repo[2]}`, "-F", `number=${pr.number}`, ...after ? ["-f", `after=${after}`] : []]);
       const extra = await graph(THREADS).then(text => threadsSchema.parse(JSON.parse(text)).data.repository.pullRequest).catch(() => null);
-      const reviews = [...extra?.reviews?.nodes ?? []];
-      // GitHub lists reviews by when they were started, so the one submitted last can sit on any page.
-      for (let page = extra?.reviews?.pageInfo; page?.hasNextPage && page.endCursor;) {
-        const next = await graph(MORE_REVIEWS, page.endCursor).then(text => moreReviewsSchema.parse(JSON.parse(text)).data.repository.pullRequest.reviews).catch(() => undefined);
-        reviews.push(...next?.nodes ?? []);
+      // GitHub lists reviews by when they were started, so the one submitted last can sit on any page: a page that fails leaves the link on the PR.
+      let reviews = extra?.reviews?.nodes ?? null;
+      for (let page = extra?.reviews?.pageInfo; reviews && page?.hasNextPage;) {
+        const next = page.endCursor ? await graph(MORE_REVIEWS, page.endCursor).then(text => moreReviewsSchema.parse(JSON.parse(text)).data.repository.pullRequest.reviews).catch(() => null) : null;
+        reviews = next && [...reviews, ...next.nodes];
         page = next?.pageInfo;
       }
-      const latest = reviews.filter(node => node.url.startsWith(`${pr.url}#pullrequestreview-`)).toSorted((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? "")).at(-1);
+      const latest = reviews?.filter(node => node.url.startsWith(`${pr.url}#pullrequestreview-`)).toSorted((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? "")).at(-1);
       return { ...pr, threads: extra ? extra.reviewThreads.nodes.filter(node => !node.isResolved).length : null, ...latest && { reviewUrl: latest.url } };
     } catch { return null; }
   }

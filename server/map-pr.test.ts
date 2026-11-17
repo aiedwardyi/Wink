@@ -141,6 +141,11 @@ it("carries the latest submitted review's Conversation anchor and keeps each rev
     : graph([{ url: `${url}#pullrequestreview-11`, submittedAt: "2026-11-12T19:30:00Z" }], "c1"));
   expect((await createMapFlow(later).flow(root, base)).pr?.reviewUrl).toBe(`${url}#pullrequestreview-21`);
   expect(later).toHaveBeenCalledTimes(3);
+  const lost = vi.fn(async (_cwd: string, args: string[]) => args[0] !== "api" ? JSON.stringify(view({ reviews })) : args.includes("after=c1") ? "{}"
+    : graph([{ url: `${url}#pullrequestreview-11`, submittedAt: "2026-11-12T19:30:00Z" }], "c1"));
+  expect((await createMapFlow(lost).flow(root, base)).pr?.reviewUrl).toBeUndefined();
+  const empty = vi.fn(async (_cwd: string, args: string[]) => args[0] !== "api" ? JSON.stringify(view({ reviews })) : JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: false }] }, reviews: null } } } }));
+  expect((await createMapFlow(empty).flow(root, base)).pr).toMatchObject({ threads: 1 });
   const none = (await createMapFlow(answer([])).flow(root, base)).pr;
   expect(none?.reviewUrl).toBeUndefined();
   expect(stage(flow(none), "review")?.url).toBe(url);
