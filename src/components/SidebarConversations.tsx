@@ -29,6 +29,8 @@ import { terminalAttentionCopy } from "@/lib/notify";
 
 export { compactSidebarModelLabel } from "./BotModelLine";
 
+export const COUNT_BADGE = "pointer-events-none absolute -right-1 -top-1 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-[min(4px,var(--radius-lg))] px-[3px] text-[9px] font-semibold leading-none tabular-nums text-accent-ink ring-[1.5px]";
+
 export function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
   const { t } = useI18n();
   const shown = formatCollapsedUnreadBadge(count);
@@ -38,10 +40,7 @@ export function UnreadCountBadge({ count, selected }: { count: number; selected:
       data-sidebar-unread-count={count}
       role="img"
       aria-label={t("chrome.unreadReplies", { count })}
-      className={cn(
-        "pointer-events-none absolute -right-1 -top-1 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-[min(4px,var(--radius-lg))] bg-accent px-[3px] text-[9px] font-semibold leading-none tabular-nums text-accent-ink ring-[1.5px]",
-        selected ? "ring-raised" : "ring-panel",
-      )}
+      className={cn(COUNT_BADGE, "bg-accent", selected ? "ring-raised" : "ring-panel")}
     >
       {shown}
     </span>

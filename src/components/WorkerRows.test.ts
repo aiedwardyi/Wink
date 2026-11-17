@@ -9,13 +9,33 @@ import { workerRuns, type WorkerShownState } from "@/lib/worker-runs";
 import { ProviderMark } from "./ProviderIcons";
 import { applyLocale } from "@/lib/i18n";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
-import { WORKER_STATUS, WorkerChip, WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
+import { WORKER_STATUS, WorkerChip, WorkerRow, useSharedWorkers, useShareWorkers, useWorkerRows, type ShownRun, type WorkerSource } from "./WorkerRows";
 import { MediaViewer } from "./MediaViewer";
 
 const run = (label: string) => {
   const launch: Message = { id: "l1", at: 1, role: "bot", kind: "launch", text: `Launched ${label}\nLabel: ${label}\nWorking folder: C:\\repo\nSession: aaaaaaaa-1` };
   return workerRuns([launch])[0]!;
 };
+
+describe("useShareWorkers", () => {
+  it("keeps one shared source while the chat re-renders with the same workers", async () => {
+    const runs: ShownRun[] = [];
+    const seen = new Set<WorkerSource | undefined>();
+    function Host({ tick }: { tick: number }) {
+      useShareWorkers("t-share", { name: "Scout", runs });
+      seen.add(useSharedWorkers("t-share"));
+      return createElement("i", null, tick);
+    }
+    const root = createRoot(document.createElement("div"));
+    try {
+      for (const tick of [1, 2, 3]) await act(async () => root.render(createElement(Host, { tick })));
+      seen.delete(undefined);
+      expect(seen.size).toBe(1);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+});
 
 describe("useWorkerRows", () => {
   it("moves to a new note and keeps expansion when older messages mount", async () => {
