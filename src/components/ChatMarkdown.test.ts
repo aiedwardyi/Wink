@@ -1456,6 +1456,20 @@ describe("relative file links", () => {
       }
     });
 
+    it("a retry after a refusal hides the desktop note while it lists again", async () => {
+      const { host, root } = await mount(folder, 404, "t-retry");
+      try {
+        let answer!: (res: Response) => void;
+        vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (answer = resolve))));
+        await act(async () => host.querySelector("button")!.click());
+        expect(host.textContent).not.toContain("Files open in the desktop app");
+        await act(async () => answer(new Response(JSON.stringify({ files, more: 0 }))));
+        expect(lastShown("t-retry")?.path).toBe(folder);
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
     it("lists a folder once for a double tap", async () => {
       vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/linked-folder?")
         ? new Response(JSON.stringify({ files, more: 0 }))
