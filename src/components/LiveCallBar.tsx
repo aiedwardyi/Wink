@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Volume2 } from "lucide-react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { useJoinedRoom } from "@/lib/joined-rooms";
@@ -29,7 +30,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "Speaking",
     working: "Working",
     paused: "Tap to resume",
-    noSound: "Tap for sound",
+    noSound: "Tap to hear {bot}",
     ended: "Call ended",
     failed: "Call failed",
     send: "Ask {bot} to do this?",
@@ -63,7 +64,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "말하는 중",
     working: "작업 중",
     paused: "탭해서 통화 이어가기",
-    noSound: "탭해서 소리 켜기",
+    noSound: "{bot} 목소리 듣기",
     ended: "통화 종료",
     failed: "통화 실패",
     send: "{bot}에게 이렇게 요청할까요?",
@@ -339,10 +340,21 @@ function PostCard({ live, room }: { live: Live; room: string }) {
 export function ResumeButton({ live }: { live: Live }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
-  const noSound = useSyncExternalStore(live.call.subscribe, () => Boolean(live.call.state().noSound), () => false);
   return (
     <button type="button" data-live-call-resume onClick={() => live.call.resume()} className="px-1 pb-1.5 text-left text-xs font-medium text-accent hover:underline max-md:min-h-10">
-      {noSound ? words.noSound : words.paused}
+      {words.paused}
+    </button>
+  );
+}
+
+/** The phone would not play the voice: one tap in the call row lets it. */
+export function SoundPill({ bot, live }: { bot: Bot; live: Live }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  return (
+    <button type="button" data-live-call-sound onClick={() => live.call.resume()} className="flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full bg-accent pl-2.5 pr-3 text-[13px] font-medium text-accent-ink hover:brightness-110 max-md:h-10">
+      <Volume2 size={16} aria-hidden className="shrink-0 animate-pulse motion-reduce:animate-none" />
+      <span className="min-w-0 truncate">{words.noSound.replace("{bot}", () => bot.name)}</span>
     </button>
   );
 }
@@ -392,7 +404,7 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
       <Fold open={Boolean(snap.pending)} soft keep>
         <OrderCard bot={bot} live={live} />
       </Fold>
-      {snap.status === "paused" && <ResumeButton live={live} />}
+      {snap.status === "paused" && !snap.noSound && <ResumeButton live={live} />}
       {note && (
         <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
           {room && snap.status === "needsKey"
