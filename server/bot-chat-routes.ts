@@ -323,7 +323,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       // a retry of a saved send replays its receipt below
-      const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(store.activePath(threadId), text);
+      const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(() => store.activePath(threadId), text);
       if (again) return json(res, 409, { error: "question already settled", message: clientMessage(again) });
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,

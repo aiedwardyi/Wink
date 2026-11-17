@@ -6,7 +6,7 @@
 // activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { ANSWERED_IN_CHAT, askStates, cardsToClose, isAskUserCard, isSentByPerson, quotedCard, scanQuestion, typedPastCard } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, askStates, cardsToClose, isAskUserCard, isSentByPerson, quotedCard, quotesCard, scanQuestion, typedPastCard } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -110,7 +110,9 @@ export function settledAsk(messages: readonly Message[], messageId: string): Mes
 }
 
 /** The settled card a quoted answer names: a tap or an earlier line already answered it, so this send would be a second answer. */
-export function answeredAgain(messages: readonly Message[], text: string): Message | null {
+export function answeredAgain(path: () => readonly Message[], text: string): Message | null {
+  if (!quotesCard(text)) return null;
+  const messages = path();
   const quoted = quotedCard(messages, text);
   return quoted ? settledAsk(messages, quoted.id) : null;
 }

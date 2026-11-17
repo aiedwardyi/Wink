@@ -55,9 +55,11 @@ export function answerText(card: Row, answer: string): string {
   return `${answerPrefix(card)}${answer}`;
 }
 
+export const quotesCard = (text: string) => text.startsWith("Re: “");
+
 /** The ask_user card a "Re: “question”" line names, the newest that matches. */
 export function quotedCard<T extends Row>(messages: readonly T[], text: string): T | undefined {
-  return text.startsWith("Re: “") ? messages.findLast((message) => isAskUserCard(message) && text.startsWith(answerPrefix(message))) : undefined;
+  return quotesCard(text) ? messages.findLast((message) => isAskUserCard(message) && text.startsWith(answerPrefix(message))) : undefined;
 }
 
 const sameAsker = (left: Row, right: Row) => left.from?.botId === right.from?.botId;

@@ -113,7 +113,7 @@ async function mount(props: ComposerProps, transcript?: Group) {
   await act(async () => FakeEventSource.current!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "" }));
 }
 const rerender = (props: ComposerProps, transcript?: Group) => act(async () => root!.render(tree(props, transcript)));
-const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
+const settle = () => act(() => new Promise((done) => setTimeout(done, 0)));
 const pin = () => host!.querySelector("[data-pending-question]");
 const row = () => host!.querySelector<HTMLElement>("[data-question-row]");
 const openCard = () => host!.querySelector<HTMLElement>('[role="region"][data-pending-question]');
@@ -302,9 +302,9 @@ describe("taps", () => {
     const question = card({ subtitle: "Which build?", options: ["Let me pick", "Latest"] });
     const tapped = { ...question, card: { ...question.card!, answered: "Let me pick" } };
     const spoken = `${shared.answerPrefix(question)}Let me pick`;
-    expect(server.answeredAgain?.([tapped] as never, spoken)?.id).toBe(question.id);
-    expect(server.answeredAgain?.([question, line(spoken, { answersCard: question.id })] as never, spoken)?.id).toBe(question.id);
-    expect(server.answeredAgain?.([question] as never, spoken)).toBeNull();
+    expect(server.answeredAgain?.(() => [tapped] as never, spoken)?.id).toBe(question.id);
+    expect(server.answeredAgain?.(() => [question, line(spoken, { answersCard: question.id })] as never, spoken)?.id).toBe(question.id);
+    expect(server.answeredAgain?.(() => [question] as never, spoken)).toBeNull();
 
     vi.useFakeTimers();
     vi.stubGlobal("crypto", { randomUUID: () => "send-1" });
