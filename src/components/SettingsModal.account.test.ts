@@ -126,7 +126,7 @@ describe("Account settings", () => {
   it("gives About You its own entry, right under Account", async () => {
     const pane = await render("about-you");
     expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Import Memory");
-    expect(pane.textContent).toContain("Copy Prompt");
+    expect(pane.querySelector('button[aria-label="Copy Prompt"]')).not.toBeNull();
     expect(pane.querySelector("#settings-profile-name")).toBeNull();
   });
 

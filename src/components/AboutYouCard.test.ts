@@ -44,16 +44,18 @@ describe("About You card", () => {
   });
 
   const render = () => act(async () => root.render(createElement(I18nProvider, null, createElement(AboutYouCard))));
-  const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label)!;
+  const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label || node.getAttribute("aria-label") === label)!;
   const click = (label: string) => act(async () => button(label).click());
 
   it("copies the prompt, then adds one paste for every bot with no bot to pick", async () => {
     await render();
     expect(host.textContent).toContain("Bring what ChatGPT, Claude, Gemini, Grok or Muse knows about you. Every bot reads it.");
     expect(button("Add to Memory").disabled).toBe(true);
+    expect(host.textContent).toContain("I'm moving to a new AI assistant called Wink.");
+    expect(host.textContent).not.toContain("Copy Prompt");
     await click("Copy Prompt");
     expect(writeText).toHaveBeenCalledWith(en["aboutYou.prompt"]);
-    expect(button("Copied")).toBeDefined();
+    expect(button("Copied").querySelector("svg")).not.toBeNull();
 
     const box = host.querySelector("textarea")!;
     await act(async () => {
