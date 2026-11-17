@@ -204,7 +204,7 @@ describe("who started the turn", () => {
 
 describe("web-proxy stdio", () => {
   const ask = async (env: Record<string, string>, url: string) => {
-    const child = spawn(process.execPath, [PROXY], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, OMB_READ_ONLY_TURN: "", ...env } });
+    const child = spawn(process.execPath, [PROXY], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true, env: { ...process.env, OMB_READ_ONLY_TURN: "", ...env } });
     const reply = new Promise<any>((resolve) => child.stdout.once("data", (chunk) => resolve(JSON.parse(String(chunk)))));
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_url", arguments: { url } } })}\n`);
     const message = await reply;
@@ -213,7 +213,7 @@ describe("web-proxy stdio", () => {
   };
 
   it("lists read_url as the only tool, marked read-only", async () => {
-    const child = spawn(process.execPath, [PROXY], { stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn(process.execPath, [PROXY], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
     const reply = new Promise<any>((resolve) => child.stdout.once("data", (chunk) => resolve(JSON.parse(String(chunk)))));
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
     const message = await reply;
