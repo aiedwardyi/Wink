@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerText, isSentByPerson, scanQuestion } from "./open-question.ts";
+import { ANSWERED_IN_CHAT, answerText, isSentByPerson, scanQuestion } from "./open-question.ts";
 
 const ask = { role: "bot", kind: "options", card: { askUser: true as const } };
 
@@ -31,6 +31,19 @@ describe("an answer to an older question", () => {
     const newer = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const } };
     expect(answerText([older, newer], older, "Yes")).toBe("Re: “Ship it?”\nYes");
     expect(answerText([older, newer], newer, "main")).toBe("main");
+  });
+});
+
+describe("a settled card", () => {
+  it("never hands a line typed past it to an older question", () => {
+    const folder = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which folder?", staysOpen: true as const } };
+    const branch = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const, options: ["main", "dev"] } };
+    const said = (text: string) => ({ role: "user", kind: "text", text });
+    expect(scanQuestion([folder, branch, said("release")])).toBe(branch);
+    expect(scanQuestion([folder, { ...branch, card: { ...branch.card, answered: ANSWERED_IN_CHAT } }, said("release")])).toBe(folder);
+    const tapped = { ...branch, card: { ...branch.card, answered: "main" } };
+    expect(scanQuestion([folder, tapped, said("release"), said("main")])).toBe(folder);
+    expect(scanQuestion([folder, tapped, said("main"), said("src/app")])).toBeNull();
   });
 });
 

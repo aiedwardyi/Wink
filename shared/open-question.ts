@@ -77,8 +77,7 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
       open = open.filter((older) => states.get(older)?.state === "waiting");
       asked.push(message);
       const card = message.card!;
-      if (card.answered) states.set(message, { state: "answered", reply: firstLine(card.answered) });
-      else if (card.dismissed) states.set(message, { state: "dismissed" });
+      if (card.dismissed && !card.answered) states.set(message, { state: "dismissed" });
       else {
         states.set(message, { state: "waiting" });
         open.push(message);
@@ -101,6 +100,8 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
     const top = open.at(-1);
     if (top && (!top.card!.staysOpen || !top.card!.options?.length)) answer(top, text, message);
   }
+  // replayed as if open, an answered card keeps the lines it held, so its patch settles no other question
+  for (const card of asked) if (card.card!.answered) states.set(card, { state: "answered", reply: firstLine(card.card!.answered) });
   return states;
 }
 
