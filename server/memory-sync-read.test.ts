@@ -44,6 +44,40 @@ describe("memory reads", () => {
     expect(snapshot.files["MEMORY.md"].text).toBe(absent ? null : "remember this");
   });
 
+  it("reads no PC's copy again while nothing changed, and pulls once one does", () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-unchanged-"));
+    roots.push(root);
+    const folder = join(root, "drive");
+    const [workspace, other] = [join(root, "workspace"), join(root, "other")];
+    for (const dir of [workspace, other]) {
+      mkdirSync(dir);
+      writeFileSync(join(dir, "MEMORY.md"), "remember this");
+    }
+    const [mine, theirs]: MemorySyncLedger[] = [{ bots: {} }, { bots: {} }];
+    const later = Date.now() + 5_000;
+    syncBotMemory(folder, "bot", other, theirs, { host: "other", now: later });
+    syncBotMemory(folder, "bot", workspace, mine, { now: later });
+    vi.mocked(readFileSync).mockClear();
+    syncBotMemory(folder, "bot", workspace, mine, { now: later });
+    const copies = vi.mocked(readFileSync).mock.calls.filter(([file]) => String(file).startsWith(memorySyncDir(folder, "bot")));
+    expect(copies).toEqual([]);
+    writeFileSync(join(other, "MEMORY.md"), "remember this and that");
+    syncBotMemory(folder, "bot", other, theirs, { host: "other", now: later });
+    expect(syncBotMemory(folder, "bot", workspace, mine, { now: later })["MEMORY.md"]).toBe("pulled");
+  });
+
+  it("rechecks a file edited within its timestamp's resolution", () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-racy-"));
+    roots.push(root);
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+    writeFileSync(join(workspace, "MEMORY.md"), "remember this");
+    const ledger: MemorySyncLedger = { bots: {} };
+    syncBotMemory(join(root, "drive"), "bot", workspace, ledger);
+    writeFileSync(join(workspace, "MEMORY.md"), "remember that");
+    expect(syncBotMemory(join(root, "drive"), "bot", workspace, ledger)["MEMORY.md"]).toBe("pushed");
+  });
+
   it.each(["", "   \n", MEMORY_SEED])("keeps empty or seed memory absent: %j", (text) => {
     const root = mkdtempSync(join(tmpdir(), "memory-empty-"));
     roots.push(root);
