@@ -1,13 +1,13 @@
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Download, ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { Download, ExternalLink, FileText, Folder, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
-import type { MediaSource } from "@/lib/show-media";
-import { lastShown, linkedFileSrc, saveFile, showCheck, showItem, showMap, showMedia, showName, type ShowItem } from "@/lib/show-pane";
+import { mediaFile, type MediaSource } from "@/lib/show-media";
+import { lastShown, linkedFileSrc, linkedFolder, saveFile, showCheck, showItem, showMap, showMedia, showName, takeFolder, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
-import { ShowMedia } from "./ShowMedia";
+import { MediaFiles, ShowMedia } from "./ShowMedia";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import { VerifyWatchFrame } from "./VerifyWatch";
 import "./VerifyWatch.css";
@@ -15,7 +15,7 @@ import "./ShowPane.css";
 
 const ShowPdf = lazy(() => import("./ShowPdf"));
 const MapPane = lazy(() => import("./MapPane").then(module => ({ default: module.MapPane })));
-const ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText };
+const ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText, folder: Folder };
 // Past this a text file is a log to open in an editor, not something to read in the pane.
 const TEXT_MAX = 1_000_000;
 
@@ -80,7 +80,9 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
         <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
       </div>
-      {item && <ShowFrame key={`${item.threadId}:${item.src ?? item.path}`} item={item} maximized={expanded} />}
+      {item && (item.kind === "folder"
+        ? <ShowFolder key={`${item.threadId}:${item.path}`} item={item} maximized={expanded} />
+        : <ShowFrame key={`${item.threadId}:${item.src ?? item.path}`} item={item} maximized={expanded} />)}
       {watch && (watch.card.doc
         ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
         : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
@@ -162,6 +164,47 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
                 ? text !== undefined && <pre>{text}</pre>
                 : pageSrc && <iframe key={loads} src={pageSrc} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
       </div>
+    </div>
+  );
+}
+
+/** A linked folder through the Media list: pictures step with the arrows, a page or PDF shows here, the rest download. */
+function ShowFolder({ item, maximized }: { item: ShowItem; maximized: boolean }) {
+  const { t } = useI18n();
+  const [listing, setListing] = useState<FolderListing | null>(() => takeFolder(item.threadId, item.path));
+  const [failed, setFailed] = useState(false);
+  const name = showName(item.path.replace(/[\\/]+$/, ""));
+
+  useEffect(() => watchFolder(item.threadId, item.path, (got) => {
+    setFailed(false);
+    setListing(got);
+  }), [item.threadId, item.path]);
+
+  // Reopened from the Show tab, the folder lists again.
+  useEffect(() => {
+    if (listing) return;
+    let alive = true;
+    void linkedFolder(item.threadId, item.path).then((got) => {
+      if (!alive) return;
+      if (got) setListing(got);
+      else setFailed(true);
+    });
+    return () => { alive = false; };
+  }, [item.threadId, item.path, listing]);
+
+  const files = useMemo(() => listing?.files.map((file) => mediaFile(item.threadId, { kind: "l", name: file.name, ref: file.path, size: file.size }, file.modified)) ?? null, [item.threadId, listing]);
+
+  return (
+    <div className="verify-watch-frame show-frame show-media" data-kind="folder" data-maximized={maximized || undefined} aria-busy={!files && !failed || undefined}>
+      <div className="verify-watch-bar show-frame-bar">
+        <Folder size={14} aria-hidden="true" className="show-frame-icon" />
+        <span className="show-frame-name" title={item.path}>{name}</span>
+      </div>
+      {failed
+        ? <div className="verify-watch-banner" role="status">{t("show.folderFailed")}</div>
+        : <MediaFiles files={files} pickFor={`${item.threadId}\n${item.path}`} empty="chat.folder.empty">
+          {listing && listing.more > 0 && <p data-folder-more className="show-media-empty">{t(listing.more === 1 ? "chat.folder.moreOne" : "chat.folder.more", { count: listing.more })}</p>}
+        </MediaFiles>}
     </div>
   );
 }
