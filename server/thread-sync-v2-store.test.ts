@@ -184,6 +184,30 @@ afterEach(async () => {
 });
 
 describe("store delta sync", { timeout: 60_000 }, () => {
+  it("reads boot state through an index, never a scan of every message", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { messageDatabase } = await import("./message-db.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const prepare = DatabaseSync.prototype.prepare;
+    const prepared: string[] = [];
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+      prepared.push(sql);
+      return prepare.call(this, sql);
+    });
+    await createThreadSyncV2Store({
+      store, dataDir: DATA_DIR, deviceId: "local", folder: () => temp(), enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
+    })!.close();
+    vi.restoreAllMocks();
+    const plans = prepared.filter((sql) => /^\s*SELECT/i.test(sql) && /\bmessages\b/.test(sql))
+      .flatMap((sql) => messageDatabase().prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail)));
+    expect(plans.filter((detail) => /^SCAN (m|messages)$/.test(detail))).toEqual([]);
+  });
+
   it("does not note a pulled head after the folder switches while adoption awaits", async () => {
     const { DATA_DIR } = await import("./config.ts");
     const { Store } = await import("./store.ts");

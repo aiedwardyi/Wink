@@ -93,10 +93,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     INSERT OR IGNORE INTO sync_v2_migration_log VALUES (1, 0);
   `));
   withMessageTransaction(initializeMigration);
+  // CROSS JOIN keeps thread_state outer; a plain JOIN lets the planner scan every message, a full cold read at boot
   const noticeHeads = new Map(withMessageTransaction((db) => z.array(z.object({
     threadId: z.string(), leaf: z.string(), parent: z.string().nullable(),
   })).parse(db.prepare(`SELECT s.thread_id AS threadId, m.id AS leaf, json_extract(m.json, '$.parentId') AS parent
-    FROM thread_state s JOIN messages m ON m.thread_id = s.thread_id AND m.id = s.active_leaf_id
+    FROM thread_state s CROSS JOIN messages m ON m.thread_id = s.thread_id AND m.id = s.active_leaf_id
     WHERE m.kind = 'activity' AND json_extract(m.json, '$.tool.name') = ?`)
     .all(`error: ${CONFLICT_NOTICE_V2}`))).map((notice) => [notice.threadId, notice]));
 
