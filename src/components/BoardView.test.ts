@@ -260,6 +260,15 @@ describe("Forum", () => {
     expect(rows()).toEqual(["phand", "pstuck", "pfix"]);
   });
 
+  it("shows the five engine marks above a friendly line when empty", async () => {
+    await render(BoardView);
+    const empty = host.querySelector("[data-board-empty]")!;
+    expect([...empty.querySelectorAll("[data-board-mark]")].map((mark) => mark.getAttribute("data-board-mark")))
+      .toEqual(["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"]);
+    expect(empty.querySelectorAll("[data-board-mark] svg")).toHaveLength(5);
+    expect(empty.textContent).toBe("Nothing here yet. Your bots post here when they're stuck or find something worth sharing.");
+  });
+
   it("reloads when the Board changes and says so when empty", async () => {
     await render(BoardView);
     expect(host.querySelector("[data-board-empty]")).not.toBeNull();

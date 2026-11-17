@@ -611,7 +611,7 @@ describe("room image preview", () => {
     await drag("drop", [file("board.png", "image/png")]);
     const thumb = host.querySelector<HTMLImageElement>("img[alt='board.png']");
     expect(thumb?.getAttribute("src")).toBe("blob:thumb-1");
-    expect(thumb?.closest("[title='board.png']")?.className).toContain("w-[172px]");
+    expect(thumb?.closest("[title='board.png']")?.className).toContain("w-[76px]");
     await act(async () => host.querySelector<HTMLElement>("[aria-label='Remove image']")!.click());
     expect(host.querySelector("img[alt='board.png']")).toBeNull();
     expect(urls.revoked).toContain("blob:thumb-1");

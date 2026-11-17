@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { Maximize, Minimize } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { pauseOtherClips } from "@/lib/one-clip";
 import { useBackLayer } from "@/lib/use-back-layer";
 
 function canFullscreenWrapper(): boolean {
@@ -64,7 +63,6 @@ export function PhoneVideo({ src }: { src: string }) {
       preload="metadata"
       playsInline
       onSeeked={refocusAfterSeek}
-      onPlay={(event) => pauseOtherClips(event.currentTarget)}
       data-phone-media="video"
       // Android Chromium draws nofullscreen as a greyed button instead of hiding it.
       className={cn(full ? "h-full w-full object-contain" : VIDEO, available && "[&::-webkit-media-controls-fullscreen-button]:hidden")}
