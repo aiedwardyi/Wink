@@ -3770,7 +3770,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   });
 
   describe("account user setup", () => {
-    const accountCreate = async (own: { enabledPlugins?: Record<string, boolean>; chrome?: boolean } = {}) => {
+    const accountCreate = async (chrome = true) => {
       const base = join(scratch, "base-claude");
       const home = join(scratch, "account-claude");
       const kit = (name: string) => {
@@ -3782,18 +3782,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const entry = (installPath: string) => [{ scope: "user", installPath, version: "1.0.0" }];
       const browser = kit("browser-kit");
       writeFileSync(join(base, "settings.json"), JSON.stringify({
-        enabledPlugins: { "browser-kit@fake-market": true, "off-kit@fake-market": false, "opt-out-kit@fake-market": true, "gone-kit@fake-market": true },
+        enabledPlugins: { "browser-kit@fake-market": true, "off-kit@fake-market": false, "gone-kit@fake-market": true },
       }));
       writeFileSync(join(base, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
         "browser-kit@fake-market": entry(browser),
         "off-kit@fake-market": entry(kit("off-kit")),
-        "opt-out-kit@fake-market": entry(kit("opt-out-kit")),
         "gone-kit@fake-market": entry(join(base, "plugins", "cache", "fake-market", "gone-kit", "missing")),
       } }));
-      writeFileSync(join(base, ".claude.json"), JSON.stringify({ claudeInChromeDefaultEnabled: true }));
+      writeFileSync(join(base, ".claude.json"), JSON.stringify({ claudeInChromeDefaultEnabled: chrome }));
       mkdirSync(home, { recursive: true });
-      writeFileSync(join(home, "settings.json"), JSON.stringify({ enabledPlugins: { "opt-out-kit@fake-market": false, ...own.enabledPlugins } }));
-      if (own.chrome !== undefined) writeFileSync(join(home, ".claude.json"), JSON.stringify({ claudeInChromeDefaultEnabled: own.chrome }));
       const exec = procs.execCli;
       vi.spyOn(procs, "execCli").mockImplementation((cli, args, opts, cb) =>
         args[0] === "auth" ? cb(null, JSON.stringify({ loggedIn: true, authMethod: "claude.ai", configDirectory: home })) : exec(cli, args, opts, cb));
@@ -3833,10 +3830,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__ogb");
     });
 
-    it("keeps the account's own plugin and Chrome choices", async () => {
-      await accountCreate({ enabledPlugins: { "browser-kit@fake-market": false }, chrome: false });
-      const { seen, pluginDirs } = await accountArgv("t-account-own");
-      expect(pluginDirs).toEqual([]);
+    it("leaves Chrome off when the user's own Claude has it off", async () => {
+      const { browser } = await accountCreate(false);
+      const { seen, pluginDirs } = await accountArgv("t-account-no-chrome");
+      expect(pluginDirs).toEqual([browser]);
       expect(seen.argv).not.toContain("--chrome");
     });
 

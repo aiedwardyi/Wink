@@ -305,17 +305,16 @@ function readSetting<T>(file: string, schema: z.ZodType<T>): T | undefined {
 }
 
 // An account home starts without the plugins and Chrome default the user turned on in their own Claude setup.
-function userSetupArgs(baseHome: string, baseConfig: string, accountHome: string): string[] {
-  const own = readSetting(join(accountHome, "settings.json"), enabledPluginsSchema)?.enabledPlugins ?? {};
+// The account home itself is never read here; the CLI applies its own "<name>@inline": false and dedupes installed copies.
+function userSetupArgs(baseHome: string, baseConfig: string): string[] {
   const enabled = readSetting(join(baseHome, "settings.json"), enabledPluginsSchema)?.enabledPlugins ?? {};
   const installed = readSetting(join(baseHome, "plugins", "installed_plugins.json"), installedPluginsSchema)?.plugins ?? {};
   const args = Object.entries(enabled).flatMap(([id, on]) => {
-    if (on !== true || Object.hasOwn(own, id)) return [];
+    if (on !== true) return [];
     const entry = installed[id]?.find((each) => each.scope === "user" && statSync(each.installPath, { throwIfNoEntry: false })?.isDirectory());
     return entry ? ["--plugin-dir", entry.installPath] : [];
   });
-  const chrome = (file: string) => readSetting(file, chromeDefaultSchema)?.claudeInChromeDefaultEnabled;
-  if (chrome(baseConfig) === true && chrome(join(accountHome, ".claude.json")) !== false) args.push("--chrome");
+  if (readSetting(baseConfig, chromeDefaultSchema)?.claudeInChromeDefaultEnabled === true) args.push("--chrome");
   return args;
 }
 
@@ -1148,7 +1147,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
       if (turn.leanStartup === true) args.push("--setting-sources", "project");
-      else if (input.account && baseHome) args.push(...userSetupArgs(baseHome, baseConfig, input.account.home));
+      else if (input.account && baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless
