@@ -4,23 +4,24 @@ import { useSyncExternalStore } from "react";
 const KEY = "wink.liveCall.captions";
 
 const watchers = new Set<() => void>();
-// Only read while storage is unavailable.
-let session = true;
+// Set only while the last write failed, so the choice still holds for this session.
+let unsaved: boolean | undefined;
 
 export function callCaptions(): boolean {
+  if (unsaved !== undefined) return unsaved;
   try {
     return localStorage.getItem(KEY) !== "0";
   } catch {
-    return session;
+    return true;
   }
 }
 
 export function setCallCaptions(next: boolean) {
-  session = next;
+  unsaved = undefined;
   try {
     localStorage.setItem(KEY, next ? "1" : "0");
   } catch {
-    /* The choice still applies for this session. */
+    unsaved = next;
   }
   for (const fn of [...watchers]) fn();
 }
