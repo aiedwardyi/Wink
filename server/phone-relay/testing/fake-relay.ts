@@ -81,6 +81,10 @@ export class FakeRelay extends EventEmitter {
   offerSnags = false;
   /** Offer active in ready, as a team relay does. An old relay closes the channel on one. */
   offerActive = false;
+  /** Offer pokes in ready, as a relay with S2 does. An old relay closes the channel on one. */
+  offerPokes = false;
+  /** Every poke frame, as parsed. */
+  readonly pokes: RelayMessage[] = [];
   reportOwner?: string;
   readonly snags: unknown[] = [];
   enrollAnswer: ((body: string) => EnrollAnswer) | null = null;
@@ -314,6 +318,7 @@ export class FakeRelay extends EventEmitter {
           if (this.refreshAccount && msg.account) ready.account = this.refreshAccount;
           if (this.offerSnags) ready.snags = true;
           if (this.offerActive) ready.active = true;
+          if (this.offerPokes) ready.pokes = true;
           if (this.reportOwner) ready.reportOwner = this.reportOwner;
           socket.write(encodeFrame(ready));
           this.record("control:ready");
@@ -331,6 +336,10 @@ export class FakeRelay extends EventEmitter {
         } else if (msg.type === "active") {
           this.record("active");
           if (!this.offerActive) socket.destroy();
+        } else if (msg.type === "poke") {
+          this.pokes.push(msg);
+          this.record("poke");
+          if (!this.offerPokes) socket.destroy();
         }
       }
     });
