@@ -30,7 +30,7 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
-import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
+import { isAskUserCard, useShownQuestionId } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
@@ -276,6 +276,7 @@ export const Transcript = memo(function Transcript({
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
+  const shownQuestionId = useShownQuestionId(group.messages);
   const items = useMemo(
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
@@ -443,7 +444,7 @@ export const Transcript = memo(function Transcript({
                 message={m}
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
-                pinned={pinnedQuestion(group.messages)?.id === m.id}
+                pinned={shownQuestionId === m.id}
                 onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
