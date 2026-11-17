@@ -42,10 +42,10 @@
 .show-media [data-media-grid] :is(img, video) { opacity: 0; transition: opacity var(--motion-moderate) var(--ease-standard); }
 .show-media [data-media-grid] :is(img, video)[data-loaded] { opacity: 1; }
 .show-media [data-media-file] { position: absolute; height: 52px; }
-.show-media-rail { position: absolute; top: 0; right: 0; bottom: 0; width: 12px; pointer-events: none; }
+.show-media-rail { position: absolute; top: 0; right: 0; bottom: 0; width: 20px; pointer-events: none; }
 .show-media-thumb { position: absolute; top: 0; right: 0; width: 100%; pointer-events: auto; touch-action: none; }
-.show-media-thumb::before { content: ""; position: absolute; inset: 0 3px 0 auto; width: 4px; border-radius: 2px; background: var(--color-ink-secondary); opacity: .35; }
-.show-media-bubble { position: absolute; top: 0; right: 18px; translate: 0 -50%; padding: 4px 10px; border-radius: 999px; background: var(--color-raised); color: var(--color-ink); font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: 0 1px 2px rgb(0 0 0 / .2); opacity: 0; pointer-events: none; transition: opacity var(--motion-moderate) var(--ease-standard); }
+.show-media-thumb::before { content: ""; position: absolute; inset: 0 6px 0 auto; width: 8px; border-radius: 4px; background: var(--color-ink-secondary); opacity: .35; }
+.show-media-bubble { position: absolute; top: 0; right: 26px; translate: 0 -50%; padding: 4px 10px; border-radius: 999px; background: var(--color-raised); color: var(--color-ink); font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: 0 1px 2px rgb(0 0 0 / .2); opacity: 0; pointer-events: none; transition: opacity var(--motion-moderate) var(--ease-standard); }
 .show-media-bubble[data-shown] { opacity: 1; }
 .show-media-empty { padding: 28px 8px; color: var(--color-ink-secondary); font-size: 13px; text-align: center; }
 
@@ -58,6 +58,6 @@
   .show-pane-tabs button::after { content: ""; position: absolute; inset: -6px 0; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
   /* a thumb a finger can catch */
-  .show-media-rail { width: 28px; }
-  .show-media-bubble { right: 32px; }
+  .show-media-rail { width: 44px; }
+  .show-media-bubble { right: 50px; }
 }
