@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "@/lib/cn";
@@ -19,7 +19,7 @@ function when(schedule: Routine["schedule"], tag: string, everyDay: string) {
 }
 
 /** A bot's routines, behind one Alarms line that shows only when it has some. Its own wake_me wakes are not alarms. */
-export function BotAlarms({ routines: all }: { routines: Routine[] }) {
+export function BotAlarms({ routines: all, onDelete }: { routines: Routine[]; onDelete: (routineId: string) => void }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
   const routines = all.filter((routine) => !routine.wake);
@@ -36,12 +36,23 @@ export function BotAlarms({ routines: all }: { routines: Routine[] }) {
         <Fold open={open}>
           <ul className="mt-2 space-y-2">
             {routines.map((routine) => (
-              <li key={routine.id} data-alarm="" className="min-w-0 text-[13px]">
-                <div className="truncate text-ink">{routine.name}</div>
-                <div className="text-[12px] text-ink-secondary">
-                  {when(routine.schedule, tag, t("bot.alarmsEveryDay"))}
-                  {!routine.enabled && ` · ${t("bot.alarmsPaused")}`}
+              <li key={routine.id} data-alarm="" className="group flex min-w-0 items-center gap-2 text-[13px]">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-ink">{routine.name}</div>
+                  <div className="text-[12px] text-ink-secondary">
+                    {when(routine.schedule, tag, t("bot.alarmsEveryDay"))}
+                    {!routine.enabled && ` · ${t("bot.alarmsPaused")}`}
+                  </div>
                 </div>
+                {/* focus reveals it as hover does; touch has no hover, so it always shows there */}
+                <button
+                  type="button"
+                  aria-label={`${t("chrome.delete")} ${routine.name}`}
+                  onClick={() => onDelete(routine.id)}
+                  className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary opacity-0 hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
+                >
+                  <Trash2 size={14} />
+                </button>
               </li>
             ))}
           </ul>

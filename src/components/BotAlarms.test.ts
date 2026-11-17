@@ -22,10 +22,10 @@ function routine(partial: Partial<Routine>): Routine {
   };
 }
 
-function render(routines: Routine[], locale: "en" | "ko" = "en") {
+function render(routines: Routine[], locale: "en" | "ko" = "en", onDelete: (routineId: string) => void = () => undefined) {
   persistPreference(locale);
   applyLocale(locale);
-  act(() => root!.render(createElement(I18nProvider, null, createElement(BotAlarms, { routines }))));
+  act(() => root!.render(createElement(I18nProvider, null, createElement(BotAlarms, { routines, onDelete }))));
 }
 
 const toggle = () => host.querySelector<HTMLButtonElement>("button[aria-expanded]");
@@ -98,9 +98,31 @@ describe("Alarms line in Bot details", () => {
     expect(row).toContain("일시 중지됨");
   });
 
+  it("deletes a routine from its trash button, no confirm step", () => {
+    const onDelete = vi.fn();
+    render([routine({}), routine({ id: "r2", name: "Standup" })], "en", onDelete);
+    act(() => toggle()!.click());
+    const trash = host.querySelectorAll<HTMLButtonElement>("[data-alarm] button");
+    expect(trash).toHaveLength(2);
+    expect(trash[1].getAttribute("aria-label")).toBe("Delete Standup");
+    act(() => trash[1].click());
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("r2");
+  });
+
+  it("reveals the trash on hover and focus, always on touch", () => {
+    render([routine({})]);
+    act(() => toggle()!.click());
+    const cls = host.querySelector("[data-alarm] button")!.className;
+    expect(cls).toContain("opacity-0");
+    expect(cls).toContain("group-hover:opacity-100");
+    expect(cls).toContain("focus-visible:opacity-100");
+    expect(cls).toContain("pointer-coarse:opacity-100");
+  });
+
   it("is fed from this bot's routines in Bot details, with no sidebar entry", () => {
     const panel = readFileSync(join(here, "SettingsPanel.tsx"), "utf8");
-    expect(panel).toContain("<BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />");
+    expect(panel).toContain("routines={state.routines.filter((each) => each.botId === bot.id)}");
+    expect(panel).toContain("`/api/routines/${routineId}`, { method: \"DELETE\" }");
     expect(readFileSync(join(here, "Sidebar.tsx"), "utf8")).not.toMatch(/BotAlarms|bot\.alarms/);
   });
 });

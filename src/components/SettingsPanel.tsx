@@ -826,7 +826,14 @@ export function SettingsPanel({
                 )}
               </div>
 
-              <BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />
+              <BotAlarms
+                routines={state.routines.filter((each) => each.botId === bot.id)}
+                onDelete={(routineId) =>
+                  void api(`/api/routines/${routineId}`, { method: "DELETE" })
+                    .then(() => dispatch({ type: "routineDeleted", routineId }))
+                    .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }))
+                }
+              />
 
               <VoiceChatSettings bot={bot} />
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
