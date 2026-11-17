@@ -4,6 +4,7 @@
 import { existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { applyPicks, mergeTimelines } from "./picks.ts";
 import { traceClaimedTurn } from "./turn-timing.ts";
 
 import {
@@ -34,6 +35,14 @@ describe("workspace", () => {
     const dir = ensureWorkspace(BOT);
     writeFileSync(join(dir, "memory", "decisions.conflict-e059d14f.md"), "# Decision timeline\n");
     expect(memorySystemPrompt(BOT)).not.toContain("decisions.conflict-e059d14f.md");
+  });
+  it("names a timeline conflict copy until its picks are in decisions.md", () => {
+    const dir = ensureWorkspace(BOT);
+    const copy = applyPicks("", [{ kind: "pick", at: Date.now(), key: "forum", picked: "C - Reddit cards", said: "c" }])!.text;
+    writeFileSync(join(dir, "memory", "decisions.conflict-0123abcd.md"), copy);
+    expect(memorySystemPrompt(BOT)).toContain("memory/decisions.conflict-0123abcd.md");
+    writeFileSync(join(dir, "memory", "decisions.md"), mergeTimelines("", copy)!);
+    expect(memorySystemPrompt(BOT)).not.toContain("decisions.conflict-0123abcd.md");
   });
   beforeEach(() => {
     rmSync(WORKSPACES_DIR, { recursive: true, force: true });

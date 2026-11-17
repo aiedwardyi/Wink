@@ -249,6 +249,19 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
   return { text: renderTimeline({ head: timelineHead(head), entries }), picks, tweaks, replaced };
 }
 
+/** The timeline already holds every pick, tweak and older line of a set-aside copy, so the copy has nothing left to recover. */
+export function timelineHolds(text: string | null, copy: string): boolean {
+  const main = parseTimeline(text ?? "");
+  const held = new Map(main.entries.map((entry) => [identity(entry), entry]));
+  const lines = new Set(main.head.split("\n").map((line) => line.trim()));
+  const { head, entries } = parseTimeline(copy);
+  const boilerplate = (line: string) => !line || line.startsWith("<!--") || line === TITLE || line === INTRO || line === LEGACY || /^#\s+older decisions$/i.test(line);
+  return head.split("\n").every((line) => boilerplate(line.trim()) || lines.has(line.trim())) && entries.every((entry) => {
+    const kept = held.get(identity(entry));
+    return kept !== undefined && entry.tweaks.every(({ at, said }) => kept.tweaks.some((tweak) => tweak.at === at && tweak.said === said));
+  });
+}
+
 export function currentPicks(text: string | null | undefined): PickEntry[] {
   return text ? parseTimeline(text).entries.filter((entry) => !entry.replacedBy) : [];
 }
