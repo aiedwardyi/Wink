@@ -7862,6 +7862,7 @@ const internalRoutes = createInternalRoutes({
   computerControl,
   askBotAndWait,
   checkedMemberIds,
+  checkedGroupResponder,
   createdBotSelection,
   store,
   keepGoing,
