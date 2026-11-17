@@ -10,7 +10,11 @@ import type { Message } from "./store.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
-const fn = (name: string) => parsed.statements.find((n) => ts.isFunctionDeclaration(n) && n.name?.text === name)!.getText(parsed);
+const fn = (name: string) => {
+  const node = parsed.statements.find((n) => ts.isFunctionDeclaration(n) && n.name?.text === name);
+  if (!node) throw new Error(`function '${name}' not found in index.ts - was it renamed?`);
+  return node.getText(parsed);
+};
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
