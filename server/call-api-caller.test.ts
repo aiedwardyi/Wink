@@ -70,7 +70,7 @@ describe("call_api caller", () => {
     expect(h.fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("keeps a key on its own hosts", async () => {
+  it("refuses a URL outside the credential's own hosts", async () => {
     const h = harness();
     const result = await h.post(tokenOf("bot-a"), { fromBotId: "bot-a", fromThreadId: "chat-a", url: "https://example.com/v1" });
     expect(result.status).toBe(403);
