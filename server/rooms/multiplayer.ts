@@ -28,6 +28,8 @@ export const collabLine = (refusal: string) =>
 
 export const COLLAB_LINE = collabLine("The host has to turn this on for you.");
 
+export const REACH_LINE = "Each is on its owner's PC; only @ here reaches it.";
+
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {
   if (!group.hosted) return "";
   try {
@@ -38,7 +40,7 @@ export function teammatesLine(group: { hosted?: { roomId: string } }): string {
       const owner = people.find((person) => person.id === bot.owner);
       return owner ? [`${JSON.stringify(bot.name)} (${JSON.stringify(owner.name)})`] : [];
     });
-    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. @ one only to hand it real work, never just to thank or confirm; it answers here. When the job is done, say so and tag no bot. Unlisted @names reach no one.`].filter(Boolean).join("\n");
+    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. ${REACH_LINE} @ one only to hand it real work, never just to thank or confirm; it answers here. When the job is done, say so and tag no bot. Unlisted @names reach no one.`].filter(Boolean).join("\n");
   } catch {
     return "";
   }

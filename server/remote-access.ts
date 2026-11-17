@@ -123,16 +123,14 @@ export function remoteCookieRefresh(cookieHeader: string | undefined, remoteKey:
   return remoteKey !== undefined && remoteCookieAuthorized(cookieHeader, remoteKey) ? buildRemoteSetCookie(remoteKey) : undefined;
 }
 
-const BEARER_ONLY_PATHS = new Set(["/api/internal/terminal-bridge", "/api/internal/google-account"]);
-
-/** /api/* accepts the boot token or, when remote mode is on, the cookie; bearer-only paths refuse the cookie. */
+/** /api/* accepts the boot token or, when remote mode is on, the cookie; /api/internal/* is for agents and refuses the cookie. */
 export function apiRequestAuthorized(
   bearerOk: boolean,
   cookieHeader: string | undefined,
   remoteKey: string | undefined,
   path = "",
 ): boolean {
-  return bearerOk || (!BEARER_ONLY_PATHS.has(path) && remoteCookieAuthorized(cookieHeader, remoteKey));
+  return bearerOk || (!path.startsWith("/api/internal/") && remoteCookieAuthorized(cookieHeader, remoteKey));
 }
 
 const FALSY_FLAG = new Set(["", "0", "false", "no", "off"]);

@@ -39,6 +39,9 @@ const render = async (node: Parameters<typeof createElement>[0]) => {
   await settle();
 };
 const rows = () => [...host.querySelectorAll("[data-board-post]")].map((row) => row.getAttribute("data-board-post"));
+// reduced motion unmounts a closed post at once; the push/pop test turns it off
+const realMatchMedia = window.matchMedia.bind(window);
+const reduceMotion = (reduce: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: reduce && query.includes("reduce") }));
 
 beforeEach(() => {
   host = document.createElement("div");
@@ -46,6 +49,7 @@ beforeEach(() => {
   root = createRoot(host);
   mock.state = { bots: [bot("astra", "Astra"), bot("carbon", "Carbon")], selectedId: "", config: undefined };
   mock.dispatched = [];
+  reduceMotion(true);
   posts = [];
   replies = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -63,6 +67,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("Forum", () => {
@@ -139,6 +144,27 @@ describe("Forum", () => {
     await openPost();
     const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back to Forum"]')!;
     expect([...back.classList]).not.toContain("-ml-2");
+  });
+
+  it("an open post's back reads ‹ Forum on the shared back button", async () => {
+    await openPost();
+    const back = host.querySelector<HTMLButtonElement>("[data-back-button]")!;
+    expect(back.textContent).toBe("Forum");
+    expect(back.getAttribute("aria-label")).toBe("Back to Forum");
+    expect(host.querySelector("h1")).toBeNull();
+  });
+
+  it("a post pushes in and pops out like a side panel", async () => {
+    reduceMotion(false);
+    await openPost();
+    const page = host.querySelector<HTMLElement>("[data-side-panel]")!;
+    expect(page.contains(host.querySelector("article"))).toBe(true);
+    expect([...page.classList]).toEqual(expect.arrayContaining(["max-md:animate-panel-in", "md:animate-panel-slide", "md:*:animate-fade-in"]));
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-back-button]")!.click());
+    expect(page.hasAttribute("data-closing")).toBe(true);
+    expect(host.querySelector('[role="list"] [data-board-post="pesc"]')).not.toBeNull();
+    await vi.waitFor(() => expect(host.querySelector("[data-side-panel]")).toBeNull());
+    expect(host.querySelector("article")).toBeNull();
   });
 
   it("names the bot and the model it ran from the post, even for a bot this PC does not have", async () => {
