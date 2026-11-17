@@ -530,11 +530,11 @@ export function queuedSteeredMessage(
   botId: string,
   threadId: string,
   sendId: string,
-): { id: string; text: string; replyToId?: string; reason?: "sync" } | null {
+): { id: string; text: string; replyToId?: string; reason?: "sync"; actedAt?: number } | null {
   const entry = queues.get(entryKey(botId, threadId));
   if (!entry || entry.botId !== botId) return null;
   const item = entry.items.find((candidate): candidate is SteerItem => !isRoomItem(candidate) && candidate.sendId === sendId);
-  return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}) } : null;
+  return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}), ...(item.actedAt !== undefined ? { actedAt: item.actedAt } : {}) } : null;
 }
 
 /** Every thread's waiting sends, as the window that sent them shows them. */

@@ -57,7 +57,7 @@ export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: Usag
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
-export type UserLine = { text: string; context?: string; pictures?: Picture[]; files?: string[]; at?: number; tap?: boolean };
+export type UserLine = { text: string; context?: string; options?: string[]; pictures?: Picture[]; files?: string[]; at?: number; tap?: boolean };
 export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
@@ -131,16 +131,16 @@ export function replyContext(text: string): string {
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
 /** For each id, the bot's text reply or ask_user card just before it, if no other user line sits between. */
-export function replyContexts(messages: readonly Message[], ids: string[]): Map<string, string> {
+export function replyContexts(messages: readonly Message[], ids: string[]): Map<string, { context: string; options?: string[] }> {
   const wanted = new Set(ids);
-  const found = new Map<string, string>();
+  const found = new Map<string, { context: string; options?: string[] }>();
   for (let i = messages.length - 1, seen = 0; i >= 0 && seen < wanted.size; i -= 1) {
     if (!wanted.has(messages[i]!.id)) continue;
     seen += 1;
     const answer = messages[i]!.answersCard;
     const answered = answer ? messages.slice(0, i).find((message) => message.id === answer && message.role === "bot" && message.kind === "options" && message.card?.askUser && !message.card.requestId)?.card : undefined;
     if (answered) {
-      found.set(messages[i]!.id, replyContext(`${answered.subtitle}\n${answered.options.join("\n")}`));
+      found.set(messages[i]!.id, { context: replyContext(`${answered.subtitle}\n${answered.options.join("\n")}`), options: answered.options });
       continue;
     }
     let card: { subtitle: string; options: string[] } | undefined;
@@ -157,7 +157,7 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
     }
     // a card often just says "pick 1-3", so behind a reply only its options ride, last so the cap keeps them
     const context = replyContext(reply ? [reply, ...(card?.options ?? [])].join("\n") : card ? `${card.subtitle}\n${card.options.join("\n")}` : "");
-    if (context) found.set(messages[i]!.id, context);
+    if (context) found.set(messages[i]!.id, card ? { context, options: card.options } : { context });
   }
   return found;
 }
@@ -408,7 +408,7 @@ function clauses(text: string): Array<{ words: string[]; asked: boolean }> {
 function userChose(picked: string, said: string, own: UserLine[]): boolean {
   const label = LABEL.exec(picked.trim())?.[1]?.toLowerCase();
   const stems = contentWords(picked);
-  return (own.length ? own : [{ text: said }]).some(({ text, context }) => {
+  return (own.length ? own : [{ text: said }]).some(({ text, context, options: card }) => {
     const spoken = clauseOf(text, said);
     const long = words(spoken).length > SHORT_ANSWER;
     const parts = clauses(spoken);
@@ -417,6 +417,8 @@ function userChose(picked: string, said: string, own: UserLine[]): boolean {
     if (ordinal && !explicit) {
       if (parts.some(({ words: clause, asked }) => asked || NEGATED.test(clause.join(" ")))) return false;
       const options = [...(context ?? "").matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)].map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
+      // the context runs a card's unlettered options together
+      if (!options.length && card?.length) options.push(...card);
       if (!options.length && context?.includes(" or ")) options.push(...context.split(/[.!?]/).filter(Boolean).at(-1)!.split(/,?\s+or\s+/));
       const index = ordinal === "last" ? options.length - 1 : ["first", "second", "third", "fourth", "fifth"].indexOf(ordinal) >= 0 ? ["first", "second", "third", "fourth", "fifth"].indexOf(ordinal) : Number(ordinal[0]) - 1;
       const option = options[index];
@@ -538,19 +540,22 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
         if (found && found.path !== picture?.path && !overPictures.some((other) => other.path === found.path)) overPictures.push(found);
       }
       if (picture && !overPictures.length && recorded.includes(picture)) overPictures.push(...recorded.filter((other) => other.path !== picture.path));
+      // the same short answer can sit on two questions; the one whose question names the pick says how and when it was chosen
+      const asked = own.filter(({ context }) => contentWords(line).some((stem) => contentWords(context ?? "").some((word) => sameStem(stem, word))));
+      const source = asked.length ? asked : own;
       const files = [...new Set(own.flatMap(({ files }) => files ?? []))];
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
       keys.add(pickKey(thing));
       live.add(pickKey(thing));
       decided.add(squash(said));
-      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at, key: thing, picked: line, said };
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: source.at(-1)?.at ?? 0, key: thing, picked: line, said };
       if (over.length) pick.over = over;
       if (picture) pick.picture = picture;
       if (overPictures.length) pick.overPictures = overPictures;
       if (files.length) pick.files = files;
-      if (own.length && own.every((line) => line.tap)) pick.tapped = true;
-      if (target) pick.legacy = { day: old?.[2] ?? day(at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
+      if (source.length && source.every((line) => line.tap)) pick.tapped = true;
+      if (target) pick.legacy = { day: old?.[2] ?? day(pick.at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
       const note: Note = { line: named, kind: "decision", pick };
       if (target) note.replaces = target;
       return note;
@@ -825,7 +830,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (tap) line.tap = true;
       const context = contexts.get(id);
       const pictures = shown.get(id);
-      if (context) line.context = context;
+      if (context) line.context = context.context;
+      if (context?.options) line.options = context.options;
       if (pictures) line.pictures = pictures;
       if (files.length) line.files = files;
       return line;

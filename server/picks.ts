@@ -105,6 +105,8 @@ export function pickStamp(ms: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
+
 const entryTime = (entry: PickEntry) => {
   const stamp = entry.id.replace(/ \(\d+\)$/, "");
   return entry.at ?? new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime();
@@ -212,7 +214,10 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (!picked) continue;
     if (current && sameOption(current.picked, picked)) {
       if (overTap) {
+        // pinned first: the identity hashes the time, and a merge must still find the tap
+        current.source = identity(current);
         delete current.tapped;
+        current.at = change.at;
         retyped = true;
       }
       continue;
@@ -245,6 +250,19 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
   return { text: renderTimeline({ head: timelineHead(head), entries }), picks, tweaks, replaced };
 }
 
+/** The timeline already holds every pick, tweak and older line of a set-aside copy, so the copy has nothing left to recover. */
+export function timelineHolds(text: string | null, copy: string): boolean {
+  const main = parseTimeline(text ?? "");
+  const held = new Map(main.entries.map((entry) => [identity(entry), entry]));
+  const lines = new Set(main.head.split("\n").map((line) => line.trim()));
+  const { head, entries } = parseTimeline(copy);
+  const boilerplate = (line: string) => !line || line.startsWith("<!--") || line === TITLE || line === INTRO || line === LEGACY || /^#\s+older decisions$/i.test(line);
+  return head.split("\n").every((line) => boilerplate(line.trim()) || lines.has(line.trim())) && entries.every((entry) => {
+    const kept = held.get(identity(entry));
+    return kept !== undefined && entry.tweaks.every(({ at, said }) => kept.tweaks.some((tweak) => tweak.at === at && tweak.said === said));
+  });
+}
+
 export function currentPicks(text: string | null | undefined): PickEntry[] {
   return text ? parseTimeline(text).entries.filter((entry) => !entry.replacedBy) : [];
 }
@@ -256,8 +274,10 @@ export function mergeTimelines(a: string, b: string): string | null {
   const merged = new Map<string, PickEntry>();
   const parents = new Map<string, Set<string>>();
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-  const union = <T>(x: T[], y: T[]) => [...new Map([...x, ...y].map((item) => [JSON.stringify(item), item])).values()].sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
-  const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
+  const unique = <T>(x: T[], y: T[]) => [...new Map([...x, ...y].map((item) => [JSON.stringify(item), item])).values()];
+  const union = <T>(x: T[], y: T[]) => unique(x, y).sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
+  // same-minute tweaks keep the order they were said in; the sort is stable
+  const said = (x: Tweak[], y: Tweak[]) => unique(x, y).sort((x, y) => compare(x.at, y.at));
   for (const { entries } of timelines) {
     const sources = new Map(entries.map((entry) => [entry.id, identity(entry)]));
     const byId = new Map(entries.map((entry) => [entry.id, entry]));
@@ -268,12 +288,22 @@ export function mergeTimelines(a: string, b: string): string | null {
       const ordered = Boolean(entry.tapped) === Boolean(entry.replacedBy && byId.get(entry.replacedBy)?.tapped);
       if (next && next !== key && ordered) parents.set(next, new Set([...(parents.get(next) ?? []), key]));
       const before = merged.get(key);
-      merged.set(key, before ? {
+      if (!before) {
+        merged.set(key, { ...entry, source: key, replacedBy: undefined });
+        continue;
+      }
+      const both: PickEntry = {
         ...before,
         picture: before.picture ?? entry.picture,
         over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
-        files: union(before.files, entry.files), tweaks: union(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
-      } : { ...entry, source: key, replacedBy: undefined });
+        files: union(before.files, entry.files), tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
+      };
+      // one PC saw the tap retyped
+      if (before.tapped && !entry.tapped) {
+        delete both.tapped;
+        both.at = entry.at;
+      }
+      merged.set(key, both);
     }
   }
   const pending = [...merged.entries()].sort(([a, x], [b, y]) => entryTime(x) - entryTime(y) || compare(a, b));

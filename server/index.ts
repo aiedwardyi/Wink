@@ -4433,6 +4433,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
       if (speaker && group?.busyBotId === speaker.botId) {
+        memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });

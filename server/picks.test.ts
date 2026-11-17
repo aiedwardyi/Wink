@@ -40,6 +40,11 @@ describe("applyPicks", () => {
     expect(mergeTimelines(merged, typed)).toBe(merged);
     expect(mergeTimelines(merged, merged)).toBe(merged);
   });
+  it("keeps same-minute tweaks in the order the user said them through a merge", () => {
+    const first = applyPicks("", [pick("header", "Big header", "big header", at(17, 12))])!.text;
+    const text = applyPicks(first, [tweak("header", "make the header smaller", at(17, 12, 1)), tweak("header", "keep the header large", at(17, 12, 1) + 20_000)])!.text;
+    expect(currentPicks(mergeTimelines(text, text))[0]!.tweaks.map(({ said }) => said)).toEqual(["make the header smaller", "keep the header large"]);
+  });
   it("keeps the later choice when two PCs pick within the same minute", () => {
     const early = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10) + 5_000)])!.text;
     const late = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10) + 10_000)])!.text;
@@ -102,6 +107,15 @@ describe("applyPicks", () => {
     const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
     const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
     expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 12), { tapped: true })])).toBeNull();
+  });
+  it("dates a retyped tap at the typing, so an older delayed pick never replaces it", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
+    expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 10, 30))])).toBeNull();
+    const merged = mergeTimelines(tapped, typed)!;
+    expect(parseTimeline(merged).entries).toHaveLength(1);
+    expect(currentPicks(merged)[0]?.tapped).toBeUndefined();
+    expect(applyPicks(merged, [pick("forum", "B - tiles", "b", at(17, 10, 30))])).toBeNull();
   });
   it("changes nothing for a restated pick, a repeated tweak or a tweak with no pick", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;

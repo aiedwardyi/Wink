@@ -1055,6 +1055,10 @@ describe("memory pass wiring", () => {
     expect(index).toContain("memoryPass.dispose();");
   });
 
+  it("runs the pass after a room turn, for the member that spoke", () => {
+    expect(index).toMatch(/if \(speaker && group\?\.busyBotId === speaker\.botId\) \{\s*memoryPass\.onSettled\(speaker\.botId, event\.threadId\);\s*settledGroupSpeakers\.set/);
+  });
+
   it("reads the Settings switch live and drops pending notes on a config change", () => {
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: \(botId\) => \{[\s\S]*?memoryNotesEnabled\(cfg, bot\);[\s\S]*?\}\);/);
     expect(index).toMatch(/saveConfig\(patch\);[\s\S]*?Object\.assign\(cfg, loadConfig\(\)\);\s*\}\s*if \(\(cfg\.profile[^\n]*\n\s*memoryPass\.onConfigChanged\(\);/);
