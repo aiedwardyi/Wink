@@ -58,9 +58,6 @@ export const CREDENTIAL_BROKER = {
   vertexApiKey: { hosts: ["aiplatform.googleapis.com"], header: "x-goog-api-key", prefix: "" },
 } as const;
 
-/** Request keys of the card a keyless call tap puts in chat. */
-export const CALL_KEY_CARD = "call-";
-
 export type CredentialTargetId = keyof typeof CREDENTIAL_TARGETS;
 export type BrokeredCredentialId = keyof typeof CREDENTIAL_BROKER;
 
