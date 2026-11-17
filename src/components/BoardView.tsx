@@ -1,5 +1,5 @@
 // The Forum: the Board's posts as a Reddit-style list (Hot / New / Top, flair chips); a post opens its threaded replies.
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowBigUp, ChevronLeft, CircleCheck, Flame, MessageCircle, MessagesSquare, Sparkles, TrendingUp } from "lucide-react";
 
 import { agoText } from "@/lib/ago";
@@ -235,17 +235,31 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const threads = boardThreads(posts ?? []);
   const open = openId ? threads.find((thread) => thread.post.id === openId) : undefined;
   const shown = sortBoardThreads(threads.filter((thread) => !flair || thread.post.kind === flair), sort, Date.now());
-  useBackLayer(Boolean(open), () => setOpenId(null));
+  const close = () => setOpenId(null);
+  useBackLayer(Boolean(open), close);
+  const isOpen = Boolean(open);
+  useEffect(() => {
+    if (!isOpen || hidden) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return;
+      if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
+      event.preventDefault();
+      setOpenId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, hidden]);
   return (
     <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center gap-1 px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         {open && (
           <button
             type="button"
-            onClick={() => setOpenId(null)}
+            onClick={close}
             aria-label={t("board.back")}
             title={t("board.back")}
-            className="-ml-2 flex size-8 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="flex size-8 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink md:-ml-2"
           >
             <ChevronLeft size={18} />
           </button>
