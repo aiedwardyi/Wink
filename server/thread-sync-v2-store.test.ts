@@ -181,8 +181,13 @@ async function exchange(a: ReturnType<typeof pc>, c: ReturnType<typeof pc>): Pro
 }
 
 afterEach(async () => {
+  const fakeTimers = vi.isFakeTimers();
+  vi.useRealTimers();
+  setSafeTimers();
+  vi.restoreAllMocks();
   await Promise.all(peers.splice(0).map((peer) => peer.close()));
   await Promise.all(roots.splice(0).map(removeTempDir));
+  expect(fakeTimers, "restore real timers in test cleanup").toBe(false);
 });
 
 describe("store delta sync", { timeout: 60_000 }, () => {
@@ -214,14 +219,6 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     const { DATA_DIR } = await import("./config.ts");
     const { Store } = await import("./store.ts");
     const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
-    vi.useFakeTimers();
-    // waitFor uses the runner's saved timers, so route its deadline through the fake clock too.
-    setSafeTimers();
-    const flush = ThreadSyncV2.prototype.flush;
-    vi.spyOn(ThreadSyncV2.prototype, "flush").mockImplementationOnce(async function (this: ThreadSyncV2, ...args) {
-      await vi.advanceTimersByTimeAsync(1_000);
-      return flush.apply(this, args);
-    });
     const store = new Store(() => ({ instanceId: "test", model: "test" }));
     const bot = store.createBot({}, { seedMessages: false });
     store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
@@ -231,14 +228,22 @@ describe("store delta sync", { timeout: 60_000 }, () => {
       target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
       running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
     })!;
-    store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
     const prepare = DatabaseSync.prototype.prepare;
     const prepared: string[] = [];
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
-      prepared.push(sql);
-      return prepare.call(this, sql);
-    });
     try {
+      vi.useFakeTimers();
+      // A reintroduced waitFor must use this clock to expose its deadline.
+      setSafeTimers();
+      const flush = ThreadSyncV2.prototype.flush;
+      vi.spyOn(ThreadSyncV2.prototype, "flush").mockImplementationOnce(async function (this: ThreadSyncV2, ...args) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        return flush.apply(this, args);
+      });
+      store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+        prepared.push(sql);
+        return prepare.call(this, sql);
+      });
       expect(await sync.flush("thread")).toBe("written");
     } finally {
       vi.restoreAllMocks();
