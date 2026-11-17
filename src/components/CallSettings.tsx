@@ -190,8 +190,8 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   );
 }
 
-/** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls. */
-export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactNode }) {
+/** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls, or with `tap` toggles it. */
+export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: ReactNode; tap?: boolean }) {
   const { t } = useI18n();
   const anchor = useRef<HTMLSpanElement>(null);
   const press = useRef<{ x: number; y: number; held: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -213,6 +213,7 @@ export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactN
   const width = Math.min(360, window.innerWidth - 16);
   return (
     <span ref={anchor} data-call-hold="" className="flex select-none [-webkit-touch-callout:none]"
+      onClick={tap ? () => (at ? close() : open()) : undefined}
       onContextMenu={(event) => {
         event.preventDefault();
         open();
