@@ -19,8 +19,8 @@ function readRuns(file) {
 
 /** Each bot's spawned panes, written on every change so a crash still leaves the record. */
 export function createPaneRuns(file) {
-  // `kept` marks a pane the last quit left in the worker host, whatever its state.
-  const runs = new Map(readRuns(file).filter((run) => (run?.state === "running" || run?.kept) && !run.recovery?.replacement).map((run) => [run.id, run]));
+  // `kept` marks a pane the last quit left in the worker host, whatever its state. A report does not end the command, so a crash can leave a reported pane running there too.
+  const runs = new Map(readRuns(file).filter((run) => (run?.state === "running" || run?.state === "reported" || run?.kept) && !run.recovery?.replacement).map((run) => [run.id, run]));
   const prior = new Set(runs.keys());
   const waiting = new Set();
   const save = () => {

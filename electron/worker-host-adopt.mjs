@@ -108,7 +108,8 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
         runs.held(run.id);
         return warn(`worker host pane ${run.id.slice(0, 8)} did not finish its replay`);
       }
-      const finished = result.exitCode !== null || !result.running || (result.reported && !result.busy);
+      // A quiet screen after a report is not an end: only the command's own end closes the pane.
+      const finished = result.exitCode !== null || !result.running;
       if (!finished) return group(run).running.push(run);
       group(run).finished.push({ run, reported: result.reported, exitCode: result.exitCode });
       if (result.reported) group(run).close.push(run.id);

@@ -168,7 +168,7 @@ it("adopts what the worker host kept and restarts only panes that are gone with 
   const dropped = [];
   const restarted = [];
   const workerHost = { left: () => "kept", prewarm: async () => true, panes: async () => [{ id: "kept" }], attach: () => ({ pty: { detach() {}, onData() {}, onExit() {}, onError() {} }, replayed: Promise.resolve() }), drop: id => dropped.push(id), state: () => ({}) };
-  const terminalHost = { adoptPane: run => { adopted.push(run.id); runs.adopted(run.id); return Promise.resolve({ running: true, busy: false, exitCode: null, reported: false }); }, closeForBot: async () => {} };
+  const terminalHost = { adoptPane: run => { adopted.push(run.id); runs.adopted(run.id); return Promise.resolve({ running: true, exitCode: null, reported: false }); }, closeForBot: async () => {} };
   await startup({ app: { isPackaged: true, getPath: () => f.profile }, SERVER_PORT: Number(new URL(f.url).port), deliverMailboxOutbox, adoptWorkers, workerHost, terminalHost, paneRuns: runs, paneMailbox: async () => null, paneBotNames: async () => null, recoverWorkers: async ({ runs: recovering, kept }) => {
     expect([...kept.keys()]).toEqual(["bot"]);
     restarted.push(ids(recovering.restarted()));

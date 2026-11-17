@@ -239,6 +239,23 @@ test("a pane that finished while the app was closed is told to its bot once, and
   await closeAll(second, [quiet, gone]);
 });
 
+// A report is not the command's end: a crash leaves no kept mark, and a quit inside the idle window keeps the pane.
+for (const end of ["kill", "quit"]) {
+  test(`a pane that reported and still runs comes back running after a ${end} of the app`, { ...windows, timeout: 300_000 }, async (t) => {
+    const before = await left(t, { end, reported: ["KEEP-0"] });
+    const [pane] = before.panes;
+    assert.deepEqual(record(before.root).map((run) => [run.state, run.kept === true]), [["reported", end === "quit"]]);
+    const second = app(before.root, runtimeRoot);
+    await second.adopt();
+    assert.deepEqual(second.notes.map((note) => note.text), [`KEPT RUNNING: KEEP-0 [pane ${pane.sessionId.slice(0, 8)}] (script) still running.`]);
+    const { generation } = second.of("terminal:opened").find((item) => item.id === pane.sessionId);
+    await second.host.inputBot(pane.botId, { sessionId: pane.sessionId, generation, data: "two\r" });
+    await until(() => second.text(pane.sessionId).includes("LINE2=two"));
+    assert.deepEqual([second.of("terminal:closed"), (await second.client.panes()).map((item) => item.pid), alive(pane.pid)], [[], [pane.pid], true]);
+    await closeAll(second, [pane]);
+  });
+}
+
 test("a pane that finished while Wink was closed (host exited after its last kept pane ended) reports as finished, not restarted", { ...windows, timeout: 120_000 }, async (t) => {
   const before = await left(t, { count: 1, command: [GONE], typed: null });
   const [gone] = before.panes;
