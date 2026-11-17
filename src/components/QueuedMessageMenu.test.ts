@@ -191,7 +191,7 @@ describe("queued message menu", () => {
     await ui.open("held");
     await ui.click("[data-menu-send-now]");
     expect(ui.posts[2]).toEqual({ path: ui.posts[0]!.path, body: {
-      text: "held", threadId: "thread-helper", sendId: queued.body.sendId, queueId: "queue-2",
+      text: "held", threadId: "thread-helper", sendId: queued.body.sendId, queueId: "queue-2", actedAt: expect.any(Number),
     } });
     expect(ui.deletes).toEqual([]);
     expect(ui.store().state.pendingQueued["thread-helper"] ?? []).toEqual([]);

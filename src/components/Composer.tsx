@@ -692,6 +692,7 @@ export function Composer({
         sendId: entry.draft.sendId,
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
+        actedAt: entry.at,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -965,6 +966,7 @@ export function Composer({
       sendId: next.draft.sendId,
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
+      actedAt: next.at,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
