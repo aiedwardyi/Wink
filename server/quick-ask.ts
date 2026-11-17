@@ -46,7 +46,7 @@ export interface QuickGate {
 /** Gate 0, then the rules. Any doubt goes to the bot. */
 export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
-  if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
+  if (!bot.busy || bot.threadId !== threadId) return false;
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
@@ -54,7 +54,8 @@ export function routesQuick(gate: QuickGate): boolean {
   const question = scanQuestion(gate.messages);
   if (question && typedReply(question, gate.text) !== null) return false;
   if (gate.messages.some(isOpenRequest)) return false;
-  return nominate(gate.text) === "quick";
+  // a turn in another thread (a room hand-off, a routine) cannot take the line, so the helper answers or hands off any of it
+  return (bot.activeThreadId ?? threadId) !== threadId || nominate(gate.text) === "quick";
 }
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
