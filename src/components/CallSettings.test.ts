@@ -304,11 +304,11 @@ it("labels the panel in Korean", async () => {
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
 });
 
-it("lists how the bot sounds first, then speed and volume, then captions", async () => {
+it("lists voices, then captions, then style and language, then speed and volume", async () => {
   const host = await render(createElement(CallSettings, { bot: ada }));
   const rows = [...host.querySelector("[data-call-settings]")!.children] as HTMLElement[];
   const name = (row: HTMLElement) => row.matches("[data-call-voices]") ? "Voice" : (row.querySelector("[aria-label]")!.getAttribute("aria-label"));
-  expect(rows.map(name)).toEqual(["Voice", "Style", "Language", "Speed", "Volume", "Captions"]);
+  expect(rows.map(name)).toEqual(["Voice", "Captions", "Style", "Language", "Speed", "Volume"]);
 });
 
 it("gives every row below the voices one shape and the app's shared controls", async () => {

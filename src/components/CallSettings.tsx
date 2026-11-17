@@ -167,7 +167,7 @@ export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
   );
 }
 
-/** The per-bot call panel: voice, style and language (how the bot sounds), then speed, volume (this device) and captions. */
+/** The per-bot call panel: voice, captions, then style and language (how the bot sounds), then speed and volume (this device). */
 export function CallSettings({ bot, language = true, className }: { bot: Bot; language?: boolean; className?: string }) {
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
@@ -179,6 +179,9 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
       <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
         badge={<BotAvatar bot={bot} state="happy" size={20} />} />
+      <MenuRow label={t("callMenu.captions")}>
+        <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
+      </MenuRow>
       <MenuRow label={t("callMenu.style")}>
         <Segmented<CallStyle> label={t("callMenu.style")} value={prefs.style} onChange={(style) => prefs.set({ style })}
           options={CALL_STYLES.map((style) => ({ id: style, label: t(`callMenu.style.${style}`) }))} />
@@ -193,9 +196,6 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
-      <MenuRow label={t("callMenu.captions")}>
-        <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
-      </MenuRow>
     </div>
   );
 }
