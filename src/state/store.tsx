@@ -2028,7 +2028,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const draftId = `group:${group.id}:${group.threadId}`;
       const hold = takeClosedRoomHold(draftId);
       if (!hold) continue;
-      const { text, requestText, sendId, threadId, revision, replyToId, attachments } = hold;
+      const { text, requestText, sendId, threadId, revision, replyToId, attachments, at } = hold;
       dispatch({
         type: "sendGroup",
         groupId: group.id,
@@ -2036,6 +2036,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         sendId,
         replyToId,
         threadId,
+        actedAt: at,
         onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
       });
     }
