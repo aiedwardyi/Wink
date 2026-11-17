@@ -4,6 +4,7 @@ import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-d
 import worker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 import { useI18n } from "@/lib/i18n";
+import { usePageSwipe } from "@/lib/use-page-swipe";
 
 // Older builds served this file with a type a module worker refuses, cached for a year.
 GlobalWorkerOptions.workerSrc = `${worker}?v=2`;
@@ -14,6 +15,7 @@ export default function ShowPdf({ src, onReady, onFail }: { src: string; onReady
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
   const canvas = useRef<HTMLCanvasElement>(null);
+  usePageSwipe(canvas, (step) => { if (doc) setPage((at) => Math.min(doc.numPages, Math.max(1, at + step))); });
   const done = useRef({ onReady, onFail });
   done.current = { onReady, onFail };
 
@@ -47,7 +49,7 @@ export default function ShowPdf({ src, onReady, onFail }: { src: string; onReady
 
   return (
     <>
-      <canvas ref={canvas} className="show-pdf" />
+      <canvas ref={canvas} className="show-pdf" data-no-swipe />
       {doc && (
         <div data-show-pager className="show-pager">
           <button type="button" className="verify-watch-icon" disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label={t("show.previous")} title={t("show.previous")}><ChevronLeft size={16} /></button>
