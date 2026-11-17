@@ -166,10 +166,6 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <span className={LABEL}>{t("callMenu.captions")}</span>
-        <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
-      </div>
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
@@ -183,6 +179,10 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
               {t(`callMenu.style.${style}`)}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={LABEL}>{t("callMenu.captions")}</span>
+          <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
         </div>
       </div>
       <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
