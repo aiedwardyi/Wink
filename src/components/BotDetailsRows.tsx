@@ -21,7 +21,7 @@ export function DetailsSwitch({ on, label, disabled, className, onToggle }: {
       aria-label={label}
       disabled={disabled}
       onClick={onToggle}
-      className={cn("relative h-6 w-11 shrink-0 rounded-full transition-colors", on ? "bg-accent" : "bg-control", className)}
+      className={cn("relative h-6 w-11 shrink-0 rounded-full", on ? "bg-accent" : "bg-control", className)}
     >
       <span className={cn("absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white transition-all", on ? "left-[21px]" : "left-[3px]")} />
     </button>
