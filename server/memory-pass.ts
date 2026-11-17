@@ -172,7 +172,7 @@ const plainLine = (text: string) => text.replace(CONTEXT_TAGS, " ").replace(/\s+
 
 /** The images the user attached to a row. */
 export function attachedImages(text: string): string[] {
-  const typed = userTyping(text, true, true);
+  const typed = userTyping(text, false, true);
   return [...new Set([...typed.matchAll(ATTACHED)].map((match) => match[1]!.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")).filter(Boolean))];
 }
 
@@ -412,8 +412,9 @@ function userChose(picked: string, said: string, own: UserLine[]): boolean {
     const spoken = clauseOf(text, said);
     const long = words(spoken).length > SHORT_ANSWER;
     const parts = clauses(spoken);
-    const ordinal = /\b(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\b/.exec(spoken)?.[1];
-    if (ordinal) {
+    const ordinal = /\b(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|option|choice))?\b/.exec(spoken)?.[1];
+    const explicit = parts.some(({ words: clause }) => Boolean(label && clause.includes(label)) || stems.length > 0 && stems.every((stem) => clause.some((word) => sameStem(stem, word))));
+    if (ordinal && !explicit) {
       if (parts.some(({ words: clause, asked }) => asked || NEGATED.test(clause.join(" ")))) return false;
       const options = [...(context ?? "").matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)].map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
       if (!options.length && context?.includes(" or ")) options.push(...context.split(/[.!?]/).filter(Boolean).at(-1)!.split(/,?\s+or\s+/));
@@ -434,6 +435,7 @@ function userChose(picked: string, said: string, own: UserLine[]): boolean {
       if (at < 0 && label && (!long || explicit || (opening && clause.length <= SHORT_ANSWER))) at = long && !explicit && (label === "a" || label === "i") ? (clause.at(-1) === label ? clause.length - 1 : -1) : clause.indexOf(label);
       return at < 0 ? [] : [!asked && !NEGATED.test(clause.slice(0, at).join(" "))];
     });
+    // The last mention can withdraw an earlier choice in the same line.
     if (named.length) return named.at(-1)!;
     const plain = parts.every(({ words: clause, asked }) => !asked && !NEGATED.test(clause.join(" ")));
     return !long && plain && CHOOSING.test(words(spoken).join(" ")) && Boolean(context && ASKED.test(context));
@@ -813,11 +815,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const row = rows.get(id);
       // a pasted tag cannot open or close a prompt block
       const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
-      return text ? [{ id, text, at: row!.at, files: attachedImages(row!.text ?? "") }] : [];
+      return text ? [{ id, text, at: row!.actedAt ?? row!.at, files: attachedImages(row!.text ?? "") }] : [];
     });
     const contexts = replyContexts(messages, typed.map(({ id }) => id));
     const shown = replyPictures(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
-    const lines = typed.map(({ id, text, at, files }) => {
+    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, files }) => {
       const line: UserLine = { text, at };
       const context = contexts.get(id);
       const pictures = shown.get(id);

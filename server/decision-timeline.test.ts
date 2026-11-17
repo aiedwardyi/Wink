@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { acceptFacts, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
+import { acceptFacts, attachedImages, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import { currentPicks } from "./picks.ts";
 import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
@@ -130,6 +130,12 @@ describe("decision timeline", () => {
     expect(kept.length > 0).toBe(accepted);
   });
 
+  it("keeps an explicit option when first describes the work order", () => {
+    const kept = acceptFacts([{ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "I choose C first" }],
+      [{ text: "I choose C first", context: "Forum: A - plain list, B - tiles, C - Reddit cards. Which one?" }], "");
+    expect(kept[0]?.pick).toMatchObject({ picked: "C - Reddit cards" });
+  });
+
   it("keeps question context for a reply longer than 200 characters", async () => {
     bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
     const quote = "I choose C for the forum layout";
@@ -148,17 +154,36 @@ describe("decision timeline", () => {
     expect(currentPicks(timeline())[0]?.files).toEqual(["/real/a&b.png"]);
   });
 
+  it("keeps image paths whose folders contain ordinary sensitive words", () => {
+    expect(attachedImages('<attached-image path="/mock/secret/menu.png"/>')).toEqual(["/mock/secret/menu.png"]);
+  });
+
   it("grounds a late card tap in the card it answers", async () => {
     const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Forum", subtitle: "Which forum look?", options: ["A - plain list", "B - tiles", "C - Reddit cards"], askUser: true } });
     say("I choose A");
     bot("A it is. Should the theme be 1) Dark or 2) Light?");
-    store.appendMessage("t1", { role: "user", kind: "text", text: "C", answersCard: card.id });
+    await vi.advanceTimersByTimeAsync(1_000);
+    store.appendMessage("t1", { role: "user", kind: "text", text: "C", answersCard: card.id, actedAt: Date.now() });
     reply(
       { kind: "decision", key: "forum", fact: "A - plain list", quote: "I choose A" },
       { kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "C" },
     );
     await settle();
     expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+  });
+
+  it("keeps newer typing when an earlier Yes swap tap arrives afterward", async () => {
+    const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Marketing", subtitle: "Swap the marketing bot or keep it?", options: ["Yes, swap", "Keep marketing bot"], askUser: true } });
+    await vi.advanceTimersByTimeAsync(2_000);
+    store.appendMessage("t1", { role: "user", kind: "text", text: "Keep marketing bot", actedAt: NOW + 2_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    store.appendMessage("t1", { role: "user", kind: "text", text: "Yes, swap", answersCard: card.id, actedAt: NOW + 1_000 });
+    reply(
+      { kind: "decision", key: "marketing bot", fact: "Keep marketing bot", quote: "Keep marketing bot" },
+      { kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" },
+    );
+    await settle();
+    expect(currentPicks(timeline())[0]?.picked).toBe("Keep marketing bot");
   });
 
   it.each(["c, and keep it under 300 tokens", "go with b and pin it to the top", "actually go with c, it uses fewer tokens", "c, with a secret menu"])("keeps a non-secret decision: %s", async (quote) => {

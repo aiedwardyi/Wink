@@ -8,6 +8,28 @@ const pick = (key: string, picked: string, said: string, when: number, extra: Pa
 const tweak = (key: string, said: string, when: number): PickChange => ({ kind: "tweak", at: when, key, said });
 
 describe("applyPicks", () => {
+  it("keeps precise action time in metadata readable by older timeline parsers", () => {
+    const time = at(17, 10) + 5_000;
+    const text = applyPicks("", [pick("forum", "C - Reddit cards", "c", time)])!.text;
+    expect(text).toContain("## 2026-11-17 10:00 | forum | current");
+    expect(text).toContain(`- At: ${time}`);
+    expect(parseTimeline(text).entries[0]?.at).toBe(time);
+  });
+  it("merges a legacy roll file with a timeline without losing either", () => {
+    const timeline = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10))])!.text;
+    const merged = mergeTimelines("# Older decisions\n- Keep the old note\n", timeline)!;
+    expect(currentPicks(merged)[0]?.picked).toBe("C - Reddit cards");
+    expect(merged).toContain("Keep the old note");
+    expect(mergeTimelines(timeline, "# Older decisions\n- Keep the old note\n")).toBe(merged);
+  });
+
+  it("preserves known replacement order for old minute ids", () => {
+    const text = '# Decision timeline\n\n## 2026-11-17 10:00 | palette | replaced by 2026-11-17 10:00 (2)\n- Picked: ~~Zinc~~\n- Said: "zinc"\n\n## 2026-11-17 10:00 (2) | palette | current\n- Picked: Amber\n- Said: "amber"\n';
+    const other = applyPicks("", [pick("layout", "Cards", "cards", at(17, 11))])!.text;
+    const merged = mergeTimelines(text, other)!;
+    expect(currentPicks(merged).find(({ key }) => key === "palette")?.picked).toBe("Amber");
+    expect(mergeTimelines(merged, text)).toBe(merged);
+  });
   it("keeps the later choice when two PCs pick within the same minute", () => {
     const early = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10) + 5_000)])!.text;
     const late = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10) + 10_000)])!.text;

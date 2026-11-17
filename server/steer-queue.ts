@@ -34,6 +34,7 @@ interface SteerItem {
   syncUntil?: number;
   call?: CallTag;
   answersCard?: string;
+  actedAt?: number;
 }
 
 /** A lane's hand-off: needs the bot free, never drains onto a lane. A string is the teammate's settled ask, rechecked as it starts. */
@@ -91,6 +92,7 @@ const savedQueueSchema = z.array(z.object({
     syncUntil: z.number().finite().nonnegative().optional(),
     call: z.object({ id: z.string(), voice: z.literal(true).optional(), order: z.literal(true).optional(), ask: z.literal(true).optional() }).optional(),
     answersCard: z.string().optional(),
+    actedAt: z.number().finite().nonnegative().optional(),
   })),
 }));
 
@@ -237,7 +239,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; call?: CallTag; answersCard?: string } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; call?: CallTag; answersCard?: string; actedAt?: number } = {},
 ): QueuedSteer {
   if (options.sendId && cancelledSendIds.has(options.sendId)) {
     return { id: options.sendId, skipped: true, cancelled: true };
@@ -257,6 +259,7 @@ export function queueSteeredMessage(
     syncUntil: options.syncUntil,
     call: options.call,
     answersCard: options.answersCard,
+    actedAt: options.actedAt,
   };
   queues.set(key, { ...entry, items: [...entry.items, item] });
   try {
@@ -405,6 +408,7 @@ export function drainSteeredMessages(
           queueId: item.messageId,
           call: item.call,
           answersCard: item.answersCard,
+          actedAt: item.actedAt,
         });
       } catch (error) {
         queues.set(key, entry);
@@ -462,7 +466,7 @@ export function takeQueuedSteers(
   threadId: string,
   since: number,
   steering = false,
-): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string; call?: CallTag; answersCard?: string }> {
+): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string; call?: CallTag; answersCard?: string; actedAt?: number }> {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   if (!entry || entry.botId !== botId) return [];
@@ -475,7 +479,7 @@ export function takeQueuedSteers(
   else queues.delete(key);
   return steerItems
     .filter((item) => !item.after && !promoting.has(item.messageId) && !isSendCancelled(item.sendId))
-    .map((item) => ({ id: item.messageId, text: item.text, prompt: item.prompt, replyToId: item.replyToId, sendId: item.sendId, call: item.call, answersCard: item.answersCard }));
+    .map((item) => ({ id: item.messageId, text: item.text, prompt: item.prompt, replyToId: item.replyToId, sendId: item.sendId, call: item.call, answersCard: item.answersCard, actedAt: item.actedAt }));
 }
 
 /** Persist this thread's waiting sends as steered user lines and return
@@ -504,6 +508,7 @@ export function foldQueuedSends(
         steered: true,
         call: item.call,
         answersCard: item.answersCard,
+        actedAt: item.actedAt,
       });
       rows?.push(row);
       appended.add(item.id);

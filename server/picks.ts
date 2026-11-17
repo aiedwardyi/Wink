@@ -1,4 +1,5 @@
 // The user's picks, one timeline per bot in memory/decisions.md: plain markdown, oldest first.
+import { createHash } from "node:crypto";
 
 export const PICKS_FILE = "decisions.md";
 /** Estimated tokens of the current-picks block in the prompt, header included. */
@@ -23,7 +24,7 @@ const HEADER = `Current picks, newest first: the user's own, each beating older 
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -34,6 +35,8 @@ export type Picture = { path: string; caption?: string };
 export type Tweak = { at: string; said: string };
 export type PickEntry = {
   id: string;
+  source?: string;
+  at?: number;
   key: string;
   replacedBy?: string;
   picked: string;
@@ -95,9 +98,13 @@ export function sameOption(a: string, b: string): boolean {
 
 export function pickStamp(ms: number): string {
   const date = new Date(ms);
-  const seconds = date.getSeconds() || date.getMilliseconds() ? `:${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}` : "";
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}${seconds}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
+
+const entryTime = (entry: PickEntry) => {
+  const stamp = entry.id.replace(/ \(\d+\)$/, "");
+  return entry.at ?? new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime();
+};
 
 /** Entries and the text above them; lines it does not know stay with their entry. */
 export function parseTimeline(text: string): Timeline {
@@ -123,6 +130,8 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Over pictures") entry.overPictures = list(value).map(pictureOf);
     else if (field === "Said") entry.said = value.replace(/^"(.*)"$/, "$1");
     else if (field === "Files") entry.files = list(value);
+    else if (field === "Source" && /^[a-f0-9]{64}$/.test(value)) entry.source = value;
+    else if (field === "At" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) entry.at = Number(value);
     else entry.extra.push(line);
   }
   for (const entry of entries) while (entry.extra.length && !entry.extra.at(-1)!.trim()) entry.extra.pop();
@@ -139,6 +148,8 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.overPictures.length ? [`- Over pictures: ${entry.overPictures.map(pictureText).join(SEPARATOR)}`] : []),
       ...(entry.said === undefined ? [] : [`- Said: "${entry.said}"`]),
       ...(entry.files.length ? [`- Files: ${entry.files.join(SEPARATOR)}`] : []),
+      ...(entry.source ? [`- Source: ${entry.source}`] : []),
+      ...(entry.at === undefined ? [] : [`- At: ${entry.at}`]),
       ...entry.tweaks.map(({ at, said }) => `- Tweak ${at}: "${said}"`),
       ...entry.extra,
     ].join("\n"),
@@ -177,7 +188,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const said = clip(change.said, SAID_MAX);
     const stamp = pickStamp(change.at);
     // a replayed batch from before the current pick never lands on it
-    if (current && stamp < current.id.replace(/ \(\d+\)$/, "")) continue;
+    if (current && change.at < entryTime(current)) continue;
     if (change.kind === "tweak") {
       const last = current?.tweaks.at(-1);
       // a retried batch or an ask said twice in a row adds nothing; asking again after a reversal does
@@ -207,6 +218,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       extra: [],
     };
     if (change.picture) entry.picture = change.picture;
+    if (change.at % 60_000) entry.at = change.at;
     entries.push(entry);
     picks += 1;
   }
@@ -221,23 +233,36 @@ export function currentPicks(text: string | null | undefined): PickEntry[] {
 /** Concurrent PCs can reuse a minute id; content breaks ties and gives each pick a stable slot. */
 export function mergeTimelines(a: string, b: string): string | null {
   const timelines = [a, b].sort().map(parseTimeline);
-  if (timelines.some(({ entries }) => !entries.length)) return null;
+  if (timelines.every(({ entries }) => !entries.length)) return null;
   const merged = new Map<string, PickEntry>();
+  const parents = new Map<string, Set<string>>();
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   const union = <T>(x: T[], y: T[]) => [...new Map([...x, ...y].map((item) => [JSON.stringify(item), item])).values()].sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
+  const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
   for (const { entries } of timelines) {
+    const sources = new Map(entries.map((entry) => [entry.id, identity(entry)]));
     for (const entry of entries) {
-      const key = JSON.stringify([pickKey(entry.key), entry.id.replace(/ \(\d+\)$/, ""), entry.picked, entry.said]);
+      const key = identity(entry);
+      const next = entry.replacedBy ? sources.get(entry.replacedBy) : undefined;
+      if (next && next !== key) parents.set(next, new Set([...(parents.get(next) ?? []), key]));
       const before = merged.get(key);
       merged.set(key, before ? {
         ...before,
         picture: before.picture ?? entry.picture,
         over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
         files: union(before.files, entry.files), tweaks: union(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
-      } : { ...entry, replacedBy: undefined });
+      } : { ...entry, source: key, replacedBy: undefined });
     }
   }
-  const entries = [...merged.entries()].sort(([a, x], [b, y]) => compare(x.id.replace(/ \(\d+\)$/, ""), y.id.replace(/ \(\d+\)$/, "")) || compare(a, b)).map(([, entry]) => entry);
+  const pending = [...merged.entries()].sort(([a, x], [b, y]) => entryTime(x) - entryTime(y) || compare(a, b));
+  const left = new Set(merged.keys());
+  const entries: PickEntry[] = [];
+  while (pending.length) {
+    const ready = pending.findIndex(([key]) => ![...(parents.get(key) ?? [])].some((parent) => left.has(parent)));
+    const [key, entry] = pending.splice(Math.max(0, ready), 1)[0]!;
+    entries.push(entry);
+    left.delete(key);
+  }
   const ids = new Set<string>();
   const current = new Map<string, PickEntry>();
   for (const entry of entries) {
@@ -251,7 +276,7 @@ export function mergeTimelines(a: string, b: string): string | null {
     if (before) before.replacedBy = id;
     current.set(pickKey(entry.key), entry);
   }
-  const head = [...new Set(timelines.flatMap(({ head }) => head.split("\n")))].join("\n");
+  const head = [...new Set(timelines.flatMap(({ head }) => timelineHead(head).split("\n")))].join("\n");
   return renderTimeline({ head, entries });
 }
 
