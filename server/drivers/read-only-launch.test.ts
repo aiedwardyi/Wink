@@ -1,0 +1,180 @@
+// Every engine's read-only turn, launched for real against its fake CLI on its most permissive
+// instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
+import { mkdtempSync, readFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { ensureDirs } from "../config.ts";
+import type { ProviderInstance, SendTurnInput } from "../contracts.ts";
+import { removeTempDir } from "../testing/cleanup.ts";
+import { recordEvents } from "../testing/events.ts";
+import { GrokAgentDriver } from "./acp/grok.ts";
+import * as auth from "./antigravity-auth.ts";
+import { AntigravityDriver } from "./antigravity.ts";
+import { BUILT_IN_DRIVERS } from "./builtIn.ts";
+import { ClaudeDriver } from "./claude.ts";
+import { CodexDriver } from "./codex.ts";
+import { MspMuseAgentDriver } from "./msp/muse.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fake = (name: string) => join(here, "..", "testing", name);
+const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+const EXEMPT: Record<string, string> = { boxAgent: "a cloud box has no read-only mode, so Wink keeps the can't-work line for it" };
+const agents = { command: process.execPath, args: ["-e", ""], env: {} };
+const composio = { command: process.execPath, args: ["-e", "", "composio"], env: {} };
+
+const createSignIn = auth.antigravitySignIn;
+let scratch: string;
+const live: ProviderInstance[] = [];
+const envBefore = new Map<string, string | undefined>();
+const setEnv = (name: string, value: string) => {
+  if (!envBefore.has(name)) envBefore.set(name, process.env[name]);
+  process.env[name] = value;
+};
+beforeEach(() => {
+  ensureDirs();
+  vi.spyOn(auth, "antigravitySignIn").mockImplementation(() => createSignIn(async () => true));
+  scratch = mkdtempSync(join(tmpdir(), "omb-read-only-launch-"));
+});
+afterEach(async () => {
+  for (const instance of live.splice(0)) await instance.dispose();
+  for (const [name, value] of envBefore) value === undefined ? delete process.env[name] : (process.env[name] = value);
+  envBefore.clear();
+  vi.restoreAllMocks();
+  await removeTempDir(scratch);
+});
+
+const run = async (instance: ProviderInstance, threadId: string, extra: Partial<SendTurnInput> = {}) => {
+  const recorder = recordEvents(instance.adapter);
+  await instance.adapter.sendTurn({ threadId, text: "edit notes.txt, then run echo ran", cwd: scratch, approval: "auto", ...extra });
+  const done = await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId);
+  expect(done, JSON.stringify(recorder.events.filter((e) => e.type === "runtime.error"))).toMatchObject({ ok: true });
+};
+const dumped = (name: string) => JSON.parse(readFileSync(join(scratch, name), "utf8"));
+const after = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1];
+// Paths, ids and the node binary differ per machine; the launch shape must not.
+const escaped = (path: string) => [JSON.stringify(JSON.stringify(path).slice(1, -1)).slice(1, -1), JSON.stringify(path).slice(1, -1), path];
+const clean = (text: string) => {
+  let out = text;
+  for (const [path, label] of [[scratch, "<scratch>"], [join(here, "..", ".."), "<repo>"], [process.execPath, "<node>"], [tmpdir(), "<tmp>"]] as const) {
+    for (const form of escaped(path)) out = out.replaceAll(form, label);
+  }
+  return out
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
+    .replace(/omb-mcp-[^\\/"]+/g, "omb-mcp-<id>")
+    .replace(/\\+/g, "/");
+};
+const normalized = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(normalized)
+  : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, normalized(inner)]))
+  : typeof value === "string" ? clean(value) : value;
+
+type Engine = { launch(readOnly: boolean): Promise<unknown>; restricted(launch: unknown): void };
+const ENGINES: Record<string, Engine> = {
+  claudeAgent: {
+    async launch(readOnly) {
+      const instance = await ClaudeDriver.create({ instanceId: "ro-claude", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-claude-cli.ts"), permissionMode: "bypassPermissions" } });
+      live.push(instance);
+      setEnv("FAKE_CLAUDE_DUMP", join(scratch, "claude.json"));
+      await run(instance, "t-claude", { integrations: { agents, composio }, ...(readOnly && { readOnly }) });
+      const { argv, mcpConfig } = dumped("claude.json");
+      return { argv, mcpServers: Object.keys(mcpConfig?.mcpServers ?? {}).sort() };
+    },
+    restricted({ argv, mcpServers }: { argv: string[]; mcpServers: string[] }) {
+      expect(after(argv, "--permission-mode")).toBe("default");
+      expect(after(argv, "--disallowedTools").split(",")).toEqual(expect.arrayContaining(WRITE_TOOLS));
+      expect(argv).toEqual(expect.arrayContaining(["--strict-mcp-config", "--no-chrome"]));
+      expect(argv).not.toContain("--plugin-dir");
+      expect(mcpServers).toEqual(["agents", "ogb"]);
+      expect(after(argv, "--allowedTools").split(",").sort()).toEqual(["mcp__agents", "mcp__ogb"]);
+    },
+  },
+  codex: {
+    async launch(readOnly) {
+      setEnv("FAKE_CODEX_MODE", "resume");
+      setEnv("FAKE_CODEX_CONFIG", JSON.stringify({ mcp_servers: { github: { url: "https://example.invalid/mcp" }, agents: {} }, plugins: { "unified-computer-use@openai-bundled": { enabled: true } } }));
+      const instance = await CodexDriver.create({ instanceId: "ro-codex", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-codex-app-server.ts"), fullAuto: true } });
+      live.push(instance);
+      const params: Record<string, unknown> = {};
+      for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-9"]] as const) {
+        const file = `codex-${method.replace("/", "-")}.json`;
+        setEnv("FAKE_CODEX_DUMP", join(scratch, file));
+        await run(instance, `t-codex-${method}`, { integrations: { agents }, ...(cursor && { resumeCursor: cursor }), ...(readOnly && { readOnly }) });
+        const { argv, calls } = dumped(file);
+        params[method] = { argv, params: calls.find((call: { method: string }) => call.method === method).params };
+      }
+      return params;
+    },
+    restricted(launch: Record<string, { params: { sandbox: string; approvalPolicy: string; config: Record<string, unknown> } }>) {
+      for (const method of ["thread/start", "thread/resume"]) {
+        const { sandbox, approvalPolicy, config } = launch[method]!.params;
+        expect({ method, sandbox, approvalPolicy }).toEqual({ method, sandbox: "read-only", approvalPolicy: "untrusted" });
+        expect(config).toMatchObject({ "mcp_servers.github.enabled": false, "plugins.unified-computer-use@openai-bundled.enabled": false, "features.apps": false, "features.remote_plugin": false });
+        expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
+      }
+    },
+  },
+  antigravityAgent: {
+    async launch(readOnly) {
+      // vitest's setup points HOME at a throwaway dir, so agy's MCP mount never reaches the real ~/.gemini
+      setEnv("FAKE_AGY_DUMP", join(scratch, "agy.json"));
+      const instance = await AntigravityDriver.create({ instanceId: "ro-agy", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-agy-cli.ts"), fullAuto: true } });
+      live.push(instance);
+      await run(instance, "t-agy", readOnly ? { readOnly } : {});
+      return { argv: dumped("agy.json").argv };
+    },
+    restricted({ argv }: { argv: string[] }) {
+      expect(after(argv, "--mode")).toBe("plan");
+      expect(argv).not.toContain("--dangerously-skip-permissions");
+    },
+  },
+  grokAgent: {
+    async launch(readOnly) {
+      const instance = await GrokAgentDriver.create({ instanceId: "ro-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-acp-cli.ts"), fullAuto: true } });
+      live.push(instance);
+      setEnv("FAKE_ACP_DUMP", join(scratch, "grok.json"));
+      await run(instance, "t-grok", readOnly ? { readOnly } : {});
+      return { argv: dumped("grok.json").argv };
+    },
+    restricted({ argv }: { argv: string[] }) {
+      expect(after(argv, "--permission-mode")).toBe("plan");
+      expect(argv).not.toContain("bypassPermissions");
+    },
+  },
+  museAgent: {
+    async launch(readOnly) {
+      setEnv("META_API_KEY", "meta-key");
+      const instance = await MspMuseAgentDriver.create({ instanceId: "ro-muse", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-msp-cli.ts"), fullAuto: true } });
+      live.push(instance);
+      setEnv("FAKE_MSP_DUMP", join(scratch, "muse.json"));
+      await run(instance, "t-muse", readOnly ? { readOnly } : {});
+      return { argv: dumped("muse.json").argv };
+    },
+    restricted({ argv }: { argv: string[] }) {
+      expect(argv).toEqual(expect.arrayContaining(["--disable-write", "--disable-shell"]));
+    },
+  },
+};
+
+describe("read-only launch contract", () => {
+  it("runs with a throwaway HOME", () => {
+    expect(homedir().startsWith(tmpdir())).toBe(true);
+  });
+
+  it("covers every registered engine", () => {
+    const missing = BUILT_IN_DRIVERS.map((driver) => driver.driverKind).filter((kind) => !(kind in ENGINES) && !(kind in EXEMPT));
+    if (missing.length) {
+      throw new Error(`${missing.join(", ")}: add an entry to ENGINES in read-only-launch.test.ts that launches a read-only turn and asserts the engine's own read-only mode (sandbox, plan mode, or tools off), never a full-permission turn`);
+    }
+  });
+
+  it.each(Object.keys(ENGINES))("%s launches a read-only turn restricted, even on its most permissive instance", async (kind) => {
+    ENGINES[kind]!.restricted(await ENGINES[kind]!.launch(true));
+  });
+
+  it.each(Object.keys(ENGINES))("%s launches a normal turn exactly as before", async (kind) => {
+    expect(normalized(await ENGINES[kind]!.launch(false))).toMatchSnapshot();
+  });
+});

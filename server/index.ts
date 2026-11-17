@@ -5951,7 +5951,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const routinePrompt = canMessage
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation. For a one-off later step in this chat, call wake_me instead of a countdown in a terminal pane."
         : "";
-      const taskStatePrompt = integrations.agents
+      const taskStatePrompt = integrations.agents && !readOnly
         ? ` Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`
         : "";
       const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
@@ -7841,18 +7841,22 @@ const groupRoutes = createGroupRoutes({
   },
   syncSettled: (threadId) => threadSyncGate.enabled ? syncHold.settle(threadId) : Promise.resolve(),
 });
+function readOnlyRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
+}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
   roomTurn: ({ botId, threadId }) => {
-    const hosted = store.groupByThread(threadId)?.hosted;
-    if (readOnlyTurnThreads.has(threadId) || (hosted && readOnlyAskTurn(hosted.roomId, threadId, botId))) return "read-only";
-    return hosted || joinedRoomThreads.has(threadId) ? "room" : null;
+    if (readOnlyRoomTurn(botId, threadId)) return "read-only";
+    return store.groupByThread(threadId)?.hosted || joinedRoomThreads.has(threadId) ? "room" : null;
   },
 });
 const internalRoutes = createInternalRoutes({
+  readOnlyTurn: readOnlyRoomTurn,
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,

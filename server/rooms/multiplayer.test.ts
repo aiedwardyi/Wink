@@ -423,16 +423,18 @@ describe("a teammate's request under the host's setting for the bot", () => {
 
   it("marks Board posts from a joined room's task as room posts, and clears no read-only mark it never set", () => {
     let roomTurn = "";
+    let readOnlyRoomTurn = "";
     let wiring = "";
     const walk = (node: ts.Node) => {
       if (ts.isPropertyAssignment(node) && node.name.getText(index) === "roomTurn") roomTurn = node.initializer.getText(index);
+      if (ts.isFunctionDeclaration(node) && node.name?.text === "readOnlyRoomTurn") readOnlyRoomTurn = node.getText(index);
       if (ts.isPropertyAssignment(node) && node.name.getText(index) === "startTurn" && node.initializer.getText(index).includes("transcriptText: typed")) wiring = node.initializer.getText(index);
       ts.forEachChild(node, walk);
     };
     walk(index);
     expect(wiring).toContain("joinedRoomThreads.add(threadId)");
     const joinedRoomThreads = new Set(["joined-task"]);
-    const turn = new Function("store", "readOnlyTurnThreads", "readOnlyAskTurn", "joinedRoomThreads", `return ${js(roomTurn)};`)(
+    const turn = new Function("store", "readOnlyTurnThreads", "readOnlyAskTurn", "joinedRoomThreads", `${js(readOnlyRoomTurn)}; return ${js(roomTurn)};`)(
       { groupByThread: () => undefined }, new Set(["read-only-task"]), () => false, joinedRoomThreads,
     );
     expect(turn({ botId: "b", threadId: "joined-task" })).toBe("room");
