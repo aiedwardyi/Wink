@@ -159,28 +159,38 @@ const argWords = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/
 const CMD_SWITCH = /^\/[A-Za-z](?::\S*)?$/;
 const looksLikePath = (word: string) => /^(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$))/.test(word) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(word);
 
-/** Paths a delete removes, as far as the summary shows them. */
-function deletedPaths(tool: string, summary: string): string[] {
+const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "set-location", "sl"]);
+const expandHome = (path: string) => path.replace(/^~(?=[\\/]|$)/, homedir());
+const isRooted = (path: string) => isAbsolute(path) || /^~(?:[\\/]|$)/.test(path);
+
+/** The first path a delete removes outside `workspace`, following cd across the command. */
+function pathOutside(tool: string, summary: string, workspace: string): string | null {
+  const root = resolve(workspace);
+  const outside = (path: string, dir: string | null) => {
+    // a relative path under a folder we lost track of could be anywhere
+    if (dir === null && !isRooted(path)) return true;
+    const rel = relative(root, resolve(dir ?? root, expandHome(path)));
+    return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  };
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
   // an ACP title, not a command line; only a word that is plainly a path counts
-  if (DELETE_TOOLS.has(bare)) return argWords(summary).filter(looksLikePath);
-  if (!COMMAND_TOOLS.has(bare)) return [];
-  const paths: string[] = [];
+  if (DELETE_TOOLS.has(bare)) return argWords(summary).filter(looksLikePath).find((path) => outside(path, root)) ?? null;
+  if (!COMMAND_TOOLS.has(bare)) return null;
+  let dir: string | null = root;
   for (const segment of summary.split(/[;&|\n\r]+/)) {
     const words = argWords(segment);
     let i = 0;
     while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
-    if (!DELETE_PROGRAMS.has(programName(words[i] ?? ""))) continue;
-    paths.push(...words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word)));
-  }
-  return paths;
-}
-
-function pathOutside(tool: string, summary: string, workspace: string): string | null {
-  const root = resolve(workspace);
-  for (const path of deletedPaths(tool, summary)) {
-    const rel = relative(root, resolve(root, path.replace(/^~(?=[\\/]|$)/, homedir())));
-    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return path;
+    const program = programName(words[i] ?? "");
+    const args = words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word));
+    if (CD_PROGRAMS.has(program)) {
+      const target = args[0];
+      dir = target === undefined ? homedir() : /[$%]/.test(target) || words[i + 1] === "-" ? null : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+      continue;
+    }
+    if (!DELETE_PROGRAMS.has(program)) continue;
+    const hit = args.find((path) => outside(path, dir));
+    if (hit) return hit;
   }
   return null;
 }
@@ -283,8 +293,10 @@ export function autoVerdict(
     return { approve: null, source: "away-desktop-deny" };
   }
   if (context?.unattended && bot.autoApprove) {
+    // a file tool's summary carries the file's text, which runs nothing
+    const runs = !FILE_TOOLS.has(tool.replace(/^mcp__[^_]+__/, "").toLowerCase());
     // no folder (an API engine, a cloud run): only the destructive rule applies
-    const rule = destructive ?? (context.workspace ? pathOutside(tool, summary, context.workspace) : null);
+    const rule = (runs ? destructive : null) ?? (context.workspace ? pathOutside(tool, summary, context.workspace) : null);
     if (rule) return { approve: null, source: "unattended-deny", rule };
   }
   if (context?.unattended && !bot.autoApprove) {

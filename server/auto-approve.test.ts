@@ -291,6 +291,10 @@ describe("unattended turns", () => {
       ["powershell", "Remove-Item C:\\Users\\you\\Documents\\report.docx"],
       ["delete", "Delete /work/other/data.db"],
       ["Bash", 'rm "/work/my notes/old.md"'],
+      ["Bash", "cd /work/other && rm data.db"],
+      ["Bash", "cd .. && rm notes.md"],
+      ["Bash", "cd $HOME; rm notes.md"],
+      ["Bash", "cd; rm notes.md"],
     ]) {
       expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ approve: null, source: "unattended-deny" });
     }
@@ -309,6 +313,10 @@ describe("unattended turns", () => {
       ["delete", "Delete src/old.ts"],
       ["Bash", "del /q build\\out.js"],
       ["Bash", 'rm "/work/project/my notes/old.md"'],
+      ["Bash", "cd src && rm old.ts"],
+      ["Bash", "cd /work/project/build; rm out.js"],
+      ["Write", JSON.stringify({ file_path: "/work/project/cleanup.sh", content: "rm -rf dist\ngit reset --hard\n" })],
+      ["Edit", JSON.stringify({ file_path: "src/docs.md", old_string: "a", new_string: "run rm -rf node_modules" })],
       ["edit", "Edit src/a.ts"],
       ["WebFetch", "https://example.com/docs"],
     ]) {
