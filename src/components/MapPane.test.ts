@@ -929,3 +929,25 @@ it("puts a second drag line between the tree and the Git rows, hidden when no Gi
   expect(css).toContain(".map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }");
   expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
 });
+
+it("keeps a loaded Map through wide, narrow and wide again with no size-only fetch or blank code", async () => {
+  let narrow = false;
+  const flips = new Set<() => void>();
+  vi.stubGlobal("matchMedia", (query: string) => ({ get matches() { return query.includes("max-width") && narrow; }, addEventListener: (_: string, fn: () => void) => flips.add(fn), removeEventListener: (_: string, fn: () => void) => flips.delete(fn) }));
+  const { ShowPane } = await import("./ShowPane");
+  await act(async () => root.render(createElement(ShowPane, { map: true, botId: "bot", hidden: false })));
+  for (let i = 0; i < 100 && !stream; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  await emit([workers[0]]);
+  const code = () => document.querySelector(".map-code")?.textContent ?? "";
+  for (let i = 0; i < 100 && !code().includes("const edited"); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(code()).toContain("const edited = true;");
+  const streams = vi.mocked(EventSource).mock.calls.length;
+  const calls = vi.mocked(fetch).mock.calls.length;
+  const seen = [];
+  for (const next of [true, false]) {
+    await act(async () => { narrow = next; flips.forEach(flip => flip()); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    seen.push({ code: code(), streams: vi.mocked(EventSource).mock.calls.length - streams, fetches: vi.mocked(fetch).mock.calls.length - calls });
+  }
+  expect(seen).toEqual([{ code: "1+const edited = true;", streams: 0, fetches: 0 }, { code: "1+const edited = true;", streams: 0, fetches: 0 }]);
+});

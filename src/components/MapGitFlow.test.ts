@@ -107,12 +107,12 @@ it("puts a square per check in the checks box and the details in each stop's tip
   expect(host.querySelector(".map-flow-rows > .map-flow-tip")).not.toBeNull();
 });
 
-it("opens the PR, its checks and its files from their own stops, and nothing from Coding, Commit, Push or the row", async () => {
+it("opens the PR, its checks and its Conversation from their own stops, and nothing from Coding, Commit, Push or the row", async () => {
   const url = "https://github.com/o/r/pull/1529";
   flows.b = flow({ pr: null });
   await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
   const [open, bare] = [...host.querySelectorAll<HTMLElement>(".map-flow-row")];
-  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: `${url}/files`, merge: url });
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: url, merge: url });
   expect(host.querySelectorAll(".map-flow-rows a[href]:not([target='_blank'])")).toHaveLength(0);
   expect(open.tagName).toBe("DIV");
   expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("tabindex")]))).toEqual({ code: "0", commit: "0", push: "0", pr: null, checks: null, review: null, merge: null });
@@ -184,6 +184,14 @@ it("shows the row's details on keyboard focus", async () => {
   expect([...host.querySelectorAll(".map-flow-tip p")].map(line => line.textContent)).toEqual(["Running: vitest 1", "claude · commented", "2 open threads"]);
   await act(async () => { host.querySelector<HTMLElement>(".map-flow-row")!.blur(); });
   expect(host.querySelector(".map-flow-tip")).toBeNull();
+});
+
+it("opens the Review stop at the latest review on the Conversation tab and leaves the PR stop on the PR", async () => {
+  const url = "https://github.com/o/r/pull/1529";
+  flows.a = flow({ pr: pr({ reviewUrl: `${url}#pullrequestreview-5933092064` }) });
+  await render();
+  const href = (key: string) => host.querySelector(`.map-flow-row [data-k="${key}"]`)?.getAttribute("href");
+  expect([href("pr"), href("review")]).toEqual([url, `${url}#pullrequestreview-5933092064`]);
 });
 
 it("counts the files another worker is also editing, hidden at 0", async () => {

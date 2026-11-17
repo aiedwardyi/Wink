@@ -118,3 +118,24 @@ it("stops asking gh about a merged PR and falls back quietly when gh fails", asy
     expect(signedOut).toHaveBeenCalledTimes(2);
   } finally { vi.useRealTimers(); }
 });
+
+it("carries the latest submitted review's Conversation anchor and keeps each reviewer's standing", async () => {
+  const { root, git, commit, base } = repo();
+  git("remote", "add", "origin", "https://github.com/o/r.git");
+  git("update-ref", "refs/remotes/origin/feat/x", commit("feat: one"));
+  const url = "https://github.com/o/r/pull/1529";
+  const graph = (nodes: object[]) => JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] }, reviews: { nodes } } } } });
+  const reviews = [review("aiedwardyi", "CHANGES_REQUESTED", "2026-11-12T18:00:00Z"), review("aiedwardyi", "COMMENTED", "2026-11-12T19:30:00Z"), review("coderabbitai", "COMMENTED", "2026-11-12T19:00:00Z")];
+  const answer = (nodes: object[]) => vi.fn(async (_cwd: string, args: string[]) => args[0] === "api" ? graph(nodes) : JSON.stringify(view({ reviews })));
+  const pr = (await createMapFlow(answer([
+    { url: `${url}#pullrequestreview-11`, submittedAt: "2026-11-12T19:30:00Z" },
+    { url: `${url}#pullrequestreview-12`, submittedAt: "2026-11-12T19:00:00Z" },
+    { url: "https://github.com/o/other/pull/9#pullrequestreview-13", submittedAt: "2026-11-12T20:00:00Z" },
+  ])).flow(root, base)).pr;
+  expect(pr?.reviewUrl).toBe(`${url}#pullrequestreview-11`);
+  expect(pr?.reviews).toEqual([{ login: "aiedwardyi", state: "changes" }, { login: "coderabbitai", state: "commented" }]);
+  expect([stage(flow(pr), "pr")?.url, stage(flow(pr), "review")?.url]).toEqual([url, `${url}#pullrequestreview-11`]);
+  const none = (await createMapFlow(answer([])).flow(root, base)).pr;
+  expect(none?.reviewUrl).toBeUndefined();
+  expect(stage(flow(none), "review")?.url).toBe(url);
+});

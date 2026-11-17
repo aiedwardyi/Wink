@@ -7,7 +7,7 @@ import { mapGit } from "./map-git.ts";
 export type MapGh = (cwd: string, args: string[]) => Promise<string>;
 
 const FIELDS = "number,state,isDraft,url,title,baseRefName,statusCheckRollup,reviews,reviewDecision,mergedAt";
-const THREADS = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}";
+const THREADS = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}} reviews(last:20,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{url submittedAt}}}}}";
 const OPEN_FOR = 25_000;
 const MISSING_FOR = 120_000;
 
@@ -17,7 +17,10 @@ const viewSchema = z.object({
   statusCheckRollup: z.array(z.object({ name: z.string().optional(), context: z.string().optional(), status: z.string().optional(), conclusion: z.string().nullish(), state: z.string().optional() })).nullish(),
   reviews: z.array(z.object({ author: z.object({ login: z.string() }).nullish(), state: z.string(), submittedAt: z.string().nullish() })).nullish(),
 });
-const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }) }) }) }) });
+const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({
+  reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }),
+  reviews: z.object({ nodes: z.array(z.object({ url: z.string(), submittedAt: z.string().nullish() })) }).optional(),
+}) }) }) });
 
 const GH_AUTH_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
 
@@ -104,9 +107,11 @@ export function createMapFlow(gh: MapGh = ghRun) {
       const pr = mapPr(raw, null);
       const repo = pr && /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\//.exec(pr.url);
       if (!pr || !repo) return pr;
-      const threads = await gh(root, ["api", "graphql", "-f", `query=${THREADS}`, "-F", `owner=${repo[1]}`, "-F", `name=${repo[2]}`, "-F", `number=${pr.number}`])
-        .then(text => threadsSchema.parse(JSON.parse(text)).data.repository.pullRequest.reviewThreads.nodes.filter(node => !node.isResolved).length).catch(() => null);
-      return { ...pr, threads };
+      const extra = await gh(root, ["api", "graphql", "-f", `query=${THREADS}`, "-F", `owner=${repo[1]}`, "-F", `name=${repo[2]}`, "-F", `number=${pr.number}`])
+        .then(text => threadsSchema.parse(JSON.parse(text)).data.repository.pullRequest).catch(() => null);
+      // Reviews list by when they were started, so a pending review submitted last can sit before a newer one.
+      const latest = extra?.reviews?.nodes.filter(node => node.url.startsWith(`${pr.url}#pullrequestreview-`)).toSorted((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? "")).at(-1);
+      return { ...pr, threads: extra ? extra.reviewThreads.nodes.filter(node => !node.isResolved).length : null, ...latest && { reviewUrl: latest.url } };
     } catch { return null; }
   }
 

@@ -90,7 +90,7 @@ function stops(item: MapWorker, flow: MapFlow, stages: MapStage[], c: Copy): Sto
     { key: "pr", state: pr ? "on" : undefined, url: pr?.url, tip: pr ? [`#${pr.number} ${pr.title}`, c.into(pr.into)] : [c.noPr] },
     { key: "checks", state: checks?.total ? checks.tone : undefined, url: checks?.url,
       tip: checks?.fail ? checks.detail.map(c.failTip) : checks?.pending ? checks.detail.map(c.runTip) : [checks?.total ? c.passed(checks.total) : c.noChecks] },
-    { key: "review", state: review?.tone === "bad" ? "bad" : review?.tone === "ok" ? "on" : review?.on || review?.threads ? "half" : undefined, url: pr ? `${pr.url}/files` : undefined,
+    { key: "review", state: review?.tone === "bad" ? "bad" : review?.tone === "ok" ? "on" : review?.on || review?.threads ? "half" : undefined, url: review?.url,
       tip: pr ? [...pr.reviews.map(each => `${person(each.login)} · ${c.reviewed[each.state]}`), ...pr.threads ? [c.threads(pr.threads)] : []].concat(pr.reviews.length ? [] : [c.noReviews]) : [c.noReviews] },
     { key: "merge", state: merge?.on ? merge.tone : undefined, url: pr?.url,
       tip: [merge?.tone === "closed" ? c.closedTip : merge?.on ? c.mergedInto(pr!.into, merge.at ? new Date(merge.at).toLocaleString() : "") : c.openTip] },
