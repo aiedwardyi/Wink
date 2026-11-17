@@ -13,7 +13,7 @@ import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useQuestionView } from "@/lib/open-question";
-import { lockAxis, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
+import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
@@ -64,7 +64,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   onDismiss: () => void;
 }) {
   const { t } = useI18n();
-  const view = useQuestionView(message.id, { typed, attached, replying, movedOn });
+  const view = useQuestionView(message.id, { typed, attached, replying, movedOn }, reducedMotion());
   const { folded, glowing } = view;
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);

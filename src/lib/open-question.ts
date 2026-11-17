@@ -7,7 +7,6 @@
 // component keeps a copy that can drift from it.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Message, OptionCardData } from "@/state/store";
-import { reducedMotion } from "./phone-swipe";
 import { isShownMessage } from "./shown-message";
 import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, lineSettles, typedReply, type AskState } from "../../shared/open-question";
 
@@ -176,11 +175,11 @@ export function questionFolded(id: string, input: QuestionInput): boolean {
 const drafting = (input: QuestionInput) => Boolean(input.typed.trim()) || input.attached > 0 || input.replying;
 
 /** A shown question's fold and arrival glow, which plays once per question and never after it folds. */
-export function useQuestionView(id: string, input: QuestionInput) {
+export function useQuestionView(id: string, input: QuestionInput, still: boolean) {
   useSyncExternalStore(subscribe, () => folds.has(id), () => false);
   // read in render so a question arriving over a draft or past the chat's last turn never paints as the card first
   const folded = questionFolded(id, input);
-  const [glowing, setGlowing] = useState(() => !glowed.has(id) && !reducedMotion());
+  const [glowing, setGlowing] = useState(() => !glowed.has(id) && !still);
   useEffect(() => { glowed.add(id); }, [id]);
   const was = useRef(input);
   const { typed, attached, replying, movedOn } = input;

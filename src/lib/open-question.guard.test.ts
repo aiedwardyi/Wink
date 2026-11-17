@@ -15,6 +15,7 @@ const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: tru
 const OTHER_CARDS = new Set(["components/OptionCard.tsx", "state/store-transforms.ts"]);
 // a file that touches the ask_user card
 const ASK_AWARE = /askUser|isAskUserCard|PendingQuestion|AskUserRecord|open-question/;
+const LEAF_IMPORTS = new Set(["react", "./shown-message", "../../shared/open-question"]);
 const RULES: Array<[RegExp, string]> = [
   [/\.staysOpen\b/, "reads staysOpen"],
   [/card[!?]?\.(?:answered|dismissed)\b(?!\s*:)/, "reads a card's answered or dismissed"],
@@ -33,5 +34,11 @@ describe("one source for the question card", () => {
       });
     }
     expect(found, `decide the question card's open, fold or settle state in ${MODULE} (askRecord, useQuestionView, useShownQuestion, answerPatch, settledBy) and read it from there`).toEqual([]);
+  });
+
+  it("keeps the module a leaf", () => {
+    const text = readFileSync(join(src, "lib", "open-question.ts"), "utf8");
+    const values = [...text.matchAll(/^(?:import|export) (?!type\b)[^;]*?from "([^"]+)"/gm)].map((match) => match[1]);
+    expect(values.filter((from) => !LEAF_IMPORTS.has(from)), `${MODULE} is imported by sidebar-order and the store, so a value import from an app module makes a cycle; pass the value in from the component instead`).toEqual([]);
   });
 });
