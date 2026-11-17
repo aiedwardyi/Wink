@@ -59,12 +59,12 @@ function webpFrames(clip: string): number | null {
   return animated ? frames : 0;
 }
 
-const FIRST_ALIVE = "1.0.278";
+const ENFORCE_AFTER = "1.0.278";
 
 function stale(entries: Record<string, WhatsNewEntry>): string[] {
   const found: string[] = [];
   for (const [version, entry] of Object.entries(entries)) {
-    if (!newerRelease(version, FIRST_ALIVE)) continue;
+    if (!newerRelease(version, ENFORCE_AFTER)) continue;
     for (const tile of entry.tiles) {
       const clips = [tile.clip, tile.lightClip].filter((clip): clip is string => Boolean(clip));
       const why = [
