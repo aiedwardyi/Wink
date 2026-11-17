@@ -247,10 +247,9 @@ export function usePhoneHeaderNameFloor(
       };
       const last = slots.at(-1);
       if (!last) return;
-      const fit = (last = false) => {
+      const fit = (truncate = false) => {
         for (const slot of slots) {
-          // Spacing is spent before the label truncates or the effort word goes.
-          if (!last && (slot.truncateLabel || !slot.showEffort)) continue;
+          if (slot.truncateLabel && !truncate) continue;
           paint(slot);
           if (fits(slot)) return true;
         }

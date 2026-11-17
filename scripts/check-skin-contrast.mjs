@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const css = ["src/styles.css", "src/skins/fresh-dark.css"].map((file) => readFileSync(join(root, file), "utf8")).join("\n");
 const sceneCss = readFileSync(join(root, "src/scenes/scenes.css"), "utf8");
+const drawerButton = readFileSync(join(root, "src/lib/drawer-button.ts"), "utf8");
 
 function declarations(body) {
   const tokens = {};
@@ -238,10 +239,13 @@ function iconBacking(source, marker) {
 // Header icons that float straight on the scene. The phone menu is placed by
 // drawer-button.ts: 30px box, 14px in from the side it opens from, 15px down.
 // The side pane toggle ends the chat header: the header's 20px px-5 in from the
-// right edge, or 52px (DRAWER_HEADER_RIGHT) when the drawer opens from the right.
+// right edge, or DRAWER_HEADER_RIGHT (read from drawer-button.ts) when the drawer opens from the right.
+const drawerHeaderRight = drawerButton.match(/DRAWER_HEADER_RIGHT = "[^"]*\bpr-(\d+)\b/);
+if (!drawerHeaderRight) throw new Error("DRAWER_HEADER_RIGHT in src/lib/drawer-button.ts has no pr-N: the side pane toggle inset cannot be derived");
+const DRAWER_HEADER_RIGHT_PX = Number(drawerHeaderRight[1]) * 4;
 const SCENE_ICONS = [
   { name: "phone menu", marker: "[data-phone-menu]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [14], sides: ["left", "right"], top: 15 },
-  { name: "side pane toggle", marker: "[data-show-pane-button]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [20, 52], sides: ["right"], top: 15 },
+  { name: "side pane toggle", marker: "[data-show-pane-button]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [20, DRAWER_HEADER_RIGHT_PX], sides: ["right"], top: 15 },
 ];
 // A tile is a 2x capture of a 132px thumbnail whose chat was laid out 132 / scale CSS px wide (scale 0.45, snow 0.3): 264 / 293 and 396 / 440 are both 0.9 tile px per CSS px.
 const STILL_PX_PER_CSS_PX = 0.9;
