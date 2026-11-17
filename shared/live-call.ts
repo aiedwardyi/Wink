@@ -47,10 +47,14 @@ export const CALL_ID = /^c-[0-9a-f]{12}$/;
 export type CallTag = { id: string; voice?: true; notice?: true; order?: true; ask?: true; ms?: number; summary?: string };
 export type CallRoom = { id: string; kind: "host" | "joined" };
 export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number };
+const OPEN_MARKERS = ["no speech", "pause", "silence", "noise", "instruction"];
 
 /** Model markers are never speech, including a marker left open at the end of a chunk. */
 export function spokenText(text: string): string {
-  const clean = text.replace(/<[^>]*>?|\{[^}]*\}?/g, " ").replace(/\s+/g, " ").trim();
+  const clean = text.replace(/<[^>]*>|\{[^}]*\}?/g, " ").replace(/<([^\s<>][^<>]*)$/g, (whole, tail: string) => {
+    const marker = tail.toLowerCase().trim();
+    return marker.length >= 2 && OPEN_MARKERS.some((name) => name.startsWith(marker) || marker.startsWith(`${name}:`)) ? " " : whole;
+  }).replace(/\s+/g, " ").trim();
   return /[\p{L}\p{N}]/u.test(clean) ? clean : "";
 }
 

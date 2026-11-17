@@ -663,14 +663,7 @@ export class LiveCall {
         }
         const words = spokenText(this.saidBuf);
         if (!words && /[<{]/.test(this.saidBuf)) this.echo ??= [];
-        const claim = claimOf(words);
-        const pending = this.pending;
-        if (pending && (SCREEN_CONFIRM.test(words) || claim?.claim === "promise")) return this.drop(waitForYes(pending.order), () => this.pending === pending);
-        if ((this.sends.size && claim?.claim === "promise") || ((this.sends.size || this.req.accepted) && SCREEN_CONFIRM.test(words))) return this.discard();
-        if (ON_IT.test(claim?.sentence ?? "") && !this.req.accepted) {
-          this.guard(words);
-          return this.discard();
-        }
+        if (this.rejectWork(words)) return;
         if (this.ackEcho) return;
         if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
         const ask = this.checkAsk && !offerFirst(words) ? reasks(words, this.closed) : "no";
@@ -702,6 +695,7 @@ export class LiveCall {
       turnDone: () => {
         if (!mine()) return;
         this.stats.turns += 1;
+        this.rejectWork(spokenText(this.saidBuf), true);
         if (this.echo && this.checkAsk && !offerFirst(spokenText(this.saidBuf)) && reasks(spokenText(this.saidBuf), this.closed, true) === "yes") this.drop(this.askedLine());
         if (this.echo) {
           const repeat = lineKey(spokenText(this.saidBuf)) === this.lastLine;
@@ -1103,6 +1097,26 @@ export class LiveCall {
       this.queuedSends.delete(sendId);
       this.unstarted(sendId, text, "not sent: cancelled");
     }
+  }
+
+  private rejectWork(said: string, ended = false): boolean {
+    if (this.req.read || !said || (!ended && !/[.!?](?:\s|$)/.test(said))) return false;
+    const claim = claimOf(said);
+    const pending = this.pending;
+    if (pending && (SCREEN_CONFIRM.test(said) || claim?.claim === "promise")) {
+      this.drop(waitForYes(pending.order), () => this.pending === pending);
+      return true;
+    }
+    if ((this.sends.size && claim?.claim === "promise") || ((this.sends.size || this.req.accepted) && SCREEN_CONFIRM.test(said))) {
+      this.discard();
+      return true;
+    }
+    if (!this.req.accepted && said.split(/(?<=[.!?])\s+/).some((sentence) => ON_IT.test(sentence))) {
+      this.guard(said);
+      this.discard();
+      return true;
+    }
+    return false;
   }
 
   /** A promise of work with nothing behind it gets one nudge per request, then a line saying it was not sent. */

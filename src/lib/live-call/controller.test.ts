@@ -110,6 +110,10 @@ beforeEach(() => { vi.stubGlobal("crypto", { randomUUID: () => "send-1" }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("spokenText", () => {
+  it.each(["Set the threshold to < 5", "Keep it <5", "Use <threshold"])("preserves comparisons and unfinished text: %s", (text) => {
+    expect(spokenText(text)).toBe(text);
+  });
+
   it("drops transcript markers", () => {
     expect(spokenText("<no speech>{pause}")).toBe("");
     expect(spokenText("<no speech")).toBe("");
@@ -119,6 +123,56 @@ describe("spokenText", () => {
 });
 
 describe("CALL-YES", () => {
+  it("keeps screen instructions for a new question after a completed send", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    await call.answer(true);
+    engine().events.heard("How do I sign in?");
+    engine().events.answering();
+    const text = "To sign in, click the button on your screen.";
+    engine().events.said(text);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
+
+  it("keeps a pending confirmation question when it arrives in chunks", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Open the Orbit folder.", ["open"]);
+    engine().events.answering();
+    engine().events.said("I'll open the Orbit folder");
+    engine().events.audio(new Int16Array([500]));
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said(", okay?");
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("I'll open the Orbit folder, okay?");
+    expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("cuts a contradictory On it even after a not-sent sentence", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Save the Samurai theme note.");
+    engine().events.answering();
+    engine().events.said("Not sent. On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    call.end();
+    await flush();
+  });
+
   it("drops two marker-only audio turns after the last real line", async () => {
     const audio = fakeAudio();
     const play = vi.spyOn(audio, "play");
@@ -167,6 +221,7 @@ describe("CALL-YES", () => {
 
   it.each([
     "On it.",
+    "On it",
     "That update will start as soon as you confirm the request on your screen.",
     "The update to your auto-notes will start as soon as you approve the prompt on your screen.",
   ])("cuts an unsupported acknowledgement before its audio: %s", async (said) => {
@@ -2823,18 +2878,18 @@ describe("VOICE-READBACK: what it said in the chat", () => {
   const TLDR = "Quick update: eval round 3 is done.";
   const ASK = "Tell me what you just said. Earlier, like in the message.";
   const readLines = (engine: FakeEngine) => engine.texts.filter((t) => t.includes("newest chat message"));
-  async function replied() {
+  async function replied(message = MESSAGE, spoken = SPOKEN) {
     vi.useFakeTimers();
     const audio = { ...fakeAudio(), played: 0 };
     audio.play = () => { audio.played += 1; };
-    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: SPOKEN } } }, audio);
+    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: spoken } } }, audio);
     const e = s.engine();
     e.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Run eval round 3." } }]);
     await s.call.answer(true);
     e.events.answering();
     e.events.said("On it.");
     e.events.turnDone();
-    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", MESSAGE)] });
+    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", message)] });
     await gap();
     e.events.answering();
     e.events.said(TLDR);
@@ -2842,6 +2897,25 @@ describe("VOICE-READBACK: what it said in the chat", () => {
     await gap();
     return { ...s, e, audio };
   }
+
+  it("reads a quoted On it without treating it as a new promise", async () => {
+    const text = "On it. I will check the build.";
+    const { call, e, audio, posts } = await replied(text, [text]);
+    e.events.heard(ASK);
+    e.events.answering();
+    e.events.turnDone();
+    await flush();
+    await gap();
+    const before = audio.played;
+    e.events.answering();
+    e.events.said(text);
+    e.events.audio(pcm);
+    e.events.turnDone();
+    expect(audio.played).toBe(before + 1);
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
 
   it("asked three times, reads the newest message whole each time and never says its short line again", async () => {
     const { e, audio, posts } = await replied();
