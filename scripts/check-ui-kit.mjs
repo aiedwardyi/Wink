@@ -86,7 +86,7 @@ const words = (text) => new Set(text.split(/[\s"'\x60]+/));
 // The className as text: literals, same-file consts spelled out, and identifiers kept so MENU_CLASS-style names show.
 function classText(node, consts, seen = new Set()) {
   if (!node) return "";
-  if (ts.isStringLiteralLike(node)) return node.text;
+  if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) return node.text;
   if (ts.isIdentifier(node)) {
     const value = consts.get(node.text);
     if (!value || seen.has(node.text)) return node.text;
@@ -106,7 +106,7 @@ function rawTiming(object) {
     if (!ts.isPropertyAssignment(prop)) continue;
     const name = nameOf(prop.name);
     const value = prop.initializer;
-    if (name === "iterations" && /Infinity/.test(value.getText())) return false;
+    if (name === "iterations" && /\bInfinity\b/.test(value.getText())) return false;
     if ((name === "duration" || name === "delay") && ts.isNumericLiteral(value) && Number(value.text) > 0) raw = true;
     if (name === "easing" && textOf(value) !== undefined && rawMotion(textOf(value))) raw = true;
   }

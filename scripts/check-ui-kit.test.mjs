@@ -21,6 +21,10 @@ describe("ui kit gate", () => {
     ["button", 'export const A = () => <button className="rounded-lg bg-accent px-3 py-2 text-accent-ink hover:brightness-110">Save</button>;', tsx],
     ["switch", 'export const A = ({ on }) => <button role="switch" aria-checked={on} className="h-6 w-11 rounded-full bg-control" />;', tsx],
     ["segmented", 'export const A = () => <div role="radiogroup" className="flex rounded-lg bg-inset p-[3px]"><button role="radio">One</button></div>;', tsx],
+    ["button", "export const A = ({ extra }) => <button className={`bg-accent text-accent-ink ${extra}`}>Save</button>;", tsx],
+    ["segmented", "export const A = ({ extra }) => <div role=\"radiogroup\" className={`rounded-lg bg-inset p-[3px] ${extra}`} />;", tsx],
+    ["menu", 'export const A = () => <div role="menu" className="animate-pop-in fixed z-40 rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60" />;', tsx],
+    ["motion", "el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, iterations: untilInfinityMs });", tsx],
   ])("rejects a hand-rolled %s: %s", (rule, source, file) => {
     expect(uiKitHits(file, source).map((hit) => hit.rule)).toEqual([rule]);
   });
@@ -29,6 +33,7 @@ describe("ui kit gate", () => {
     [".card { transition: opacity var(--motion-fast) var(--ease-standard); }", css],
     [".card { animation: pop-in var(--motion-moderate) var(--ease-standard, cubic-bezier(.2, 0, .38, .9)) both; }", css],
     [".spinner { animation: spin 1s linear infinite; }", css],
+    ['el.animate([{ rotate: "0deg" }, { rotate: "360deg" }], { duration: 1200, iterations: Infinity });', tsx],
     ["@media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; } }", css],
     [":root { --motion-fast: 110ms; --ease-standard: cubic-bezier(0.2, 0, 0.38, 0.9); }", "src/motion.css"],
     ['export const A = () => <div className="animate-pop-in transition-opacity duration-(--motion-fast) ease-standard" />;', tsx],
