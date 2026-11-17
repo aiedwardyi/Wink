@@ -253,7 +253,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
       secret: {
         target: "geminiApiKey",
         label: target.label,
-        description: `Lets you talk with ${bot.name} live. Saving it starts the call.`,
+        description: "Open Get API key, sign in, click Create API key (top right), paste it here.",
         placeholder: target.placeholder,
         helpUrl: target.helpUrl,
         requestKey: `${KEY_CARD}${randomBytes(8).toString("hex")}`,
