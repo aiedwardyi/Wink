@@ -76,7 +76,7 @@ function db(): DatabaseSync {
   return handle;
 }
 
-export { db as messageDatabase };
+export { db as messageDatabase, DB_FILE as messageDbFile };
 
 /** Its own read-only handle, for the backup worker: no import, no schema change, no write. */
 export function openThreadExport(file: string) {
@@ -130,19 +130,19 @@ export function threadOver(threadId: string, cap: number): boolean {
   return row.n > cap;
 }
 
-/** The newest `count` rows in insertion order, the options rows before them, and the stored head. */
-export function readThreadTail(threadId: string, count: number): ThreadRows & { options: Message[] } {
+/** The newest `count` rows in insertion order, the options rows before them, and the stored head; cold-thread-worker.ts runs it on its own handle. */
+export function threadTailOn(handle: DatabaseSync, threadId: string, count: number): ThreadRows & { options: Message[] } {
   // SAFETY: This projection selects SQLite's rowid and the stored message JSON.
-  const rows = db()
+  const rows = handle
     .prepare("SELECT rowid AS cursor, json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?")
     .all(threadId, count) as Array<{ cursor: number; json: string }>;
   const oldest = rows.at(-1)?.cursor ?? 0;
   // SAFETY: This projection selects the stored message JSON.
-  const options = db()
+  const options = handle
     .prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' AND rowid < ? ORDER BY rowid")
     .all(threadId, oldest) as Array<{ json: string }>;
   // SAFETY: thread_state.active_leaf_id is a nullable TEXT column.
-  const state = db()
+  const state = handle
     .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
     .get(threadId) as { active_leaf_id: string | null } | undefined;
   return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };

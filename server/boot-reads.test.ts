@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { mailboxGrant, mailboxSecretFor } from "./mailbox.ts";
 import { closeMessageDb, messageDatabase } from "./message-db.ts";
-import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
+import { loadProfileSyncSettings, PROFILE_SYNC_CHANGES_DIR, PROFILE_SYNC_FORMAT, PROFILE_SYNC_VERSION, saveProfileSyncSettings, writeSyncOperation } from "./profile-sync.ts";
 import { Store, type Message } from "./store.ts";
 import { harnessFetch, spawnHarness } from "./testing/harness-auth.ts";
 import { CONFLICT_NOTICE } from "./thread-sync.ts";
@@ -22,6 +22,7 @@ const base = `http://127.0.0.1:${port}`;
 const home = join(homedir(), "host");
 const userData = join(home, "user-data");
 const spyLog = join(home, "main-sql.jsonl");
+const syncFolder = join(home, "sync");
 const BIG = 50_000;
 const WINDOW_MS = 30_000;
 const scope = { pane: "pane-1", teacher: "teacher-1" };
@@ -32,7 +33,8 @@ let botId = "";
 let threadId = "";
 let servingAt = 0;
 
-type Statement = { t: number; sql: string; params: string[]; at: string | null; via?: string[]; plan?: string[] };
+type Statement = { t: number; sql: string; params: string[]; rows?: number; at: string | null; via?: string[]; plan?: string[] };
+type FsRead = { t: number; fs: string; path: string; at: string | null; via: string[] };
 
 function seed(): void {
   mkdirSync(DATA_DIR, { recursive: true });
@@ -47,7 +49,7 @@ function seed(): void {
   const cutoverAt = Date.now() - 86_400_000;
   writeFileSync(join(DATA_DIR, "thread-sync-v2-cutover.json"), JSON.stringify({ version: 2, cutoverAt }));
   const sync = createThreadSyncV2Store({
-    store, dataDir: DATA_DIR, deviceId: saveProfileSyncSettings(DATA_DIR, loadProfileSyncSettings(DATA_DIR)).deviceId, folder: () => null, enabled: () => false, target: () => null, bots: () => [],
+    store, dataDir: DATA_DIR, deviceId: saveProfileSyncSettings(DATA_DIR, { ...loadProfileSyncSettings(DATA_DIR), folder: syncFolder }).deviceId, folder: () => null, enabled: () => false, target: () => null, bots: () => [],
     running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {}, bootReads: async () => ({ migration: [], conflicts: [] }),
   })!;
   void sync.close();
@@ -62,6 +64,9 @@ function seed(): void {
   ];
   // a resumed ask starts the turn the user asked for, which loads its chat; in the big chat that would hide any boot walk of it
   const ask = { id: "mark-ask", at: Date.now() - 60_000, parentId: null, role: "user", kind: "text", text: "quick question?", quick: { state: "asked" } } satisfies Partial<Message>;
+  for (let sequence = 1; sequence <= 200; sequence++) {
+    writeSyncOperation(syncFolder, { format: PROFILE_SYNC_FORMAT, version: PROFILE_SYNC_VERSION, operationId: `gone-${sequence}`, deviceId: "peer-device", sequence, recordedAt: cutoverAt, entity: "bot", entityId: `gone-${sequence}`, deleted: true });
+  }
   const db = messageDatabase();
   const insert = db.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)");
   db.exec("BEGIN");
@@ -88,13 +93,13 @@ function seed(): void {
   closeMessageDb();
 }
 
-function logged(): Array<Statement | { t: number; tick: true }> {
-  // SAFETY: main-sql-spy.ts writes one Statement or tick per line.
-  return readFileSync(spyLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Statement | { t: number; tick: true });
+function logged(): Array<Statement | FsRead | { t: number; tick: true }> {
+  // SAFETY: main-sql-spy.ts writes one Statement, fs read or tick per line.
+  return readFileSync(spyLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Statement | FsRead | { t: number; tick: true });
 }
 
 function statements(): Statement[] {
-  return logged().filter((row): row is Statement => !("tick" in row));
+  return logged().filter((row): row is Statement => "sql" in row);
 }
 
 function plans(rows: Statement[]): Map<string, string[]> {
@@ -146,6 +151,22 @@ function unbounded(rows: Statement[]): string[] {
   });
 }
 
+// The first page's cold reads: a chat's page or the profile sync change log, read on the thread that serves the app.
+function firstPageReads(rows: Array<Statement | FsRead>): string[] {
+  const changes = join(syncFolder, PROFILE_SYNC_CHANGES_DIR);
+  const seen = new Set<string>();
+  return rows.flatMap((row) => {
+    const via = [row.at, ...(row.via ?? [])].join(" < ");
+    const line = "fs" in row
+      ? row.path.startsWith(changes) && `main-thread ${row.fs} of the profile sync change log (${via}). Read it with readSyncOperationsAsync in server/profile-sync.ts (STARTUP-ROOT).`
+      : row.params.includes(threadId) && (row.rows ?? 0) > 1
+        && `main-thread page of a cold chat: ${row.sql.replace(/\s+/g, " ").trim()} (${via}). Read it in server/cold-thread-worker.ts (STARTUP-ROOT).`;
+    if (!line || seen.has(line)) return [];
+    seen.add(line);
+    return [line];
+  });
+}
+
 function rows(): Map<string, Message> {
   const db = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });
   try {
@@ -178,7 +199,7 @@ beforeAll(async () => {
       ...Object.fromEntries(["PATH", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "ComSpec", "TEMP", "TMP"].flatMap((key) => process.env[key] ? [[key, process.env[key]]] : [])),
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: DATA_DIR, OMB_PORT: String(port), OMB_USER_DATA: userData,
       APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
-      OMB_THREAD_SYNC_V2: "1", ORBIT_REMOTE_AUTO: "0", ORBIT_RELAY: "0", ORBIT_NO_WSL: "1", WINK_SQL_SPY: spyLog,
+      OMB_THREAD_SYNC_V2: "1", ORBIT_REMOTE_AUTO: "0", ORBIT_RELAY: "0", ORBIT_NO_WSL: "1", WINK_SQL_SPY: spyLog, WINK_SQL_SPY_FS: syncFolder,
     },
   });
   child.stderr!.on("data", (chunk) => { stderr += chunk; });
@@ -193,6 +214,8 @@ beforeAll(async () => {
     if (child.exitCode !== null || Date.now() > end) throw new Error(`server start: ${stderr.slice(-4000)}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  // the first page asks for the sync status beside its chats
+  expect((await harnessFetch(`${base}/api/profile-sync`)).status).toBe(200);
 }, 120_000);
 
 afterAll(async () => {
@@ -244,6 +267,10 @@ describe("boot reads of messages.db", () => {
     await vi.waitFor(() => expect(logged().at(-1)!.t).toBeGreaterThanOrEqual(servingAt + WINDOW_MS), { timeout: WINDOW_MS + 5_000, interval: 500 });
     expect(unbounded(statements().filter((row) => row.t >= servingAt && row.t < servingAt + WINDOW_MS))).toEqual([]);
   }, WINDOW_MS + 10_000);
+
+  it("reads the first page's cold chat tails and sync change log off the main thread", () => {
+    expect(firstPageReads(logged().filter((row): row is Statement | FsRead => !("tick" in row) && row.t < servingAt + WINDOW_MS))).toEqual([]);
+  });
 });
 
 describe("boot rows", () => {

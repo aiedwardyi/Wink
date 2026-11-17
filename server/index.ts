@@ -1616,7 +1616,7 @@ function localOrderChanges(assign: boolean): Record<string, unknown> {
   return { sectionOrder, itemOrder };
 }
 
-function profileSyncStatus() {
+async function profileSyncStatus() {
   const folder = profileSyncSettings.folder;
   if (!folder) {
     return {
@@ -1630,7 +1630,7 @@ function profileSyncStatus() {
     };
   }
   ensureProfileSyncWorkspace(folder);
-  const remote = syncOperationsStatus(folder);
+  const remote = await syncOperationsStatus(folder);
   const status = remote.invalidFiles.length > 0
     ? "needs-review"
     : remote.operations > 0
@@ -8418,7 +8418,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── shared bot profile sync ───────────────────────────────────────
     if (method === "GET" && path === "/api/profile-sync") {
       return json(res, 200, {
-        ...profileSyncStatus(),
+        ...(await profileSyncStatus()),
         chatSyncVersion: threadSyncGate.enabled ? 2 : 1,
         chatSyncWaitingFor: threadSyncGate.waitingFor,
         chatSyncMigration: threadSyncV2?.migrationStatus() ?? null,
@@ -8438,7 +8438,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
         syncAllThreads();
         publishDeviceRecord();
-        return json(res, 200, profileSyncStatus());
+        return json(res, 200, await profileSyncStatus());
       } catch (error) {
         return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -8448,7 +8448,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       threadSyncV2?.stop();
       profileSyncSettings.folder = null;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
     if (method === "PUT" && path === "/api/profile-sync/chats") {
       const body = await readBody(req);
@@ -8457,7 +8457,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       profileSyncSettings.syncChats = body.enabled;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
       syncAllThreads();
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
 
     if (method === "GET" && path === "/api/key-uses") {
@@ -8576,15 +8576,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
       const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
-        const tail = limit === undefined ? null : chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
+      const page = async (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const tail = limit === undefined ? null : await chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
         if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
         return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
       };
       if (typeof open === "string") warmFirst(open);
+      // taken before the cold pages are read off this thread: an event meanwhile replays, and the client folds repeats by id
+      const cursor = `${STREAM_ID}:${lastSeq}`;
+      const [bots, groups] = await Promise.all([
+        Promise.all(store.bots.map(async (bot) => ({ ...publicBotRecord(bot), ...(await page(bot)) }))),
+        Promise.all(store.groups.map(async (g) => ({ ...publicGroupState(g), ...(await page(g)) }))),
+      ]);
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...page(bot) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g) })),
+        bots,
+        groups,
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -8592,7 +8598,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }),
         ),
         queued: waitingSends(),
-        cursor: `${STREAM_ID}:${lastSeq}`,
+        cursor,
         ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });
     }

@@ -335,35 +335,52 @@ describe("profile sync operations", () => {
     expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots["bot-1"]?.memoryNotes).toBe(false);
   });
 
-  it("answers status like a full read and rereads only when the change folder moves", () => {
+  it("answers status like a full read and rereads only when the change folder moves", async () => {
     const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
     roots.push(root);
     const full = () => {
       const read = readSyncOperations(root);
       return { operations: read.operations.length, invalidFiles: read.invalidFiles };
     };
-    const reads = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fsp, "readFile");
     try {
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       const first = writeSyncOperation(root, operation());
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       reads.mockClear();
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
       expect(reads).not.toHaveBeenCalled();
       const second = operation({ operationId: "op-2", sequence: 2 });
       const arrived = join(root, "changes", syncOperationFileName(second));
       writeFileSync(arrived, "{");
-      expect(syncOperationsStatus(root)).toEqual(full());
-      expect(syncOperationsStatus(root).invalidFiles).toEqual([syncOperationFileName(second)]);
+      expect(await syncOperationsStatus(root)).toEqual(full());
+      expect(reads).toHaveBeenCalled();
+      expect((await syncOperationsStatus(root)).invalidFiles).toEqual([syncOperationFileName(second)]);
       writeFileSync(arrived, serializeSyncOperation(second));
-      expect(syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
       writeSyncOperation(root, { ...operation(), changes: { name: "Renamed" } });
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       unlinkSync(first);
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
     } finally {
       reads.mockRestore();
+    }
+  });
+
+  it("reads the change log once for status asks that arrive together", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
+    roots.push(root);
+    writeSyncOperation(root, operation());
+    const syncReads = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fsp, "readFile");
+    try {
+      expect(await Promise.all([syncOperationsStatus(root), syncOperationsStatus(root), syncOperationsStatus(root)])).toEqual(Array(3).fill({ operations: 1, invalidFiles: [] }));
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(syncReads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      syncReads.mockRestore();
     }
   });
 
