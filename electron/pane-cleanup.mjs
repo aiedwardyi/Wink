@@ -799,12 +799,6 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const covered = [];
     for (const entry of entries) if (!entry.worktreeDone) covered.push(await norm(entry.cwd));
     const uncovered = (name) => name !== root && contains(root, name) && !covered.some((cwd) => contains(name, cwd));
-    let names;
-    try { names = await fsp.readdir(worktreeRoot, { withFileTypes: true }); } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      return;
-    }
-    if (!names.some((dirent) => dirent.isDirectory() && !BACKUP_RE.test(dirent.name) && uncovered(canonical(path.join(root, dirent.name))))) return;
     for (const repo of repos) {
       let listed;
       try { listed = await git(repo, ["worktree", "list", "--porcelain"]); } catch { continue; }

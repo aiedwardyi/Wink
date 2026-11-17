@@ -2276,6 +2276,25 @@ test("sweeps a clean pushed worktree that was never a pane cwd", async (t) => {
   assert.deepEqual(f.warnings, []);
 });
 
+test("a worktree beside a kept one in the same folder is still found", async (t) => {
+  const f = fixture(t);
+  const { main, target } = repo(f);
+  git(main, "worktree", "remove", target);
+  const known = path.join(f.worktreeRoot, "group", "known");
+  const orphan = path.join(f.worktreeRoot, "group", "orphan");
+  git(main, "worktree", "add", "--quiet", "-b", "test-known", known);
+  git(main, "worktree", "add", "--quiet", "-b", "test-orphan", orphan);
+  fs.writeFileSync(path.join(known, "dirty"), "");
+  f.session.cwd = known;
+  await eligible(f);
+  await f.cleanup.sweep();
+  f.advance(2 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(known), true);
+  assert.equal(fs.existsSync(orphan), false, f.warnings.map(String).join("\n"));
+  assert.deepEqual(f.warnings, []);
+});
+
 test("a worktree first seen without a row waits a day like a closed pane", async (t) => {
   const f = fixture(t);
   const { main } = repo(f);

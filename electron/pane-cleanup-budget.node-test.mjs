@@ -168,9 +168,11 @@ test("git runs once per worktree, not once per ledger row", async (t) => {
   fs.writeFileSync(path.join(target, "file"), "local");
   git(target, "commit", "--quiet", "-am", "local");
   let spawns = 0;
+  let lists = 0;
   const execFile = childProcess.execFile;
   t.mock.method(childProcess, "execFile", (...args) => {
-    if (args[0] === "git") spawns++;
+    if (args[0] === "git" && args[1][1].endsWith(".git") && args[1].slice(2).join(" ") === "worktree list --porcelain") lists++;
+    else if (args[0] === "git") spawns++;
     return execFile(...args);
   });
   syncBuiltinESMExports();
@@ -181,6 +183,7 @@ test("git runs once per worktree, not once per ledger row", async (t) => {
   assert.equal(fs.existsSync(target), true);
   assert.ok(first <= 6, `${first} git spawns for 5 rows`);
   assert.ok(spawns - first <= 1, `${spawns - first} git spawns on an unchanged sweep`);
+  assert.equal(lists, 2, "one worktree list per known repo per pass");
   assert.deepEqual(f.warnings, []);
 });
 
