@@ -87,6 +87,8 @@ export function measurer(element: HTMLElement) {
         if (!(shown > 0)) return width;
         width = shown;
       }
+      // A face still loading measures as its fallback: the tree lays out again once it is in.
+      if (document.fonts?.check(fonts[font]) === false) return width;
       if (widths.size >= 4096) widths.delete(widths.keys().next().value!);
       widths.set(key, width);
     }
@@ -113,6 +115,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const frame = useRef(0);
   const [width, setWidth] = useState(0);
   const [idleOpen, setIdleOpen] = useState(false);
+  const [faces, setFaces] = useState(0);
   const W = width || 560;
   const phone = W < 480;
   const line = useIsPhone() ? TREE.TOUCH : TREE.LINE;
@@ -132,7 +135,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const rank = (path: string) => slots.get(owners.get(path)?.[0] ?? "") ?? 99;
     const measure = view.current ? measurer(view.current) : (text: string) => text.length * 7;
     return { changed, ...treeLayout(index, { width: W, phone, line, changed, current: focus, team: team ? { named, marks: new Set(clashBy.keys()), rank } : undefined, measure, folders: labels.folders, files: labels.files }) };
-  }, [index, W, phone, line, ownersKey, clashKey, focus, team, labels, slots]);
+  }, [index, W, phone, line, ownersKey, clashKey, focus, team, labels, slots, faces]);
   const order = useMemo(() => treeOrder(index, layout.changed), [index, layout.changed]);
   const shown = useMemo(() => new Set(layout.items.flatMap(it => it.squares ?? it.files ?? [])), [layout.items]);
   const fill = (path: string) => {
@@ -153,6 +156,14 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const observer = new ResizeObserver(read);
     observer.observe(element);
     return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const loaded = () => setFaces(n => n + 1);
+    fonts.addEventListener("loadingdone", loaded);
+    return () => fonts.removeEventListener("loadingdone", loaded);
   }, []);
 
   // A held Up or Down jumps the arrow so fast scrolling stays fast.

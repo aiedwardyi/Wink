@@ -12,6 +12,23 @@ it("keeps the text width cache bounded across many repos", () => {
   expect(measure("file-19999.ts", "file")).toBeGreaterThan(0);
 });
 
+it("keeps no width measured while its face is still loading, so the next layout reads the real one", async () => {
+  let face = 10, loading = true;
+  // SAFETY: the measurer only sets font and calls measureText on its canvas.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ measureText: () => ({ width: face }) } as never);
+  Object.defineProperty(document, "fonts", { configurable: true, value: { check: () => !loading } });
+  vi.resetModules();
+  const fresh = await import("./MapTree");
+  const measure = fresh.measurer(document.body);
+  expect(measure("docs/", "dir")).toBe(10);
+  face = 12;
+  loading = false;
+  expect(measure("docs/", "dir")).toBe(12);
+  face = 14;
+  expect(measure("docs/", "dir")).toBe(12);
+  Reflect.deleteProperty(document, "fonts");
+});
+
 it("measures a box count in the page once the tree has layout, where its tabular digits are drawn, and other text on the canvas", async () => {
   // A canvas draws a proportional 1 (4px here); the page draws every tabular digit 6px wide.
   const wide = (text: string, one: number) => [...text].reduce((sum, letter) => sum + (letter === "1" ? one : 6), 0);

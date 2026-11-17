@@ -3,7 +3,7 @@
 /* one quiet edge and fill for every box and button in the Map */
 .map-pane { --map-edge: color-mix(in oklab, var(--color-ink) 13%, transparent); --map-edge-on: color-mix(in oklab, var(--color-ink) 26%, transparent); --map-fill: color-mix(in oklab, var(--color-ink) 2.5%, var(--color-panel)); }
 /* the code view keeps the app's code face; Korean keeps its own faces, as in styles.css */
-.map-pane > :is(.map-head, .map-top, .map-flow-rows, .map-crumbs, .map-step) { --font-sans: var(--font-geist) system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Malgun Gothic", monospace; }
+.map-pane > :is(.map-head, .map-top, .map-flow-rows, .map-crumbs, .map-step) { font-family: var(--font-sans); --font-sans: var(--font-geist) system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Malgun Gothic", monospace; }
 .map-pane > :is(.map-head, .map-top, .map-flow-rows, .map-crumbs, .map-code, .map-example) { animation: fade-in var(--motion-moderate) var(--ease-standard); }
 .map-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-shrink: 0; padding: 10px 12px; border-bottom: 1px solid var(--color-hairline); }
 .map-worker-menu { position: relative; min-width: 0; flex-shrink: 0; max-width: 50%; }

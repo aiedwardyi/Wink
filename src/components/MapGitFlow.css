@@ -83,6 +83,10 @@
 }
 /* a worker with no PR keeps its own words until the narrow row has no room for them */
 @container map-pane (max-width: 440px) { .map-flow-end > small:not([data-short]) { font-size: 0; } }
-@container map-pane (max-width: 380px) { .map-flow-list { grid-template-columns: 8px minmax(36px, 52px) minmax(min-content, 1fr) auto; } }
+/* 11px stop words need the room 9.5px left: tighter gaps and a shorter name */
+@container map-pane (max-width: 440px) { .map-flow-list { grid-template-columns: 8px minmax(28px, 64px) minmax(min-content, 1fr) auto; column-gap: 4px; } }
+@container map-pane (max-width: 380px) { .map-flow-list { grid-template-columns: 8px minmax(28px, 52px) minmax(min-content, 1fr) auto; } }
 @container map-pane (max-width: 372px) { .map-flow-clash { display: none; } }
+/* touch scrollbars draw over the list and take no room */
+@media (hover: none) { .map-flow-clash { padding-right: 0; } }
 @media (prefers-reduced-motion: reduce) { .map-flow-stops, .map-flow-stops > i, .map-flow-stops > a::before, .map-flow-stops > a::after, .map-flow-stops > a > i, .map-flow-box i, .map-flow-tip { transition: none; animation: none; } }
