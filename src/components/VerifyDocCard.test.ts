@@ -90,6 +90,20 @@ it("ends the live watch on the check's own time, not the last mark's", async () 
   vi.unstubAllGlobals();
 });
 
+it.each([["en", "Replay unavailable on this PC"], ["ko", "이 PC에서 다시보기를 사용할 수 없어요"]] as const)("shows an unavailable document replay on this PC in %s", async (locale, message) => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  applyLocale(locale);
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "not-here" }, { status: 404 })));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ replay: ["run-123456"] }), threadId: "thread", live: false, hidden: false, onClose() {} })));
+  await act(async () => { await new Promise(done => setTimeout(done, 50)); });
+  expect(host.querySelector("[data-current]")?.textContent).toBe(message);
+  expect(host.querySelector(".verify-watch-url")?.textContent).toBe("script.md");
+  await act(async () => root.unmount());
+});
+
 const WORKER_CARD = [
   "# NOTE-SORT | high | FRESH", "", "## Purpose", "Notes in a room sort by the time they were saved, so a late edit jumps to the top.", "Sort them by the time they were written. Users will recieve them in order.", "",
   "## Acceptance", "- A note edited later keeps its place in the list.", "- Two notes written in the same minute stay in the order they were sent.", "- Old rooms open with the same order on desktop and phone.", "- Red first, one test that fails today.", "",
