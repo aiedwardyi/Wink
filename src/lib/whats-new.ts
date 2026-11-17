@@ -112,6 +112,7 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
+  "1.0.279": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */
