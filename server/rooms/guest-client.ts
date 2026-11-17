@@ -96,7 +96,7 @@ const stateSchema = z.object({
   instructions: z.string().max(20_000),
   host: name,
   me: personSchema,
-  people: z.array(personSchema).max(100),
+  people: z.array(personSchema.extend({ works: z.boolean().optional() })).max(100),
   bots: z.array(z.object({ id, name, color: z.string().max(64), mascotStyle: z.string().max(64).optional() })).max(100).default([]),
   teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id, mascotStyle: z.string().max(64).optional() })).max(200).optional(),
 });

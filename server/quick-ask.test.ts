@@ -562,9 +562,17 @@ describe("Gate 0", () => {
     expect(routesQuick(base)).toBe(true);
   });
 
+  it("passes any line while the bot's turn runs in another thread", () => {
+    const elsewhere = { ...busy, activeThreadId: "room" };
+    expect(routesQuick({ ...base, bot: elsewhere, text: "tldr pls ?" })).toBe(true);
+    expect(routesQuick({ ...base, bot: elsewhere, text: "ship it" })).toBe(true);
+    expect(routesQuick({ ...base, text: "tldr pls ?" })).toBe(false);
+    expect(routesQuick({ ...base, bot: elsewhere, messages: [card] })).toBe(false);
+    expect(routesQuick({ ...base, bot: elsewhere, answersCard: card.id })).toBe(false);
+  });
+
   it.each<[string, Partial<QuickGate>]>([
     ["idle", { bot: { ...bot, busy: false } }],
-    ["busy on another thread", { bot: { ...busy, activeThreadId: "room" } }],
     ["sent after this turn", { deliverAfter: true }],
     ["a Reply", { replyTo: card }],
     ["a queued send", { queueId: "q1" }],

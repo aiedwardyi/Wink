@@ -30,7 +30,7 @@ export interface DoorState {
   instructions: string;
   host: string;
   me: { id: string; name: string };
-  people: Array<{ id: string; name: string }>;
+  people: Array<{ id: string; name: string; works: boolean }>;
   bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
   /** Teammates' own bots; only a host that takes them sends this. */
   teamBots: Array<{ id: string; name: string; color: string; owner: string; mascotStyle?: string }>;
