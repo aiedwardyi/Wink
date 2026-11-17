@@ -1,8 +1,9 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { askPreallowedOps, builtinOps, isSideEffectOp, opEffect } from "./builtin-ops.ts";
-import { TOOLS as PHONE_TOOLS } from "./phone-proxy.ts";
 import { TOOLS as TERMINAL_TOOLS } from "./terminal-proxy.ts";
 import { CATALOG_TOOLS } from "./tool-catalog.ts";
 
@@ -21,9 +22,15 @@ async function agentsProxyTools(): Promise<string[]> {
   return JSON.parse(lines[0]!).result.tools.map((tool: { name: string }) => tool.name);
 }
 
+function phoneProxyTools(): string[] {
+  const proxy = fileURLToPath(new URL("./phone-proxy.ts", import.meta.url));
+  const { stdout } = spawnSync(process.execPath, [proxy], { input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`, encoding: "utf8", windowsHide: true });
+  return JSON.parse(stdout.split("\n")[0]!).result.tools.map((tool: { name: string }) => tool.name);
+}
+
 describe("built-in operation table", () => {
   it("classifies every tool the agents, phone and terminal proxies list", async () => {
-    const listed = { agents: [...(await agentsProxyTools()), ...CATALOG_TOOLS.map((tool) => tool.name)], phone: PHONE_TOOLS.map((tool) => tool.name), terminal: TERMINAL_TOOLS.map((tool) => tool.name) };
+    const listed = { agents: [...(await agentsProxyTools()), ...CATALOG_TOOLS.map((tool) => tool.name)], phone: phoneProxyTools(), terminal: TERMINAL_TOOLS.map((tool) => tool.name) };
     for (const [server, names] of Object.entries(listed)) {
       const unclassified = names.filter((name) => !Object.hasOwn(builtinOps(server) ?? {}, name));
       expect(unclassified, `add these ${server} tools to builtin-ops.ts`).toEqual([]);
