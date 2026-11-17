@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LIVE_VAD, type CallLine } from "../../../shared/live-call";
+import { LIVE_VAD, LIVE_VOICE, type CallLine } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { asRequest, LiveCall, spokenText, told, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
+import { GeminiLive } from "./gemini";
 import { asksForQuiet, callsVoice, readsBack } from "./guard";
 import { GAP_MS } from "./manners";
 
@@ -2867,5 +2868,69 @@ describe("VOICE-READBACK: what it said in the chat", () => {
     ["Save the data in the reply we got.", false], ["Do what you said.", false], ["Did you do what you said?", false], ["피터한테 메시지 보내서 말해 줘.", false],
   ])("readsBack(%s) is %s", (line, want) => {
     expect(readsBack(line)).toBe(want);
+  });
+});
+
+describe("one voice per call", () => {
+  class Socket {
+    static OPEN = 1;
+    static all: Socket[] = [];
+    readyState = 1;
+    frames: any[] = [];
+    onopen?: () => void;
+    onmessage?: (event: { data: string }) => void;
+    onclose?: (event: { code: number; reason: string }) => void;
+    constructor(readonly url: string) { Socket.all.push(this); }
+    send(text: string) { this.frames.push(JSON.parse(text)); }
+    close() {}
+  }
+  const voiceOf = (socket: Socket) => socket.frames[0].setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
+  const serve = async (socket: Socket, ...frames: object[]) => {
+    for (const frame of frames) socket.onmessage!({ data: JSON.stringify(frame) });
+    await flush();
+  };
+
+  it("every session names the call's voice across a reconnect and one chosen change", async () => {
+    Socket.all = [];
+    vi.stubGlobal("WebSocket", Socket);
+    // Same rule as the token route: a new call or a swap takes the picks, a resume keeps the call's own voice.
+    const voices = new Map<string, string>();
+    const ids: string[] = [];
+    const call = new LiveCall({
+      botId: "b1",
+      botName: "Nova",
+      device: "phone",
+      engine: () => new GeminiLive(),
+      audio: fakeAudio(),
+      now: () => 1_000,
+      prefs: { voice: "Alnilam" },
+      post: async (path, body: any) => {
+        if (!path.endsWith("/call/token")) return { status: 200, data: {} };
+        const callId = body.callId ?? "c-0123456789ab";
+        if (!body.callId || body.swap) voices.set(callId, body.call?.voice ?? LIVE_VOICE);
+        ids.push(callId);
+        return { status: 200, data: { callId, url: "wss://x", token: "t", model: "m", voice: voices.get(callId), locale: "en" } };
+      },
+    });
+    const open = async () => {
+      const socket = Socket.all.at(-1)!;
+      socket.onopen!();
+      await serve(socket, { setupComplete: {} }, { sessionResumptionUpdate: { newHandle: `h${Socket.all.length}`, resumable: true } }, { serverContent: { turnComplete: true } });
+      return socket;
+    };
+    await call.start();
+    const first = await open();
+    await serve(first, { goAway: {} });
+    const resumed = await open();
+    call.retune({ voice: "Fenrir" });
+    await flush();
+    await open();
+    await flush();
+    const changed = Socket.all.at(-1)!;
+    await serve(changed, { goAway: {} });
+    await open();
+    expect(Socket.all.map(voiceOf)).toEqual(["Alnilam", "Alnilam", "Fenrir", "Fenrir"]);
+    expect(new Set(ids)).toEqual(new Set(["c-0123456789ab"]));
+    expect(resumed).toBe(Socket.all[1]);
   });
 });
