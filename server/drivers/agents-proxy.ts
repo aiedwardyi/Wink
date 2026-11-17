@@ -62,8 +62,6 @@ const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation"
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
 export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
-const MAX_CREATED_PER_TURN = 4;
-let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
 const verifyCalls = new Map<unknown, AbortController>();
 
@@ -407,7 +405,7 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
+      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team. If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
     inputSchema: {
       type: "object",
       properties: {
@@ -918,9 +916,6 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!botName || !role || !instructions) {
       return { text: "create_bot needs name, role, and instructions.", isError: true };
     }
-    if (createdThisTurn >= MAX_CREATED_PER_TURN) {
-      return { text: `You can create at most ${MAX_CREATED_PER_TURN} bots in one turn. Use the team you have before adding more.`, isError: true };
-    }
     const r = await api(`/api/internal/create-bot`, {
       method: "POST",
       body: JSON.stringify({
@@ -933,7 +928,6 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         effort: typeof args.effort === "string" && args.effort.trim() ? args.effort.trim() : undefined,
       }),
     });
-    createdThisTurn += 1;
     return {
       text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}]. If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids. Assign work with ask_bot if you must report back this turn, otherwise delegate_bot.`,
     };
