@@ -7,6 +7,7 @@ import App from "./App";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { startSelectMode } from "@/components/MessageMenu";
+import { closeShow } from "@/lib/show-pane";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -17,8 +18,13 @@ async function until<T extends Element>(found: () => T | null) {
   return found();
 }
 const key = (init: KeyboardEventInit) => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
-const menu = () => document.querySelector("[data-worker-list]:not([data-closing])");
-const strip = () => document.querySelector<HTMLButtonElement>("main [data-worker-strip]");
+const menu = () => document.querySelector("[data-side-panel]:not([data-closing]) [data-worker-list]");
+const strip = () => document.querySelector<HTMLButtonElement>("main [data-show-pane-button]");
+const closeButton = () => document.querySelector<HTMLButtonElement>('[data-side-panel]:not([data-closing]) button[aria-label="Close"]');
+const openList = async () => {
+  await act(async () => strip()!.click());
+  return until(menu);
+};
 
 const launch = (botId: string, label: string, session: string) => ({
   id: `${botId}-launch`, at: 1, role: "bot", kind: "launch", from: { botId, name: botId },
@@ -53,7 +59,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(async () => root.unmount());
+  await act(async () => { root.unmount(); closeShow(); });
   host.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -79,11 +85,24 @@ describe("the model picker follows the view", () => {
   });
 });
 
+describe("one workers list", () => {
+  it("lives in the side pane, with no chip left in the chat header", async () => {
+    await act(async () => root.render(createElement(App)));
+    await until(strip);
+    expect(document.querySelector("main [data-worker-strip]")).toBeNull();
+    expect(strip()!.querySelector("[data-worker-badge]")?.textContent).toBe("1");
+    await openList();
+    expect(menu()?.querySelector("h2")?.textContent).toBe("Scout's workers");
+    expect(document.querySelectorAll("[data-worker-list]")).toHaveLength(1);
+    expect(document.querySelector('[data-side-panel] [role="tab"][aria-selected="true"]')?.textContent).toBe("Workers");
+  });
+});
+
 describe("the workers menu follows the view", () => {
   const openMenu = async () => {
     await act(async () => root.render(createElement(App)));
     await until(strip);
-    await act(async () => strip()!.click());
+    await openList();
     expect(menu()?.querySelector("h2")?.textContent).toBe("Scout's workers");
   };
 
@@ -110,7 +129,7 @@ describe("the workers menu follows the view", () => {
     expect(title()?.textContent).toBe("Terminal / ONE");
     await key({ key: "`", code: "Backquote", ctrlKey: true });
     expect(document.querySelector(".orbit-terminal-overlay")?.getAttribute("data-open")).toBe("false");
-    await act(async () => strip()!.click());
+    await openList();
     const row = menu()!.lastElementChild as HTMLButtonElement;
     expect(row.hasAttribute("data-worker-terminal")).toBe(true);
     await act(async () => row.click());
@@ -123,7 +142,7 @@ describe("the workers menu follows the view", () => {
     await openMenu();
     await key({ key: "2", code: "Digit2", ctrlKey: true });
     expect(menu()).toBeNull();
-    await act(async () => strip()!.click());
+    await openList();
     expect(menu()?.querySelector("h2")?.textContent).toBe("Pilot's workers");
   });
 });
@@ -173,8 +192,9 @@ describe("phone Back with the workers list", () => {
 
   it("closes the list before returning to the previous bot", async () => {
     await selectPilot();
-    await act(async () => strip()!.click());
+    await openList();
     expect(menu()?.querySelector("h2")?.textContent).toBe("Pilot's workers");
+    expect(menu()?.querySelector("[data-worker-terminal]")?.textContent).toBe("Open terminal");
     await back();
     expect(menu()).toBeNull();
     expect(document.querySelector("textarea[data-orbit-composer]")?.getAttribute("placeholder")).toBe("Message Pilot");
@@ -240,16 +260,13 @@ describe("phone Back with the workers list", () => {
     expect(index).toBe(0);
   });
 
-  it.each(["X", "backdrop"])("drops the list entry after %s, including five repeated opens", async (dismiss) => {
+  it.each(["X", "the pane button"])("drops the list entry after %s, including five repeated opens", async (dismiss) => {
     await selectPilot();
     for (let count = 0; count < 5; count++) {
-      await act(async () => strip()!.click());
+      await openList();
       expect(menu()).not.toBeNull();
       expect(index).toBe(2);
-      await act(async () => {
-        if (dismiss === "X") menu()!.querySelector<HTMLButtonElement>("button")!.click();
-        else menu()!.parentElement!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      });
+      await act(async () => (dismiss === "X" ? closeButton() : strip())!.click());
       await settle();
       expect(menu()).toBeNull();
       expect(index).toBe(1);
@@ -261,11 +278,11 @@ describe("phone Back with the workers list", () => {
 
   it("closes a confirm above the list one visible layer at a time", async () => {
     await selectPilot(createElement(ConfirmOverApp));
-    await act(async () => strip()!.click());
+    await openList();
     await act(async () => document.querySelector<HTMLButtonElement>("[data-open-confirm]")!.click());
-    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
-    await back();
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    await back();
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
     expect(menu()).not.toBeNull();
     expect(index).toBe(2);
     await back();
@@ -320,7 +337,7 @@ describe("phone Back with the workers list", () => {
       }] }), { headers: { "Content-Type": "application/json" } })) : new Promise<Response>(() => {});
     }));
     await selectPilot();
-    await act(async () => strip()!.click());
+    await openList();
     const entry = () => menu()?.querySelector<HTMLButtonElement>("li button") ?? null;
     await until(entry);
     expect(entry()).not.toBeNull();
@@ -349,11 +366,11 @@ describe("phone Back with the workers list", () => {
     await until(strip);
     await act(async () => document.querySelector<HTMLButtonElement>('[data-sidebar-row-kind="group"] button')!.click());
     await until(strip);
-    await act(async () => strip()!.click());
+    await openList();
     expect(menu()?.querySelector("h2")?.textContent).toBe("Team's workers");
     await back();
     expect(menu()).toBeNull();
-    await act(async () => strip()!.click());
+    await openList();
     expect(menu()?.querySelector("h2")?.textContent).toBe("Team's workers");
     await back();
     await back();
@@ -365,7 +382,7 @@ describe("phone Back with the workers list", () => {
     window.ogb = {} as NonNullable<typeof window.ogb>;
     try {
       await selectPilot();
-      await act(async () => strip()!.click());
+      await openList();
       expect(menu()).not.toBeNull();
       expect(index).toBe(0);
       await act(async () => window.dispatchEvent(new PopStateEvent("popstate", { state: null })));

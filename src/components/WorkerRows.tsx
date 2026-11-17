@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Bot, Check, ChevronDown, ScrollText, TerminalSquare, X } from "lucide-react";
 
@@ -9,7 +9,7 @@ import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { lateReportText } from "@/lib/late-report";
 import { isPhone, PHONE_QUERY } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { useSheetSwipe } from "@/lib/use-phone-swipe";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
@@ -196,6 +196,7 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
 
 function TerminalEntry({ onOpenTerminal, onClose, inset, hotkey }: { onOpenTerminal: () => void; onClose: () => void; inset?: boolean; hotkey?: number }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   return (
     <button
       type="button"
@@ -211,7 +212,7 @@ function TerminalEntry({ onOpenTerminal, onClose, inset, hotkey }: { onOpenTermi
         <TerminalSquare size={18} aria-hidden className="text-ink-secondary" />
       </span>
       <span className="min-w-0 flex-1 truncate font-medium text-ink">{t("terminal.open")}</span>
-      {inset && <kbd className="shrink-0 font-sans text-[12.5px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>}
+      {inset && !phone && <kbd className="shrink-0 font-sans text-[12.5px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>}
     </button>
   );
 }
@@ -294,7 +295,65 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpe
   );
 }
 
-/** Header chip for this chat's listed runs. Opens the worker list. */
+/** A chat's worker list as its header hands it to the side pane. */
+export type WorkerSource = { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void };
+
+export const listedFor = ({ runs, livePanes = null, paneLabels, waitForLive = false }: WorkerSource): ShownRun[] => livePanes === null && waitForLive ? [] : listedRuns(runs, livePanes, paneLabels);
+
+export const workerCounts = (listed: readonly ShownRun[]) => ({
+  working: listed.filter((shown) => shown.state === "working").length,
+  waiting: listed.filter((shown) => shown.state === "waiting").length,
+  failed: listed.filter((shown) => shown.state === "failed").length,
+  done: listed.filter((shown) => shown.state === "done").length,
+});
+
+const sources = new Map<string, WorkerSource>();
+const sourceListeners = new Set<() => void>();
+const subscribeSources = (listener: () => void) => { sourceListeners.add(listener); return () => { sourceListeners.delete(listener); }; };
+const emitSources = () => { for (const listener of sourceListeners) listener(); };
+
+/** The pane renders in App, away from the chat that owns the runs and terminal callbacks, so the chat shares them by thread. */
+export function useShareWorkers(threadId: string, source: WorkerSource | undefined) {
+  useEffect(() => {
+    if (!source) return;
+    sources.set(threadId, source);
+    emitSources();
+    return () => {
+      if (sources.get(threadId) !== source) return;
+      sources.delete(threadId);
+      emitSources();
+    };
+  }, [threadId, source]);
+}
+
+export function useSharedWorkers(threadId: string | undefined): WorkerSource | undefined {
+  return useSyncExternalStore(subscribeSources, () => (threadId ? sources.get(threadId) : undefined), () => undefined);
+}
+
+/** The side pane's Workers tab: the chat's one worker list. */
+export function WorkerPage({ source, maximized, onClose }: { source: WorkerSource | undefined; maximized: boolean; onClose: () => void }) {
+  const { t } = useI18n();
+  useEffect(() => { trackScreen("workers"); }, []);
+  useEffect(() => {
+    window.addEventListener("orbit:close-worker-menu", onClose);
+    return () => window.removeEventListener("orbit:close-worker-menu", onClose);
+  }, [onClose]);
+  const listed = source ? listedFor(source) : [];
+  return (
+    <div data-worker-list className="verify-watch-frame show-workers" data-maximized={maximized || undefined}>
+      <div className="verify-watch-bar show-frame-bar">
+        <Bot size={14} aria-hidden className="show-frame-icon" />
+        <h2 className="show-frame-name">{source ? t("workers.title", { name: source.name }) : t("show.workers")}</h2>
+      </div>
+      {listed.length > 0
+        ? <WorkerEntries inset nickFirst runs={listed} livePanes={source?.livePanes ?? null} onOpenTerminalPane={source?.onOpenTerminalPane} onClose={onClose} />
+        : source && <p className="px-3 py-4 text-[13px] text-ink-secondary">{t("terminal.workersEmpty", { name: source.name })}</p>}
+      {source?.onOpenTerminal && <TerminalEntry inset onOpenTerminal={source.onOpenTerminal} onClose={onClose} />}
+    </div>
+  );
+}
+
+/** A terminal header's chip for its listed panes. Opens the worker list. */
 export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf, className }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined; className?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -387,12 +446,7 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
   }, [open]);
   if (!shown) return null;
   const first = listed[0];
-  const counts = {
-    working: listed.filter((shown) => shown.state === "working").length,
-    waiting: listed.filter((shown) => shown.state === "waiting").length,
-    failed: listed.filter((shown) => shown.state === "failed").length,
-    done: listed.filter((shown) => shown.state === "done").length,
-  };
+  const counts = workerCounts(listed);
   const close = () => setOpen(false);
   return (
     <div ref={rootRef} className="relative shrink-0">
