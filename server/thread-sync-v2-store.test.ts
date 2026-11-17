@@ -6,6 +6,7 @@ import { Worker } from "node:worker_threads";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setSafeTimers } from "vitest/internal/browser";
 
 import type { BotRecord, Message, TaskRecord } from "./store.ts";
 import { CONFLICT_NOTICE } from "./thread-sync.ts";
@@ -213,6 +214,14 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     const { DATA_DIR } = await import("./config.ts");
     const { Store } = await import("./store.ts");
     const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    vi.useFakeTimers();
+    // waitFor uses the runner's saved timers, so route its deadline through the fake clock too.
+    setSafeTimers();
+    const flush = ThreadSyncV2.prototype.flush;
+    vi.spyOn(ThreadSyncV2.prototype, "flush").mockImplementationOnce(async function (this: ThreadSyncV2, ...args) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      return flush.apply(this, args);
+    });
     const store = new Store(() => ({ instanceId: "test", model: "test" }));
     const bot = store.createBot({}, { seedMessages: false });
     store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
@@ -230,11 +239,15 @@ describe("store delta sync", { timeout: 60_000 }, () => {
       return prepare.call(this, sql);
     });
     try {
-      // the boot notice cleanup holds the first flush until the worker's rows land
-      await vi.waitFor(async () => expect(await sync.flush("thread")).toBe("written"));
+      expect(await sync.flush("thread")).toBe("written");
     } finally {
       vi.restoreAllMocks();
-      await sync.close();
+      try {
+        await sync.close();
+      } finally {
+        vi.useRealTimers();
+        setSafeTimers();
+      }
     }
     expect(prepared.filter((sql) => /COUNT\(\*\)[\s\S]*sync_v2_packets/.test(sql))).toEqual([]);
   });
@@ -254,7 +267,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     };
     const first = createThreadSyncV2Store({ ...options, bootReads: testBootReads(DATA_DIR) })!;
     store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
-    await vi.waitFor(async () => expect(await first.flush("thread")).toBe("written"));
+    expect(await first.flush("thread")).toBe("written");
     await first.close();
     let release!: () => void;
     const rows = new Promise<void>((resolve) => { release = resolve; }).then(() => bootRowsNow([], DATA_DIR));
@@ -284,7 +297,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     };
     const first = createThreadSyncV2Store({ ...options, bootReads: testBootReads(DATA_DIR) })!;
     store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
-    await vi.waitFor(async () => expect(await first.flush("thread")).toBe("written"));
+    expect(await first.flush("thread")).toBe("written");
     await first.close();
     let release!: () => void;
     const rows = new Promise<void>((resolve) => { release = resolve; }).then(() => bootRowsNow([], DATA_DIR));
