@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -54,6 +54,17 @@ describe("local sign-in cache", () => {
     }
   });
 
+  it("re-probes after the CLI's own answer for a half-written credentials file", async () => {
+    // Claude 2.1.326 reads a cut-off .credentials.json as signed out, so that answer is never reused.
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/auth-status-torn-credentials.json", import.meta.url), "utf8"));
+    const probe = vi.fn<() => Promise<boolean | undefined>>().mockResolvedValue(recorded.reply.loggedIn);
+    const check = cachedSignIn(probe);
+    expect(await check()).toBe(false);
+    probe.mockResolvedValue(true);
+    expect(await check()).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the last answer while the file is half-written and never reads unknown as signed out", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-auth-torn-"));
     const path = join(home, "auth.json");
@@ -66,6 +77,10 @@ describe("local sign-in cache", () => {
       expect(storedSignIn(path, classify)).toBe(true);
       writeFileSync(fresh, '{"signedIn":tr');
       expect(storedSignIn(fresh, classify)).toBeUndefined();
+      writeFileSync(path, '{"signedIn":false}');
+      expect(storedSignIn(path, classify)).toBe(false);
+      writeFileSync(path, '{"signedIn":fa');
+      expect(storedSignIn(path, classify)).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
