@@ -1182,6 +1182,21 @@ describe("reactions", () => {
     }
   });
 
+  it("carries a bot's reaction on a teammate's line to every joined teammate as that bot", async () => {
+    const group = peopleRoom();
+    const bot = store.createBot();
+    const mina = await joined(group, "Mina Park");
+    const seoyeon = await joined(group, "이서연");
+    const { entry, message } = writeRoomEntry(store, group, { author: { kind: "person", id: mina.personId, name: "Mina Park" }, text: "배포 끝났어요" });
+    const streams = await Promise.all([openStream(group.hosted.roomId, mina.key, 0, true), openStream(group.hosted.roomId, seoyeon.key, 0, true)]);
+    try {
+      store.toggleReaction(group.threadId, message.id, "🎉", bot.id);
+      for (const stream of streams) await stream.until((frames) => marksOf(frames, entry.id)?.[0]?.by === `bot:${bot.id}`);
+    } finally {
+      await Promise.all(streams.map(shut));
+    }
+  });
+
   it("starts every stream with all reactions on its lines, so 20 survive a reconnect", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina Park");

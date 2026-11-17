@@ -7103,7 +7103,8 @@ async function runClaimedGroupMemberTurn(
       "If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation.",
     integrations.agents &&
       `Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`,
-    canMessage && reactionToolGuidance(),
+    // a read-only teammate turn still mounts react: a reaction is not a write
+    Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH && reactionToolGuidance(),
     canMessage && SHOW_IMAGE_GUIDANCE,
   ]
     .filter(Boolean)
@@ -7851,6 +7852,7 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
+  answeredLine: (threadId) => roomTurnInstruction.get(threadId),
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
@@ -8161,8 +8163,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
       }
       // The react tool: a bot leaving an emoji on the user's message, the
-      // way the user already can on the bot's. Always targets the latest
-      // user message on the active branch, the one this turn is replying to.
+      // way the user already can on the bot's. Targets the line a room turn
+      // answers, else the latest user message on the active branch.
       if (method === "POST" && path === "/api/internal/react") {
         return await internalRoutes.react(req, res);
       }
