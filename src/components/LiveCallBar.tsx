@@ -21,7 +21,7 @@ import { Fold } from "./Fold";
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 const ROOM_PRIVACY_SEEN = "wink.liveCall.roomPrivacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "micSilent" | "soundInput" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "noSound" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "micSilent" | "soundInput" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -29,6 +29,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "Speaking",
     working: "Working",
     paused: "Tap to resume",
+    noSound: "Tap for sound",
     ended: "Call ended",
     failed: "Call failed",
     send: "Ask {bot} to do this?",
@@ -62,6 +63,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "말하는 중",
     working: "작업 중",
     paused: "탭해서 통화 이어가기",
+    noSound: "탭해서 소리 켜기",
     ended: "통화 종료",
     failed: "통화 실패",
     send: "{bot}에게 이렇게 요청할까요?",
@@ -175,7 +177,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
   const [live] = useState((): Live => {
-    const audio = new CallAudio(active.ctx);
+    const audio = new CallAudio(active.sound);
     const call = new LiveCall({
       botId: bot.id,
       botName: bot.name,
@@ -337,9 +339,10 @@ function PostCard({ live, room }: { live: Live; room: string }) {
 export function ResumeButton({ live }: { live: Live }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
+  const noSound = useSyncExternalStore(live.call.subscribe, () => Boolean(live.call.state().noSound), () => false);
   return (
     <button type="button" data-live-call-resume onClick={() => live.call.resume()} className="px-1 pb-1.5 text-left text-xs font-medium text-accent hover:underline max-md:min-h-10">
-      {words.paused}
+      {noSound ? words.noSound : words.paused}
     </button>
   );
 }

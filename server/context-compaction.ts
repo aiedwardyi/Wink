@@ -13,7 +13,7 @@ import {
   readContextCompaction,
   type ContextCompactionV1,
 } from "../shared/context-compaction.ts";
-import { VOICE_SAID } from "../shared/live-call.ts";
+import { VOICE_SAID, VOICE_UNHEARD } from "../shared/live-call.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 
 export const MODEL_CONTEXT_FALLBACK = 128_000;
@@ -578,7 +578,7 @@ function replayUnits(
     if (message.call?.notice) return [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
-      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${VOICE_SAID} ${body}` : body;
+      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${message.call.unheard ? VOICE_UNHEARD : VOICE_SAID} ${body}` : body;
       const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
       const unit: ReplayUnit = {
         id: message.id,
