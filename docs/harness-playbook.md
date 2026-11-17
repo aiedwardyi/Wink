@@ -108,6 +108,8 @@ The exact shape of its final message, plus one line: what it reused.
 - One card, one branch, one worktree. The worker does exactly what the card says.
 - A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
   Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
+- Reuse first: a card for a new surface (like group rooms next to 1:1 chats) names the existing component or
+  code path it extends; never a parallel copy. Shared UI parts: docs/ui-kit.md, enforced by `pnpm check:ui-kit`.
 - A repeat mistake gets a failing check, not a rule line. Automate a job (routine, fan-out) only after one run passes Verify before push.
 - Launch only cards that serve the current goal or that the user asked for.
 - Parallel cards: split shared ids, routes and names between them up front.
