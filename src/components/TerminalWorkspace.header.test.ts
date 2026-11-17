@@ -32,7 +32,8 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Header checks do not need link detection.
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class { dispose() {} } }));
 
-import { TerminalWorkspace, lastViewedPanes } from "./TerminalWorkspace";
+import { lastViewedPanes } from "@/lib/terminal-panes";
+import { TerminalWorkspace } from "./TerminalWorkspace";
 
 let root: ReturnType<typeof createRoot>;
 let host: HTMLElement;

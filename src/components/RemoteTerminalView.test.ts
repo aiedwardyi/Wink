@@ -17,12 +17,14 @@ vi.mock("@/state/store", async () => {
 
 import { I18nProvider } from "@/lib/i18n";
 import { ConnectionError } from "@/lib/error-text";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { RemoteTerminalView, snapshotText } from "./RemoteTerminalView";
 import { ProviderMark } from "./ProviderIcons";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "App.tsx"), "utf8");
 
 afterEach(() => {
+  lastViewedPanes.clear();
   store.api.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -898,6 +900,29 @@ describe("RemoteTerminalView", () => {
     await act(async () => {});
     expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal");
     await act(async () => root.unmount());
+  });
+
+  it("reopens the remembered worker and closes to the chat only when it is gone on return", async () => {
+    let panes = [{ sessionId: "main", label: null, main: true }, { sessionId: "worker", label: "build", main: false }];
+    store.api.mockImplementation(async (path: string) => {
+      const id = new URL(path, "http://localhost").searchParams.get("sessionId") ?? "main";
+      if (!panes.some((pane) => pane.sessionId === id)) throw new Error("Unknown terminal");
+      return { screenText: id, sessionId: id, generation: 1, panes };
+    });
+    lastViewedPanes.set("bot-1", "worker");
+    const first = await renderView();
+    expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal?sessionId=worker");
+    expect(title(first.host)).toBe("Terminal / build");
+    panes = panes.slice(0, 1);
+    await act(async () => click(button(first.host, "Refresh")));
+    await vi.waitFor(() => expect(title(first.host)).toBe("Terminal / Ada"));
+    expect(first.onClose).not.toHaveBeenCalled();
+    await act(async () => first.root.unmount());
+    lastViewedPanes.set("bot-1", "worker");
+    const second = await renderView();
+    expect(second.onClose).toHaveBeenCalledOnce();
+    expect(lastViewedPanes.get("bot-1")).toBeNull();
+    await act(async () => second.root.unmount());
   });
 
   it("sends a line with a trailing newline and replaces the snapshot", async () => {

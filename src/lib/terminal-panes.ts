@@ -5,6 +5,9 @@ import { api, type Action } from "@/state/store";
 
 export const PANE_COUNT_REFRESH_MS = 15_000;
 
+// Per bot, in memory: last picked pane, or null for Main.
+export const lastViewedPanes = new Map<string, string | null>();
+
 const payloadSchema = z.object({
   counts: z.record(z.string(), z.number().int().min(1)).optional(),
   panes: z.record(z.string(), z.array(z.string()).min(1)).optional(),
