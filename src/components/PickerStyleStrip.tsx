@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChartSpline, Check, ChevronDown, CupSoda, Gauge, List, type LucideIcon } from "lucide-react";
+import { ChartSpline, Check, ChevronDown, Gauge, List, type LucideIcon } from "lucide-react";
 import type { ModelPickerView } from "@/lib/model-picker-view";
 import { PICKER_LOOK_CHOICES, pickerLook, pickerLookSkin, shownPickerLook, type PickerLook, type PickerLookChoice } from "@/lib/picker-look";
 import type { SkinId } from "@/lib/skins";
@@ -108,55 +108,10 @@ function ChartPreview() {
   </>;
 }
 
-const PACKS = [["#f3e3d3", "#c4573f"], ["#5a4a7a", "#f8f0e8"], ["#9a8bb8", "#f8f0e8"], ["#e7c2df", "#9a5f94"], ["#f2e3a6", "#bfa95c"]];
-
-// The Machine keeps its own colors in every look, as the real one does.
-function MachinePreview() {
-  return <>
-    <rect x="6" y="4" width="148" height="92" rx="8" fill="#3b2441" />
-    <rect x="10" y="8" width="140" height="10" rx="3" fill="#f6dbe0" />
-    <circle cx="16" cy="13" r="2.5" fill="#241a26" />
-    <rect x="21" y="11.5" width="12" height="3" rx="1" fill="#241a26" />
-    <rect x="36" y="12" width="20" height="2" rx="1" fill="#6a4660" />
-    <rect x="114" y="12" width="18" height="2" rx="1" fill="#6a4660" />
-    <rect x="135.5" y="10.5" width="11" height="5" rx="1.5" fill="none" stroke="#6a4660" />
-    <rect x="10" y="22" width="92" height="62" rx="3" fill="#f9eee7" />
-    {[0, 1, 2].map((row) => {
-      const base = 36 + row * 20.5;
-      return <g key={row}>
-        {[0, 1, 2, 3, 4].map((i) => {
-          const [body, band] = PACKS[(i + row * 2) % PACKS.length]!;
-          const h = 9 + ((i + row) % 2) * 1.5;
-          const x = 15 + i * 17.5;
-          return <g key={i}>
-            <rect x={x} y={base - h} width="8" height={h} rx="1.5" fill={body} />
-            <rect x={x} y={base - h * 0.45} width="8" height="2" fill={band} />
-          </g>;
-        })}
-        <rect x="10" y={base + 1} width="92" height="5" fill="#3b2441" opacity=".9" />
-        {[0, 1, 2, 3, 4].map((i) => <rect key={i} x={12 + i * 17.5} y={base + 1.75} width="15" height="3.5" rx="1" fill={row === 0 && i === 3 ? "#cf4a6c" : "#fbf3ea"} />)}
-      </g>;
-    })}
-    <rect x="106" y="22" width="44" height="26" rx="3" fill="#170f18" />
-    <rect x="110" y="26" width="8" height="3" rx="1" fill="#f8d5dc" />
-    {[0, 1, 2].map((i) => <rect key={i} x={110 + i * 12} y="32" width="9" height="3" rx="1" fill={i === 2 ? "#f1d98f" : "#f8d5dc"} />)}
-    <path d="M112 45L120 42L128 41L136 38L144 36" fill="none" stroke="#e27a9a" />
-    <circle cx="128" cy="41" r="1.5" fill="#f1d98f" />
-    {[0, 1, 2, 3, 4].map((i) => <rect key={i} x={106 + i * 9.1} y="52" width="7.6" height="4" rx="1" fill={["#f2b6c8", "#f2b6c8", "#cf4a6c", "#5b3f60", "#5b3f60"][i]} />)}
-    {[0, 1].map((row) => [0, 1, 2, 3, 4].map((i) => <rect key={`${row}-${i}`} x={106 + i * 9.1} y={60 + row * 7} width="7.6" height="5.5" rx="1.2" fill={(row === 0 && i === 0) || (row === 1 && i === 3) ? "#f1d98f" : "#fbf3ea"} />))}
-    <rect x="106" y="76" width="44" height="9" rx="3" fill="#6a4470" />
-    <rect x="117" y="79.5" width="22" height="2" rx="1" fill="#fbf3ea" />
-    <rect x="10" y="88" width="56" height="5" rx="2" fill="#2a1730" />
-    <rect x="31" y="89" width="9" height="3" rx="1" fill="#f3e3d3" />
-    <rect x="72" y="89" width="22" height="2.5" rx="1" fill="#fbf3ea" opacity=".85" />
-  </>;
-}
-
 const STYLES: ReadonlyArray<{ id: ModelPickerView; Icon: LucideIcon; Preview: () => ReactNode }> = [
   { id: "dial", Icon: Gauge, Preview: DialPreview },
   { id: "list", Icon: List, Preview: ListPreview },
   { id: "chart", Icon: ChartSpline, Preview: ChartPreview },
-  { id: "machine", Icon: CupSoda, Preview: MachinePreview },
 ];
 
 function Mini({ look, skin, Preview }: { look: PickerLook; skin: SkinId; Preview: () => ReactNode }) {
@@ -234,16 +189,15 @@ export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle
   const { t } = useI18n();
   const root = useRef<HTMLDivElement>(null);
   const look = shownPickerLook(picked, skin);
-  // The Machine keeps its own colors, so looks preview on the Dial there.
-  const Preview = shown === "machine" ? DialPreview : STYLES.find((style) => style.id === shown)?.Preview ?? DialPreview;
+  const Preview = STYLES.find((style) => style.id === shown)?.Preview ?? DialPreview;
 
-  // Follows its button: in the header, or on the Machine's sign once that view shows.
+  // Follows its header button.
   useLayoutEffect(() => {
     let frame = 0;
     const place = () => {
       const strip = root.current;
       const dialog = strip?.closest(".model-cross-dialog");
-      const button = dialog?.querySelector(".model-machine [data-picker-style-button]") ?? dialog?.querySelector(".model-cross-header [data-picker-style-button]");
+      const button = dialog?.querySelector(".model-cross-header [data-picker-style-button]");
       const rect = button?.getBoundingClientRect();
       if (strip && rect) {
         strip.style.setProperty("--pss-top", `${Math.round(rect.bottom + 8)}px`);

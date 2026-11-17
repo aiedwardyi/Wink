@@ -14,6 +14,8 @@ main[data-scene] .\@container\/chathead button.text-ink {
 main[data-scene] .thinking-sheen { text-shadow: none; }
 /* The model chip is see-through; over a scene it needs a solid face. */
 main[data-scene] .\@container\/chathead button:has([data-model-label]) { background-color: var(--color-raised); }
+/* The phone menu button floats beside main, so it finds the scene by what follows it. */
+[data-phone-menu]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) { background-color: var(--color-raised); }
 /* The composer's bottom bg-app slab would cut a band out of the scene. */
 main[data-scene] [data-orbit-composer-host] > .bg-app[aria-hidden="true"] { background: transparent; }
 

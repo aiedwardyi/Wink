@@ -274,7 +274,7 @@ it("shares one pane with the checker, and Bot Details still takes the spot", asy
   await act(async () => root.render(createElement(Slot)));
   expect(seen.at(-1)).toEqual([false, false]);
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('...(watch || show || media || mapping ? ["show" as const] : [])');
+  expect(app).toContain('...(watch || show || media || mapping || crewThread ? ["show" as const] : [])');
 });
 
 const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
@@ -373,7 +373,7 @@ it("speaks Korean on the Check tab", async () => {
 it("hides only Show and Check behind the other tabs, never the Media list", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
   const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
-  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane)');
+  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers)');
 });
 
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {

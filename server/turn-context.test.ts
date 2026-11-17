@@ -425,9 +425,9 @@ describe("asks in the task record", () => {
       { id: "A3", ask: "Fix the login redirect", status: "building" as const, at: now - 1_000, changedAt: now - 1_000 },
     ],
   };
-  const lines = "- A3 building 11-12: Fix the login redirect\n- A1 waiting-for-user 11-12: Review the model picker PR (PR #1348)\n1 stale (A1): no change in 6+ hours, so raise it with the user now, then update it.";
-  const stale = `[Wink asks list - 2 open.]\n${lines}`;
-  const listed = `[Wink asks list - 2 open. Build any summary or status from this list.]\n${lines}`;
+  const lines = "- A1 waiting-for-user stale 11-12: Review the model picker PR (PR #1348)\n- A3 building 11-12: Fix the login redirect";
+  const stale = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it.]\n${lines}`;
+  const listed = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it. Build any summary or status from this list.]\n${lines}`;
   const plain = { text: "thanks", transcript, rewound: false, fresh: false, replaysNatively: false };
 
   it.each([

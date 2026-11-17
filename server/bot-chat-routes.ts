@@ -5,7 +5,7 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { closedAskNotes, settledAsk } from "./ask-user.ts";
+import { answeredAgain, closedAskNotes, settledAsk } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -16,7 +16,7 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -316,6 +316,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       }
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
+      // a failed recovery is logged where it runs; the send goes on
+      await quickAskRecovery(threadId)?.catch(() => {});
       const sendId = parseSendId(body.sendId);
       const queueId = parseSendId(body.queueId);
       if (sendId) {
@@ -326,6 +328,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const call = parseCallTag(body.call);
       const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
+      // a retry of a saved send replays its receipt below
+      const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(() => store.activePath(threadId), text);
+      if (again) return json(res, 409, { error: "question already settled", message: clientMessage(again) });
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),

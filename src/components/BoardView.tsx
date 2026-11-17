@@ -1,6 +1,6 @@
 // The Forum: the Board's posts as a Reddit-style list (Hot / New / Top, flair chips); a post opens its threaded replies.
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { ArrowBigUp, ChevronLeft, CircleCheck, Flame, MessageCircle, MessagesSquare, Sparkles, TrendingUp } from "lucide-react";
+import { ArrowBigUp, CircleCheck, Flame, MessageCircle, MessagesSquare, Sparkles, TrendingUp } from "lucide-react";
 
 import { agoText } from "@/lib/ago";
 import {
@@ -14,12 +14,15 @@ import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { usePresence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
 import { shownProfile } from "@/state/store-transforms";
 import type { Bot } from "@/state/store-types";
 
 import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
+import { BackButton } from "./BackButton";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { ProviderMark } from "./ProviderIcons";
 import { MessageBoundary } from "./TurnPresence";
 
 const TONE = {
@@ -34,6 +37,11 @@ const SORT = {
   new: { key: "board.new", Icon: Sparkles },
   top: { key: "board.top", Icon: TrendingUp },
 } satisfies Record<BoardSort, { key: MessageKey; Icon: typeof Flame }>;
+
+const EMPTY_MARKS = ["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"];
+const EMPTY_MARK_SIZE = 30;
+const EMPTY_RING_RADIUS = 56;
+const EMPTY_RING_BOX = 2 * EMPTY_RING_RADIUS + EMPTY_MARK_SIZE;
 
 /** Name, face and model come from the post; a bot on this PC lends its face, which may be an uploaded picture. */
 function useAuthor(post: BoardPost) {
@@ -83,7 +91,7 @@ function PostRow({ post, replies, onOpen }: { post: BoardPost; replies: number; 
   const { t } = useI18n();
   return (
     <div role="listitem" data-board-post={post.id}>
-      <button type="button" onClick={onOpen} className="flex w-full gap-2 rounded-2xl bg-card py-2.5 pr-4 pl-1.5 text-left hover:brightness-[1.04]">
+      <button type="button" onClick={onOpen} className="flex w-full gap-2 rounded-2xl bg-card py-2.5 pr-4 pl-1.5 text-left hover:bg-control">
         <span className="flex w-10 shrink-0 flex-col items-center pt-px text-ink-secondary">
           <ArrowBigUp size={18} aria-hidden />
           <b data-board-helped className="text-[14px] leading-tight font-bold text-ink">{post.helped_bot_ids.length}</b>
@@ -141,7 +149,7 @@ function ReplyBox({ parentId, onDone, autoFocus = false, round = true }: { paren
           className="min-w-0 flex-1 bg-transparent py-1 text-[14px] text-ink outline-none placeholder:text-ink-secondary max-md:text-[16px]"
         />
         {text.trim() && (
-          <button type="submit" disabled={busy} className="h-7 shrink-0 rounded-full bg-accent px-3 text-[13px] font-semibold text-accent-ink disabled:opacity-60">
+          <button type="submit" disabled={busy} className="h-7 shrink-0 rounded-full bg-accent px-3 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:opacity-60">
             {t("board.send")}
           </button>
         )}
@@ -238,6 +246,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const close = () => setOpenId(null);
   useBackLayer(Boolean(open), close);
   const isOpen = Boolean(open);
+  const page = usePresence(open);
   useEffect(() => {
     if (!isOpen || hidden) return;
     const onKey = (event: KeyboardEvent) => {
@@ -253,66 +262,87 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   return (
     <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center gap-1 px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
-        {open && (
-          <button
-            type="button"
-            onClick={close}
-            aria-label={t("board.back")}
-            title={t("board.back")}
-            className="flex size-8 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink md:-ml-2"
-          >
-            <ChevronLeft size={18} />
-          </button>
+        {open ? <BackButton label={t("chrome.forum")} ariaLabel={t("board.back")} onClick={close} /> : (
+          <div className="flex min-w-0 flex-col">
+            <h1 className="min-w-0 truncate text-[15px] font-semibold text-ink">{t("chrome.forum")}</h1>
+            <p data-board-subtitle className="truncate text-[12px] leading-[1.4] text-ink-secondary">{t("board.subtitle")}</p>
+          </div>
         )}
-        <div className="flex min-w-0 flex-col">
-          <h1 className="min-w-0 truncate text-[15px] font-semibold text-ink">{t("chrome.forum")}</h1>
-          {!open && <p data-board-subtitle className="truncate text-[12px] leading-[1.4] text-ink-secondary">{t("board.subtitle")}</p>}
-        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-        <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}>
-          {failed && <div role="alert" className="pb-3 text-[13px] text-danger">{t("errors.request")}</div>}
-          {posts && !threads.length && (
-            <div data-board-empty className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-              <MessagesSquare size={40} className="text-ink-secondary" aria-hidden />
-              <div className="max-w-[360px] text-[14px] text-ink-secondary">{t("board.empty")}</div>
-            </div>
-          )}
-          {open ? <Thread post={open.post} replies={open.replies} /> : threads.length > 0 && (
-            <>
-              <div className="flex flex-col gap-2 pb-3">
-                <div role="tablist" aria-label={t("board.sort")} className="flex gap-1">
-                  {BOARD_SORTS.map((id) => {
-                    const { key, Icon } = SORT[id];
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full overflow-x-hidden overflow-y-auto">
+          <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}>
+            {failed && <div role="alert" className="pb-3 text-[13px] text-danger">{t("errors.request")}</div>}
+            {!posts && !failed && (
+              <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
+            )}
+            {posts && !threads.length && (
+              <div data-board-empty className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+                <div aria-hidden className="relative opacity-40" style={{ width: EMPTY_RING_BOX, height: EMPTY_RING_BOX }}>
+                  {EMPTY_MARKS.map((kind, i) => {
+                    const angle = (i / EMPTY_MARKS.length) * 2 * Math.PI - Math.PI / 2;
+                    const offset = EMPTY_RING_BOX / 2 - EMPTY_MARK_SIZE / 2;
                     return (
-                      <button
-                        key={id}
-                        type="button"
-                        role="tab"
-                        aria-selected={sort === id}
-                        data-board-sort={id}
-                        onClick={() => setSort(id)}
-                        className={cn("flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold", sort === id ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink")}
+                      <span
+                        key={kind}
+                        data-board-mark={kind}
+                        className="absolute"
+                        style={{ left: offset + EMPTY_RING_RADIUS * Math.cos(angle), top: offset + EMPTY_RING_RADIUS * Math.sin(angle) }}
                       >
-                        <Icon size={15} aria-hidden />{t(key)}
-                      </button>
+                        <ProviderMark driverKind={kind} size={EMPTY_MARK_SIZE} />
+                      </span>
                     );
                   })}
                 </div>
-                <div className="flex gap-1.5 overflow-x-auto">
-                  <Chip on={!flair} onClick={() => setFlair(null)} className={flair ? "text-ink-secondary hover:text-ink" : "bg-raised text-ink"}>{t("board.all")}</Chip>
-                  {BOARD_FLAIRS.map((kind) => (
-                    <Chip key={kind} on={flair === kind} onClick={() => setFlair(flair === kind ? null : kind)} className={cn(TONE[kind], flair === kind && "ring-1 ring-current ring-inset")}>{t(FLAIR_KEY[kind])}</Chip>
-                  ))}
+                <div className="max-w-[360px] text-[14px] text-ink-secondary">{t("board.empty")}</div>
+              </div>
+            )}
+            {!open && threads.length > 0 && (
+              <>
+                <div className="flex flex-col gap-2 pb-3">
+                  <div role="tablist" aria-label={t("board.sort")} className="flex gap-1">
+                    {BOARD_SORTS.map((id) => {
+                      const { key, Icon } = SORT[id];
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          role="tab"
+                          aria-selected={sort === id}
+                          data-board-sort={id}
+                          onClick={() => setSort(id)}
+                          className={cn("flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold", sort === id ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink")}
+                        >
+                          <Icon size={15} aria-hidden />{t(key)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex gap-1.5 overflow-x-auto">
+                    <Chip on={!flair} onClick={() => setFlair(null)} className={flair ? "text-ink-secondary hover:text-ink" : "bg-raised text-ink"}>{t("board.all")}</Chip>
+                    {BOARD_FLAIRS.map((kind) => (
+                      <Chip key={kind} on={flair === kind} onClick={() => setFlair(flair === kind ? null : kind)} className={cn(TONE[kind], flair === kind && "ring-1 ring-current ring-inset")}>{t(FLAIR_KEY[kind])}</Chip>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div role="list" aria-label={t("board.list")} className="flex flex-col gap-2">
-                {shown.map(({ post, replies }) => <PostRow key={post.id} post={post} replies={replies.length} onOpen={() => setOpenId(post.id)} />)}
-                {!shown.length && <div className="py-6 text-center text-[13px] text-ink-secondary">{t("board.noneHere")}</div>}
-              </div>
-            </>
-          )}
+                <div role="list" aria-label={t("board.list")} className="flex flex-col gap-2">
+                  {shown.map(({ post, replies }) => <PostRow key={post.id} post={post} replies={replies.length} onOpen={() => setOpenId(post.id)} />)}
+                  {!shown.length && <div className="py-6 text-center text-[13px] text-ink-secondary">{t("board.noneHere")}</div>}
+                </div>
+              </>
+            )}
+          </div>
         </div>
+        {page.mounted && page.value && (
+          <div
+            data-side-panel=""
+            data-closing={page.closing || undefined}
+            inert={page.closing}
+            className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app"
+          >
+            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} /></div>
+          </div>
+        )}
       </div>
     </main>
   );

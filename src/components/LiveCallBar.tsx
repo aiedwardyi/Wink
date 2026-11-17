@@ -170,7 +170,7 @@ export function LiveCallHost() {
 }
 
 function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
-  const { state, dispatch } = useStore();
+  const { state } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
@@ -185,7 +185,6 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       post,
       opener: active.opener,
       prefs: bot.call,
-      onKeyCard: (messageId) => dispatch({ type: "focusMessage", threadId: bot.threadId, messageId }),
       room: active.room && { id: active.room.id, kind: active.room.kind },
     });
     return { call, level: (mic) => audio.level(mic) };

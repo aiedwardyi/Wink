@@ -23,7 +23,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 
 import { ATTACHMENTS_DIR, sniffImageMime } from "../attachments.ts";
-import { BACKGROUND_DENY_NOTE } from "../auto-approve.ts";
+import { BACKGROUND_DENY_NOTE, guardInput } from "../auto-approve.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
 import { brokerSocketPath, cliVersion, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
@@ -1387,8 +1387,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             return (desktop ? backgroundAutoAttended(s) : backgroundAuto(s)) ? "auto" : "denied";
           },
           onAsk: (ask) => {
-            const eventTurnId = sessions.get(threadId)?.turn?.turnId ?? turnId;
+            const s = sessions.get(threadId);
+            const eventTurnId = s?.turn?.turnId ?? turnId;
+            // a helper keeps the origin of the turn that started it
+            const unattended = s ? (ask.background ? !backgroundAutoAttended(s) : s.auto && !s.autoAttended) : false;
             askTools.set(ask.id, typeof ask.tool === "string" ? ask.tool : undefined);
+            const approvalScope = askScope(ask.tool);
             emit({
               ...base(threadId, eventTurnId),
               type: "request.opened",
@@ -1397,9 +1401,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               tool: ask.tool,
               summary: askSummary(ask),
               inputDigest: inputDigest(ask.input ?? askArgs(ask)),
-              approvalScope: askScope(ask.tool),
+              approvalScope,
+              ...(approvalScope ? guardInput(ask.input) : {}),
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
               ...(ask.background ? { background: true } : {}),
+              ...(unattended ? { unattended: true } : {}),
             });
           },
           onResolve: (resolved) => {

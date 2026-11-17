@@ -62,8 +62,6 @@ const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation"
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
 export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
-const MAX_CREATED_PER_TURN = 4;
-let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
 const verifyCalls = new Map<unknown, AbortController>();
 
@@ -344,7 +342,6 @@ const TOOLS = [
               ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
               status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
               ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
-              due: { type: "string", maxLength: 40, pattern: "^$|\\S", description: "When you promise a time, set due: RFC3339 with offset, like 2026-11-17T07:30:00+09:00. Wink wakes you once then if the ask is still open. Empty string clears it." },
             },
             required: ["status"],
           },
@@ -407,7 +404,7 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
+      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team. If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
     inputSchema: {
       type: "object",
       properties: {
@@ -423,7 +420,7 @@ const TOOLS = [
   {
     name: "create_channel",
     description:
-      "Create a shared channel (room) with existing bots. Use this when the user asks to start a two-bot channel, a group chat, or a room. Never scan ports, environment variables, or localhost APIs — call this tool. Include the other bot(s) in member_ids; you are added automatically if omitted. After create_bot, call this so the user talks in the room rather than only in the new bot's 1:1. ask_bot remains the way to talk to a peer this turn.",
+      "Create a shared channel (room) with existing bots. Use this when the user asks to start a two-bot channel, a group chat, or a room. Never scan ports, environment variables, or localhost APIs — call this tool. Include the other bot(s) in member_ids; you are added automatically if omitted. After create_bot, call this so the user talks in the room rather than only in the new bot's 1:1. ask_bot remains the way to talk to a peer this turn. Every member answers a plain message unless you set answers.",
     inputSchema: {
       type: "object",
       properties: {
@@ -434,6 +431,10 @@ const TOOLS = [
           description: "Bot ids to include (from list_bots or create_bot). You are added automatically if omitted.",
         },
         bulletin: { type: "string", description: "Optional shared instructions for everyone in the room." },
+        answers: {
+          type: "string",
+          description: 'Who answers a message that @mentions no one: "everyone" (default), "mentions" (only who is @mentioned), or one member bot id.',
+        },
       },
       required: ["name", "member_ids"],
     },
@@ -695,7 +696,6 @@ interface TaskStateAsk {
   ask?: string;
   status: string;
   ref?: string;
-  due?: string;
 }
 
 interface TaskStateToolArgs {
@@ -914,9 +914,6 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!botName || !role || !instructions) {
       return { text: "create_bot needs name, role, and instructions.", isError: true };
     }
-    if (createdThisTurn >= MAX_CREATED_PER_TURN) {
-      return { text: `You can create at most ${MAX_CREATED_PER_TURN} bots in one turn. Use the team you have before adding more.`, isError: true };
-    }
     const r = await api(`/api/internal/create-bot`, {
       method: "POST",
       body: JSON.stringify({
@@ -929,7 +926,6 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         effort: typeof args.effort === "string" && args.effort.trim() ? args.effort.trim() : undefined,
       }),
     });
-    createdThisTurn += 1;
     return {
       text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}]. If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids. Assign work with ask_bot if you must report back this turn, otherwise delegate_bot.`,
     };
@@ -961,6 +957,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       memberIds,
     };
     if (typeof args.bulletin === "string") body.bulletin = args.bulletin;
+    if (args.answers !== undefined) body.answers = args.answers;
     const r = await api("/api/internal/create-channel", { method: "POST", body: JSON.stringify(body) });
     const members = Array.isArray(r.memberIds) ? (r.memberIds as string[]).join(", ") : memberIds.join(", ");
     return {
