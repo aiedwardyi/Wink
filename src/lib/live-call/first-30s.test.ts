@@ -6,7 +6,6 @@ import type { CallLine, LiveVoice } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
-import { asksForQuiet, callsVoice } from "./guard";
 
 type Utterance = { voice: LiveVoice | undefined; text: string };
 
@@ -497,111 +496,6 @@ describe("4 greeting first", () => {
     turn(engine(), "Hi, how's it going?", "Good! Busy with the picker.");
     await wait(1_500);
     expect(readouts(engine())).toHaveLength(1);
-  });
-});
-
-describe("5 the name it is shown by", () => {
-  it("F7 the name he knows the voice by wakes it: \"Jennifer, you can talk now\"", async () => {
-    const { call, engine } = await started({ voice: "Aoede" });
-    engine().events.turnDone();
-    turn(engine(), "Be quiet, please.", "Okay.");
-    expect(call.state().hushed).toBe(true);
-    engine().events.heard("Jennifer, you can talk now.");
-    engine().events.answering();
-    expect(call.state().hushed).toBeUndefined();
-  });
-
-  it("A06 \"Jenn, are you there?\" wakes a hushed Chief of Staff", async () => {
-    const { call, engine } = await started({ voice: "Aoede" });
-    engine().events.turnDone();
-    turn(engine(), "Be quiet, please.", "Okay.");
-    engine().events.heard("Jenn, are you there?");
-    engine().events.answering();
-    expect(call.state().hushed).toBeUndefined();
-  });
-
-  it("each picker voice answers to its own shown name only", async () => {
-    const { call, engine } = await started({ voice: "Alnilam" });
-    engine().events.turnDone();
-    turn(engine(), "Eddie, be quiet.", "Okay.");
-    expect(call.state().hushed).toBe(true);
-    turn(engine(), "Jenn, are you there?", "Okay.");
-    expect(call.state().hushed).toBe(true);
-    engine().events.heard("Eddie?");
-    engine().events.answering();
-    expect(call.state().hushed).toBeUndefined();
-    expect(callsVoice("Hi Jennifer", "Chief of Staff")).toBe(false);
-    expect(callsVoice("Hi Jennifer", "Chief of Staff", ["Jenn"])).toBe(true);
-  });
-
-  it("the Korean picker label hushes and wakes it too", async () => {
-    const { call, engine } = await started({ voice: "Erinome" });
-    engine().events.turnDone();
-    turn(engine(), "아델, 조용해.", "네.");
-    expect(call.state().hushed).toBe(true);
-    engine().events.heard("아델, 이제 말해도 돼.");
-    engine().events.answering();
-    expect(call.state().hushed).toBeUndefined();
-  });
-});
-
-describe("6 hush and wake", () => {
-  it("\"Be quiet, please.\" hushes, and nothing held is told until a wake", async () => {
-    const { call, audio, engine } = await started();
-    engine().events.turnDone();
-    const told = engine().texts.length;
-    engine().events.heard("Be quiet, please.");
-    engine().events.answering();
-    engine().events.audio(new Int16Array([500, -500]));
-    engine().events.said("Okay.");
-    engine().events.turnDone();
-    expect(call.state().hushed).toBe(true);
-    call.observe({ busy: false, messages: [...HISTORY, userRow("u", "Check CI."), botRow("r", "CI is green."), shipCard("q1")], needs: { id: "n1", short: "approve a command" } });
-    await flush();
-    turn(engine(), "So anyway, what do you want for lunch?", "Want me to look up lunch places?");
-    expect({ played: audio.played, told: engine().texts.length - told }).toEqual({ played: 0, told: 0 });
-  });
-
-  it("F11 plain ways to ask for quiet hush the call", () => {
-    const lines = ["Quiet.", "Quiet, please.", "Be quiet for a second.", "Can you be quiet for a minute?", "Stop talking for a second.", "Silence.", "Enough.", "That's enough.", "No more updates.", "조용.", "그만 말해.", "그만 말해도 돼.", "시끄러워."];
-    expect(lines.filter((line) => !asksForQuiet(line, "Chief of Staff"))).toEqual([]);
-    const talk = ["Stop talking about the tests.", "If I say be quiet, can you do that?", "That's enough money for now?", "Is it quiet in there?", "영어로 말하지 마."];
-    expect(talk.filter((line) => asksForQuiet(line, "Chief of Staff"))).toEqual([]);
-    expect(asksForQuiet("Jenn, be quiet.", "Chief of Staff", ["Jenn"])).toBe(true);
-  });
-
-  it("A05 a whole quiet line latches before the model has started answering", async () => {
-    vi.useFakeTimers();
-    const { call, engine } = await started();
-    engine().events.turnDone();
-    engine().events.heard("Be quiet, please.");
-    await wait(1_300);
-    expect(call.state().hushed).toBe(true);
-  });
-
-  it("F12 waking after a hush reads only the newest update and says a few things came in", async () => {
-    vi.useFakeTimers();
-    const { call, engine } = await started();
-    engine().events.turnDone();
-    turn(engine(), "Be quiet, please.", "Okay.");
-    const rows = [...HISTORY];
-    for (const n of [1, 2, 3, 4]) {
-      rows.push(userRow(`u${n}`, `Check job ${n}.`), botRow(`r${n}`, `Job ${n} is done.`));
-      call.observe({ busy: false, messages: [...rows] });
-      await flush();
-    }
-    engine().events.heard("Hey, Chief of Staff, you there?");
-    engine().events.answering();
-    engine().events.said("Hey.");
-    engine().events.turnDone();
-    for (let i = 0; i < 4; i += 1) {
-      await wait(1_500);
-      engine().events.turnDone();
-    }
-    expect(replies(engine())).toHaveLength(1);
-    expect(replies(engine())[0]).toMatch(/a few things came in/i);
-    expect(replies(engine())[0]).toContain("Job 4 is done.");
-    expect(engine().contexts.filter((text) => /Job [123] is done/.test(text))).toHaveLength(3);
   });
 });
 

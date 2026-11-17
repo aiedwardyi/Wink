@@ -178,12 +178,13 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" }), expect.objectContaining({ name: "hush" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
       sessionResumption: {},
     });
+    expect(body.bidiGenerateContentSetup.tools[0].functionDeclarations.map((tool: { name: string }) => tool.name)).toEqual(["propose_work", "ask"]);
     const brief = body.bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("You are Juno");
     expect(brief).toContain("fix the login page");
@@ -221,13 +222,13 @@ describe("call token", () => {
     expect(brief).not.toMatch(/Greet/);
   });
 
-  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele or 아델"]] as const)("brief knows its shown name, the voice-change line and how quiet works (%s)", async (voice, shown) => {
+  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele or 아델"]] as const)("brief knows its shown name, the voice-change line (%s)", async (voice, shown) => {
     const h = harness({ liveCall: { voice } });
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
     expect(brief).toContain("Told your voice changed or sounds different: they picked it in the call settings, and you're still the same assistant.");
-    expect(brief).toContain("Told to be quiet or that they're talking to someone else, in any words: call hush and say nothing. Updates wait in the chat; your name wakes you.");
+    expect(brief).not.toMatch(/hush/i);
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
