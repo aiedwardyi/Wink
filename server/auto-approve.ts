@@ -283,6 +283,7 @@ export function autoVerdict(
     return { approve: null, source: "away-desktop-deny" };
   }
   if (context?.unattended && bot.autoApprove) {
+    // no folder (an API engine, a cloud run): only the destructive rule applies
     const rule = destructive ?? (context.workspace ? pathOutside(tool, summary, context.workspace) : null);
     if (rule) return { approve: null, source: "unattended-deny", rule };
   }

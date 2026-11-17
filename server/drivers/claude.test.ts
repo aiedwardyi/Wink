@@ -2956,7 +2956,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await create("background-task");
     const harness = instance.adapter.onEvent((e) => {
       if (e.type !== "request.opened" || !e.requestId) return;
-      const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended });
+      const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended, workspace: scratch });
       void instance.adapter.respondToRequest(e.threadId, e.requestId, { behavior: verdict.approve ? "allow" : "deny" });
     });
     try {
@@ -2969,6 +2969,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         expect.objectContaining({ type: "request.opened", requestId: "ask-away-rm", background: true, unattended: true }),
       );
       conn.end();
+
+      const outside = await askBetween("t-helper-away-rm", { id: "ask-away-del", tool: "Bash", input: { command: "rm ~/.bashrc" } });
+      await expect(outside.answer).resolves.toMatchObject({ id: "ask-away-del", behavior: "deny" });
+      outside.conn.end();
+      const inside = await askBetween("t-helper-away-rm", { id: "ask-away-keep", tool: "Bash", input: { command: "rm build/out.js" } });
+      await expect(inside.answer).resolves.toMatchObject({ id: "ask-away-keep", behavior: "allow" });
+      inside.conn.end();
     } finally {
       harness();
     }
