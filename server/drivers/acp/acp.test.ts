@@ -1857,6 +1857,20 @@ describe("ACP turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(`${dump}.permission.json`, "utf8"))).toEqual(["allow_once"]);
   });
 
+  it("launches grok in plan mode and rejects every ask on a read-only turn, even on a full-auto instance", async () => {
+    const dump = join(scratch, "perm-read-only.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    process.env.FAKE_ACP_PERMISSION_KINDS = "allow_always,allow_once,reject_always,reject_once";
+    await create(GrokAgentDriver, "permission", true);
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "go", approval: "auto", readOnly: true });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.map((e) => e.type)).not.toContain("request.opened");
+    expect(JSON.parse(readFileSync(`${dump}.permission.json`, "utf8"))).toEqual(["reject_once"]);
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv.slice(0, 2)).toEqual(["--permission-mode", "plan"]);
+    expect(argv).not.toContain("bypassPermissions");
+  });
+
   /** An agent offering only a persistent grant gets no answer at all: selecting
    *  allow_always would hand it a grant this app never recorded and cannot
    *  revoke, so the ask cancels loudly instead. */

@@ -57,7 +57,9 @@ export function accountLaunch(
     }
     env.CLAUDE_CONFIG_DIR = account.home;
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
-    return { env, args: args[0] === "auth" || args[0] === "--version" ? args : [...args, "--setting-sources", userSetup ? "user,project,local" : "project,local"] };
+    // the CLI takes the last --setting-sources, so a turn that asked for none must stay last
+    const none = args.some((arg, i) => arg === "--setting-sources" && args[i + 1] === "");
+    return { env, args: args[0] === "auth" || args[0] === "--version" || none ? args : [...args, "--setting-sources", userSetup ? "user,project,local" : "project,local"] };
   }
   env.CODEX_HOME = account.home;
   env.CODEX_SQLITE_HOME = join(account.home, "state");

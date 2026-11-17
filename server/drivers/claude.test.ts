@@ -3805,12 +3805,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       recorder = recordEvents(instance.adapter);
       return { browser, home };
     };
-    const accountArgv = async (threadId: string, leanStartup?: true) => {
+    const accountArgv = async (threadId: string, leanStartup?: true, readOnly?: true) => {
       const dump = join(scratch, `${threadId}.json`);
       process.env.FAKE_CLAUDE_DUMP = dump;
       try {
         const turn: Parameters<typeof instance.adapter.sendTurn>[0] = { threadId, text: "hi" };
         if (leanStartup) turn.leanStartup = leanStartup;
+        if (readOnly) turn.readOnly = readOnly;
         await instance.adapter.sendTurn(turn);
         await recorder.until((e) => e.type === "turn.completed");
       } finally {
@@ -3835,6 +3836,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const { seen, pluginDirs } = await accountArgv("t-account-no-chrome");
       expect(pluginDirs).toEqual([browser]);
       expect(seen.argv).not.toContain("--chrome");
+    });
+
+    it("loads no user plugins, Chrome or inherited MCP servers on a read-only turn", async () => {
+      await accountCreate();
+      const { seen, pluginDirs } = await accountArgv("t-account-read-only", undefined, true);
+      expect(pluginDirs).toEqual([]);
+      expect(seen.argv).not.toContain("--chrome");
+      expect(seen.argv).toEqual(expect.arrayContaining(["--strict-mcp-config", "--no-chrome"]));
+      expect(seen.argv[seen.argv.indexOf("--permission-mode") + 1]).toBe("default");
     });
 
     it("loads no user plugins when Load Skills & Plugins is off", async () => {

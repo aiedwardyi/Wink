@@ -240,7 +240,15 @@ describe("live call in the message box", () => {
       await connect(host);
       const box = frame(host).querySelector<HTMLElement>("[data-call-box]")!;
       expect(box.className).toContain("row-start-3");
-      for (const label of ["Captions", "Mute", "End"]) expect(button(box, label)).not.toBeNull();
+      const row = [...box.querySelectorAll("button")];
+      expect(row.map((b) => b.getAttribute("aria-label"))).toEqual(["Call settings", "Mute", "End"]);
+      expect(new Set(row.map((b) => b.className.match(/\bsize-\d+\b/)![0])).size).toBe(1);
+      expect(row.every((b) => b.className.includes("rounded-full"))).toBe(true);
+      expect(row.some((b) => b.className.includes("accent"))).toBe(false);
+      expect(row.filter((b) => b.className.includes("bg-danger"))).toEqual([button(box, "End")]);
+      expect(frame(host).querySelectorAll('[aria-label="End"]')).toHaveLength(1);
+      expect(button(box, "End")!.hasAttribute("title")).toBe(false);
+      expect([...frame(host).querySelectorAll("*")].some((el) => el.children.length === 0 && el.textContent === "End")).toBe(false);
       expect(host.querySelector("[data-live-call]")?.querySelector("button")).toBeNull();
       expect(button(box, "End")!.className).toContain("bg-danger");
       expect(host.textContent).toContain("Free Gemini");
@@ -254,12 +262,25 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("has no gear: a right-click on End opens the small call menu and a click still ends", async () => {
+  it("shows the call settings gear that opens the small menu, and a right-click on End still does", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      expect(button(frame(host), "Call settings")).toBeNull();
       expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.title).toBe("Call settings");
+      expect(gear.compareDocumentPosition(button(frame(host), "End")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      await act(async () => gear.click());
+      const small = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
+      expect(small.querySelector('input[aria-label="Speed"]')).not.toBeNull();
+      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
+      await act(async () => small.click());
+      expect(document.querySelector("[data-call-settings-menu]:not([data-closing])")).not.toBeNull();
+      await act(async () => {
+        gear.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        gear.click();
+      });
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(frame(host), "End")!.dispatchEvent(right));
       expect(right.defaultPrevented).toBe(true);
@@ -299,15 +320,12 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("keeps captions above typing and remembers the toggle", async () => {
+  it("shows captions by default, above typing, and the menu switch turns them off for good", async () => {
     const first = await mount();
     try {
       const engine = await connect(first.host);
+      expect(button(frame(first.host), "Captions")).toBeNull();
       await act(async () => engine.events.heard("Can you fix the login bug?"));
-      expect(first.host.querySelector("[data-call-caption]")).toBeNull();
-      const toggle = button(frame(first.host), "Captions")!;
-      expect(toggle.getAttribute("aria-pressed")).toBe("false");
-      await act(async () => toggle.click());
       const caption = frame(first.host).querySelector("[data-call-caption]");
       expect(caption?.textContent).toBe("YouCan you fix the login bug?");
       expect(frame(first.host).querySelector("[data-call-caption] ~ textarea")).not.toBeNull();
@@ -316,14 +334,23 @@ describe("live call in the message box", () => {
       await type(first.host, "also check the reset email");
       expect(frame(first.host).querySelector("[data-call-caption]")?.textContent).toBe("AtlasThe one where sign-in loops back?");
       expect(first.host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")?.value).toBe("also check the reset email");
+      await act(async () => button(frame(first.host), "Call settings")!.click());
+      const toggle = button(document.body, "Captions")!;
+      expect(toggle.getAttribute("role")).toBe("switch");
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      expect(frame(first.host).querySelector("[data-call-caption]")).toBeNull();
     } finally {
       await first.unmount();
     }
+    expect(localStorage.getItem("wink.liveCall.captions")).toBe("0");
     const second = await mount();
     try {
       await type(second.host, "");
-      await connect(second.host);
-      expect(button(frame(second.host), "Captions")!.getAttribute("aria-pressed")).toBe("true");
+      const engine = await connect(second.host);
+      await act(async () => engine.events.heard("Still off"));
+      expect(frame(second.host).querySelector("[data-call-caption]")).toBeNull();
     } finally {
       await second.unmount();
     }
@@ -416,7 +443,6 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       const engine = await connect(host);
-      await act(async () => button(frame(host), "Captions")!.click());
       await act(async () => engine.events.said("I am ready to help"));
       const text = frame(host).querySelector("[data-call-caption]")!.children[1] as HTMLElement;
       Object.defineProperty(text, "scrollHeight", { value: 144 });
