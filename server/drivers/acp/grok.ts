@@ -39,7 +39,7 @@ function grokHome(env: Record<string, string | undefined>): string {
 
 /** Probed at the same home the config is read from: on the real homedir a set
  *  GROK_HOME/HOME reads as signed in and the inline sign-in card never renders. */
-export function grokIsAuthenticated(env: Record<string, string | undefined>): boolean {
+export function grokIsAuthenticated(env: Record<string, string | undefined>): boolean | undefined {
   return storedSignIn(join(grokHome(env), "auth.json"), (text) => {
     const parsed = grokAuthSchema.safeParse(JSON.parse(text));
     return parsed.success && Object.values(parsed.data).some((entry) => Boolean(entry.key?.trim() || entry.refresh_token?.trim()));
