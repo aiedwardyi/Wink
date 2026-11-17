@@ -21,7 +21,7 @@ import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
-import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
 import { requestReview, resolveAutoReviewMode, shouldReview } from "./auto-review.ts";
 import {
   resolveAutomaticSelection,
@@ -3894,9 +3894,14 @@ bus.subscribe((event: RuntimeEvent) => {
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
+        ? autoVerdict(asker, event.tool, event.action ?? event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused })
         : null;
-      if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
+      const skipNote = verdict?.source === "away-desktop-deny"
+        ? AWAY_DESKTOP_DENY_NOTE
+        : verdict?.source === "unchecked-desktop-deny" && event.actionRefused
+          ? UNCHECKED_DESKTOP_DENY_NOTE[event.actionRefused]
+          : null;
+      if (skipNote && verdict && asker && event.requestId) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : botAccounts.instance(asker, event.threadId);
@@ -3905,7 +3910,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // answered at once: a desktop card nobody can see would stall the turn
         const deny = async () => {
           if (!instance) throw new Error("provider unavailable");
-          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: AWAY_DESKTOP_DENY_NOTE });
+          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: skipNote });
           if (outcome === "unavailable") throw new Error("the ask is no longer open");
         };
         void (async () => {
@@ -3915,7 +3920,7 @@ bus.subscribe((event: RuntimeEvent) => {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: `Skipped desktop control while you were away: ${summary.slice(0, 120)}`, ok: false },
+              tool: { name: `${verdict.source === "away-desktop-deny" ? "Skipped desktop control while you were away" : "Skipped a desktop action Auto mode couldn't check"}: ${summary.slice(0, 120)}`, ok: false },
             });
             appendDecision(DATA_DIR, {
               threadId: event.threadId,
@@ -3926,7 +3931,7 @@ bus.subscribe((event: RuntimeEvent) => {
               summary,
               decision: "auto-denied",
               source: verdict.source,
-              unattended: true,
+              unattended: unattended || undefined,
             });
           } catch {
             pushMessage({

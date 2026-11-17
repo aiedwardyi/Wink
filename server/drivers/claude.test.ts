@@ -17,9 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeMessage, fileAttachment } from "../../src/lib/composer-attachments.ts";
 import { saveImage } from "../attachments.ts";
+import ts from "typescript";
+
+import * as autoApprove from "../auto-approve.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, saveConfig, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
-import type { ProviderInstance } from "../contracts.ts";
+import type { ProviderInstance, RuntimeEvent } from "../contracts.ts";
 import { resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
@@ -3339,6 +3342,113 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     conn.end();
     await instance.adapter.interruptTurn("t-perm-abc");
     await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  describe("the desktop guard in an attended Auto turn", () => {
+    const index = ts.createSourceFile("index.ts", readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts"), "utf8"), ts.ScriptTarget.Latest, true);
+    let fold: ts.CaseClause | undefined;
+    ts.forEachChild(index, function walk(node): void {
+      if (ts.isCaseClause(node) && node.expression.getText(index) === '"request.opened"') fold = node;
+      ts.forEachChild(node, walk);
+    });
+    const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const owner = { id: "b-owner", name: "Owner Bot", autoApprove: true };
+    const localComputer = { command: "/cua-driver", args: ["mcp"], env: {}, platform: "linux" as const, scope: "local-computer" as const };
+
+    /** index.ts's request.opened fold for an owner's direct chat, up to its first break. */
+    function harness(event: RuntimeEvent) {
+      expect(fold).toBeDefined();
+      const respondToRequest = vi.fn(async () => "delivered");
+      const pushMessage = vi.fn((message: object) => ({ id: "m1", ...message }));
+      const scope = {
+        ...autoApprove,
+        event, bot: owner, speaker: undefined, group: undefined, store: {}, readOnlyTurnThreads: new Set(), readOnlyAskTurn: () => false, teammateAskTurn: () => false,
+        isUnattended: () => false, registry: new Map(), botAccounts: { instance: () => ({ adapter: { respondToRequest } }) }, pushMessage, appendDecision: vi.fn(), DATA_DIR,
+      };
+      new Function(...Object.keys(scope), js(`switch (event.type) { ${fold!.getText(index)} }`))(...Object.values(scope));
+      return { respondToRequest, pushMessage };
+    }
+
+    /** The verdict that fold reaches, before it shows a card or answers. */
+    function verdictFor(event: RuntimeEvent) {
+      let init: ts.Expression | undefined;
+      fold!.forEachChild(function walk(node): void {
+        if (ts.isVariableDeclaration(node) && node.name.getText(index) === "verdict") init ??= node.initializer;
+        ts.forEachChild(node, walk);
+      });
+      expect(init).toBeDefined();
+      const scope = { ...autoApprove, event, asker: owner, permission: true, readOnly: false, cardless: Boolean((event as { background?: boolean }).background), unattended: false };
+      return new Function(...Object.keys(scope), js(`return (${init!.getText(index)});`))(...Object.values(scope)) as autoApprove.AutoVerdict | null;
+    }
+
+    const opened = async (threadId: string, ask: Record<string, unknown>) => {
+      const { conn } = await askBetween(threadId, ask);
+      const event = await recorder.until((e) => e.type === "request.opened" && e.requestId === ask.id);
+      conn.end();
+      return event;
+    };
+
+    it("judges a desktop action by its whole input, not the cut card summary", async () => {
+      await create("hang");
+      await instance.adapter.sendTurn({ threadId: "t-host-guard", text: "go", approval: "auto", attended: true, integrations: { localComputer } });
+      await recorder.until((e) => e.type === "session.started");
+
+      const typed = await opened("t-host-guard", { id: "ask-long", tool: "mcp__computer__type_text", input: { text: `${"meeting notes ".repeat(20)}\nrm -rf ~\n` } });
+      expect(typed).toMatchObject({ approvalScope: "local-computer" });
+      if (typed.type !== "request.opened") throw new Error("missing permission request");
+      expect(typed.summary).toHaveLength(200);
+      expect(typed.summary).not.toContain("rm -rf");
+      expect(verdictFor(typed)).toMatchObject({ approve: null, source: "destructive-guard" });
+
+      const keys = await opened("t-host-guard", { id: "ask-field", tool: "mcp__computer__computer_exec", input: { command: "cat notes.txt", files: ["~/.aws/credentials"] } });
+      expect(verdictFor(keys)).toMatchObject({ approve: null, source: "sensitive-guard" });
+
+      await instance.adapter.interruptTurn("t-host-guard");
+      await recorder.until((e) => e.type === "turn.completed");
+    });
+
+    it("skips a desktop action too large or malformed to check whole, telling the bot why", async () => {
+      await create("hang");
+      await instance.adapter.sendTurn({ threadId: "t-host-big", text: "go", approval: "auto", attended: true, integrations: { localComputer } });
+      await recorder.until((e) => e.type === "session.started");
+
+      for (const [id, input, reason] of [
+        ["ask-big", { text: "a".repeat(70_000) }, "too large"],
+        ["ask-odd", "rm -rf ~", "can't be read"],
+      ] as const) {
+        const { respondToRequest, pushMessage } = harness(await opened("t-host-big", { id, tool: "mcp__computer__type_text", input }));
+        await vi.waitFor(() => expect(pushMessage).toHaveBeenCalled());
+        expect(respondToRequest.mock.calls).toEqual([["t-host-big", id, { behavior: "deny", message: expect.stringContaining(reason) }]]);
+      }
+
+      await instance.adapter.interruptTurn("t-host-big");
+      await recorder.until((e) => e.type === "turn.completed");
+    });
+
+    it("still auto-approves everyday Auto work, on the desktop and off it", async () => {
+      await create("hang");
+      await instance.adapter.sendTurn({ threadId: "t-host-ok", text: "go", approval: "auto", attended: true, integrations: { localComputer } });
+      await recorder.until((e) => e.type === "session.started");
+      for (const [id, tool, input] of [
+        ["ask-click", "mcp__computer__click", { x: 120, y: 48 }],
+        ["ask-prose", "mcp__computer__type_text", { text: "Dear team, ".repeat(40) }],
+        ["ask-shot", "mcp__computer__screenshot", {}],
+      ] as const) {
+        const { respondToRequest } = harness(await opened("t-host-ok", { id, tool, input }));
+        await vi.waitFor(() => expect(respondToRequest.mock.calls).toEqual([["t-host-ok", id, { behavior: "allow" }]]));
+      }
+      await instance.adapter.interruptTurn("t-host-ok");
+      await recorder.until((e) => e.type === "turn.completed");
+
+      await instance.adapter.sendTurn({ threadId: "t-plain-auto", text: "go", approval: "auto", attended: true });
+      await recorder.until((e) => e.type === "session.started" && e.threadId === "t-plain-auto");
+      for (const [id, command] of [["ask-test", "npm test"], ["ask-clean", "rm -rf dist"]]) {
+        const { respondToRequest } = harness(await opened("t-plain-auto", { id, tool: "Bash", input: { command } }));
+        await vi.waitFor(() => expect(respondToRequest.mock.calls).toEqual([["t-plain-auto", id, { behavior: "allow" }]]));
+      }
+      await instance.adapter.interruptTurn("t-plain-auto");
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-plain-auto");
+    });
   });
 
   it("digests every ask field, so one URL with different prompts stays distinct", async () => {
