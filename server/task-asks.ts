@@ -82,14 +82,14 @@ export function mergeTaskAsks(
       target.status = update.status;
       if (update.ref) target.ref = update.ref;
       else if (update.ref !== undefined) delete target.ref;
-      if (update.due) target.due = update.due;
+      if (typeof update.due === "number") target.due = update.due;
       else if (update.due !== undefined) delete target.due;
       target.changedAt = now;
       continue;
     }
     if (!text) return { error: "A new ask needs ask, the user's words in brief; send id to update one." };
     last += 1;
-    asks.push({ id: `A${last}`, ask: text, status: update.status, ...(update.ref ? { ref: update.ref } : {}), ...(update.due ? { due: update.due } : {}), at: now, changedAt: now });
+    asks.push({ id: `A${last}`, ask: text, status: update.status, ...(update.ref ? { ref: update.ref } : {}), ...(typeof update.due === "number" ? { due: update.due } : {}), at: now, changedAt: now });
     added.push(`A${last}`);
   }
   trimClosed(asks);
@@ -149,13 +149,14 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, all
   const over = all ? ordered.findIndex((ask) => (used += Buffer.byteLength(line(ask), "utf8") + 1) > MAX_STATUS_ASKS_BYTES) : -1;
   const shown = !all ? ordered.slice(0, BRIEF_ASKS) : over < 0 ? ordered : ordered.slice(0, over);
   const them = stale.length === 1 ? "it" : "them";
+  const staleIds = `${stale.slice(0, BRIEF_ASKS).map((ask) => ask.id).join(", ")}${stale.length > BRIEF_ASKS ? `, +${stale.length - BRIEF_ASKS}` : ""}`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
     `[Wink asks list - ${open.length} open.${all ? " Build any summary or status from this list." : ""}${questions}]`,
     ...(late.length ? [`[Due time passed, not started: ${late.length}. Start now or set a new due time.]`] : []),
     ...shown.map(line),
     ...(ordered.length > shown.length ? [`+${ordered.length - shown.length} more open`] : []),
-    ...(stale.length ? [`${stale.length} stale (${stale.map((ask) => ask.id).join(", ")}): no change in 6+ hours, so raise ${them} with the user now, then update ${them}.`] : []),
+    ...(stale.length ? [`${stale.length} stale (${staleIds}): no change in 6+ hours, so raise ${them} with the user now, then update ${them}.`] : []),
   ].join("\n");
 }
 

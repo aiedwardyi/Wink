@@ -209,6 +209,28 @@ describe("self-wake", () => {
     ]);
   });
 
+  it("cancels the wake of an ask that fell off, sets one again when a closed ask reopens before its time, and says when the time already passed", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const open: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], open, START);
+    syncAskWakes(h.manager, chat, open, [], START);
+    expect(h.manager.listRoutines()).toEqual([]);
+    const reopen: TaskAsk[] = [{ id: "A2", ask: "ship it", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], reopen, START);
+    const closed = [{ ...reopen[0]!, status: "done" as const }];
+    syncAskWakes(h.manager, chat, reopen, closed, START);
+    expect(h.manager.listRoutines()).toEqual([]);
+    syncAskWakes(h.manager, chat, closed, [{ ...closed[0]!, status: "open" }], START);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired.map((fire) => fire.line)).toEqual([expect.stringContaining("Ask A2 is due")]);
+    expect(syncAskWakes(h.manager, chat, [], [{ id: "A3", ask: "late one", status: "open", due: START - 60_000, at: START, changedAt: START }], START)).toEqual([
+      "No wake for A3: its due time already passed.",
+    ]);
+  });
+
   it("never lets a wake ride a calendar routine id", () => {
     const h = harness();
     const routine = h.manager.create({ name: "Brief", prompt: "x", botId: "bot-1", schedule: { type: "once", at: START + 60 * 60_000 } });

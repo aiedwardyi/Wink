@@ -154,6 +154,12 @@ describe("task asks", () => {
     expect(asksNudge(asks.slice(1), NOW, "thanks")).toBe("");
   });
 
+  it("names at most five stale ids however many went stale", () => {
+    const asks = Array.from({ length: 30 }, (_, index) => ask(index + 1, { changedAt: 0 }));
+    expect(asksBlock(asks, NOW).split("\n").at(-1)).toBe("30 stale (A1, A2, A3, A4, A5, +25): no change in 6+ hours, so raise them with the user now, then update them.");
+    expect(asksBlock(asks, NOW, true).split("\n").at(-1)).toBe("30 stale (A1, A2, A3, A4, A5, +25): no change in 6+ hours, so raise them with the user now, then update them.");
+  });
+
   it("keeps a due time on the ask and clears it with null", () => {
     const due = NOW + HOUR;
     const added = saved(mergeTaskAsks(undefined, [{ ask: "Phone designs", status: "open", due }], NOW)).asks;
