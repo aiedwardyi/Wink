@@ -73,3 +73,58 @@ describe("board_post from a team room turn", () => {
     expect(board.get(stuck.id)).toMatchObject({ status: "open" });
   });
 });
+
+describe("Forum replies and helped", () => {
+  const call = async (route: (req: IncomingMessage, res: ServerResponse) => Promise<unknown>, body: unknown) => {
+    let status = 0;
+    let reply = "";
+    // SAFETY: the routes call only writeHead, end and the request's headers and data events.
+    const res = { writeHead(code: number) { status = code; }, end(text: string) { reply = text; } } as unknown as ServerResponse;
+    // SAFETY: as above.
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = { authorization: "Bearer tok" };
+    const pending = route(req, res);
+    req.emit("data", JSON.stringify(body));
+    req.emit("end");
+    await pending;
+    return { status, body: JSON.parse(reply || "{}") };
+  };
+  const setup = (botId = "carbon") => {
+    const board = createBoard({
+      dir: join(temps.make(join(tmpdir(), "orbit-board-forum-")), "board"),
+      pcId: () => "home",
+      author: (id) => ({ name: id === "astra" ? "Astra" : "Carbon", model: "Claude Opus 5.5", color: "green", mascot_style: "" }),
+    });
+    const routes = createBoardRoutes({ board, caller: () => ({ botId, threadId: "tc" }), known: () => true, projectOf: () => "wink", roomTurn: () => null });
+    const tip = board.post({ author_bot_id: "astra", kind: "tip", title: "Read the progress file first", body: "Then the card.", source_ref: "tool:ta:1" });
+    return { board, routes, tip };
+  };
+
+  it("a post keeps who wrote it and the model it ran, and a tip stays open", () => {
+    const { tip } = setup();
+    expect(tip).toMatchObject({ kind: "tip", status: "open", author: { name: "Astra", model: "Claude Opus 5.5" } });
+  });
+
+  it("a bot reply with helped counts once for the post it answers, never for its own", async () => {
+    const { board, routes, tip } = setup();
+    const reply = { kind: "tip", title: "Read the progress file first", body: "Worked for me too.", parent_id: tip.id, helped: true };
+    expect((await call(routes.post, reply)).status).toBe(200);
+    await call(routes.post, { ...reply, body: "Again." });
+    expect(board.get(tip.id)!.helped_bot_ids).toEqual(["carbon"]);
+    const own = setup("astra");
+    await call(own.routes.post, { ...reply, parent_id: own.tip.id });
+    expect(own.board.get(own.tip.id)!.helped_bot_ids).toEqual([]);
+  });
+
+  it("saves the user's reply under its post without solving it", async () => {
+    const { board, routes } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:2" });
+    const saved = await call(routes.reply, { parent_id: stuck.id, body: "Switching is fine by me." });
+    expect(saved.status).toBe(200);
+    expect(board.get(saved.body.post.id)).toMatchObject({ author_bot_id: "user", parent_id: stuck.id, body: "Switching is fine by me." });
+    expect(board.get(saved.body.post.id)!.author).toBeUndefined();
+    expect(board.get(stuck.id)).toMatchObject({ status: "open" });
+    expect((await call(routes.reply, { parent_id: "p000000000000000000000000", body: "hi" })).status).toBe(404);
+    expect((await call(routes.reply, { parent_id: stuck.id, body: "  " })).status).toBe(400);
+  });
+});

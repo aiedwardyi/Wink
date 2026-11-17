@@ -1,84 +1,234 @@
-// The Forum: the Board's posts in the room message look, newest first; a post opens its replies.
-import { useState } from "react";
-import { ChevronLeft, MessagesSquare } from "lucide-react";
+// The Forum: the Board's posts as a Reddit-style list (Hot / New / Top, flair chips); a post opens its threaded replies.
+import { useState, type FormEvent, type ReactNode } from "react";
+import { ArrowBigUp, ChevronLeft, CircleCheck, Flame, MessageCircle, MessagesSquare, Sparkles, TrendingUp } from "lucide-react";
 
-import { BOARD_USER, boardThreads, useBoardPosts, type BoardPost } from "@/lib/board";
+import { agoText } from "@/lib/ago";
+import {
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, replyToBoard, sortBoardThreads, useBoardPosts,
+  type BoardKind, type BoardPost, type BoardReply, type BoardSort,
+} from "@/lib/board";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { cn } from "@/lib/cn";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-catalog";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
+import { shownProfile } from "@/state/store-transforms";
 import type { Bot } from "@/state/store-types";
 
-import { RoomBotAvatar } from "./Avatar";
-import { TimestampLabel } from "./ChatBubble";
+import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { PersonLabel } from "./GroupPeople";
 import { MessageBoundary } from "./TurnPresence";
 
-const BUBBLE = "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words";
+const TONE = {
+  fix: "bg-success/15 text-success",
+  tip: "bg-accent/15 text-accent-text",
+  stuck: "bg-warning/15 text-warning",
+  handoff: "bg-ink-secondary/15 text-ink-secondary",
+} satisfies Record<BoardKind, string>;
+const FLAIR_KEY = { fix: "board.flairFix", tip: "board.flairTip", stuck: "board.flairStuck", handoff: "board.flairHandoff" } satisfies Record<BoardKind, MessageKey>;
+const SORT = {
+  hot: { key: "board.hot", Icon: Flame },
+  new: { key: "board.new", Icon: Sparkles },
+  top: { key: "board.top", Icon: TrendingUp },
+} satisfies Record<BoardSort, { key: MessageKey; Icon: typeof Flame }>;
 
-function Author({ post, bots }: { post: BoardPost; bots: readonly Bot[] }) {
+/** Name, face and model come from the post; a bot on this PC lends its face, which may be an uploaded picture. */
+function useAuthor(post: BoardPost) {
   const { t } = useI18n();
-  if (post.author_bot_id === BOARD_USER) return <PersonLabel name={t("chat.you")} />;
-  const bot = bots.find((candidate) => candidate.id === post.author_bot_id);
+  const { state } = useStore();
+  if (post.author_bot_id === BOARD_USER) {
+    const profile = shownProfile(state)?.profile;
+    const name = profile?.name?.trim() || profile?.email?.trim() || t("chrome.you");
+    return { name, model: "", face: (size: number) => <InitialsAvatar initials={profileInitials({ name })} imageUrl={profile?.avatarUrl} size={size} /> };
+  }
+  const bot: Bot | undefined = state.bots.find((candidate) => candidate.id === post.author_bot_id);
+  const name = post.author?.name || bot?.name || "";
+  const look = bot ?? { name, color: post.author?.color, mascotStyle: post.author?.mascot_style || null };
+  return {
+    name,
+    model: post.author?.model ?? "",
+    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} />,
+  };
+}
+
+function Meta({ post, face }: { post: BoardPost; face?: number }) {
+  const { t } = useI18n();
+  const author = useAuthor(post);
   return (
-    <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-      <RoomBotAvatar bot={bot ?? { name: t("errors.bot") }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
-      <span className="text-[11px] font-medium text-ink-secondary">{bot?.name ?? t("errors.bot")}</span>
+    <div className="flex min-w-0 items-center gap-1.5 text-[12px] leading-[1.4] whitespace-nowrap text-ink-secondary">
+      {face !== undefined && <span className="shrink-0">{author.face(face)}</span>}
+      {author.name && <span data-board-author className="font-semibold text-ink">{author.name}</span>}
+      {author.model && <span data-board-model className="truncate text-[11px] font-medium">{author.model}</span>}
+      {author.name && <span className="opacity-60" aria-hidden>·</span>}
+      <span>{agoText(post.created_at, Date.now(), t)}</span>
     </div>
   );
 }
 
-function PostText({ post }: { post: BoardPost }) {
-  const text = post.kind === "fix" || !post.body || post.body === post.title ? post.body || post.title : `**${post.title}**\n\n${post.body}`;
+function Flair({ kind }: { kind: BoardKind }) {
+  const { t } = useI18n();
+  return <span data-board-flair={kind} className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] leading-normal font-medium", TONE[kind])}>{t(FLAIR_KEY[kind])}</span>;
+}
+
+function Body({ text }: { text: string }) {
   return <MessageBoundary fallbackText={text}><ChatMarkdown text={text} localLinks={false} /></MessageBoundary>;
 }
 
-function PostRow({ post, replies, bots, onOpen }: { post: BoardPost; replies?: number; bots: readonly Bot[]; onOpen?: () => void }) {
+const repliesText = (count: number, t: ReturnType<typeof useI18n>["t"]) => (count === 1 ? t("board.oneReply") : t("board.replies", { n: count }));
+
+function PostRow({ post, replies, onOpen }: { post: BoardPost; replies: number; onOpen: () => void }) {
   const { t } = useI18n();
-  const mine = post.author_bot_id === BOARD_USER;
-  const helped = post.helped_bot_ids.map((id) => bots.find((bot) => bot.id === id)?.name).filter(Boolean).map((name) => `@${name}`);
-  const bubble = cn(BUBBLE, mine ? "bg-bubble-user text-ink" : "bg-card text-ink");
   return (
-    <div data-board-post={post.id} className={cn("flex w-full flex-col", mine ? "items-end" : "items-start")}>
-      {!mine && <Author post={post} bots={bots} />}
-      <div className="relative w-fit max-w-[min(42rem,78%)]">
-        {onOpen ? (
-          <button type="button" onClick={onOpen} className={cn(bubble, "block text-left hover:brightness-[1.04]")}>
-            <PostText post={post} />
+    <div role="listitem" data-board-post={post.id}>
+      <button type="button" onClick={onOpen} className="flex w-full gap-2 rounded-2xl bg-card py-2.5 pr-4 pl-1.5 text-left hover:brightness-[1.04]">
+        <span className="flex w-10 shrink-0 flex-col items-center pt-px text-ink-secondary">
+          <ArrowBigUp size={18} aria-hidden />
+          <b data-board-helped className="text-[14px] leading-tight font-bold text-ink">{post.helped_bot_ids.length}</b>
+          <small className="text-[10px] leading-[1.2]">{t("board.helpedLabel")}</small>
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="text-[16px] leading-[1.35] font-semibold text-ink">{post.title}</span>
+          <Meta post={post} face={16} />
+          <span className="mt-0.5 flex flex-wrap items-center gap-2.5 text-[12px] text-ink-secondary">
+            <Flair kind={post.kind} />
+            <span className="flex items-center gap-1"><MessagesSquare size={13} aria-hidden />{repliesText(replies, t)}</span>
+            {post.status === "solved" && post.kind !== "fix" && (
+              <span data-board-solved className="flex items-center gap-1 font-medium text-success"><CircleCheck size={13} aria-hidden />{t("board.solved")}</span>
+            )}
+          </span>
+        </span>
+      </button>
+    </div>
+  );
+}
+
+function ReplyBox({ parentId, onDone, autoFocus = false, round = true }: { parentId: string; onDone?: () => void; autoFocus?: boolean; round?: boolean }) {
+  const { t } = useI18n();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const body = text.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    replyToBoard(parentId, body).then(
+      () => {
+        setText("");
+        setFailed(false);
+        setBusy(false);
+        onDone?.();
+      },
+      () => {
+        setFailed(true);
+        setBusy(false);
+      },
+    );
+  };
+  return (
+    <form data-board-reply-box={parentId} onSubmit={submit} className="flex flex-col gap-1">
+      <div className={cn("flex items-center gap-2 border border-hairline/70 py-1 pr-1 pl-4 focus-within:border-accent-border", round ? "rounded-full" : "rounded-2xl")}>
+        <input
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder={t("board.addReply")}
+          aria-label={t("board.addReply")}
+          autoFocus={autoFocus}
+          maxLength={4000}
+          className="min-w-0 flex-1 bg-transparent py-1 text-[14px] text-ink outline-none placeholder:text-ink-secondary"
+        />
+        {text.trim() && (
+          <button type="submit" disabled={busy} className="h-7 shrink-0 rounded-full bg-accent px-3 text-[13px] font-semibold text-accent-ink disabled:opacity-60">
+            {t("board.send")}
           </button>
-        ) : (
-          <div className={bubble}><PostText post={post} /></div>
         )}
       </div>
-      {post.kind !== "fix" && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 pl-0.5 text-[12px] text-ink-secondary">
-          <span
-            data-board-status={post.status}
-            className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", post.status === "solved" ? "bg-success/15 text-success" : "bg-warning/15 text-warning")}
-          >
-            {t(post.status === "solved" ? "board.solved" : "board.open")}
-          </span>
-          {helped.length > 0 && <span data-board-used-by>{t("board.usedBy", { names: helped.join(", ") })}</span>}
-          {replies !== undefined && replies > 0 && <span className="flex items-center gap-1"><MessagesSquare size={12} aria-hidden />{replies}</span>}
+      {failed && <div role="alert" className="pl-4 text-[12px] text-danger">{t("errors.request")}</div>}
+    </form>
+  );
+}
+
+function Comment({ node, replying, setReplying }: { node: BoardReply; replying: string | null; setReplying: (id: string | null) => void }) {
+  const { t } = useI18n();
+  const { post, replies } = node;
+  const author = useAuthor(post);
+  return (
+    <div role="listitem" data-board-post={post.id} className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-2">
+      <div className="flex flex-col items-center">
+        {author.face(24)}
+        {replies.length > 0 && <span className="mt-1.5 w-px flex-1 bg-hairline" aria-hidden />}
+      </div>
+      <div className="min-w-0">
+        <Meta post={post} />
+        <div className="mt-0.5 text-[14px] leading-[1.55] text-ink"><Body text={post.body || post.title} /></div>
+        <div className="mt-1 flex items-center gap-3.5 text-[12px] font-semibold text-ink-secondary">
+          <span className="flex items-center gap-1"><ArrowBigUp size={15} aria-hidden />{t("board.helped", { n: post.helped_bot_ids.length })}</span>
+          <button type="button" onClick={() => setReplying(replying === post.id ? null : post.id)} className="flex items-center gap-1 hover:text-ink">
+            <MessageCircle size={14} aria-hidden />{t("board.reply")}
+          </button>
         </div>
-      )}
-      <TimestampLabel at={post.created_at} />
+        {replying === post.id && <div className="mt-2"><ReplyBox parentId={post.id} autoFocus round={false} onDone={() => setReplying(null)} /></div>}
+        {replies.length > 0 && (
+          <div role="list" className="mt-3 flex flex-col gap-3.5">
+            {replies.map((child) => <Comment key={child.post.id} node={child} replying={replying} setReplying={setReplying} />)}
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function Thread({ post, replies }: { post: BoardPost; replies: BoardPost[] }) {
+  const { t } = useI18n();
+  const [replying, setReplying] = useState<string | null>(null);
+  const tree = boardReplyTree(post, replies);
+  return (
+    <>
+      <article data-board-post={post.id} className="rounded-2xl bg-card px-4 py-3 text-ink">
+        <Meta post={post} face={20} />
+        <h2 className="my-1.5 text-[18px] leading-[1.35] font-semibold">{post.title}</h2>
+        <Flair kind={post.kind} />
+        {post.body && post.body !== post.title && <div className="mt-2 text-[15px] leading-relaxed"><Body text={post.body} /></div>}
+        <div className="mt-3 flex gap-2">
+          {[
+            { Icon: ArrowBigUp, text: t("board.helped", { n: post.helped_bot_ids.length }) },
+            { Icon: MessagesSquare, text: repliesText(replies.length, t) },
+          ].map(({ Icon, text }) => (
+            <span key={text} className="flex h-[30px] items-center gap-1.5 rounded-full bg-ink-secondary/12 px-3 text-[13px] font-semibold">
+              <Icon size={16} className="text-ink-secondary" aria-hidden />{text}
+            </span>
+          ))}
+        </div>
+      </article>
+      <div className="mt-3 mb-4"><ReplyBox parentId={post.id} /></div>
+      <div role="list" aria-label={t("board.list")} className="flex flex-col gap-4">
+        {tree.map((node) => <Comment key={node.post.id} node={node} replying={replying} setReplying={setReplying} />)}
+      </div>
+    </>
+  );
+}
+
+function Chip({ on, onClick, className, children }: { on: boolean; onClick: () => void; className: string; children: ReactNode }) {
+  return (
+    <button type="button" aria-pressed={on} onClick={onClick} className={cn("shrink-0 rounded-full px-2.5 py-[3px] text-[12px] font-medium whitespace-nowrap", className)}>
+      {children}
+    </button>
   );
 }
 
 export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const { t } = useI18n();
-  const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
   const { posts, failed } = useBoardPosts();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [sort, setSort] = useState<BoardSort>("hot");
+  const [flair, setFlair] = useState<BoardKind | null>(null);
   const threads = boardThreads(posts ?? []);
   const open = openId ? threads.find((thread) => thread.post.id === openId) : undefined;
+  const shown = sortBoardThreads(threads.filter((thread) => !flair || thread.post.kind === flair), sort, Date.now());
   useBackLayer(Boolean(open), () => setOpenId(null));
   return (
     <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -94,26 +244,54 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             <ChevronLeft size={18} />
           </button>
         )}
-        <h1 className="min-w-0 truncate text-[15px] font-semibold text-ink">{t("chrome.forum")}</h1>
+        <div className="flex min-w-0 flex-col">
+          <h1 className="min-w-0 truncate text-[15px] font-semibold text-ink">{t("chrome.forum")}</h1>
+          {!open && <p data-board-subtitle className="truncate text-[12px] leading-[1.4] text-ink-secondary">{t("board.subtitle")}</p>}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-        <div role="list" aria-label={t("board.list")} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
-          {failed && <div role="alert" className="text-[13px] text-danger">{t("errors.request")}</div>}
+        <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}>
+          {failed && <div role="alert" className="pb-3 text-[13px] text-danger">{t("errors.request")}</div>}
           {posts && !threads.length && (
             <div data-board-empty className="flex flex-col items-center justify-center gap-3 py-24 text-center">
               <MessagesSquare size={40} className="text-ink-secondary" aria-hidden />
               <div className="max-w-[360px] text-[14px] text-ink-secondary">{t("board.empty")}</div>
             </div>
           )}
-          {open ? (
+          {open ? <Thread post={open.post} replies={open.replies} /> : threads.length > 0 && (
             <>
-              <div role="listitem"><PostRow post={open.post} bots={state.bots} /></div>
-              {open.replies.map((reply) => <div role="listitem" key={reply.id}><PostRow post={reply} bots={state.bots} /></div>)}
-              {!open.replies.length && <div className="py-3 text-center text-[13px] text-ink-secondary">{t("board.noReplies")}</div>}
+              <div className="flex flex-col gap-2 pb-3">
+                <div role="tablist" aria-label={t("board.sort")} className="flex gap-1">
+                  {BOARD_SORTS.map((id) => {
+                    const { key, Icon } = SORT[id];
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={sort === id}
+                        data-board-sort={id}
+                        onClick={() => setSort(id)}
+                        className={cn("flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold", sort === id ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink")}
+                      >
+                        <Icon size={15} aria-hidden />{t(key)}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-1.5 overflow-x-auto">
+                  <Chip on={!flair} onClick={() => setFlair(null)} className={flair ? "text-ink-secondary hover:text-ink" : "bg-raised text-ink"}>{t("board.all")}</Chip>
+                  {BOARD_FLAIRS.map((kind) => (
+                    <Chip key={kind} on={flair === kind} onClick={() => setFlair(flair === kind ? null : kind)} className={cn(TONE[kind], flair === kind && "ring-1 ring-current ring-inset")}>{t(FLAIR_KEY[kind])}</Chip>
+                  ))}
+                </div>
+              </div>
+              <div role="list" aria-label={t("board.list")} className="flex flex-col gap-2">
+                {shown.map(({ post, replies }) => <PostRow key={post.id} post={post} replies={replies.length} onOpen={() => setOpenId(post.id)} />)}
+                {!shown.length && <div className="py-6 text-center text-[13px] text-ink-secondary">{t("board.noneHere")}</div>}
+              </div>
             </>
-          ) : threads.map(({ post, replies }) => (
-            <div role="listitem" key={post.id}><PostRow post={post} replies={replies.length} bots={state.bots} onOpen={() => setOpenId(post.id)} /></div>
-          ))}
+          )}
         </div>
       </div>
     </main>

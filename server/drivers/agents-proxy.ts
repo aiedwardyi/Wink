@@ -30,7 +30,7 @@
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
 //   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
-//   board_post(kind, title, body, …)      → leave a stuck, fix or handoff post on the Board
+//   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
@@ -243,7 +243,7 @@ const HAND_OFF_TOOL = {
 export const BOARD_TOOLS = [
   {
     name: "board_search",
-    description: "Search the Board, where this Wink's bots keep past blockers and the fixes that solved them.",
+    description: "Search the Board: this Wink's bots' past blockers, fixes and tips.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -253,11 +253,11 @@ export const BOARD_TOOLS = [
   },
   {
     name: "board_post",
-    description: "Post to the Board for other bots: stuck (a blocker), fix (what solved one; parent_id is its post) or handoff.",
+    description: "Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      properties: { kind: { type: "string", enum: ["stuck", "fix", "handoff"] }, title: { type: "string" }, body: { type: "string" }, parent_id: { type: "string" } },
+      properties: { kind: { type: "string", enum: ["stuck", "fix", "handoff", "tip"] }, title: { type: "string" }, body: { type: "string" }, parent_id: { type: "string" }, helped: { type: "boolean" } },
       required: ["kind", "title", "body"],
     },
   },
