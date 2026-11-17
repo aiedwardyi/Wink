@@ -237,18 +237,19 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const shown = sortBoardThreads(threads.filter((thread) => !flair || thread.post.kind === flair), sort, Date.now());
   const close = () => setOpenId(null);
   useBackLayer(Boolean(open), close);
+  const isOpen = Boolean(open);
   useEffect(() => {
-    if (!open || hidden) return;
+    if (!isOpen || hidden) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return;
-      if (event.target instanceof HTMLInputElement && event.target.value) return;
+      if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
       event.preventDefault();
       setOpenId(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, hidden]);
+  }, [isOpen, hidden]);
   return (
     <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center gap-1 px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>

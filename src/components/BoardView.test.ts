@@ -114,6 +114,14 @@ describe("Forum", () => {
     });
     await esc(input);
     expect(host.querySelector("article")).not.toBeNull();
+    await esc();
+    expect(host.querySelector("article")).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await esc();
+    expect(host.querySelector("article")).toBeNull();
   });
 
   it("the back button sits clear of the phone menu badge: no negative margin below md", async () => {
