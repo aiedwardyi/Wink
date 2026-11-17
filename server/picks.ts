@@ -63,7 +63,8 @@ export type PickChange =
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 const clip = (text: string, max: number) => {
   const one = flat(text);
-  return one.length > max ? `${one.slice(0, max - 3).trimEnd()}...` : one;
+  // a cut between an emoji's two halves leaves a broken character
+  return one.length > max ? `${one.slice(0, max - 3).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}...` : one;
 };
 const same = (a: string, b: string) => flat(a).toLowerCase() === flat(b).toLowerCase();
 const list = (value: string) => value.split(SEPARATOR).map((part) => part.trim()).filter(Boolean);

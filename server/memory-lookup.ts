@@ -14,6 +14,7 @@ import { parseJson } from "./schema.ts";
 import { listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
 
 // Its own file: bots.json and profile-sync.json are parsed strictly by older builds.
+const PICKS_SOURCE = `memory/${PICKS_FILE}`;
 const FLAG_FILE = "lookup-bots.json";
 const LOG_FILE = "lookup-log.jsonl";
 const LOG_MAX_BYTES = 1024 * 1024;
@@ -122,7 +123,8 @@ function piecesOfFile(file: NoteFile): Piece[][] {
     if (!words(text).length) return;
     const table = line.startsWith("|");
     const cell = words(firstCell(text).slice(0, TITLE_CHARS));
-    const label = table ? cell : words(/^(?:[-*]\s+)?([^:]{2,60}):\s/.exec(text)?.[1] ?? "");
+    // a timeline field like "Picked:" belongs to its own entry, never one topic across entries
+    const label = table ? cell : file.source === PICKS_SOURCE ? [] : words(/^(?:[-*]\s+)?([^:]{2,60}):\s/.exec(text)?.[1] ?? "");
     const key = `${file.source}\0${text.slice(0, 80)}`;
     const shared = {
       key,
@@ -315,7 +317,7 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
     }
     const text = await readFile(path, "utf8").catch(() => null);
     // a replaced pick is history, never a recall hit
-    if (text !== null) files.push({ source, tier, text: source === `memory/${PICKS_FILE}` ? currentOnly(text) : text, mtime });
+    if (text !== null) files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
   }
   return files;
 }

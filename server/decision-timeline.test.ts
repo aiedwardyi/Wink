@@ -244,4 +244,30 @@ describe("decision timeline", () => {
     }
     expect(timeline()).toBe(switched);
   });
+
+  it("picks by label from a longer line that tweaks it, never from a negated or asked one", async () => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say("i choose c but make the header smaller and use a blue accent");
+    reply(
+      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "i choose c but make the header smaller and use a blue accent", over: ["A - plain list", "B - tiles"] },
+      { kind: "tweak", key: "forum look", fact: "smaller header", quote: "make the header smaller" },
+      { kind: "tweak", key: "forum look", fact: "blue accent", quote: "use a blue accent" },
+    );
+    await settle();
+    expect(timeline()).toContain(
+      '## 2026-11-17 10:00 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "i choose c but make the header smaller and use a blue accent"\n- Tweak 2026-11-17 10:00: "make the header smaller"\n- Tweak 2026-11-17 10:00: "use a blue accent"\n',
+    );
+    const picked = timeline();
+    for (const [line, fact] of [
+      ["make a smaller header and keep it simple for now", "A - plain list"],
+      ["not b, and keep the header as it is", "B - tiles"],
+      ["b? and how big would the header be", "B - tiles"],
+    ] as const) {
+      bot("Anything else?");
+      say(line);
+      reply({ kind: "decision", key: "forum look", fact, quote: line });
+      await settle();
+    }
+    expect(timeline()).toBe(picked);
+  });
 });

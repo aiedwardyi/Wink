@@ -43,6 +43,13 @@ describe("applyPicks", () => {
     expect(applyPicks("", [tweak("forum look", "make the header smaller", at(17, 10))])).toBeNull();
   });
 
+  it("never cuts an emoji in half", () => {
+    const said = `${"x".repeat(116)}\u{1F600} and more`;
+    const { text } = applyPicks("", [pick("forum look", "C - Reddit cards", said, at(17, 10))])!;
+    expect(text).toContain(`- Said: "${"x".repeat(116)}..."\n`);
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
   it("keeps an older decisions file word for word under its own heading", () => {
     const out = applyPicks("# Older decisions\n\n- GIT ROW LOOK (11-14): rows show the branch first\n", [pick("forum look", "C - Reddit cards", "c", at(17, 10))])!;
     expect(out.text).toMatch(/^# Decision timeline\n/);

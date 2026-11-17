@@ -158,7 +158,7 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
 }
 
 const SHOW_IMAGE = /(?:^|[_.])show_image$/;
-const IMAGE_PATH = /(?:[a-z]:[\\/]|\\\\|~[\\/])?(?:[\w.-]+[\\/])*[\w.-]+\.(?:png|jpe?g|gif|webp|svg)\b/gi;
+const IMAGE_PATH = /(?:[a-z]:[\\/]|\\\\|~[\\/]|(?<![:/])\/)?(?:[\w.-]+[\\/])*[\w.-]+\.(?:png|jpe?g|gif|webp|svg)\b/gi;
 const ATTACHED = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
 
 const shownImage = (message: Message) =>
@@ -336,6 +336,8 @@ function grounded(line: string, said: string, sources: UserLine[]): boolean {
 const ASKED = /\?|(?:^|\s)(?:[1-9]|[a-h])[.):]\s|\boption\s+[a-h1-9]\b/i;
 const LABEL = /^(?:option\s+)?([a-z]|\d{1,2})\b/i;
 const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
+const LEAD = /^(.*?)([,;.!?]|\s+(?:and|but)\s|\s+-\s|$)/i;
+const NEGATED = /\b(?:not|no|don't|dont|never|instead)\b/i;
 
 /** The quote is in the text, a short one as whole words, so "c" never matches inside "cards". */
 function quotes(text: string, said: string): boolean {
@@ -351,8 +353,16 @@ function userChose(picked: string, said: string, own: UserLine[]): boolean {
   if (contentWords(picked).some((word) => typed.some((source) => sameStem(word, source)))) return true;
   const short = words(said).length <= SHORT_ANSWER;
   const label = LABEL.exec(picked.trim())?.[1]?.toLowerCase();
-  if (short && label && words(said).includes(label)) return true;
+  if (label && (short ? words(said).includes(label) : leadsWith(said, label))) return true;
   return short && own.some(({ context }) => Boolean(context && ASKED.test(context)));
+}
+
+/** "i choose c but make the header smaller": a short opening clause names the label, "a" or "i" only as its last word. */
+function leadsWith(said: string, label: string): boolean {
+  const [, lead = "", end] = LEAD.exec(said.trim()) ?? [];
+  const opening = words(lead);
+  if (end === "?" || opening.length > SHORT_ANSWER || NEGATED.test(lead)) return false;
+  return label === "a" || label === "i" ? opening.at(-1) === label : opening.includes(label);
 }
 
 /** An option the pick beat, grounded like a decision; a bare label like "B" only from the text around the pick. */
@@ -546,6 +556,8 @@ interface Batch {
   ids: string[];
   facts: Fact[];
   source: UserLine[];
+  // its picks are in the timeline, held only for MEMORY.md
+  picked?: boolean;
 }
 
 /** Notes passing facts from new user lines into MEMORY.md once a 1:1 chat goes quiet. Never on the reply path. */
@@ -657,12 +669,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
       return done(threadId, batch.ids);
     }
-    if (text !== null && saveMemoryFile(botId, text, memory.revision).conflict) {
-      held.set(threadId, batch);
-      log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
-      return arm(botId, threadId);
-    }
-    // after MEMORY.md, so a retry finds its facts noted and lands each pick once
+    // before MEMORY.md drops a replaced decision line, so a failed write never loses it; a retry lands each pick once
     const landed = changes.length ? applyPicks(timeline, changes) : null;
     if (landed) {
       try {
@@ -674,7 +681,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         return arm(botId, threadId);
       }
     }
-    const kept = accepted.filter((note) => (note.pick ? Boolean(landed) : !note.kind && text !== null));
+    const picked = Boolean(landed) || Boolean(batch.picked);
+    if (text !== null && saveMemoryFile(botId, text, memory.revision).conflict) {
+      held.set(threadId, { ...batch, picked });
+      log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
+      return arm(botId, threadId);
+    }
+    const kept = accepted.filter((note) => (note.pick ? picked : !note.kind && text !== null));
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);

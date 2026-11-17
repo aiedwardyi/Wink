@@ -14,6 +14,7 @@ import {
   noteSummary,
   parseFacts,
   pendingRows,
+  replyPictures,
   secretLike,
   userTyping,
   type MemoryPass,
@@ -702,7 +703,7 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe("");
   });
 
-  it("moves a replaced decision line out of MEMORY.md into the timeline once, and only from the MEMORY.md it saves", async () => {
+  it("moves a replaced decision line into the timeline before MEMORY.md drops it, once across a conflict", async () => {
     const old = "- Repo uses spaces (noted 2026-10-01)";
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
@@ -714,14 +715,43 @@ describe("memory pass", () => {
     });
     await settle("t1", 3 * MINUTE);
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    expect(existsSync(side)).toBe(false);
+    const moved = readFileSync(side, "utf8");
+    expect(moved).toContain('## 2026-10-01 | repo indent | replaced by 2026-10-15 12:00\n- Picked: ~~Repo uses spaces~~\n\n## 2026-10-15 12:00 | repo indent | current\n- Picked: Repo uses tabs\n- Said: "tabs"\n');
     expect(memoryFileRaw("bot-t1")).toBe(`${notes}- edited meanwhile\n`);
+    expect(chips("t1")).toHaveLength(0);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n- edited meanwhile\n");
-    expect(readFileSync(side, "utf8")).toContain(
-      '## 2026-10-01 | repo indent | replaced by 2026-10-15 12:00\n- Picked: ~~Repo uses spaces~~\n\n## 2026-10-15 12:00 | repo indent | current\n- Picked: Repo uses tabs\n- Said: "tabs"\n',
-    );
+    expect(readFileSync(side, "utf8")).toBe(moved);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps a replaced decision line in MEMORY.md until its timeline write lands", async () => {
+    const old = "- Repo uses spaces (noted 2026-10-01)";
+    const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
+    writeMemoryFile("bot-t1", notes);
+    // a folder where the timeline goes fails its write
+    const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
+    mkdirSync(side, { recursive: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
+    say("t1", "tabs");
+    generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(notes);
+    rmSync(side, { recursive: true });
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");
+    expect(readFileSync(side, "utf8")).toContain('## 2026-10-01 | repo indent | replaced by 2026-10-15 12:00\n- Picked: ~~Repo uses spaces~~\n\n## 2026-10-15 12:00 | repo indent | current\n- Picked: Repo uses tabs\n- Said: "tabs"\n');
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps the root of a picture path a bot names", () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Mocks: /tmp/mock/C.png, ~/mock/B.png and C:\\mocks\\A.png. Which one?" });
+    const { id } = say("t1", "c");
+    const shown = replyPictures(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
+    expect(shown?.map(({ path }) => path)).toEqual(["/tmp/mock/C.png", "~/mock/B.png", "C:\\mocks\\A.png"]);
   });
 
   it("never lands the same pick twice", async () => {
