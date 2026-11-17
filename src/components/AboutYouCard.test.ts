@@ -49,7 +49,7 @@ describe("About You card", () => {
 
   it("copies the prompt, then adds one paste for every bot with no bot to pick", async () => {
     await render();
-    expect(host.textContent).toContain("Bring what your other AI knows about you.");
+    expect(host.textContent).toContain("Bring what ChatGPT, Claude, Gemini, Grok or Muse knows about you. Every bot reads it.");
     expect(button("Add to Memory").disabled).toBe(true);
     await click("Copy Prompt");
     expect(writeText).toHaveBeenCalledWith(en["aboutYou.prompt"]);
@@ -119,6 +119,6 @@ describe("About You card", () => {
     expect(host.textContent).toContain("From ChatGPT");
     await click("Remove");
     expect(request.mock.calls.some(([path, init]) => path === "/api/about-you/sources/ChatGPT" && init?.method === "DELETE")).toBe(true);
-    expect(host.textContent).toContain("Bring what your other AI knows about you.");
+    expect(host.textContent).toContain("Bring what ChatGPT, Claude, Gemini, Grok or Muse knows about you. Every bot reads it.");
   });
 });
