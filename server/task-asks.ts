@@ -17,6 +17,9 @@ export const taskAskSchema = z.object({
   /** the bot's own ask_user card left unanswered; Wink adds these, not the bot */
   kind: z.literal("question").optional(),
   choices: z.string().min(1).max(ASK_LIMITS.ref).optional(),
+  due: z.number().int().nonnegative().optional(),
+  /** the wake Wink set for due, so moving or closing the ask cancels it */
+  wake: z.string().min(1).max(128).optional(),
   at: z.number().int().nonnegative(),
   changedAt: z.number().int().nonnegative(),
 }).strict();
@@ -35,6 +38,8 @@ export interface TaskAskUpdate {
   ask?: string;
   status: TaskAsk["status"];
   ref?: string;
+  /** null clears it */
+  due?: number | null;
 }
 
 const STATUS_TURN = /\b(summar(y|ies|i[sz]e)|recap|status|stand-?up|morning|brief(ing)?|release|progress|catch me up|where (are|were) we|what(['’]?s| is| are) (left|open|pending|next)|to-?dos?|open items)\b|요약|정리|현황|상태|상황|브리핑|아침|릴리[스즈]|남은|어디까지/i;
@@ -44,6 +49,7 @@ export const isOpenAsk = (ask: TaskAsk): boolean => ask.status !== "done" && ask
 const isQuestion = (ask: TaskAsk) => ask.kind === "question";
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 const isStale = (ask: TaskAsk, now: number) => isOpenAsk(ask) && !isQuestion(ask) && now - ask.changedAt >= ASK_STALE_MS;
+const isPastDue = (ask: TaskAsk, now: number) => ask.status === "open" && !isQuestion(ask) && ask.due !== undefined && ask.due <= now;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 // only closed asks fall off, oldest first; an open ask is never dropped or refused
@@ -76,12 +82,14 @@ export function mergeTaskAsks(
       target.status = update.status;
       if (update.ref) target.ref = update.ref;
       else if (update.ref !== undefined) delete target.ref;
+      if (typeof update.due === "number") target.due = update.due;
+      else if (update.due !== undefined) delete target.due;
       target.changedAt = now;
       continue;
     }
     if (!text) return { error: "A new ask needs ask, the user's words in brief; send id to update one." };
     last += 1;
-    asks.push({ id: `A${last}`, ask: text, status: update.status, ...(update.ref ? { ref: update.ref } : {}), at: now, changedAt: now });
+    asks.push({ id: `A${last}`, ask: text, status: update.status, ...(update.ref ? { ref: update.ref } : {}), ...(typeof update.due === "number" ? { due: update.due } : {}), at: now, changedAt: now });
     added.push(`A${last}`);
   }
   trimClosed(asks);
@@ -121,30 +129,39 @@ function day(at: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-/** Open asks, stale first and then oldest: five unless `all`. Empty when none is open. */
+function clock(at: number): string {
+  const date = new Date(at);
+  return `${day(at)} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/** Open asks: past-due ones not started, then the newest, questions last, then the stale count; five unless `all`. Empty when none is open. */
 export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, all = false): string {
   const open = (asks ?? []).filter(isOpenAsk);
   if (!open.length) return "";
-  const byAge = (left: TaskAsk, right: TaskAsk) => left.at - right.at;
-  const stale = open.filter((ask) => isStale(ask, now)).sort(byAge);
-  const fresh = open.filter((ask) => !isStale(ask, now)).sort(byAge);
-  const ordered = [...stale, ...fresh.filter((ask) => !isQuestion(ask)), ...fresh.filter(isQuestion)];
-  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${isStale(ask, now) ? " stale" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  // newest first, so a new ask is never buried under old ones
+  const newest = (left: TaskAsk, right: TaskAsk) => right.at - left.at || Number(right.id.slice(1)) - Number(left.id.slice(1));
+  const late = open.filter((ask) => isPastDue(ask, now)).sort((left, right) => left.due! - right.due!);
+  const rest = open.filter((ask) => !isPastDue(ask, now)).sort(newest);
+  const ordered = [...late, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
+  const stale = open.filter((ask) => isStale(ask, now));
+  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""} ${day(ask.at)}${ask.due === undefined ? "" : ` due ${clock(ask.due)}`}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
   let used = 0;
   const over = all ? ordered.findIndex((ask) => (used += Buffer.byteLength(line(ask), "utf8") + 1) > MAX_STATUS_ASKS_BYTES) : -1;
   const shown = !all ? ordered.slice(0, BRIEF_ASKS) : over < 0 ? ordered : ordered.slice(0, over);
   const them = stale.length === 1 ? "it" : "them";
-  const flagged = stale.length ? `, ${stale.length} stale: no change in 6+ hours, so raise ${them} with the user now, then update ${them}` : "";
+  const staleIds = `${stale.slice(0, BRIEF_ASKS).map((ask) => ask.id).join(", ")}${stale.length > BRIEF_ASKS ? `, +${stale.length - BRIEF_ASKS}` : ""}`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
-    `[Wink asks list - ${open.length} open${flagged}.${all ? " Build any summary or status from this list." : ""}${questions}]`,
+    `[Wink asks list - ${open.length} open.${all ? " Build any summary or status from this list." : ""}${questions}]`,
+    ...(late.length ? [`[Due time passed, not started: ${late.length}. Start now or set a new due time.]`] : []),
     ...shown.map(line),
     ...(ordered.length > shown.length ? [`+${ordered.length - shown.length} more open`] : []),
+    ...(stale.length ? [`${stale.length} stale (${staleIds}): no change in 6+ hours, so raise ${them} with the user now, then update ${them}.`] : []),
   ].join("\n");
 }
 
-/** For a turn the record does not ride: every open ask on a status turn, otherwise only once one went stale. */
+/** For a turn the record does not ride: every open ask on a status turn, otherwise only once one went stale or past due. */
 export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string): string {
   if (isStatusTurn(text)) return asksBlock(asks, now, true);
-  return (asks ?? []).some((ask) => isStale(ask, now)) ? asksBlock(asks, now) : "";
+  return (asks ?? []).some((ask) => isStale(ask, now) || isPastDue(ask, now)) ? asksBlock(asks, now) : "";
 }

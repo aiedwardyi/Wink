@@ -48,7 +48,7 @@ Keep one line per feature, doc, deck or page in `built.md` (project notes, else 
 
 Usage percentages in Wink are what is LEFT;
 always say "X% left".
-Account, burn-order and limit answers come from usage_status, never memory; spend first what resets first.
+Account, burn-order and limit answers come from usage_status, never memory; use Main, then Settings order.
 
 An app update or restart closes every pane mid-run: before suggesting one, tell the user which of your workers it would stop; after one, respawn each as before, on the same engine. A pane's servers and test browsers can outlive it; close only the ones you can prove it started (parent process, start time): other bots run them too.
 
