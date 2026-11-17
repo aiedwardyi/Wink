@@ -94,7 +94,6 @@ import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
-import { WakeChips } from "./WakeChips";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
@@ -1970,7 +1969,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             onOpenUsage={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
           />
         )}
-        <WakeChips botIds={[bot.id]} threadId={bot.threadId} />
         <Composer
           key={bot.threadId}
           bot={bot}
