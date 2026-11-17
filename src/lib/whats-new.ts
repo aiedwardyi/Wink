@@ -6,6 +6,7 @@ import hydrogenLightClip from "@/assets/whats-new/1.0.263-hydrogen-light.webp";
 import mapClip from "@/assets/whats-new/1.0.263-map.webp";
 import mapLightClip from "@/assets/whats-new/1.0.263-map-light.webp";
 import themesClip from "@/assets/whats-new/1.0.276-themes.webp";
+import dialClip from "@/assets/whats-new/1.0.277-dial.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -79,6 +80,18 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
   "1.0.276": {
     title: { en: "New in Wink 1.0.276", ko: "Wink 1.0.276 새 기능" },
     tiles: [themesTile],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.277": {
+    title: { en: "New in Wink 1.0.277", ko: "Wink 1.0.277 새 기능" },
+    tiles: [
+      {
+        clip: dialClip,
+        title: { en: "The model dial is on for everyone", ko: "이제 모두가 모델 다이얼을 써요" },
+        line: { en: "Pick a model and its effort on one dial.", ko: "다이얼 하나로 모델과 추론 강도를 골라요." },
+        show: "models",
+      },
+    ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
 };
