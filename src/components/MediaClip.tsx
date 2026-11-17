@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { Play } from "lucide-react";
 
 import { useThumb } from "@/lib/media-thumbs";
-import { pauseOtherClips } from "@/lib/one-clip";
 
 const HOVER_MS = 250;
 
@@ -49,7 +48,6 @@ function HoverPlay({ src }: { src: string }) {
 function start(video: HTMLVideoElement, src: string) {
   video.setAttribute("src", src);
   video.muted = true;
-  pauseOtherClips(video);
   void video.play().catch(() => {});
   return () => {
     video.pause();
