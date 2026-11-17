@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, STYLE_LINES, type CallLine, type CallRoom, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, spokenText, STYLE_LINES, type CallLine, type CallRoom, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { callPrefsSchema } from "./bot-profile.ts";
 import type { AppConfig } from "./config.ts";
@@ -340,7 +340,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const ids: string[] = [];
     let user = false;
     for (const line of said) {
-      const text = line.text.trim().slice(0, LINE_MAX_CHARS);
+      const text = spokenText(line.text).slice(0, LINE_MAX_CHARS);
       if (!text) continue;
       const at = line.at !== undefined ? Math.min(line.at, now()) : undefined;
       const row = store.appendMessage(bot.threadId, line.who === "user"

@@ -108,10 +108,235 @@ beforeEach(() => { vi.stubGlobal("crypto", { randomUUID: () => "send-1" }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("spokenText", () => {
+  it.each(["Set the threshold to < 5", "Keep it <5", "Use <threshold", "Keep x <5 and y >10"])("preserves comparisons and unfinished text: %s", (text) => {
+    expect(spokenText(text)).toBe(text);
+  });
+
+  it("stays linear on many unclosed markers", () => {
+    const start = performance.now();
+    expect(spokenText("<a".repeat(100_000))).toHaveLength(200_000);
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
   it("drops transcript markers", () => {
     expect(spokenText("<no speech>{pause}")).toBe("");
+    expect(spokenText("<no speech")).toBe("");
     expect(spokenText("...")).toBe("");
     expect(spokenText(" Hi {pause} there ")).toBe("Hi there");
+  });
+});
+
+describe("CALL-YES", () => {
+  it("keeps screen instructions for a new question after a completed send", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    await call.answer(true);
+    engine().events.heard("How do I sign in?");
+    engine().events.answering();
+    const text = "To sign in, click the button on your screen.";
+    engine().events.said(text);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
+
+  it("keeps a pending confirmation question when it arrives in chunks", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Open the Orbit folder.", ["open"]);
+    engine().events.answering();
+    engine().events.said("I'll open the Orbit folder");
+    engine().events.audio(new Int16Array([500]));
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said(", okay?");
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("I'll open the Orbit folder, okay?");
+    expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("keeps a pending confirmation question streamed after a complete sentence", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Open the Orbit folder.", ["open"]);
+    engine().events.answering();
+    engine().events.said("Okay. I'll open the Orbit folder");
+    engine().events.audio(new Int16Array([500]));
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said(", okay?");
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("Okay. I'll open the Orbit folder, okay?");
+    expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("speaks a relayed reply's screen instruction after an accepted send", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Sign in to Drive." } }]);
+    await call.answer(true);
+    const text = "Click the button on your screen to sign in.";
+    call.observe({ busy: false, messages: [orderRow("o", "Sign in to Drive."), botRow("r", text)] });
+    await flush();
+    expect(engine().texts.at(-1)).toBe(`[Wink] Nova replied: ${text}`);
+    engine().events.answering();
+    engine().events.said(text);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
+
+  it("cuts a contradictory On it even after a not-sent sentence", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Save the Samurai theme note.");
+    engine().events.answering();
+    engine().events.said("Not sent. On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    call.end();
+    await flush();
+  });
+
+  it("drops two marker-only audio turns after the last real line", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    turn(engine(), "I'm hanging up now.", "Bye.");
+    for (let i = 0; i < 2; i++) {
+      engine().events.answering();
+      engine().events.said("<no ");
+      engine().events.audio(new Int16Array([500]));
+      engine().events.said("speech>");
+      engine().events.turnDone();
+    }
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).toEqual(["I'm hanging up now.", "Bye."]);
+    call.end();
+    await flush();
+  });
+
+  it("cuts On it when no work was sent", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    engine().events.heard("Save the Samurai theme note.");
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain("On it.");
+    call.end();
+    await flush();
+  });
+
+  it.each(["Do that", "Thank you. Do that.", "yes do it", "go ahead", "please", "응", "해줘", "그래"])("sends the pending note on %s without a tap", async (said) => {
+    vi.useFakeTimers();
+    const { call, engine, posts } = await started();
+    engine().events.toolCall([{ id: "note", name: "propose_work", args: { order: "Add a note about the Samurai theme's mobile polish." } }]);
+    engine().events.heard(said);
+    await vi.advanceTimersByTimeAsync(LIVE_VAD.silenceDurationMs);
+    expect(call.state().pending).toBeUndefined();
+    expect(messagesOf(posts).map((post) => post.body.text)).toEqual(["Add a note about the Samurai theme's mobile polish."]);
+    expect(engine().results).toContainEqual({ id: "note", result: expect.stringMatching(/^sent\b/) });
+    call.end();
+    await flush();
+  });
+
+  it.each([
+    "On it.",
+    "On it",
+    "That update will start as soon as you confirm the request on your screen.",
+    "The update to your auto-notes will start as soon as you approve the prompt on your screen.",
+  ])("cuts an unsupported acknowledgement before its audio: %s", async (said) => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Add a note about the Samurai theme's mobile polish.", ["note"]);
+    engine().events.answering();
+    engine().events.said(said);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain(said);
+    expect(engine().texts.join("\n")).not.toMatch(/on (?:their|your) screen/);
+    call.end();
+    await flush();
+  });
+
+  it("waits for the receipt before accepting On it", async () => {
+    let receipt!: (result: Posted) => void;
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({ "/messages": () => new Promise((resolve) => { receipt = resolve; }) }, audio);
+    call.propose("Add a note about the Samurai theme's mobile polish.", ["note"]);
+    const sent = call.answer(true);
+    await flush();
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain("On it.");
+    receipt({ status: 200, data: {} });
+    await sent;
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledTimes(1);
+    call.end();
+    await flush();
+  });
+
+  it("holds audio arriving before the words of an unsupported acknowledgement", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    engine().events.answering();
+    engine().events.audio(new Int16Array([500]));
+    engine().events.said("On ");
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said("it.");
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    call.end();
+    await flush();
+  });
+
+  it.each([false, true])("allows On it after an accepted receipt with queued=%s", async (queued) => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({ "/messages": { status: 202, data: { queued } } }, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    await call.answer(true);
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("On it.");
+    call.end();
+    await flush();
   });
 });
 
@@ -357,10 +582,10 @@ describe("LiveCall", () => {
     engine().events.answering();
     engine().events.said("<no speech>");
     expect(call.state().caption?.who).toBe("user");
-    engine().events.said("Sure, {pause} on it.");
-    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    engine().events.said("Want me to {pause} fix it?");
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Want me to fix it?" });
     engine().events.turnDone();
-    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Want me to fix it?" });
     engine().events.said("Next.");
     expect(call.state().caption).toEqual({ id: 3, who: "voice", text: "Next." });
   });
@@ -1365,7 +1590,7 @@ describe("VOICE-SEND: promise guard", () => {
     const { engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
     turn(engine(), "Hmm, maybe.", "On it.");
-    expect(engine().texts.at(-1)).toBe(`[Wink] Not done: "Open the Orbit folder." starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`);
+    expect(engine().texts.at(-1)).toBe(`[Wink] Not sent: "Open the Orbit folder." starts only once they say yes. A spoken yes is enough. Say that plainly in one short line; don't ask it again or offer it again.`);
   });
 
   it("a relayed result turn is not guarded", async () => {
@@ -2740,18 +2965,18 @@ describe("VOICE-READBACK: what it said in the chat", () => {
   const TLDR = "Quick update: eval round 3 is done.";
   const ASK = "Tell me what you just said. Earlier, like in the message.";
   const readLines = (engine: FakeEngine) => engine.texts.filter((t) => t.includes("newest chat message"));
-  async function replied() {
+  async function replied(message = MESSAGE, spoken = SPOKEN) {
     vi.useFakeTimers();
     const audio = { ...fakeAudio(), played: 0 };
     audio.play = () => { audio.played += 1; };
-    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: SPOKEN } } }, audio);
+    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: spoken } } }, audio);
     const e = s.engine();
     e.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Run eval round 3." } }]);
     await s.call.answer(true);
     e.events.answering();
     e.events.said("On it.");
     e.events.turnDone();
-    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", MESSAGE)] });
+    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", message)] });
     await gap();
     e.events.answering();
     e.events.said(TLDR);
@@ -2759,6 +2984,25 @@ describe("VOICE-READBACK: what it said in the chat", () => {
     await gap();
     return { ...s, e, audio };
   }
+
+  it("reads a quoted On it without treating it as a new promise", async () => {
+    const text = "On it. I will check the build.";
+    const { call, e, audio, posts } = await replied(text, [text]);
+    e.events.heard(ASK);
+    e.events.answering();
+    e.events.turnDone();
+    await flush();
+    await gap();
+    const before = audio.played;
+    e.events.answering();
+    e.events.said(text);
+    e.events.audio(pcm);
+    e.events.turnDone();
+    expect(audio.played).toBe(before + 1);
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
 
   it("asked three times, reads the newest message whole each time and never says its short line again", async () => {
     const { e, audio, posts } = await replied();
