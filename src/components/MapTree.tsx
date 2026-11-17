@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeFoot, treeLayout, treeOrder, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
+import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeFoot, treeLayout, treeOrder, treePath, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import "./MapTree.css";
@@ -63,13 +63,11 @@ function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: s
 // SAFETY: CSSProperties has no custom properties; this sets only --c.
 const tint = (color?: string) => color ? { "--c": color } as CSSProperties : undefined;
 
-export function measurer(element: HTMLElement, phone: boolean) {
+export function measurer(element: HTMLElement) {
   const style = getComputedStyle(element);
   const sans = style.getPropertyValue("--font-sans").trim() || "sans-serif";
   const mono = style.getPropertyValue("--font-mono").trim() || "monospace";
-  const fonts: Record<TreeFont, string> = phone
-    ? { root: `600 12px ${sans}`, dir: `500 11px ${sans}`, count: `400 10px ${sans}`, hidden: `400 10px ${sans}`, file: `400 10.5px ${mono}` }
-    : { root: `600 12.5px ${sans}`, dir: `500 11.5px ${sans}`, count: `400 10px ${sans}`, hidden: `400 10px ${sans}`, file: `400 11px ${mono}` };
+  const fonts = { root: `600 12.5px ${sans}`, dir: `500 11.5px ${sans}`, count: `400 11px ${sans}`, hidden: `400 11px ${sans}`, file: `400 11px ${mono}` } satisfies Record<TreeFont, string>;
   if (canvas === undefined) canvas = document.createElement("canvas").getContext?.("2d") ?? null;
   // A canvas cannot draw tabular digits, so a box count is measured in the page, styled like the count itself.
   const drawn = (text: string) => {
@@ -132,7 +130,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const changed = new Set(owners.keys());
     const named = new Set([...clashBy.keys(), ...focus ? [focus] : []]);
     const rank = (path: string) => slots.get(owners.get(path)?.[0] ?? "") ?? 99;
-    const measure = view.current ? measurer(view.current, phone) : (text: string) => text.length * 7;
+    const measure = view.current ? measurer(view.current) : (text: string) => text.length * 7;
     return { changed, ...treeLayout(index, { width: W, phone, line, changed, current: focus, team: team ? { named, marks: new Set(clashBy.keys()), rank } : undefined, measure, folders: labels.folders, files: labels.files }) };
   }, [index, W, phone, line, ownersKey, clashKey, focus, team, labels, slots]);
   const order = useMemo(() => treeOrder(index, layout.changed), [index, layout.changed]);
@@ -215,7 +213,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       const climb = to ? treeClimb(layout.items, to, at) : null;
       const shown = Math.min(1, Math.max(0, (t - t0 - 350) / 400));
       if (shown < 1) moving = true;
-      hot.current?.setAttribute("d", climb ? "M" + climb.map(point => `${half(point.x)} ${half(point.y)}`).join("L") : "");
+      hot.current?.setAttribute("d", climb ? treePath(climb.map(point => ({ x: half(point.x), y: half(point.y) }))) : "");
       hot.current?.style.setProperty("opacity", String(1 - (1 - shown) ** 3));
       if (pin.current) {
         const k = start ? 1 - (1 - Math.min(1, Math.max(0, (t - t0) / 450))) ** 3 : ease((t - t0) / 750);

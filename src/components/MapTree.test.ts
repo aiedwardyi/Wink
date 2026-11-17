@@ -6,7 +6,7 @@ import { measurer, widths } from "./MapTree";
 afterEach(() => { vi.restoreAllMocks(); });
 
 it("keeps the text width cache bounded across many repos", () => {
-  const measure = measurer(document.body, false);
+  const measure = measurer(document.body);
   for (let i = 0; i < 20_000; i++) measure(`file-${i}.ts`, "file");
   expect(widths.size).toBeLessThanOrEqual(4096);
   expect(measure("file-19999.ts", "file")).toBeGreaterThan(0);
@@ -25,7 +25,7 @@ it("measures a box count in the page once the tree has layout, where its tabular
   const fresh = await import("./MapTree");
   const tree = Object.assign(document.createElement("div"), { className: "map-tree" });
   document.body.append(tree);
-  const measure = fresh.measurer(tree, false);
+  const measure = fresh.measurer(tree);
   expect(measure("1,111", "count")).toBe(22);
   hidden = false;
   expect(measure("1,111", "count")).toBe(30);
@@ -33,5 +33,5 @@ it("measures a box count in the page once the tree has layout, where its tabular
   expect(measure("+111 files", "hidden")).toBe(54);
   expect(measure("docs/", "dir")).toBe(30);
   tree.remove();
-  expect(readFileSync("src/components/MapTree.css", "utf8")).toMatch(/\.map-tree-box span, \.map-tree-probe \{ font: 10px\/1 var\(--font-sans, sans-serif\); [^}]*font-variant-numeric: tabular-nums; \}/);
+  expect(readFileSync("src/components/MapTree.css", "utf8")).toMatch(/\.map-tree-box span, \.map-tree-probe \{ font: 11px\/1 var\(--font-sans, sans-serif\); [^}]*font-variant-numeric: tabular-nums; \}/);
 });
