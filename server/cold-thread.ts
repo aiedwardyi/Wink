@@ -1,6 +1,6 @@
 // Boot reads of threads the store has not loaded, from their newest rows, so opening the app parses no whole transcript.
 import { offscreenLimit } from "./chat-tail.ts";
-import { readThreadTail } from "./message-db.ts";
+import { readThreadTail, threadOver } from "./message-db.ts";
 import type { Message, Store } from "./store.ts";
 
 /** The newest `count` rows, chained as Store.thread() chains legacy rows; the oldest stays unchained unless all rows came back. */
@@ -30,6 +30,9 @@ export function chatListPage(
   return { messages: messages.slice(start), hasMore: start > 0 };
 }
 
+/** Chats past this many rows keep their tail page until a write or an older page loads them: a 237k-row chat took 3 s. */
+export const WARM_ROW_CAP = 5_000;
+
 /** Loads the chats' transcripts after the first paint, one per task and the open chat first, so a switch or send rarely waits on a load. */
 export function warmChats(
   store: Pick<Store, "loaded" | "messagesFor">,
@@ -38,15 +41,18 @@ export function warmChats(
 ): (open: string) => void {
   let first: string | undefined;
   const failed = new Set<string>();
+  const large = new Set<string>();
   const next = () => {
-    const cold = chats().filter((chat) => !store.loaded(chat.threadId) && !failed.has(chat.threadId));
+    const cold = chats().filter((chat) => !store.loaded(chat.threadId) && !failed.has(chat.threadId) && !large.has(chat.threadId));
     return cold.find((chat) => chat.id === first) ?? cold[0];
   };
   const warm = async () => {
     for (let chat = next(); chat; chat = next()) {
       await new Promise((resolve) => setImmediate(resolve));
       try {
-        if (!store.loaded(chat.threadId)) store.messagesFor(chat.threadId);
+        if (store.loaded(chat.threadId)) continue;
+        if (threadOver(chat.threadId, WARM_ROW_CAP)) large.add(chat.threadId);
+        else store.messagesFor(chat.threadId);
       } catch (error) {
         // a failed thread stays cold, and loads (or fails) on its own request
         failed.add(chat.threadId);

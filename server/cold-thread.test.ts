@@ -2,9 +2,10 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatListPage, warmChats } from "./cold-thread.ts";
+import { chatListPage, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
+import { messageDatabase } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -110,6 +111,25 @@ describe("warm chats", () => {
     await start();
     await vi.waitFor(() => expect(bots.every((bot) => store.loaded(bot.threadId))).toBe(true));
     expect(read.mock.calls.map(([threadId]) => threadId)).toEqual([bots[2]!.threadId, bots[0]!.threadId, bots[1]!.threadId]);
+  });
+
+  it("never loads a chat over the row cap, and warms the rest", async () => {
+    const setup = fresh();
+    const [big, small] = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];
+    setup.appendMessage(small!.threadId, { role: "user", kind: "text", text: "hi" });
+    const db = messageDatabase();
+    const insert = db.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, 'user', 'text', 'row', ?)");
+    db.exec("BEGIN");
+    for (let index = 0; index <= WARM_ROW_CAP; index++) insert.run(big!.threadId, `row-${index}`, index, JSON.stringify({ id: `row-${index}`, at: index, role: "user", kind: "text", text: "row" }));
+    db.exec("COMMIT");
+    const store = fresh();
+    const read = vi.spyOn(store, "messagesFor");
+    let start!: () => Promise<void>;
+    warmChats(store, () => [big!, small!], (begin) => (start = begin));
+    await start();
+    await vi.waitFor(() => expect(store.loaded(small!.threadId)).toBe(true));
+    expect(read.mock.calls.map(([threadId]) => threadId)).toEqual([small!.threadId]);
+    expect(store.loaded(big!.threadId)).toBe(false);
   });
 
   it("keeps warming past a thread that fails to load", async () => {

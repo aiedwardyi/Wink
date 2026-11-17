@@ -410,7 +410,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
-  readSyncOperations,
+  readSyncOperationsAsync,
   syncAvatarMatches,
   saveProfileSyncSettings,
   syncOperationsSignature,
@@ -426,7 +426,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1100,6 +1100,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
   dataDir: DATA_DIR,
@@ -1755,13 +1756,13 @@ function applySyncedBotFields(
 }
 
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
-function importProfileChanges(): void | Promise<void> {
+async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
-  const remote = readSyncOperations(folder);
+  const remote = await readSyncOperationsAsync(folder);
   if (remote.invalidFiles.length && signature !== profileSyncSeen.signature) {
     console.warn(`bot sync: skipped unreadable files [${remote.invalidFiles.slice(0, 5).join(", ")}]`);
   }
@@ -2297,6 +2298,7 @@ function initializeThreadSyncV2() {
     },
     rooms: roomThreads,
     bootReads,
+    painted: () => syncPainted,
   });
   return threadSyncV2;
 }
@@ -2411,14 +2413,25 @@ const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
 if (REMOTE_HOST !== undefined) startDevicePresence();
 else void remoteRetry.refresh();
 
+const memorySyncs = new Map<string, Promise<void>>();
+
+// one pass per bot at a time: a pass applies against the snapshots it read
 function syncMemory(botId: string): void {
+  const run = (memorySyncs.get(botId) ?? Promise.resolve()).then(() => syncMemoryOnce(botId));
+  memorySyncs.set(botId, run);
+  void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
+}
+
+async function syncMemoryOnce(botId: string): Promise<void> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
   if (!store.bot(botId)) return;
   const folder = profileSyncSettings.folder;
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger });
+    const snapshots = await readMemorySnapshots(folder, botSyncId);
+    if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
+    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
     // the poll runs for every idle bot, so only changed files refresh the check
     if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
   } catch (error) {

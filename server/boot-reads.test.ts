@@ -32,7 +32,7 @@ let botId = "";
 let threadId = "";
 let servingAt = 0;
 
-type Statement = { t: number; sql: string; params: string[]; at: string | null; plan?: string[] };
+type Statement = { t: number; sql: string; params: string[]; at: string | null; via?: string[]; plan?: string[] };
 
 function seed(): void {
   mkdirSync(DATA_DIR, { recursive: true });
@@ -115,6 +115,27 @@ function scans(rows: Statement[]): string[] {
   });
 }
 
+// After paint: a JSON filter that is not a key lookup, or every row of one chat with no LIMIT.
+function unbounded(rows: Statement[]): string[] {
+  const planOf = plans(rows);
+  const seen = new Set<string>();
+  return rows.flatMap((row) => {
+    const plan = planOf.get(row.sql) ?? [];
+    const sql = row.sql.replace(/\s+/g, " ").trim();
+    // SQLite answers a lone MIN/MAX on an indexed column from one index entry
+    if (keyed(row, plan) || /^SELECT (?:MAX|MIN)\(\w+\)(?: AS \w+)? FROM messages WHERE thread_id = \?$/i.test(sql)) return [];
+    const where = sql.split(/\bWHERE\b/i).slice(1).join(" WHERE ");
+    const json = /json_(extract|type)\(/i.test(where);
+    const whole = row.params.includes(threadId) && !/\bLIMIT\b/i.test(sql)
+      && plan.some((detail) => /^SCAN (m|messages)\b/.test(detail) || /USING (?:COVERING )?INDEX (?:messages_thread|messages_thread_at|sqlite_autoindex_messages_1) \(thread_id=\?\)$/.test(detail));
+    if (!json && !whole) return [];
+    const line = `main-thread ${json ? "JSON filter" : "whole-chat read"} after paint: ${sql} (${[row.at, ...(row.via ?? [])].join(" < ")}). Bound it to a key or a LIMITed page, or move it to server/boot-reads-worker.ts (ARCH-STARTUP).`;
+    if (seen.has(line)) return [];
+    seen.add(line);
+    return [line];
+  });
+}
+
 function rows(): Map<string, Message> {
   const db = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });
   try {
@@ -154,7 +175,8 @@ beforeAll(async () => {
   const end = Date.now() + 90_000;
   for (;;) {
     const sent = Date.now();
-    if ((await harnessFetch(`${base}/api/bots`).catch(() => null))?.status === 200) {
+    // the client's own page size: an unpaginated /api/bots reads every chat whole by design
+    if ((await harnessFetch(`${base}/api/bots?messages=200`).catch(() => null))?.status === 200) {
       servingAt = sent;
       break;
     }
@@ -206,5 +228,11 @@ describe("boot reads of messages.db", () => {
     } finally {
       notes.close();
     }
+  }, WINDOW_MS + 10_000);
+
+  it("for 30 s after serving, reads only keyed or bounded rows on the main thread", async () => {
+    const left = servingAt + WINDOW_MS - Date.now();
+    if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+    expect(unbounded(statements().filter((row) => row.t >= servingAt && row.t < servingAt + WINDOW_MS))).toEqual([]);
   }, WINDOW_MS + 10_000);
 });

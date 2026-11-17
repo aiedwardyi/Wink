@@ -209,6 +209,36 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     expect(plans.filter((detail) => /^SCAN (m|messages)$/.test(detail))).toEqual([]);
   });
 
+  it("flushes without counting the chat's outbox", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
+    const folder = temp();
+    const sync = createThreadSyncV2Store({
+      store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => folder, enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
+    })!;
+    store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
+    const prepare = DatabaseSync.prototype.prepare;
+    const prepared: string[] = [];
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+      prepared.push(sql);
+      return prepare.call(this, sql);
+    });
+    try {
+      // the boot notice cleanup holds the first flush until the worker's rows land
+      await vi.waitFor(async () => expect(await sync.flush("thread")).toBe("written"));
+    } finally {
+      vi.restoreAllMocks();
+      await sync.close();
+    }
+    expect(prepared.filter((sql) => /COUNT\(\*\)[\s\S]*sync_v2_packets/.test(sql))).toEqual([]);
+  });
+
   it("does not note a pulled head after the folder switches while adoption awaits", async () => {
     const { DATA_DIR } = await import("./config.ts");
     const { Store } = await import("./store.ts");

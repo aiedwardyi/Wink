@@ -57,6 +57,8 @@ export interface SyncStoreHost {
   rooms?: RoomThreads;
   /** Boot's notice finders, run off the main thread (boot-reads.ts); a saved task publishes only after its cleanup lands. */
   bootReads(): Promise<Pick<BootRows, "migration" | "conflicts">>;
+  /** Settles once the first page has painted; the first poll waits for it. */
+  painted?(): Promise<unknown>;
 }
 
 /** The cutover time v1 notices are cleaned from, or null before a cutover. */
@@ -415,8 +417,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       publishThreadPictures({ folder: workerFolder!, dataDir: host.dataDir, messages: pictures.map((row): Message => JSON.parse(row.json)) });
       withMessageTransaction((db) => db.prepare("DELETE FROM sync_v2_pictures WHERE thread = ? AND id <= ?").run(threadId, pictures.at(-1)!.id));
     }
-    const state = engine.state(task);
-    bytesPublished += (await transport.flush(task, undefined, state.seen[state.writerId] ?? 0)).bytesWritten;
+    bytesPublished += (await transport.flush(task, undefined, engine.seen(task.threadId)[writer] ?? 0)).bytesWritten;
     return "written";
   }
 
@@ -754,7 +755,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     },
     start(): void {
       const moved = followBotIds();
-      void serial(poll).catch(() => {});
+      void Promise.resolve(host.painted?.()).then(() => serial(poll)).catch(() => {});
       if (!pollTimer) {
         const tick = wakeClock(THREAD_SYNC_POLL_MS);
         pollTimer = setInterval(() => {

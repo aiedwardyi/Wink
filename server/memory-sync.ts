@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -163,6 +164,35 @@ function readSnapshots(dir: string): Snapshot[] | undefined {
   });
 }
 
+async function readSnapshotsAsync(dir: string): Promise<Snapshot[] | undefined> {
+  if (!existsSync(dir)) return [];
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return undefined;
+  }
+  const read = await Promise.all(names.sort().map(async (name) => {
+    const device = SNAPSHOT_FILE.exec(name)?.[1];
+    try {
+      const parsed = device ? snapshotSchema.safeParse(JSON.parse(await readFile(join(dir, name), "utf8"))) : undefined;
+      return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
+    } catch {
+      return [];
+    }
+  }));
+  return read.flat();
+}
+
+/** One bot's snapshots per sync root, read off the event loop; pass them to syncBotMemory as `snapshots`. */
+export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<Array<Snapshot[] | undefined>> {
+  try {
+    return await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId))));
+  } catch {
+    return [undefined];
+  }
+}
+
 let machineId: string | undefined;
 
 function machine(): string {
@@ -293,7 +323,7 @@ function dropMergedCopies(workspace: string, files: Iterable<string>): string[] 
   return dropped;
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string };
+export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshot[] | undefined> };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -301,7 +331,7 @@ export function syncBotMemory(
   botSyncId: string,
   workspace: string,
   ledger: MemorySyncLedger,
-  { now = Date.now(), legacy, host = machine() }: MemorySyncOptions = {},
+  { now = Date.now(), legacy, host = machine(), snapshots: read }: MemorySyncOptions = {},
 ): Record<string, MemorySyncResult> {
   memorySyncDir(folder, botSyncId);
   const me = deviceId(ledger, host);
@@ -309,7 +339,7 @@ export function syncBotMemory(
   let groups: Array<Snapshot[] | undefined>;
   try {
     dir = join(syncWriteRoot(folder, MEMORY_SYNC_DIR, join(botSyncId, `${me}.json`)), botSyncId);
-    groups = syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshots(join(root, botSyncId)));
+    groups = read ?? syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshots(join(root, botSyncId)));
   } catch {
     return {};
   }

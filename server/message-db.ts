@@ -123,6 +123,13 @@ export function storedHead(threadId: string): string | null | undefined {
   return row.last === null ? undefined : row.leaf || row.last;
 }
 
+/** Whether a thread has more than `cap` rows; counts at most cap + 1 index entries. */
+export function threadOver(threadId: string, cap: number): boolean {
+  // SAFETY: COUNT(*) returns one integer row.
+  const row = db().prepare("SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages WHERE thread_id = ? LIMIT ?)").get(threadId, cap + 1) as { n: number };
+  return row.n > cap;
+}
+
 /** The newest `count` rows in insertion order, the options rows before them, and the stored head. */
 export function readThreadTail(threadId: string, count: number): ThreadRows & { options: Message[] } {
   // SAFETY: This projection selects SQLite's rowid and the stored message JSON.

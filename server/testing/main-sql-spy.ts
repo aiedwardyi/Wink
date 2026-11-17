@@ -14,14 +14,14 @@ if (isMainThread && file) {
     owners.set(statement, this);
     return statement;
   };
-  const caller = () => (new Error().stack ?? "").split("\n").slice(1)
+  const callers = () => (new Error().stack ?? "").split("\n").slice(1)
     .map((line) => /[\\/]server[\\/]([^\s)]+?):(\d+):\d+/.exec(line))
-    .find((hit) => hit && !hit[1]!.startsWith("testing")) ?? null;
+    .flatMap((hit) => hit && !hit[1]!.startsWith("testing") ? [`${hit[1]}:${hit[2]}`] : []);
   const record = (statement: StatementSync, params: unknown[], start: number) => {
     const sql = statement.sourceSQL;
     if (!/\bmessages\b(?!_)/.test(sql)) return;
-    const site = caller();
-    const line: { t: number; ms: number; sql: string; params: string[]; at: string | null; plan?: string[] } = { t: start, ms: Date.now() - start, sql, params: params.map((value) => String(value).slice(0, 80)), at: site ? `${site[1]}:${site[2]}` : null };
+    const sites = callers();
+    const line: { t: number; ms: number; sql: string; params: string[]; at: string | null; via: string[]; plan?: string[] } = { t: start, ms: Date.now() - start, sql, params: params.map((value) => String(value).slice(0, 80)), at: sites[0] ?? null, via: sites.slice(1, 6) };
     if (!planned.has(sql)) {
       planned.add(sql);
       try {

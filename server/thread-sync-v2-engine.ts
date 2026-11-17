@@ -871,5 +871,5 @@ export function createSyncEngine(input: SyncOptions) {
   }
 
   const recover = (scope: SyncScope, mutations: SyncRecovery[], crash?: string) => commit(scope, mutations, crash, undefined, true);
-  return { commit, recover, flush, pull, state, variants, automatic, changes, applyPending, threads, conflicted, hadNativeConflict, recoveryRows, rebind };
+  return { commit, recover, flush, pull, state, seen, variants, automatic, changes, applyPending, threads, conflicted, hadNativeConflict, recoveryRows, rebind };
 }

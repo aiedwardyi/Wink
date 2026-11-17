@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, relative, resolve } from "node:path";
 import { z } from "zod";
@@ -438,6 +439,30 @@ export function readSyncOperations(folder: string): { operations: ProfileSyncOpe
       invalidFiles.push(name);
     }
   }
+  if (truncated) invalidFiles.push("[profile sync change log exceeds the supported file limit]");
+  return { operations, invalidFiles, truncated };
+}
+
+/** readSyncOperations off the event loop, for the poll that runs while the first page loads. */
+export async function readSyncOperationsAsync(folder: string): Promise<ReturnType<typeof readSyncOperations>> {
+  const directory = join(folder, PROFILE_SYNC_CHANGES_DIR);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return { operations: [], invalidFiles: [], truncated: false };
+  }
+  const jsonNames = names.filter(isSyncOperationFile).sort();
+  const truncated = jsonNames.length > PROFILE_SYNC_MAX_FILES;
+  const read = await Promise.all(jsonNames.slice(0, PROFILE_SYNC_MAX_FILES).map(async (name) => {
+    try {
+      return { name, operation: parseSyncOperationText(await readFile(join(directory, basename(name)), "utf8")) };
+    } catch {
+      return { name, operation: null };
+    }
+  }));
+  const operations = read.flatMap((item) => item.operation ? [item.operation] : []);
+  const invalidFiles = read.flatMap((item) => item.operation ? [] : [item.name]);
   if (truncated) invalidFiles.push("[profile sync change log exceeds the supported file limit]");
   return { operations, invalidFiles, truncated };
 }
