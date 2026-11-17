@@ -337,7 +337,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             inert={page.closing}
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app"
           >
-            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread post={page.value.post} replies={page.value.replies} /></div>
+            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} /></div>
           </div>
         )}
       </div>
