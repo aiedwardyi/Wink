@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall, useCallChatShown } from "@/lib/live-call/active";
 import { BotAvatar } from "./Avatar";
-import { clock, failedText, noticeText, OrderCard, ResumeButton, useLive, WORDS } from "./LiveCallBar";
+import { clock, failedText, noticeText, OrderCard, ResumeButton, SoundPill, useLive, WORDS } from "./LiveCallBar";
 
 /** The live call outside its own chat: tap to go back, mute, hang up, and answer an order. */
 export function CallWidget({ narrow = false, className }: { narrow?: boolean; className?: string }) {
@@ -84,7 +84,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
     <div data-call-widget={snap.status} className={className}>
       {pending && <OrderCard bot={bot} live={live} narrow />}
       {note}
-      {paused && <ResumeButton live={live} />}
+      {paused && (snap.noSound ? <div className="flex pb-1.5"><SoundPill bot={bot} live={live} /></div> : <ResumeButton live={live} />)}
       <div className="flex min-w-0 items-center gap-1 rounded-xl border border-hairline/50 bg-card py-1 pl-1 pr-1.5 shadow-sm">
         <button type="button" aria-label={label} title={label} onClick={open} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left hover:bg-raised max-md:min-h-10">
           <BotAvatar bot={bot} size={24} />

@@ -34,8 +34,8 @@ import { buildNotification, type Notification } from "./notify.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
-import { cancelWake, dropNewAskWakes, setWake, syncAskWakes } from "./self-wake.ts";
-import { agentRoster, sectionKey, type BotRecord, type GroupRecord, type Store } from "./store.ts";
+import { cancelWake, setWake } from "./self-wake.ts";
+import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
@@ -53,6 +53,7 @@ type InternalRouteDeps = {
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
   createdBotSelection: (chief: ModelSelection, model: unknown, effort: unknown) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
@@ -98,6 +99,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     computerControl,
     askBotAndWait,
     checkedMemberIds,
+    checkedGroupResponder,
     createdBotSelection,
     store,
     keepGoing,
@@ -201,21 +203,19 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const asks = body.asks ? mergeTaskAsks(next, body.asks, Date.now()) : null;
       if (asks && "error" in asks) return json(res, 400, { error: asks.error });
-      const wakeNotes = asks ? syncAskWakes(routines, { botId: bot.id, threadId: body.fromThreadId }, current.asks, asks.asks) : [];
       if (asks) Object.assign(next, { asks: asks.asks, lastAskId: asks.lastAskId });
       next.updatedAt = Date.now();
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
-      if (!saved && asks) dropNewAskWakes(routines, bot.id, current.asks, asks.asks);
       if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, ...wakeNotes, board?.notice].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {
@@ -773,15 +773,20 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           return json(res, 400, { error: "setup.bulletin must be at most 12000 characters" });
         }
       }
+      const answers = body.answers ?? "everyone";
+      const defaultResponder = checkedGroupResponder(
+        answers === "everyone" || answers === "mentions" ? { kind: answers } : { kind: "member", botId: answers },
+        memberIds,
+      );
+      if (!defaultResponder) {
+        return json(res, 400, { error: 'answers must be "everyone", "mentions", or a member bot id' });
+      }
       // A room the user asked for is usable the moment it exists - the
       // setup step would only stand between them and the bots they just
-      // asked to assemble. The lead is the one decision worth taking off
-      // the sender: memberIds[0] is always the sender, so picking it made
-      // every bot-opened room answer to the bot that opened it.
-      const lead = memberIds.find((id) => id !== sender.id) ?? sender.id;
+      // asked to assemble.
       const group = store.createGroup(name, memberIds, false, section, {
         bulletin,
-        defaultResponder: { kind: "member", botId: lead },
+        defaultResponder,
         completed: true,
       });
       return json(res, 201, {

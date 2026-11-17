@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Volume2 } from "lucide-react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { useJoinedRoom } from "@/lib/joined-rooms";
 import { hostLines, isTeamRoom, joinedLines, roomTeamBots, type RoomLine } from "@/lib/team-rooms";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
+import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
@@ -21,7 +23,7 @@ import { Fold } from "./Fold";
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 const ROOM_PRIVACY_SEEN = "wink.liveCall.roomPrivacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "micSilent" | "soundInput" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "noSound" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "micSilent" | "soundInput" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -29,6 +31,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "Speaking",
     working: "Working",
     paused: "Tap to resume",
+    noSound: "Tap to hear {bot}",
     ended: "Call ended",
     failed: "Call failed",
     send: "Ask {bot} to do this?",
@@ -62,6 +65,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "말하는 중",
     working: "작업 중",
     paused: "탭해서 통화 이어가기",
+    noSound: "{bot} 목소리 듣기",
     ended: "통화 종료",
     failed: "통화 실패",
     send: "{bot}에게 이렇게 요청할까요?",
@@ -170,12 +174,12 @@ export function LiveCallHost() {
 }
 
 function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
-  const { state, dispatch } = useStore();
+  const { state } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
   const [live] = useState((): Live => {
-    const audio = new CallAudio(active.ctx);
+    const audio = new CallAudio(active.sound);
     const call = new LiveCall({
       botId: bot.id,
       botName: bot.name,
@@ -185,7 +189,6 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       post,
       opener: active.opener,
       prefs: bot.call,
-      onKeyCard: (messageId) => dispatch({ type: "focusMessage", threadId: bot.threadId, messageId }),
       room: active.room && { id: active.room.id, kind: active.room.kind },
     });
     return { call, level: (mic) => audio.level(mic) };
@@ -211,10 +214,8 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   useEffect(() => {
     if (!state.config || kicked.current) return;
     kicked.current = true;
-    // A rung call with no key only opens the chat, so the server keeps ringing until the blocker clears.
-    if (active.opener && !state.config.gemini?.configured) return onEnd();
     if (!intro) void call.start();
-  }, [active.opener, call, intro, onEnd, state.config]);
+  }, [call, intro, state.config]);
 
   useEffect(() => {
     mounted.current = true;
@@ -344,6 +345,18 @@ export function ResumeButton({ live }: { live: Live }) {
   );
 }
 
+/** The phone would not play the voice: one tap in the call row lets it. */
+export function SoundPill({ bot, live }: { bot: Bot; live: Live }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  return (
+    <button type="button" data-live-call-sound onClick={() => live.call.resume()} className={cn("flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full pl-2.5 pr-3 text-[13px] font-medium max-md:h-10", PRIMARY_BUTTON)}>
+      <Volume2 size={16} aria-hidden className="shrink-0 animate-pulse motion-reduce:animate-none" />
+      <span className="min-w-0 truncate">{words.noSound.replace("{bot}", () => bot.name)}</span>
+    </button>
+  );
+}
+
 /** The call's notes and order card in its own chat or the team room it was placed from. */
 export function LiveCallBar({ bot }: { bot: Bot }) {
   const live = useLive(bot.id);
@@ -389,7 +402,7 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
       <Fold open={Boolean(snap.pending)} soft keep>
         <OrderCard bot={bot} live={live} />
       </Fold>
-      {snap.status === "paused" && <ResumeButton live={live} />}
+      {snap.status === "paused" && !snap.noSound && <ResumeButton live={live} />}
       {note && (
         <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
           {room && snap.status === "needsKey"

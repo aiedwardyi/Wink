@@ -1,11 +1,12 @@
-// Gate 1 of the quick router: nominate a busy-time message for the quick helper. Anything unsure goes to the bot.
+// Gate 1 of the quick router: a busy-time question goes to the quick helper first; any other message goes to the bot
+// at once with one short helper reply beside it, except approvals, refusals and pauses, which go to the bot alone.
 const MAX_CHARS = 240;
 const SENTENCE = /(?<=[.!?])\s+|\n+/;
 const ATTACH_OR_LINK = /<attached-(image|file)|https?:\/\//i;
 // Filler a sentence may open with, stripped before the checks ("okay great.", "hahaha", "wait", "btw").
 const LEAD =
-  /^((["'“”]+|(ok|okay|k|kk|yeah|yea|ya|true|great|cool|nice|perfect|awesome|got it|thanks|thx|ty|lol|lmao|haha\w*|wow|oh|ah|hmm+|hey|yo|wait|actually|but|and|also|then|plus|btw|so|anyway|afterwards|later|first|next|now|after that|maybe)\b)[\s,.!:]*)+/i;
-// Approvals, refusals, pauses and suggestions steer the running work, whatever follows.
+  /^((["'“”]+|(ok|okay|k|kk|yeah|yea|ya|true|great|cool|nice|perfect|awesome|got it|thanks|thx|ty|lol|lmao|haha\w*|wow|oh|ah|hmm+|hey|yo|wait|actually|but|and|also|then|plus|btw|so|anyway|afterwards|later|first|next|now|after that|maybe|please|pls|plz)\b)[\s,.!:]*)+/i;
+// Approvals, refusals, pauses and suggestions steer the running work with no reply beside them, whatever follows.
 const STEER =
   /^(yes|yep|yup|go|go ahead|go for it|do (it|that|this|both|all|them)|let'?s do|ship it|merge it|push it|lgtm|sounds good|sure|alright|dont|don't|do not|no|nope|never|stop|pause|hold on|cancel|instead|nvm|never ?mind|how about|what about|what if|why not|why don'?t (we|you|u))\b/i;
 const COMMAND =
@@ -24,7 +25,9 @@ const KO_LEAD = /^((지금|근데|그런데|그럼|그러면|그리고|그래서
 // 됐어 and 맞아 approve; with a "?" they ask.
 const KO_STEER = /^(아냐|아뇨|멈[춰추]|그만(?!큼)|잠깐|잠시만|기다려|취소|(아니[야요]?|응|네|넵|그래요?|좋아요?|(됐어|맞아)요?(?!\s*\?))(?=$|[\s,.!?~ㅋㅎㅠㅜ]))/;
 const KO_REQUEST =
-  /((줘|줄래|볼까|볼래|할까|할래)요?|하자|말고|지 ?마(요|라|세요)?)(?=$|[\s,.!?~ㅋㅎㅠㅜ])|주세요|주시|주실|줄 ?수 ?있|도 ?(돼|되|될)|어때|어떨까/;
+  /((줘|줄래|볼까|볼래|할까|할래)요?|하자)(?=$|[\s,.!?~ㅋㅎㅠㅜ])|주세요|주시|주실|줄 ?수 ?있|도 ?(돼|되|될)|어때|어떨까/;
+// "not that" and "don't" anywhere refuse.
+const KO_STOP = /(말고|지 ?마(요|라|세요)?)(?=$|[\s,.!?~ㅋㅎㅠㅜ])/;
 const KO_REPORT = /버그|고장|크래시|안 ?(돼|되|됨)|같은데|[는은인]데[\s,]+\S/;
 // 뭐든 and 왜냐하면 open statements.
 const KO_QUESTION = /^(뭐|무엇|어디|언제|왜|어떻게|얼마|몇|누가|어느)(?!든|냐하?면)|(나요|까요|인가요?|일까)\?*$/;
@@ -37,20 +40,21 @@ const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
 
-/** "quick" when the helper should try it first. Never trusted alone: the helper confirms or hands off. */
-export function nominate(raw: string): "quick" | "main" {
+/** "quick": the helper tries it first, then confirms or hands off. "ack": the bot takes it now and the helper adds one short reply. "main": the bot alone. */
+export function nominate(raw: string): "quick" | "ack" | "main" {
   const whole = raw.trim();
-  if (!whole || whole.length > MAX_CHARS || ATTACH_OR_LINK.test(whole)) return "main";
+  if (!whole) return "main";
   // the rest decides; nothing left means it only greets or pings
   const text = HELLO.test(whole) ? whole.split(SENTENCE).filter((sentence) => !CASUAL.test(sentence.trim())).join("\n") : whole;
   if (!text.trim()) return "quick";
-  if (REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "main";
   const sentences = text
     .split(SENTENCE)
     .map((sentence) => sentence.trim().replace(LEAD, "").replace(KO_LEAD, "").trim())
     .filter(Boolean);
-  if (!sentences.length || sentences.some((sentence) => STEER.test(sentence) || KO_STEER.test(sentence) || (COMMAND.test(sentence) && !QUESTION_START.test(sentence)))) return "main";
+  if (!sentences.length || KO_STOP.test(text) || sentences.some((sentence) => STEER.test(sentence) || KO_STEER.test(sentence))) return "main";
+  if (whole.length > MAX_CHARS || ATTACH_OR_LINK.test(whole) || REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "ack";
+  if (sentences.some((sentence) => COMMAND.test(sentence) && !QUESTION_START.test(sentence))) return "ack";
   const last = sentences.at(-1)!;
   const asks = sentences.some((sentence) => ENDS_Q.test(sentence)) || QUESTION_START.test(last) || KO_QUESTION.test(last) || TAG_Q.test(last);
-  return asks ? "quick" : "main";
+  return asks ? "quick" : "ack";
 }

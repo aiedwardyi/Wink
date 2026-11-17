@@ -97,6 +97,17 @@ describe("quickAsk on a fork", () => {
     expect(text).toBe("where's the plan?");
   });
 
+  it("asks a send the bot already took for one short line, never a handoff", async () => {
+    const stub = stubFork();
+    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "help me answer ur questions", ack: true });
+    stub.emit({ type: "done", ok: true, text: "On it, I'll lay out each question with my pick." });
+    expect(await pending).toMatchObject({ route: "answer", text: "On it, I'll lay out each question with my pick." });
+    const [preamble, text] = stub.inputs[0]!.text.split("\n\n");
+    expect(preamble).toMatch(/^\[Quick helper\. .*already reached your main task as their own words.*never reply HANDOFF\.\]$/);
+    expect(preamble).not.toContain("reply with exactly HANDOFF");
+    expect(text).toBe("help me answer ur questions");
+  });
+
   it("hands the main's live state to the fork", async () => {
     const stub = stubFork();
     const at = new Date().toISOString();

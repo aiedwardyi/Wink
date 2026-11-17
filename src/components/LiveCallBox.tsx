@@ -8,7 +8,7 @@ import type { CallState } from "@/lib/live-call/controller";
 import { useCallCaptions } from "@/lib/live-call/captions";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { CallSettingsHold } from "./CallSettings";
-import { clock, useLive, WORDS, type Live } from "./LiveCallBar";
+import { clock, SoundPill, useLive, WORDS, type Live } from "./LiveCallBar";
 
 const BARS = [0.55, 1, 0.75, 0.45];
 
@@ -79,7 +79,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
           ? <p data-call-mic-hint role="status" className="pointer-events-none col-span-full row-start-1 self-center px-1 py-1 text-[15px] leading-6 text-ink-secondary">{soundPane ? <>{beforeLink}<button type="button" onClick={() => void window.ogb?.permOpenSettings("sound")} className="pointer-events-auto font-medium text-accent hover:underline">{words.soundInput}</button>{afterLink}</> : words.micSilent}</p>
           : captions && snap.caption && <CaptionLine caption={snap.caption} who={snap.caption.who === "user" ? words.you : bot.name} />}
       <div data-call-box={snap.status} data-leaving={closing || undefined} className="col-start-2 row-start-3 mt-1 flex min-w-0 items-center gap-1">
-        <p role="status" className="flex min-w-0 items-center gap-2 px-1 text-[13px] tabular-nums text-ink-secondary">
+        {snap.noSound ? <SoundPill bot={bot} live={live} /> : <p role="status" className="flex min-w-0 items-center gap-2 px-1 text-[13px] tabular-nums text-ink-secondary">
           {snap.status === "starting"
             ? <><Loader2 size={15} className="shrink-0 animate-spin" aria-hidden /><span className="truncate">{words.starting}</span></>
             : talking && <>
@@ -87,7 +87,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
               {snap.startedAt !== undefined && <span>{clock(now - snap.startedAt)}</span>}
               {snap.status === "working" && <span className="truncate">{words.working}</span>}
             </>}
-        </p>
+        </p>}
         <span className="ml-auto" />
         <CallSettingsHold bot={bot} tap>
           <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(icon, "text-ink-secondary hover:bg-control hover:text-ink")}>

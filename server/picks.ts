@@ -260,10 +260,13 @@ export function mergeTimelines(a: string, b: string): string | null {
   const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
   for (const { entries } of timelines) {
     const sources = new Map(entries.map((entry) => [entry.id, identity(entry)]));
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
     for (const entry of entries) {
       const key = identity(entry);
       const next = entry.replacedBy ? sources.get(entry.replacedBy) : undefined;
-      if (next && next !== key) parents.set(next, new Set([...(parents.get(next) ?? []), key]));
+      // typed beats tapped whatever the order, so a link between them orders nothing
+      const ordered = Boolean(entry.tapped) === Boolean(entry.replacedBy && byId.get(entry.replacedBy)?.tapped);
+      if (next && next !== key && ordered) parents.set(next, new Set([...(parents.get(next) ?? []), key]));
       const before = merged.get(key);
       merged.set(key, before ? {
         ...before,
@@ -292,6 +295,10 @@ export function mergeTimelines(a: string, b: string): string | null {
     entry.id = id;
     entry.replacedBy = undefined;
     const before = current.get(pickKey(entry.key));
+    if (before && entry.tapped && !before.tapped) {
+      entry.replacedBy = before.id;
+      continue;
+    }
     if (before) before.replacedBy = id;
     current.set(pickKey(entry.key), entry);
   }

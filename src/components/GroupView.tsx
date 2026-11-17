@@ -53,7 +53,7 @@ import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
-import { WorkerRow, WorkerChip, useWorkerRows, type ShownRun } from "./WorkerRows";
+import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
@@ -1370,10 +1370,9 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           <RoomTitle name={group.name} picture={<RoomPicture key={group.id} src={group.hosted && roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
         <div data-no-swipe className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
-          <WorkerChip name={group.name} runs={workers} livePanes={null} />
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
           <RoomAlertsBell chat={group.id} />
-          <ShowPaneButton threadId={group.threadId} />
+          <ShowPaneButton threadId={group.threadId} workers={{ name: group.name, runs: workers }} />
         </div>
       </div>
 
