@@ -57,5 +57,5 @@ export function usageStatusText(board: UsageBoard, timeZone: string) {
   const engines = board.engines.map((engine) =>
     [`${ENGINES[engine.engine] ?? engine.engine}:`, ...engine.accounts.map((account) => accountLine(account, board.at, clock))].join("\n"));
   return [`Usage page now (${clock.format(board.at)}, ${timeZone}). Percent is what is LEFT.`, ...engines,
-    "Of the accounts with usage left, spend first the one whose window resets first."].join("\n");
+    "Use Main, then the Settings order; switch only when one is out or the user asks."].join("\n");
 }

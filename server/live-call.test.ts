@@ -10,7 +10,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, VOICE_SAID } from "../shared/live-call.ts";
 import type { AppConfig } from "./config.ts";
-import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
+import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, CALL_PICKS_FILE, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -29,7 +29,9 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
   const answered = vi.fn();
-  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered });
+  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered });
+  let routes = open();
+  const restart = () => { routes = open(); };
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -38,7 +40,7 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
-  return { dir, cfg, store, bot, fetch, post, sent, answered };
+  return { dir, cfg, store, bot, fetch, post, sent, answered, restart };
 }
 
 describe("call token", () => {
@@ -133,6 +135,26 @@ describe("call token", () => {
     expect(swapped.data).toMatchObject({ voice: "Erinome", style: "calm" });
     await h.post("token", { callId: first.data.callId, call: { voice: "Puck" } });
     expect(h.sent(2).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+  });
+
+  it.each(["a server restart", "sixteen newer calls"])("a resume after %s keeps the voice picked mid-call, not the bot's saved one", async (gone) => {
+    const h = harness();
+    const first = await h.post("token");
+    await h.post("token", { callId: first.data.callId, swap: true, call: { voice: "Erinome", style: "calm" } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Puck" } });
+    if (gone === "a server restart") h.restart();
+    else for (let i = 0; i < 16; i++) await h.post("token");
+    await h.post("token", { callId: first.data.callId, resume: true });
+    const setup = h.sent(h.fetch.mock.calls.length - 1).bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak softly");
+  });
+
+  it("a finished call leaves no picks behind", async () => {
+    const h = harness();
+    const first = await h.post("token", { call: { voice: "Fenrir" } });
+    await h.post("end", { callId: first.data.callId, stats: {} });
+    expect(JSON.parse(readFileSync(join(h.dir, CALL_PICKS_FILE), "utf8"))).toEqual({});
   });
 
   it("a new call speaks with the picks it carries, before the bot's own save lands", async () => {

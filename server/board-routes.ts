@@ -1,13 +1,13 @@
 // board_search and board_post for bots, and the Forum's read for the app.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, boardLine, ROOM_REF, type Board } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, ROOM_REF, type Board } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
-export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board" } as const;
+export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply" } as const;
 
 const searchSchema = z.object({ query: z.string().trim().min(1).max(200), project_id: z.string().trim().max(160).optional() }).strict();
 const postSchema = z.object({
@@ -15,7 +15,9 @@ const postSchema = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(4000),
   parent_id: z.string().trim().min(1).max(64).optional(),
+  helped: z.boolean().optional(),
 }).strict();
+const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000) }).strict();
 
 export interface BoardRouteDeps {
   board: Board;
@@ -46,8 +48,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const room = deps.roomTurn(from);
       if (room === "read-only") return json(res, 403, { error: "board_post is unavailable: the host has to turn on \"Can make bots work\" for whoever asked" });
       const body = postSchema.safeParse(await readBody(req));
-      if (!body.success) return json(res, 400, { error: "board_post needs kind (stuck, fix or handoff), title and body" });
-      const { kind, title, body: text, parent_id } = body.data;
+      if (!body.success) return json(res, 400, { error: "board_post needs kind (stuck, fix, tip or handoff), title and body" });
+      const { kind, title, body: text, parent_id, helped } = body.data;
       const parent = parent_id ? deps.board.get(parent_id) : undefined;
       if (parent_id && !parent) return json(res, 404, { error: `no Board post ${parent_id}` });
       const event = createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? ""])).digest("hex").slice(0, 16);
@@ -62,10 +64,28 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         fix: kind === "fix" ? text : undefined,
         source_ref: `${room ? ROOM_REF : "tool:"}${from.threadId}:${event}`,
       });
+      if (helped && parent && parent.author_bot_id !== from.botId) deps.board.helped([parent.id], from.botId);
       return json(res, 200, { id: post.id, text: `Posted to the Board as ${post.id}.` });
     },
     list(res: ServerResponse) {
       return json(res, 200, { posts: deps.board.list() });
+    },
+    /** The user's reply in the Forum: an ordinary post under the one it answers, never a fix that solves it. */
+    async reply(req: IncomingMessage, res: ServerResponse) {
+      const body = replySchema.safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "a reply needs parent_id and body" });
+      const parent = deps.board.get(body.data.parent_id);
+      if (!parent) return json(res, 404, { error: `no Board post ${body.data.parent_id}` });
+      const post = deps.board.post({
+        author_bot_id: BOARD_USER,
+        kind: "tip",
+        title: parent.title,
+        body: body.data.body,
+        parent_id: parent.id,
+        project_id: parent.project_id,
+        source_ref: `reply:${randomUUID()}`,
+      });
+      return json(res, 200, { post });
     },
   };
 }

@@ -418,6 +418,8 @@ export function SettingsModal({
   const backRef = useRef(back);
   useEffect(() => { backRef.current = back; }, [back]);
   useBackLayer(!closing && phone && page, back);
+  // The Model Index list needs the whole phone screen.
+  const fill = phone && page && section === "models-index";
   const dialogRef = useRef<HTMLDivElement>(null);
   const activityWaved = useRef(false);
   useSettingsSwipe(dialogRef, phone && !closing, phone && page ? section : false, back);
@@ -525,7 +527,7 @@ export function SettingsModal({
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 max-md:bg-transparent"
+      className={cn("animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 max-md:bg-transparent", fill && "p-0")}
       onMouseDown={(e) => e.target === e.currentTarget && dispatch({ type: "toggleAppSettings", open: false })}
     >
       {phone && <div data-settings-scrim className="pointer-events-none absolute inset-0 bg-black/50" />}
@@ -540,6 +542,7 @@ export function SettingsModal({
         className={cn(
           "animate-pop-in flex max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col",
           phone && section === "account" ? "h-auto" : "h-[560px]",
+          fill && "h-full rounded-none border-0",
         )}
       >
         {phone && (
@@ -617,7 +620,7 @@ export function SettingsModal({
           </div>
           {phone && section === "themes" && <div className="flex justify-end px-5 pb-3"><GeometryPicker /></div>}
 
-          <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5">
+          <div className={cn("flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5", fill && "px-4 pb-0")}>
             {section === "account" && (
               <>
                 <Card>

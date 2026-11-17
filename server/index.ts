@@ -522,7 +522,18 @@ const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
 const crashCount = crashCounter({ origin: crashOrigin, project: process.env.WINK_CRASH_PROJECT?.trim() || null, key: () => (crashOrigin ? cfg.customKeys?.[new URL(crashOrigin).host] : null) });
 let profileSyncSettings: ProfileSyncSettings = loadProfileSyncSettings(DATA_DIR);
-const board = createBoard({ dir: join(DATA_DIR, BOARD_DIR), pcId: () => profileSyncSettings.deviceId, changed: () => broadcast({ kind: "board" }) });
+const board = createBoard({
+  dir: join(DATA_DIR, BOARD_DIR),
+  pcId: () => profileSyncSettings.deviceId,
+  changed: () => broadcast({ kind: "board" }),
+  author: (botId) => {
+    const bot = store.bot(botId);
+    if (!bot) return undefined;
+    const { instanceId, model } = bot.modelSelection;
+    const label = registry.get(instanceId)?.models.options.find((option) => option.id === model)?.label ?? model;
+    return { name: bot.name, model: label, color: bot.color ?? "", mascot_style: bot.mascotStyle ?? "" };
+  },
+});
 const threadSyncGate = createThreadSyncV2Gate(DATA_DIR);
 if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
@@ -8478,6 +8489,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     // ── device picker: PCs in the sync folder ──
     if (method === "GET" && path === BOARD_ROUTES.list) return boardRoutes.list(res);
+    if (method === "POST" && path === BOARD_ROUTES.reply) return await boardRoutes.reply(req, res);
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
