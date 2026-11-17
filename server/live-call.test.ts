@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
-import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, VOICE_SAID } from "../shared/live-call.ts";
+import { CALL_ID, CALL_STYLES, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, VOICE_SAID } from "../shared/live-call.ts";
 import type { AppConfig } from "./config.ts";
 import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, CALL_PICKS_FILE, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
@@ -109,7 +109,7 @@ describe("call token", () => {
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Sulafat");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
     expect(setup.systemInstruction.parts[0].text).toContain("On screen your voice is called Sulafat");
-    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Speak softly and gently");
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm. Speak slowly");
   });
 
   it("a pick mid-call opens a fresh session in the new voice that knows the call so far", async () => {
@@ -131,7 +131,7 @@ describe("call token", () => {
     const swapped = await h.post("token", { callId: first.data.callId, swap: true, call: { voice: "Erinome", style: "calm" } });
     const setup = h.sent(1).bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
-    expect(setup.systemInstruction.parts[0].text).toContain("Speak softly");
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
     expect(swapped.data).toMatchObject({ voice: "Erinome", style: "calm" });
     await h.post("token", { callId: first.data.callId, call: { voice: "Puck" } });
     expect(h.sent(2).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
@@ -147,7 +147,7 @@ describe("call token", () => {
     await h.post("token", { callId: first.data.callId, resume: true });
     const setup = h.sent(h.fetch.mock.calls.length - 1).bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
-    expect(setup.systemInstruction.parts[0].text).toContain("Speak softly");
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
   });
 
   it("a finished call leaves no picks behind", async () => {
@@ -519,6 +519,41 @@ describe("T2 the voice's own words are never facts", () => {
     expect(block).toContain("unverified and never proof");
     expect(block).not.toContain("Treat them as part of this chat");
     expect(block).not.toContain("You: ");
+  });
+});
+
+describe("c-3a2c5539c0ea only chat talk reaches the call", () => {
+  it("a pane note's screen, tool chips and code fences stay out of RECENT CHAT, and STATUS still names the worker", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "note", text: "[pane aef5aac3] [BUILD | Opus 5.5 | high] from Juno (b1): FAIL BUILD branch=x sha=1 dirty=no\n● Write(server\\store.ts)\n  ⎿  Error: File has been modified since read\n● Bash(git checkout HEAD -- server/store.ts)" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "activity", tool: { name: "terminal_read", ok: true, detail: { input: "aef5aac3", output: ["● Write(server\\store.ts)"] } } });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Here's the fix:\n```rust\nlet path = \"output_table.txt\";\nlet mut file = std::fs::File::create(path)?;\n```\nIt writes the table next to the input." });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "nice, thanks" });
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const chat = brief.split("RECENT CHAT:\n")[1]!.split("\n\nSTATUS:")[0]!;
+    expect(chat).not.toMatch(/Pane note|● Write|⎿|git checkout|tool call|terminal_read/);
+    expect(chat).not.toMatch(/```|std::fs|output_table/);
+    expect(chat).toContain("You: Here's the fix:\n(code, in the chat)\nIt writes the table next to the input.");
+    expect(chat).toContain("User: nice, thanks");
+    expect(brief.split("STATUS:\n")[1]).toContain("BUILD reported FAILED");
+  });
+});
+
+describe("call styles", () => {
+  it("each style sends its own delivery: pace, pitch and length, at one speaking volume", async () => {
+    const sent: Record<string, string> = {};
+    for (const style of CALL_STYLES) {
+      const h = harness();
+      await h.post("token", { call: { style } });
+      sent[style] = (h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string).split("\n\n").at(-1)!;
+    }
+    expect(new Set(Object.values(sent)).size).toBe(3);
+    expect(sent.calm).toMatch(/^VOICE: Calm\..*slowly.*low in your range.*one short sentence/);
+    expect(sent.normal).toMatch(/^VOICE: Natural\..*everyday pace and pitch/);
+    expect(sent.lively).toMatch(/^VOICE: Lively\..*quickly.*lifted pitch.*Two quick sentences/);
+    for (const style of ["calm", "lively"]) expect(sent[style]).toContain("normal speaking volume");
+    expect(sent.calm).not.toMatch(/softly|quiet late-night/);
   });
 });
 

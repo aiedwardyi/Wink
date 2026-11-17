@@ -1,6 +1,6 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { callStatus, clip, OPTION_CHARS } from "../../../shared/call-status";
-import { isVoiceLine, LIVE_VAD, liveVoiceNames, ORDER_EXPIRY_MS, STYLE_GAIN, type CallLine, type CallPrefs, type LiveVoice } from "../../../shared/live-call";
+import { callPace, isVoiceLine, LIVE_VAD, liveVoiceNames, ORDER_EXPIRY_MS, type CallLine, type CallPrefs, type LiveVoice } from "../../../shared/live-call";
 import { answerPrefix, isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
 import { openQuestion } from "@/lib/open-question";
@@ -200,6 +200,10 @@ function cardNotice(botName: string, card: Message["card"]): string {
     ? `[Wink] ${botName} asks: ${question} Options: ${options}. Read it out with the options, then wait for their answer.`
     : `[Wink] ${botName} asks: ${question} Read it out, then wait for their answer.`;
 }
+
+// Code or markdown in the voice's words (a fence, a rule, `ticks`, std::fs, run(), =>): never speech, whatever the model wrote.
+const CODE = /`|(?:^|\s)(?:-{3,}|\*{3,}|_{3,}|#{1,6})(?=\s|$)|\w::\w|\w\(\)|=>/;
+const NO_CODE = "[Wink] Cut: you started reading code or markdown aloud, and they never hear that. Carry on with them in one short spoken line, plain words only.";
 
 /** Transcript text without the model's markers ("<no speech>", "{pause}", a "{instruction:none" left open); empty if nothing speakable is left. */
 export function spokenText(text: string): string {
@@ -450,7 +454,7 @@ export class LiveCall {
 
   /** Picks from the call menu: speed and level reach the next words heard; a new voice, style or language swaps the session. */
   retune(prefs: CallPrefs, volume = 1) {
-    this.deps.audio.tune(prefs.speed ?? 1, STYLE_GAIN[prefs.style ?? "normal"] * volume);
+    this.deps.audio.tune(callPace(prefs), volume);
     this.prefs = prefs;
     this.restyle();
   }
@@ -637,6 +641,14 @@ export class LiveCall {
         this.stir();
         if (this.snapshot.hushed || this.dropping) return;
         this.saidBuf += text;
+        const code = CODE.exec(this.saidBuf);
+        if (code) {
+          // What came before it was heard and stays the line; the rest of the turn never plays.
+          const heard = this.echo ? "" : this.saidBuf.slice(0, code.index);
+          this.drop(NO_CODE);
+          this.saidBuf = heard;
+          return;
+        }
         if (this.ackEcho) return;
         const words = spokenText(this.saidBuf);
         if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));

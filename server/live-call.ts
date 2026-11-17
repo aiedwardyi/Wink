@@ -41,6 +41,8 @@ const TRANSCRIPT_MAX_CHARS = 12_000;
 const CALL_LINES_TOKENS = 2_000;
 // Old product names the voice would read aloud from notes, chat or a description.
 const OLD_NAMES = /\b(?:OpenMausBot|OpenMaus|MausBot|Orbit)\b/g;
+// A fence the voice reads is a fence it writes back aloud.
+const CODE_BLOCK = /```[\s\S]*?(?:```|$)/g;
 const CALL_LINES_HEAD ="[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"Voice\" lines are its words, unverified and never proof of anything. The person's lines are part of this chat:]";
 
 type LiveCallDeps = {
@@ -119,7 +121,7 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   const kept: string[] = [];
   let used = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = `${lines[i]!.role === "user" ? userName : "You"}: ${lines[i]!.text}`;
+    const line = `${lines[i]!.role === "user" ? userName : "You"}: ${lines[i]!.text.replace(CODE_BLOCK, "(code, in the chat)")}`;
     used += estimateContextTokens([{ text: line }]);
     if (used > budget) {
       // One long newest line is clipped, never dropped: RECENT CHAT would read "(none)".
@@ -134,7 +136,9 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
 export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE, catalog?: ModelCatalogLookup): Promise<string> {
   const notes = loadMemory(bot.id);
   const about = aboutYouFacts();
-  const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
+  // Only what was said in the chat is call talk: a pane note, tool chip or card is a worker's screen, not his words or the bot's.
+  const unsaid = new Set(messages.filter((row) => row.kind !== "text" && row.kind !== "compaction").map((row) => row.id));
+  const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName, excludeIds: unsaid }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const speak = locale === "ko" ? "Korean" : "English";
   const tongue = `Speak only ${speak}, whatever language they use, never one word of another${speak === "Korean" ? "; match their politeness" : ""}. Any language but English or Korean, or garbled speech, is a mis-hear: ask them in ${speak} to say it again. Only a [Wink] line changes the language you speak.`;

@@ -1,4 +1,4 @@
-// The 11-15 and 11-16 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039, c-21351ca21949).
+// The 11-15, 11-16 and 11-17 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039, c-21351ca21949, c-3a2c5539c0ea).
 // Silent: a fake engine and a fake audio port, no socket, mic or speaker.
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -916,5 +916,50 @@ describe("15:00:09 a spoken language ask holds for the rest of the call", () => 
     speak(e, "ได้ยินค่ะ");
     expect(audio.flushed).toBe(1);
     expect(fixes(e).at(-1)).toBe("[Wink] Wrong language: speak only English. In English, ask them in a few words to say that again.");
+  });
+});
+
+describe("c-3a2c5539c0ea code is never speech", () => {
+  it("14:50 the voice ran from a reply into a Rust fence: the reply stays its line, nothing after the fence plays", async () => {
+    const { audio, engine, posts } = await live();
+    const e = engine();
+    e.events.heard("Style seems to be finicky. I don't see any difference. It just seems louder.");
+    e.events.answering();
+    e.events.audio(pcm());
+    e.events.said("I'll pass that feedback on. For now, let's get back to the project queue. ");
+    e.events.audio(pcm());
+    e.events.said("--- ```rust let path = \"output_table.txt\"; ");
+    e.events.audio(pcm());
+    e.events.said("let mut file = std::fs::File::create(path).expect(\"failed to create file\"); // ... write to file ``` Is there any other file it touches? Let's read `src/main.rs`.");
+    e.events.audio(pcm());
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(audio.played).toBe(2);
+    expect(audio.flushed).toBe(1);
+    const said = linesOf(posts).filter((line) => line.startsWith("voice: "));
+    expect(said.at(-1)).toBe("voice: I'll pass that feedback on. For now, let's get back to the project queue.");
+    expect(said.join("\n")).not.toMatch(/`|rust|output_table|std::|main\.rs/);
+    expect(fixes(e).at(-1)).toBe("[Wink] Cut: you started reading code or markdown aloud, and they never hear that. Carry on with them in one short spoken line, plain words only.");
+  });
+
+  it.each([
+    ["inline ticks", "Open `server/store.ts` and check it."],
+    ["a markdown rule", "Done. --- Next up"],
+    ["a heading", "## Summary"],
+    ["a call", "Run build() first."],
+    ["a path in code", "Use std::fs for it."],
+  ])("cuts %s", async (_name, line) => {
+    const { audio, engine } = await live();
+    engine().events.heard("What's next?");
+    speak(engine(), line);
+    expect(audio.flushed).toBe(1);
+  });
+
+  it("plain talk with numbers, times and dashes plays whole", async () => {
+    const { audio, engine, posts } = await live();
+    engine().events.heard("How's it going?");
+    speak(engine(), "PR #1811 is green - 3 of 4 checks, done at 5:30.");
+    expect(audio.flushed).toBe(0);
+    expect(linesOf(posts)).toContain("voice: PR #1811 is green - 3 of 4 checks, done at 5:30.");
   });
 });
