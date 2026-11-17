@@ -28,6 +28,7 @@ import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
 import { brokerSocketPath, cliVersion, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { inputDigest } from "../repeat-detector.ts";
+import { readSessionStart, writeSessionStart } from "../session-system.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
@@ -907,6 +908,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       prepared?: Lease;
       /** a new session started without its system text; the turn that takes it sends it in `initialize` */
       systemDeferred?: boolean;
+      /** the system text this process launched with; recorded once per session id at init */
+      launchSystem?: string;
     }
     const sessions = new Map<string, Session>();
     const lastSpawn = new Map<string, ClaudeSpawn>();
@@ -1043,6 +1046,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
+    // written when the cursor is, so the store's prune never sees it without one
+    const recordStart = (sessionId: string, system: string) => {
+      if (readSessionStart(instanceId, sessionId) === undefined) writeSessionStart(instanceId, sessionId, system);
+    };
+
     // true once the CLI acknowledges the system text; false if it refuses or exits first
     const initialize = (s: Session, threadId: string, system: string): Promise<boolean> => {
       const requestId = newId();
@@ -1112,6 +1120,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const retryScale = Number(process.env.FAKE_CLAUDE_RETRY_SCALE ?? "1");
       const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
+      // the CLI rebuilds its system from launch flags, so a --resume relaunches with the session's own start text
+      const startSystem = sessionId ? readSessionStart(instanceId, sessionId) : undefined;
+      const launchSystem = startSystem ?? turn.system;
       const asks = turn.approval === "ask" && config.permissionMode !== "bypassPermissions";
       const auto = turn.approval === "auto";
       const autoAttended = auto && turn.attended === true;
@@ -1148,7 +1159,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (turn.effort) args.push("--effort", turn.effort);
       if (turn.leanStartup === true) args.push("--setting-sources", "project");
       else if (baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
-      if (turn.system) args.push("--append-system-prompt", turn.system);
+      if (launchSystem) args.push("--append-system-prompt", launchSystem);
 
       // integrations → MCP servers; pre-allow their tools (a headless
       // acceptEdits run silently denies anything unlisted)
@@ -1238,7 +1249,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // accepts a FILE for this flag, so the secrets go in a 0600 file that
       // is removed when the turn settles.
       let mcpConfigPath: string | null = null;
-      if (Object.keys(mcpServers).length || turn.system) {
+      if (Object.keys(mcpServers).length || launchSystem) {
         mcpConfigPath = join(mkdtempSync(join(tmpdir(), "omb-mcp-")), "mcp.json");
         writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers }), { mode: 0o600 });
         if (Object.keys(mcpServers).length) {
@@ -1324,6 +1335,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           live.turn = null;
           closeSession(threadId, "initialize refused");
           throw new Error("claude session did not accept its system prompt");
+        }
+        if (deferred && turn.system && turn.hosted !== true) {
+          live.launchSystem = turn.system;
+          if (live.sessionId) recordStart(live.sessionId, turn.system);
         }
         const written = await writeUser(live, threadId, turn.text);
         if (!written) {
@@ -1420,9 +1435,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       turnTimer.mark("spawnOrReuse");
       let child: ReturnType<typeof spawnCli>;
       try {
-        if (turn.system && mcpConfigPath) {
+        if (launchSystem && mcpConfigPath) {
           const systemPromptPath = join(dirname(mcpConfigPath), "system.txt");
-          writeFileSync(systemPromptPath, turn.system, { mode: 0o600 });
+          writeFileSync(systemPromptPath, launchSystem, { mode: 0o600 });
           args.splice(args.indexOf("--append-system-prompt"), 2, "--append-system-prompt-file", systemPromptPath);
         }
         const endSpawn = trace?.span("spawn", "cold", retry.attempt);
@@ -1436,7 +1451,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         child.once("error", () => endSpawn?.("error"));
         trace?.unknown("initialize", "CLI-owned/unobservable");
         trace?.unknown(sessionId ? "resume" : "start", "CLI-owned/unobservable");
-        trace?.delivered(sessionId ? "resume-launch" : "start", () => ({ system: turn.system ?? "" }));
+        trace?.delivered(sessionId ? "resume-launch" : "start", () => ({ system: launchSystem ?? "" }));
       } catch (error) {
         broker?.close();
         if (mcpConfigPath) {
@@ -1455,6 +1470,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         sessionId: sessionId ?? newSessionId,
         prepared: lease,
         systemDeferred: prepare && sessionId === null && !turn.system ? true : undefined,
+        launchSystem: turn.hosted === true ? undefined : launchSystem,
         turn: prepare ? null : {
           ...restart?.turn,
           merging: undefined,
@@ -1744,6 +1760,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "system":
             if (o.subtype === "init") {
               if (typeof o.session_id === "string") session.sessionId = o.session_id;
+              if (typeof o.session_id === "string" && session.launchSystem) recordStart(o.session_id, session.launchSystem);
               emit({ ...base(threadId, currentTurnId()), type: "session.started", sessionId: o.session_id, model: o.model });
             } else if (o.subtype === "thinking_tokens") {
               emit({ ...base(threadId, currentTurnId()), type: "item.updated", itemType: "reasoning", tokens: o.estimated_tokens });

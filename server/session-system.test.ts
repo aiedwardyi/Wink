@@ -251,6 +251,36 @@ describe("system text on a resumed session", () => {
     );
   });
 
+  it("relaunches a cold resume with the system text the session started with", async () => {
+    process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS = "10";
+    process.env.OMB_CLAUDE_SESSION_IDLE_MS = "50";
+    await start();
+    const original = system("- Pet: a cat named Mochi");
+    const current = system("- Pet: a dog named Mochi");
+    const first = await send("hi", original);
+    const corrected = await send("it is a dog", current);
+    expect(corrected.pid).toBe(first.pid);
+    expect(corrected.text).toContain("- Pet: a dog named Mochi");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const cold = await send("what pet?", current);
+    expect(cold.pid).not.toBe(first.pid);
+    expect(cold.argv).toContain("--resume");
+    expect(cold.systemPrompt).toBe(original);
+    expect(cold.text).toBe("what pet?");
+    const held = [cold.systemPrompt, first.text, corrected.text, cold.text].join("\n");
+    expect(held.split("- Pet: a dog named Mochi")).toHaveLength(2);
+
+    recorder.stop();
+    await instance.dispose();
+    store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    await start();
+    const reloaded = await send("and now?", current);
+    expect(reloaded.argv).toContain("--resume");
+    expect(reloaded.systemPrompt).toBe(original);
+    expect(reloaded.text).toBe("and now?");
+  });
+
   it("starts a fresh session instead of a reminder past the cap", async () => {
     await start();
     const notes = (word: string) => Array.from({ length: 200 }, (_, i) => `- ${word} note ${i} ${"x".repeat(40)}`);

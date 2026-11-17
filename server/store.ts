@@ -18,7 +18,7 @@ import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
-import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
+import { readSessionSystem, SESSION_SYSTEM_DIR, sessionStartFile, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { applyPendingModel } from "./pending-model.ts";
@@ -1016,7 +1016,10 @@ export class Store {
     const live = new Set<string>();
     for (const bot of [...this.bots, ...this.trash.entries.map((entry) => entry.record)]) {
       for (const cursors of [bot.resumeCursors, ...(bot.tasks ?? []).map((task) => task.resumeCursors)]) {
-        for (const [instanceId, cursor] of Object.entries(cursors ?? {})) live.add(sessionSystemFile(instanceId, cursor));
+        for (const [instanceId, cursor] of Object.entries(cursors ?? {})) {
+          live.add(sessionSystemFile(instanceId, cursor));
+          live.add(sessionStartFile(instanceId, cursor));
+        }
       }
     }
     for (const file of files) {

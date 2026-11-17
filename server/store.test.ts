@@ -13,6 +13,7 @@ import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { peerAllowKey } from "./peer-approval-key.ts";
 import { applyResolvedProjectFolder } from "./project-folder.ts";
+import { readSessionStart, writeSessionStart } from "./session-system.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { agentRoster, Store, titleFromMessage, type BotRecord } from "./store.ts";
@@ -700,6 +701,20 @@ describe("Store", () => {
 
     store.deleteTask(bot.id, background.threadId);
     expect(store.sessionSystem("claude", "bg-session")).toBeUndefined();
+  });
+
+  it("keeps a session's start text with its cursor and drops it after", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.setResumeCursor(bot.id, "claude", "session-1", bot.threadId);
+    writeSessionStart("claude", "session-1", "start");
+    store.recordSessionSystem("claude", "session-1", "start plus changes");
+
+    expect(readSessionStart("claude", "session-1")).toBe("start");
+    new Store(selection).flushSaves();
+    expect(readSessionStart("claude", "session-1")).toBe("start");
+    store.clearResumeCursors(bot.id, bot.threadId);
+    expect(readSessionStart("claude", "session-1")).toBeUndefined();
   });
 
   it("markProviderSessionBound records the recycle watermark and drops lastInput", () => {
