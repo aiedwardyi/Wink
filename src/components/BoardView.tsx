@@ -4,7 +4,7 @@ import { ArrowBigUp, CircleCheck, Flame, MessageCircle, MessagesSquare, Sparkles
 
 import { agoText } from "@/lib/ago";
 import {
-  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, replyToBoard, sortBoardThreads, useBoardPosts,
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, isOwnReply, replyToBoard, sortBoardThreads, useBoardPosts,
   type BoardKind, type BoardPost, type BoardReply, type BoardSort,
 } from "@/lib/board";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -22,6 +22,7 @@ import type { Bot } from "@/state/store-types";
 import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { BackButton } from "./BackButton";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { MessageMenu, messageMenuProps, SelectionMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { ProviderMark } from "./ProviderIcons";
 import { MessageBoundary } from "./TurnPresence";
 
@@ -85,12 +86,22 @@ function Body({ text }: { text: string }) {
   return <MessageBoundary fallbackText={text}><ChatMarkdown text={text} localLinks={false} /></MessageBoundary>;
 }
 
+type OnMenu = (menu: MessageMenuRequest) => void;
+
+/** The chat's message menu on a post: Copy on any, Delete added on the user's own replies. */
+const menuProps = (post: BoardPost, onMenu: OnMenu) => {
+  const text = post.body || post.title;
+  const user = post.author_bot_id === BOARD_USER;
+  const target: MessageMenuTarget = { threadId: FORUM_SELECTION, message: { id: post.id, role: user ? "user" : "bot", kind: "note", text, at: post.created_at }, copyText: text, user, pinned: false, canPin: false };
+  return messageMenuProps(target, onMenu);
+};
+
 const repliesText = (count: number, t: ReturnType<typeof useI18n>["t"]) => (count === 1 ? t("board.oneReply") : t("board.replies", { n: count }));
 
-function PostRow({ post, replies, onOpen }: { post: BoardPost; replies: number; onOpen: () => void }) {
+function PostRow({ post, replies, onOpen, onMenu }: { post: BoardPost; replies: number; onOpen: () => void; onMenu: OnMenu }) {
   const { t } = useI18n();
   return (
-    <div role="listitem" data-board-post={post.id}>
+    <div role="listitem" data-board-post={post.id} {...menuProps(post, onMenu)}>
       <button type="button" onClick={onOpen} className="flex w-full gap-2 rounded-2xl bg-card py-2.5 pr-4 pl-1.5 text-left hover:bg-control">
         <span className="flex w-10 shrink-0 flex-col items-center pt-px text-ink-secondary">
           <ArrowBigUp size={18} aria-hidden />
@@ -159,7 +170,7 @@ function ReplyBox({ parentId, onDone, autoFocus = false, round = true }: { paren
   );
 }
 
-function Comment({ node, replying, setReplying }: { node: BoardReply; replying: string | null; setReplying: (id: string | null) => void }) {
+function Comment({ node, replying, setReplying, onMenu }: { node: BoardReply; replying: string | null; setReplying: (id: string | null) => void; onMenu: OnMenu }) {
   const { t } = useI18n();
   const { post, replies } = node;
   const author = useAuthor(post);
@@ -170,8 +181,10 @@ function Comment({ node, replying, setReplying }: { node: BoardReply; replying: 
         {replies.length > 0 && <span className="mt-1.5 w-px flex-1 bg-hairline" aria-hidden />}
       </div>
       <div className="min-w-0">
-        <Meta post={post} />
-        <div className="mt-0.5 text-[14px] leading-[1.55] text-ink"><Body text={post.body || post.title} /></div>
+        <div {...menuProps(post, onMenu)}>
+          <Meta post={post} />
+          <div className="mt-0.5 text-[14px] leading-[1.55] text-ink"><Body text={post.body || post.title} /></div>
+        </div>
         <div className="mt-1 flex items-center gap-3.5 text-[12px] font-semibold text-ink-secondary">
           <span className="flex items-center gap-1"><ArrowBigUp size={15} aria-hidden />{t("board.helped", { n: post.helped_bot_ids.length })}</span>
           <button type="button" onClick={() => setReplying(replying === post.id ? null : post.id)} className="flex items-center gap-1 hover:text-ink">
@@ -181,7 +194,7 @@ function Comment({ node, replying, setReplying }: { node: BoardReply; replying: 
         {replying === post.id && <div className="mt-2"><ReplyBox parentId={post.id} autoFocus round={false} onDone={() => setReplying(null)} /></div>}
         {replies.length > 0 && (
           <div role="list" className="mt-3 flex flex-col gap-3.5">
-            {replies.map((child) => <Comment key={child.post.id} node={child} replying={replying} setReplying={setReplying} />)}
+            {replies.map((child) => <Comment key={child.post.id} node={child} replying={replying} setReplying={setReplying} onMenu={onMenu} />)}
           </div>
         )}
       </div>
@@ -189,13 +202,13 @@ function Comment({ node, replying, setReplying }: { node: BoardReply; replying: 
   );
 }
 
-function Thread({ post, replies }: { post: BoardPost; replies: BoardPost[] }) {
+function Thread({ post, replies, onMenu }: { post: BoardPost; replies: BoardPost[]; onMenu: OnMenu }) {
   const { t } = useI18n();
   const [replying, setReplying] = useState<string | null>(null);
   const tree = boardReplyTree(post, replies);
   return (
     <>
-      <article data-board-post={post.id} className="rounded-2xl bg-card px-4 py-3 text-ink">
+      <article data-board-post={post.id} className="rounded-2xl bg-card px-4 py-3 text-ink" {...menuProps(post, onMenu)}>
         <Meta post={post} face={20} />
         <h2 className="my-1.5 text-[18px] leading-[1.35] font-semibold">{post.title}</h2>
         <Flair kind={post.kind} />
@@ -219,7 +232,7 @@ function Thread({ post, replies }: { post: BoardPost; replies: BoardPost[] }) {
       </article>
       <div className="mt-3 mb-4"><ReplyBox parentId={post.id} /></div>
       <div role="list" aria-label={t("board.list")} className="flex flex-col gap-4">
-        {tree.map((node) => <Comment key={node.post.id} node={node} replying={replying} setReplying={setReplying} />)}
+        {tree.map((node) => <Comment key={node.post.id} node={node} replying={replying} setReplying={setReplying} onMenu={onMenu} />)}
       </div>
     </>
   );
@@ -247,6 +260,9 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   useBackLayer(Boolean(open), close);
   const isOpen = Boolean(open);
   const page = usePresence(open);
+  const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const { value: shownMenu, closing: menuClosing } = usePresence(menu);
+  const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
     if (!isOpen || hidden) return;
     const onKey = (event: KeyboardEvent) => {
@@ -326,7 +342,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
                   </div>
                 </div>
                 <div role="list" aria-label={t("board.list")} className="flex flex-col gap-2">
-                  {shown.map(({ post, replies }) => <PostRow key={post.id} post={post} replies={replies.length} onOpen={() => setOpenId(post.id)} />)}
+                  {shown.map(({ post, replies }) => <PostRow key={post.id} post={post} replies={replies.length} onOpen={() => setOpenId(post.id)} onMenu={setMenu} />)}
                   {!shown.length && <div className="py-6 text-center text-[13px] text-ink-secondary">{t("board.noneHere")}</div>}
                 </div>
               </>
@@ -340,10 +356,25 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             inert={page.closing}
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app"
           >
-            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} /></div>
+            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} /></div>
           </div>
         )}
       </div>
+      {shownMenu?.kind === "message" ? (
+        <MessageMenu
+          key={`${shownMenu.x},${shownMenu.y}`}
+          x={shownMenu.x}
+          y={shownMenu.y}
+          opener={shownMenu.opener}
+          target={shownMenu.target}
+          closing={menuClosing}
+          selectText={false}
+          onDelete={menuPost && isOwnReply(menuPost) ? () => void deleteFromBoard(menuPost.id).catch(() => {}) : undefined}
+          onClose={() => setMenu(null)}
+        />
+      ) : shownMenu ? (
+        <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
+      ) : null}
     </main>
   );
 }

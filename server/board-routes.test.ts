@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -135,5 +136,17 @@ describe("Forum replies and helped", () => {
     expect(board.get(stuck.id)).toMatchObject({ status: "open" });
     expect((await call(routes.reply, { parent_id: "p000000000000000000000000", body: "hi" })).status).toBe(404);
     expect((await call(routes.reply, { parent_id: stuck.id, body: "  " })).status).toBe(400);
+  });
+
+  it("deletes the user's own reply for real and nothing else", async () => {
+    const { board, routes } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:3" });
+    const saved = await call(routes.reply, { parent_id: stuck.id, body: "Switching is fine by me." });
+    expect((await call(routes.remove, { id: stuck.id })).status).toBe(403);
+    expect(await call(routes.remove, { id: saved.body.post.id })).toMatchObject({ status: 200 });
+    expect(board.list().map((post) => post.id)).toContain(stuck.id);
+    expect(board.get(saved.body.post.id)).toBeUndefined();
+    expect(existsSync(join(board.dir, `${saved.body.post.id}.json`))).toBe(false);
+    expect((await call(routes.remove, { id: saved.body.post.id })).status).toBe(404);
   });
 });

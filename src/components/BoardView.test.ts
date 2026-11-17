@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { BOARD_USER, createBoard } from "../../server/board.ts";
+import { createTempDirs } from "../../server/testing/cleanup.ts";
 
 import { BOARD_CHANGED_EVENT, FORUM_SELECTION, type BoardPost } from "@/lib/board";
 import type { Action, Bot } from "@/state/store";
@@ -58,6 +63,11 @@ beforeEach(() => {
       replies.push(body);
       posts.push(post("puser", { parent_id: body.parent_id, author_bot_id: "user", kind: "tip", body: body.body, created_at: 9 }));
       return new Response(JSON.stringify({ post: posts.at(-1) }), { headers: { "content-type": "application/json" } });
+    }
+    if (url === "/api/board/delete") {
+      const { id } = JSON.parse(String(init?.body));
+      posts = posts.filter((held) => held.id !== id);
+      return new Response(JSON.stringify({ id }), { headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify({ posts }), { headers: { "content-type": "application/json" } });
   }));
@@ -260,6 +270,55 @@ describe("Forum", () => {
     expect(rows()).toEqual(["phand", "pstuck", "pfix"]);
   });
 
+  it("the user shows nowhere in the Forum from chat copied in: list, post, replies, helped", async () => {
+    mock.state.config = { profile: { name: "Edward Yi" } };
+    const temps = createTempDirs();
+    const board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-forum-")), "board"), pcId: () => "home" });
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
+    board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "fix", title: stuck.title, body: "coool it worked", fix: "coool it worked", source_ref: `answer:m1:${stuck.id}` });
+    board.post({ author_bot_id: BOARD_USER, kind: "fix", title: "Push the branch", body: "push it to staging now", source_ref: "answer:m2:p0" });
+    board.helped([stuck.id], BOARD_USER);
+    posts = board.list();
+    afterAll(() => temps.remove());
+    await render(BoardView);
+    expect(rows()).toEqual([stuck.id]);
+    expect(host.querySelector("[data-board-helped]")!.textContent).toBe("0");
+    expect(host.textContent).toContain("0 replies");
+    await act(async () => host.querySelector<HTMLButtonElement>(`[data-board-post="${stuck.id}"] button`)!.click());
+    expect(rows()).toEqual([stuck.id]);
+    expect(host.querySelector("[data-board-fix]")).toBeNull();
+    expect(host.textContent).not.toMatch(/Edward|EY|coool|push it/);
+  });
+
+  it("right-click opens the chat's menu: Copy on bot posts, Copy and Delete on the user's own reply", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    posts = [
+      post("pbot", { title: "Codex usage limit", body: "Codex usage limit", created_at: 1 }),
+      post("pcarbon", { parent_id: "pbot", author_bot_id: "carbon", kind: "tip", body: "Use Claude.", created_at: 2 }),
+      post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Thanks, worked.", source_ref: "reply:r1", created_at: 3 }),
+    ];
+    await render(BoardView);
+    const menuFor = async (selector: string) => {
+      await act(async () => { document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+      await act(async () => { host.querySelector(selector)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+      return [...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent);
+    };
+    expect(await menuFor('[data-board-post="pbot"] button')).toEqual(["Copy"]);
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-copy]")!.click());
+    expect(writeText).toHaveBeenCalledWith("Codex usage limit");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
+    expect(await menuFor("article")).toEqual(["Copy"]);
+    expect(await menuFor('[data-board-post="pcarbon"] [data-board-author]')).toEqual(["Copy"]);
+    expect(await menuFor('[data-board-post="pmine"] p')).toEqual(["Copy", "Delete"]);
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await settle();
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual(["pbot", "pcarbon"]);
+    expect(host.querySelector("article")!.textContent).toContain("1 reply");
+  });
+
   it("shows the five engine marks above a friendly line when empty", async () => {
     await render(BoardView);
     const empty = host.querySelector("[data-board-empty]")!;
@@ -284,5 +343,23 @@ describe("Forum", () => {
     expect(button.title).toBe("Forum");
     await act(async () => button.click());
     expect(mock.dispatched).toEqual([{ type: "select", id: FORUM_SELECTION, reveal: true }]);
+  });
+
+  it("the header button pressed again closes the Forum and returns to the chat it came from", async () => {
+    const press = async () => {
+      await render(BoardButton);
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-board-button]")!.click());
+      // SAFETY: the button dispatches only select actions.
+      mock.state.selectedId = (mock.dispatched.at(-1) as { id: string }).id;
+    };
+    mock.state.selectedId = "carbon";
+    await press();
+    expect(mock.state.selectedId).toBe(FORUM_SELECTION);
+    await press();
+    expect(mock.dispatched).toEqual([{ type: "select", id: FORUM_SELECTION, reveal: true }, { type: "select", id: "carbon", reveal: true }]);
+    // a Forum restored at launch has no chat behind it: the first bot
+    mock.state.selectedId = FORUM_SELECTION;
+    await press();
+    expect(mock.state.selectedId).toBe("astra");
   });
 });

@@ -1,7 +1,7 @@
 // The Board: posts bots leave when they get stuck, and the fixes that unstick them.
 // One file per post; an id comes from the event that wrote it, so a repeat is the same post.
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { z } from "zod";
@@ -12,9 +12,16 @@ import { redactSecretsInText } from "./redact.ts";
 export const BOARD_DIR = "board";
 export const BOARD_KINDS = ["stuck", "fix", "handoff", "tip"] as const;
 export const BOARD_USER = "user";
+/** Ids of deleted posts, kept beside them so a sync never brings one back. */
+const DELETED = "deleted.json";
 /** A post written on a team room turn starts its source_ref with this: people outside this PC shaped it. */
 export const ROOM_REF = "room:";
 export const fromRoom = (post: Pick<BoardPost, "source_ref">) => post.source_ref.startsWith(ROOM_REF);
+/** The Forum's reply box; any other post by the user is a chat answer saved before chat stayed out of the Board. */
+export const REPLY_REF = "reply:";
+/** The only posts the user can delete. */
+export const ownReply = (post: BoardPost) => post.author_bot_id === BOARD_USER && post.source_ref.startsWith(REPLY_REF);
+const copiedChat = (post: BoardPost) => post.author_bot_id === BOARD_USER && !ownReply(post);
 
 const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const;
 
@@ -108,6 +115,15 @@ function readPosts(dir: string): BoardPost[] {
   });
 }
 
+function readDeleted(dir: string): string[] {
+  try {
+    const ids: unknown = JSON.parse(readFileSync(join(dir, DELETED), "utf8"));
+    return Array.isArray(ids) ? ids.filter((id): id is string => idSchema.safeParse(id).success) : [];
+  } catch {
+    return [];
+  }
+}
+
 const same = (left: BoardPost, right: BoardPost) => JSON.stringify(left) === JSON.stringify(right);
 
 export interface BoardSearch {
@@ -133,6 +149,17 @@ export function createBoard(options: BoardOptions) {
   const now = options.now ?? Date.now;
   let cache: Map<string, BoardPost> | null = null;
   const posts = () => (cache ??= new Map(readPosts(options.dir).map((post) => [post.id, post])));
+  let deleted: Set<string> | null = null;
+  const gone = () => (deleted ??= new Set(readDeleted(options.dir)));
+
+  const drop = (id: string) => {
+    posts().delete(id);
+    rmSync(join(options.dir, `${id}.json`), { force: true });
+    if (gone().has(id)) return;
+    gone().add(id);
+    mkdirSync(options.dir, { recursive: true });
+    writeFileAtomic(join(options.dir, DELETED), `${JSON.stringify([...gone()].sort())}\n`);
+  };
 
   const write = (post: BoardPost) => {
     mkdirSync(options.dir, { recursive: true });
@@ -142,11 +169,23 @@ export function createBoard(options: BoardOptions) {
 
   /** Keeps a copy another PC wrote; returns whether this PC's copy changed. */
   const take = (incoming: BoardPost): boolean => {
+    if (gone().has(incoming.id)) return false;
     const held = posts().get(incoming.id);
     const next = held ? mergeBoardPosts(held, incoming) : incoming;
     if (held && same(held, next)) return false;
     write(next);
     return true;
+  };
+
+  // copied chat stays on disk but is never read back, nor the fix it wrote into its parent
+  const readable = (): BoardPost[] => {
+    const all = [...posts().values()];
+    const copied = new Set(all.filter(copiedChat).map((post) => `${post.parent_id}\n${post.fix || post.body}`));
+    return all.flatMap((post) => (copiedChat(post) ? [] : [{
+      ...post,
+      fix: copied.has(`${post.id}\n${post.fix}`) ? "" : post.fix,
+      helped_bot_ids: post.helped_bot_ids.filter((id) => id !== BOARD_USER),
+    }]));
   };
 
   const solved = (held: BoardPost, fix: string, at: number): BoardPost => {
@@ -158,10 +197,10 @@ export function createBoard(options: BoardOptions) {
   const board = {
     dir: options.dir,
     list(): BoardPost[] {
-      return [...posts().values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+      return readable().sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
     },
     get(id: string): BoardPost | undefined {
-      return posts().get(id);
+      return readable().find((post) => post.id === id);
     },
     /** Writes the post the event names; the same event again updates that post. A fix also solves its parent. */
     post(input: NewBoardPost): BoardPost {
@@ -205,6 +244,12 @@ export function createBoard(options: BoardOptions) {
       const next = solved(held, fix, now());
       options.changed?.();
       return next;
+    },
+    remove(id: string): boolean {
+      if (!posts().has(id)) return false;
+      drop(id);
+      options.changed?.();
+      return true;
     },
     helped(ids: readonly string[], botId: string): void {
       let changed = false;
@@ -250,12 +295,31 @@ export function createBoard(options: BoardOptions) {
         pcs = [];
       }
       let pulled = 0;
+      let pushed = 0;
       for (const pc of pcs) {
+        for (const id of readDeleted(join(root, pc))) {
+          if (posts().has(id)) pulled++;
+          drop(id);
+        }
         for (const post of readPosts(join(root, pc))) if (take(mapPost(post, ids.in))) pulled++;
       }
       const ownDir = join(root, mine);
+      if (gone().size) {
+        const list = `${JSON.stringify([...gone()].sort())}\n`;
+        let held = "";
+        try {
+          held = readFileSync(join(ownDir, DELETED), "utf8");
+        } catch {
+          // first delete this PC publishes
+        }
+        if (held !== list) {
+          mkdirSync(ownDir, { recursive: true });
+          writeFileAtomic(join(ownDir, DELETED), list);
+          for (const id of gone()) rmSync(join(ownDir, `${id}.json`), { force: true });
+          pushed++;
+        }
+      }
       const published = new Map(readPosts(ownDir).map((post) => [post.id, post]));
-      let pushed = 0;
       for (const post of posts().values()) {
         const out = mapPost(post, ids.out);
         const held = published.get(post.id);
