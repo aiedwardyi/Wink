@@ -288,6 +288,17 @@ it("pulses only when a click lands on the file already showing", async () => {
   expect(pulses).toBe(start + 1);
 });
 
+it("never pulses under reduced motion, so the glow class cannot get stuck", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {} }));
+  let pulses = -1;
+  const Pulses = () => { pulses = usePanePulse(); return null; };
+  await act(async () => root.render(createElement(Pulses)));
+  const start = pulses;
+  await act(async () => showItem({ ...pdf, threadId: "t16" }));
+  await act(async () => showItem({ ...pdf, threadId: "t16" }));
+  expect(pulses).toBe(start);
+});
+
 it("switches a link click to Show from the Map tab without pulsing", async () => {
   let seen: unknown[] = [];
   const Tabs = () => { seen = [useShowItem(), useMapThread(), usePanePulse()]; return null; };

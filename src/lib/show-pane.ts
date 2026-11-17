@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { z } from "zod";
 import type { Message } from "@/state/store";
+import { prefersReducedMotion } from "./arrival-glow";
 import { linkedFileSrc, localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
@@ -76,7 +77,7 @@ function openItem(next: ShowItem): boolean {
 /** A click on the file already showing pulses the pane, so it reads as "this is it". */
 export function showItem(next: ShowItem) {
   pick(next.threadId, next);
-  if (openItem(next)) return;
+  if (openItem(next) || prefersReducedMotion()) return;
   pulses++;
   emit();
 }
