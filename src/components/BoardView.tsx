@@ -22,6 +22,7 @@ import type { Bot } from "@/state/store-types";
 import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { BackButton } from "./BackButton";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { ProviderMark } from "./ProviderIcons";
 import { MessageBoundary } from "./TurnPresence";
 
 const TONE = {
@@ -36,6 +37,11 @@ const SORT = {
   new: { key: "board.new", Icon: Sparkles },
   top: { key: "board.top", Icon: TrendingUp },
 } satisfies Record<BoardSort, { key: MessageKey; Icon: typeof Flame }>;
+
+const EMPTY_MARKS = ["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"];
+const EMPTY_MARK_SIZE = 30;
+const EMPTY_RING_RADIUS = 56;
+const EMPTY_RING_BOX = 2 * EMPTY_RING_RADIUS + EMPTY_MARK_SIZE;
 
 /** Name, face and model come from the post; a bot on this PC lends its face, which may be an uploaded picture. */
 function useAuthor(post: BoardPost) {
@@ -272,7 +278,22 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             )}
             {posts && !threads.length && (
               <div data-board-empty className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-                <MessagesSquare size={40} className="text-ink-secondary" aria-hidden />
+                <div aria-hidden className="relative opacity-40" style={{ width: EMPTY_RING_BOX, height: EMPTY_RING_BOX }}>
+                  {EMPTY_MARKS.map((kind, i) => {
+                    const angle = (i / EMPTY_MARKS.length) * 2 * Math.PI - Math.PI / 2;
+                    const offset = EMPTY_RING_BOX / 2 - EMPTY_MARK_SIZE / 2;
+                    return (
+                      <span
+                        key={kind}
+                        data-board-mark={kind}
+                        className="absolute"
+                        style={{ left: offset + EMPTY_RING_RADIUS * Math.cos(angle), top: offset + EMPTY_RING_RADIUS * Math.sin(angle) }}
+                      >
+                        <ProviderMark driverKind={kind} size={EMPTY_MARK_SIZE} />
+                      </span>
+                    );
+                  })}
+                </div>
                 <div className="max-w-[360px] text-[14px] text-ink-secondary">{t("board.empty")}</div>
               </div>
             )}
@@ -319,7 +340,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             inert={page.closing}
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app"
           >
-            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread post={page.value.post} replies={page.value.replies} /></div>
+            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} /></div>
           </div>
         )}
       </div>
