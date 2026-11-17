@@ -166,6 +166,28 @@ it("fades the voice grid while more voices sit below, and drops the fade at the 
   expect(grid.hasAttribute("data-cut")).toBe(false);
 });
 
+it("puts the Captions switch on the Style row, after the pills", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const pills = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Style"]')!;
+  const row = pills.parentElement!;
+  const captions = row.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Captions"]');
+  expect(captions).not.toBeNull();
+  expect(host.querySelectorAll('[role="switch"]')).toHaveLength(1);
+  expect(pills.compareDocumentPosition(captions!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(row.firstElementChild!.textContent).toBe("Style");
+  expect(captions!.parentElement!.parentElement).toBe(row);
+  expect(captions!.parentElement!.textContent).toBe("Captions");
+});
+
+it("tightens the Style row gaps and pill padding below 380px so it fits a 360 phone", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const pills = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Style"]')!;
+  const row = pills.parentElement!;
+  expect(row.className).toContain("max-[379px]:gap-2");
+  expect(row.lastElementChild!.className).toContain("max-[379px]:gap-1.5");
+  for (const pill of pills.querySelectorAll("[role=radio]")) expect(pill.className).toContain("max-[379px]:px-1.5");
+});
+
 it("patches the bot with the whole merged call object", async () => {
   store.bots = [tuned];
   const host = await render(createElement(CallSettings, { bot: tuned }));
