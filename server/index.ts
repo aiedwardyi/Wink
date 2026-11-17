@@ -21,7 +21,7 @@ import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
-import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
 import { requestReview, resolveAutoReviewMode, shouldReview } from "./auto-review.ts";
 import {
   resolveAutomaticSelection,
@@ -313,6 +313,8 @@ import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
+import { recoverHandedMail } from "./mail-index.ts";
+import { bootReads, skipBootReads, startBootReads } from "./boot-reads.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
@@ -368,7 +370,7 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
-import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks } from "./quick-ask.ts";
 import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
@@ -408,7 +410,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
-  readSyncOperations,
+  readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
   syncOperationsSignature,
@@ -424,9 +426,10 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
+  CONFLICT_NOTICE_V2,
   chatSyncBotId,
   createThreadSyncPoll,
   deleteSyncedThread,
@@ -441,7 +444,7 @@ import {
   type ThreadSyncHost,
 } from "./thread-sync.ts";
 import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from "./picture-sync.ts";
-import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
+import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
@@ -1092,7 +1095,8 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
-const mailboxReceipts = createMailboxReceipts();
+const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
+const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
   dataDir: DATA_DIR,
   store,
@@ -1464,6 +1468,7 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 
 let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
+let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
 
 function syncSectionId(section: string | undefined): string | null {
@@ -1606,7 +1611,7 @@ function localOrderChanges(assign: boolean): Record<string, unknown> {
   return { sectionOrder, itemOrder };
 }
 
-function profileSyncStatus() {
+async function profileSyncStatus() {
   const folder = profileSyncSettings.folder;
   if (!folder) {
     return {
@@ -1620,7 +1625,7 @@ function profileSyncStatus() {
     };
   }
   ensureProfileSyncWorkspace(folder);
-  const remote = syncOperationsStatus(folder);
+  const remote = await syncOperationsStatus(folder);
   const status = remote.invalidFiles.length > 0
     ? "needs-review"
     : remote.operations > 0
@@ -1747,13 +1752,17 @@ function applySyncedBotFields(
 }
 
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
-function importProfileChanges(): void | Promise<void> {
+async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
-  const remote = readSyncOperations(folder);
+  profileImports++;
+  // a newer import's read is the newer log, so this one drops too
+  const remote = await readSyncOperationsFor(folder, () => `${profileImports}\n${profileSyncSettings.folder}\n${profileSyncSettings.workspaceId}\n${profileSyncSettings.syncChats}`);
+  // profileSyncSeen is untouched, so the next poll reads the new target
+  if (!remote) return;
   if (remote.invalidFiles.length && signature !== profileSyncSeen.signature) {
     console.warn(`bot sync: skipped unreadable files [${remote.invalidFiles.slice(0, 5).join(", ")}]`);
   }
@@ -2288,6 +2297,8 @@ function initializeThreadSyncV2() {
       return pending instanceof Promise ? pending.then(prune) : prune();
     },
     rooms: roomThreads,
+    bootReads,
+    painted: () => syncPainted,
   });
   return threadSyncV2;
 }
@@ -2402,14 +2413,25 @@ const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
 if (REMOTE_HOST !== undefined) startDevicePresence();
 else void remoteRetry.refresh();
 
+const memorySyncs = new Map<string, Promise<void>>();
+
+// one pass per bot at a time: a pass applies against the snapshots it read
 function syncMemory(botId: string): void {
+  const run = (memorySyncs.get(botId) ?? Promise.resolve()).then(() => syncMemoryOnce(botId));
+  memorySyncs.set(botId, run);
+  void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
+}
+
+async function syncMemoryOnce(botId: string): Promise<void> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
   if (!store.bot(botId)) return;
   const folder = profileSyncSettings.folder;
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger });
+    const snapshots = await readMemorySnapshots(folder, botSyncId);
+    if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
+    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
     // the poll runs for every idle bot, so only changed files refresh the check
     if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
   } catch (error) {
@@ -2992,7 +3014,11 @@ const unlandedWork = createUnlandedWork({
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
-startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });
+startupTiming.afterPaint("unlanded", async () => {
+  // the worker read each chat's reports; a chat loaded since then has them in memory
+  const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
+  for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+});
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -3894,9 +3920,14 @@ bus.subscribe((event: RuntimeEvent) => {
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
+        ? autoVerdict(asker, event.tool, event.action ?? event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused })
         : null;
-      if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
+      const skipNote = verdict?.source === "away-desktop-deny"
+        ? AWAY_DESKTOP_DENY_NOTE
+        : verdict?.source === "unchecked-desktop-deny" && event.actionRefused
+          ? UNCHECKED_DESKTOP_DENY_NOTE[event.actionRefused]
+          : null;
+      if (skipNote && verdict && asker && event.requestId) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : botAccounts.instance(asker, event.threadId);
@@ -3905,7 +3936,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // answered at once: a desktop card nobody can see would stall the turn
         const deny = async () => {
           if (!instance) throw new Error("provider unavailable");
-          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: AWAY_DESKTOP_DENY_NOTE });
+          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: skipNote });
           if (outcome === "unavailable") throw new Error("the ask is no longer open");
         };
         void (async () => {
@@ -3915,7 +3946,7 @@ bus.subscribe((event: RuntimeEvent) => {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: `Skipped desktop control while you were away: ${summary.slice(0, 120)}`, ok: false },
+              tool: { name: `${verdict.source === "away-desktop-deny" ? "Skipped desktop control while you were away" : "Skipped a desktop action Auto mode couldn't check"}: ${summary.slice(0, 120)}`, ok: false },
             });
             appendDecision(DATA_DIR, {
               threadId: event.threadId,
@@ -3926,7 +3957,7 @@ bus.subscribe((event: RuntimeEvent) => {
               summary,
               decision: "auto-denied",
               source: verdict.source,
-              unattended: true,
+              unattended: unattended || undefined,
             });
           } catch {
             pushMessage({
@@ -6688,10 +6719,10 @@ const approvalBus: ApprovalBus = { store, broadcast };
 // Approvals live only in memory, so any peer card still open on disk is one
 // whose resolver died with the previous process. Left alone it can never be
 // answered, and the composer stays disabled behind it — settle them at boot.
-{
-  const stale = startupTiming.measure("peerRecovery", () => dismissStalePeerCards(approvalBus));
+void bootReads().then((rows) => {
+  const stale = dismissStalePeerCards(approvalBus, rows.peerCards);
   if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
-}
+}).catch((error: unknown) => console.warn("peer approvals: boot dismissal failed", error));
 
 // Handoffs a previous process queued but never ran. The source turn died
 // with that process, and an interrupted turn already drops its queue rather
@@ -6702,6 +6733,8 @@ _loadPending();
   const dropped = discardOrphanedDelegations(commsBus);
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
+void bootReads().then((rows) => recoverHandedMail(store, rows.handed, performance.timeOrigin))
+  .catch((error: unknown) => console.warn("mail: boot handoff recovery failed", error));
 
 configureRoomAsks({
   store,
@@ -8090,6 +8123,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/") && !(method === "GET" && path === "/api/health") && !credentials.phoneSession &&
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)) {
+      if (remoteCookieAuthorized(req.headers.cookie, credentials.remoteKey)) return json(res, 403, { error: "forbidden" });
       return json(res, 401, { error: "unauthorized" });
     }
     const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
@@ -8394,7 +8428,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── shared bot profile sync ───────────────────────────────────────
     if (method === "GET" && path === "/api/profile-sync") {
       return json(res, 200, {
-        ...profileSyncStatus(),
+        ...(await profileSyncStatus()),
         chatSyncVersion: threadSyncGate.enabled ? 2 : 1,
         chatSyncWaitingFor: threadSyncGate.waitingFor,
         chatSyncMigration: threadSyncV2?.migrationStatus() ?? null,
@@ -8414,7 +8448,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
         syncAllThreads();
         publishDeviceRecord();
-        return json(res, 200, profileSyncStatus());
+        return json(res, 200, await profileSyncStatus());
       } catch (error) {
         return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -8424,7 +8458,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       threadSyncV2?.stop();
       profileSyncSettings.folder = null;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
     if (method === "PUT" && path === "/api/profile-sync/chats") {
       const body = await readBody(req);
@@ -8433,7 +8467,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       profileSyncSettings.syncChats = body.enabled;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
       syncAllThreads();
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
 
     if (method === "GET" && path === "/api/key-uses") {
@@ -8552,15 +8586,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
       const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
-        const tail = limit === undefined ? null : chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
+      const page = async (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const tail = limit === undefined ? null : await chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
         if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
         return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
       };
       if (typeof open === "string") warmFirst(open);
+      // taken before the cold pages are read off this thread: an event meanwhile replays, and the client folds repeats by id
+      const cursor = `${STREAM_ID}:${lastSeq}`;
+      const [bots, groups] = await Promise.all([
+        Promise.all(store.bots.map(async (bot) => ({ ...publicBotRecord(bot), ...(await page(bot)) }))),
+        Promise.all(store.groups.map(async (g) => ({ ...publicGroupState(g), ...(await page(g)) }))),
+      ]);
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...page(bot) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g) })),
+        bots,
+        groups,
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -8568,7 +8608,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }),
         ),
         queued: waitingSends(),
-        cursor: `${STREAM_ID}:${lastSeq}`,
+        cursor,
         ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });
     }
@@ -9475,7 +9515,9 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-startupTiming.measure("quick asks", () => recoverQuickAsks(store));
+// the boot drain has already run by the time the worker replies
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error))
+  .then(drainQueuedSends).catch((error: unknown) => console.warn("[quick] drain after recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
@@ -9519,6 +9561,12 @@ if (early) {
 phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
+// nothing before serving reads messages.db beyond keys and newest pages; these finders read the rest, once, off this thread
+startupTiming.afterPaint("bootReads", () => startBootReads({
+  dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
+  notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
+  reportThreads: store.bots.map((bot) => bot.threadId),
+}));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
@@ -9545,6 +9593,7 @@ hostShutdown = () => {
   if (hostShutdownStarted) return;
   hostShutdownStarted = true;
   startupTiming.close();
+  skipBootReads();
   usageStats.stop();
   askHold.flush();
   const routineThreadByBotId: Record<string, string> = {};
