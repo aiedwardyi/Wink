@@ -1,5 +1,6 @@
 import memoryClip from "@/assets/whats-new/1.0.246-memory.webp";
 import memoryLightClip from "@/assets/whats-new/1.0.246-memory-light.webp";
+import verifyClip from "@/assets/whats-new/1.0.246-verify.webp";
 import hydrogenClip from "@/assets/whats-new/1.0.263-hydrogen.webp";
 import hydrogenLightClip from "@/assets/whats-new/1.0.263-hydrogen-light.webp";
 import mapClip from "@/assets/whats-new/1.0.263-map.webp";
@@ -16,8 +17,8 @@ type Copy = Record<LocaleId, string>;
 /** What Show me opens in this chat. */
 export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | { skins: SkinId[] };
 
-/** Every tile is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `still` marks an old tile whose clip is one frame. */
-export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy; show: WhatsNewTarget };
+/** Every tile after 1.0.278 is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `how` and `still` only keep older tiles as they shipped. */
+export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
 
 export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile] | [WhatsNewTile, WhatsNewTile]; more: Copy };
 
@@ -39,6 +40,15 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
         title: { en: "See what your bot remembers", ko: "봇이 기억하는 것 보기" },
         line: { en: "Notes sorted by topic, in Bot Details.", ko: "봇 세부 정보에서 주제별로 봐요." },
         show: "memory",
+      },
+      {
+        clip: verifyClip,
+        title: { en: "Live Verify checks your site", ko: "Live Verify가 사이트를 확인" },
+        line: { en: "Desktop and phone, after every build.", ko: "만들 때마다 데스크톱과 휴대폰에서." },
+        how: {
+          en: "Starts on its own when a bot builds a page. Press Watch to see the cursors live.",
+          ko: "봇이 페이지를 만들면 저절로 시작돼요. 보기를 누르면 커서가 실시간으로 보여요.",
+        },
       },
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },

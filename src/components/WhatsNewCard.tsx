@@ -90,14 +90,15 @@ function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; 
   const seen = useSeen(frame);
   const still = useStill();
   const clip = (LIGHT_SKIN_IDS.has(useSkin()) && tile.lightClip) || tile.clip;
+  const [how, setHow] = useState(false);
   return (
     <div className="whats-new-tile">
       <div ref={frame} className="whats-new-frame">
         {seen && (still ? <Still src={clip} /> : <img src={clip} alt="" draggable={false} />)}
       </div>
       <div className="whats-new-tile-title">{tile.title[locale]}</div>
-      <div className="whats-new-line">{tile.line[locale]}</div>
-      <button type="button" className="whats-new-show" onClick={() => onShow(tile.show)}>
+      <div key={String(how)} className="whats-new-line">{how && "how" in tile ? tile.how[locale] : tile.line[locale]}</div>
+      <button type="button" className="whats-new-show" aria-expanded={"how" in tile ? how : undefined} onClick={() => ("how" in tile ? setHow((value) => !value) : onShow(tile.show))}>
         {t("whatsNew.showMe")}
       </button>
     </div>

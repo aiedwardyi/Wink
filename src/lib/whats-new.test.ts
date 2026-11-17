@@ -69,7 +69,7 @@ function stale(entries: Record<string, WhatsNewEntry>): string[] {
       const clips = [tile.clip, tile.lightClip].filter((clip): clip is string => Boolean(clip));
       const why = [
         tile.still && "is marked still",
-        !tile.show && "has no show target",
+        !("show" in tile && tile.show) && "has no show target",
         ...clips.map((clip) => {
           const frames = webpFrames(clip);
           return frames === null ? `${clip} is not a WebP` : frames < 2 ? `${clip} is not animated` : null;
@@ -104,7 +104,14 @@ describe("what's new tiles", () => {
     expect(stale(entry({ clip: moving, show: "workers" }))).toEqual([]);
   });
 
-  it("ignores releases up to 1.0.278", () => {
-    expect(stale({ "1.0.278": entry({ clip: still, show: "memory" })["1.0.279"] })).toEqual([]);
+  it("leaves tiles up to 1.0.278 as they shipped", () => {
+    expect(stale({ "1.0.246": WHATS_NEW["1.0.246"], "1.0.277": WHATS_NEW["1.0.277"], "1.0.278": entry({ clip: still, show: "memory" })["1.0.279"] })).toEqual([]);
+    expect(stale({ "1.0.246": WHATS_NEW["1.0.246"], ...entry({ clip: still, show: "memory" }) })).toHaveLength(1);
+  });
+
+  it("passes a release that adds no tile", () => {
+    expect(stale({})).toEqual([]);
+    expect(stale({ "1.0.278": WHATS_NEW["1.0.278"] })).toEqual([]);
+    expect(stale({ "1.0.279": { title: copy, more: copy, tiles: [] as unknown as WhatsNewEntry["tiles"] } })).toEqual([]);
   });
 });

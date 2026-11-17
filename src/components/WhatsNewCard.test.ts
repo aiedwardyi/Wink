@@ -57,7 +57,7 @@ vi.stubGlobal(
 
 const { default: WhatsNewCard } = await import("./WhatsNewCard");
 
-const RELEASE = "1.0.263";
+const RELEASE = Object.keys(WHATS_NEW)[0];
 
 describe("whats new card", () => {
   let host: HTMLElement;
@@ -139,15 +139,10 @@ describe("whats new card", () => {
     expect(tile.textContent).toBe(text);
   });
 
-  it("opens this chat's side pane on the workers list from its Show me", () => {
-    const { tile, text } = showMe("1.0.278", "Workers live in the side pane");
-    let listed: string | null = null;
-    const probe = createRoot(document.createElement("div"));
-    act(() => probe.render(createElement(() => ((listed = useWorkersThread()), null))));
-    act(() => probe.unmount());
-    closeShow();
-    expect(listed).toBe("t-atlas");
-    expect(tile.textContent).toBe(text);
+  it("explains Live Verify in place, since it starts on its own", () => {
+    const { tile } = showMe("1.0.246", "Live Verify checks your site");
+    expect(tile.querySelector(".whats-new-show")!.getAttribute("aria-expanded")).toBe("true");
+    expect(tile.textContent).toContain("Starts on its own when a bot builds a page.");
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -160,6 +155,18 @@ describe("whats new card", () => {
     closeShow();
     expect(mapped).toBe("t-atlas");
     expect(tile.textContent).toBe(text);
+  });
+
+  it("opens this chat's side pane on the workers list from its Show me", () => {
+    const { tile, text } = showMe("1.0.278", "Workers live in the side pane");
+    let listed: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((listed = useWorkersThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(listed).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("opens the model picker from the Gemini tile's Show me", () => {
@@ -228,7 +235,7 @@ describe("whats new card", () => {
     expect(button("확인")).toBeTruthy();
     expect(host.textContent).toContain(WHATS_NEW[RELEASE].title.ko);
     for (const entry of Object.values(WHATS_NEW)) {
-      for (const copy of [entry.title, entry.more, ...entry.tiles.flatMap((tile) => [tile.title, tile.line])]) {
+      for (const copy of [entry.title, entry.more, ...entry.tiles.flatMap((tile) => [tile.title, tile.line, ...("how" in tile ? [tile.how] : [])])]) {
         expect(copy.ko.trim()).not.toBe("");
       }
     }
