@@ -48,6 +48,12 @@ async function swipe(dx: number, dy: number, scrollTop = 0) {
   await act(async () => { touch("touchstart", 100, 100); touch("touchend", 100 + dx, 100 + dy); });
 }
 
+// Tailwind spacing in px: n * 4, or an arbitrary [npx]
+const size = (cls: string, name: string, variant = "") => {
+  const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
+  return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
+};
+
 afterEach(async () => {
   vi.restoreAllMocks();
   if (root) await act(async () => root!.unmount());
@@ -131,11 +137,6 @@ describe("question folding", () => {
   });
 
   it("gives the chevron and x 44px touch targets at 392 that split their gap and never overlap", async () => {
-    // Tailwind spacing in px: n * 4, or an arbitrary [npx]
-    const size = (cls: string, name: string, variant = "") => {
-      const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
-      return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
-    };
     const ICON = 14;
     const FRAME_PAD = 16;
     const boxes = (scope: Element) => {
@@ -163,6 +164,29 @@ describe("question folding", () => {
     expect(chevron.right - chevron.buttonRight).toBe(gap / 2);
     expect(x.buttonLeft - x.left).toBe(gap / 2);
     expect(x.right).toBeLessThanOrEqual(392);
+  });
+
+  it("draws the card's choices as pills of one height on desktop and phone, a 1-letter one wider than tall", async () => {
+    // happy-dom has no layout: a 13px glyph is at most 13px wide, a line 20px tall, the border 2px
+    const box = (choice: HTMLButtonElement, coarse: boolean) => {
+      const cls = choice.className;
+      const height = Math.max(2 + 2 * size(cls, "py") + (size(cls, "leading") || 20), coarse ? size(cls, "min-h", "pointer-coarse:") : 0);
+      const width = Math.max(2 + 2 * size(cls, "px") + Math.max(13, 8 * choice.textContent!.length), size(cls, "min-w"));
+      return { width, height, target: height - 2 * (coarse ? size(cls, "inset-y", "pointer-coarse:after:") : 0) };
+    };
+    await render("choice-pills", ["A", "Neither", "Keep both for now"]);
+    const choices = [...host.querySelectorAll<HTMLButtonElement>("[data-term-choices] button")];
+    const list = choices[0].parentElement!.className;
+    const [desktop, phone] = [false, true].map((coarse) => choices.map((choice) => box(choice, coarse)));
+    for (const [letter, word, words] of [desktop, phone]) {
+      expect(letter.width).toBeGreaterThan(letter.height);
+      expect([word.height, words.height]).toEqual([letter.height, letter.height]);
+    }
+    expect(phone.map(({ height }) => height)).toEqual(desktop.map(({ height }) => height));
+    // the phone's 44px target reaches past the pill only into half the gap to the next row
+    expect(phone[0].target).toBeGreaterThanOrEqual(44);
+    expect(phone[0].target - phone[0].height).toBeLessThanOrEqual(size(list, "gap-y", "pointer-coarse:") || size(list, "gap"));
+    expect(choices.every((choice) => choice.classList.contains("text-center"))).toBe(true);
   });
 
   it("localizes folding and reopening in Korean", async () => {

@@ -399,13 +399,13 @@ describe("pinned ask_user question", () => {
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
-  it("outlines the choices in secondary ink with a 44px touch height", async () => {
+  it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
     expect(choice).toContain("rounded-full");
     expect(choice).toContain("bg-control");
     expect(choice).toContain("border-ink-secondary ");
-    expect(choice).toContain("pointer-coarse:min-h-11");
+    expect(choice).toContain("pointer-coarse:after:-inset-y-[5px]");
   });
 
   it("gives the open card's x a 44px touch target without growing the card", async () => {
