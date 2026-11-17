@@ -13,6 +13,7 @@ import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { writeDeviceRecord } from "./device-sync.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
+import { bootRowsNow, testBootReads } from "./testing/boot-rows.ts";
 
 const roots: string[] = [];
 const peers: Array<{ close(): Promise<void> }> = [];
@@ -198,7 +199,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
       return prepare.call(this, sql);
     });
     await createThreadSyncV2Store({
-      store, dataDir: DATA_DIR, deviceId: "local", folder: () => temp(), enabled: () => true,
+      store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => temp(), enabled: () => true,
       target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
       running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
     })!.close();
@@ -223,7 +224,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
     let folder = original;
     const sync = createThreadSyncV2Store({
-      store, dataDir: DATA_DIR, deviceId: "local", folder: () => folder, enabled: () => true,
+      store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => folder, enabled: () => true,
       target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
       running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
     })!;
@@ -296,6 +297,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await a.call("restart");
     const after = await a.snapshot();
     expect(after.rows.filter(isConflictNotice)).toHaveLength(0);
+    expect(bootRowsNow([], a.dataDir).migration).toEqual([]);
     expect(after.rows.find((row) => row.id === child.id)?.parentId).toBe(before.leaf);
     expect(after.leaf).toBe(child.id);
     expect(after.disk).toEqual(after.rows);

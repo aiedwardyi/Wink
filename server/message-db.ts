@@ -287,19 +287,11 @@ export function applySyncedRows(
   return touched;
 }
 
-/** Peer-approval cards on disk, found without loading their threads. */
-export function peerCardRows(): Array<{ threadId: string; id: string }> {
-  return db().prepare(`SELECT thread_id AS threadId, id FROM messages WHERE kind = 'options'
-    AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')`)
-    .all() as Array<{ threadId: string; id: string }>;
-}
-
-/** A quick ask with no answer row, found without loading the thread. */
-export function hasUnansweredQuickAsk(threadId: string): boolean {
-  return Boolean(db().prepare(`SELECT 1 FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
-    AND json_extract(json, '$.quick.state') = 'asked'
-    AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
-      AND json_extract(json, '$.quick.askId') IS NOT NULL) LIMIT 1`).get(threadId, threadId));
+/** One stored row by key, without loading its thread. */
+export function readMessage(threadId: string, id: string): Message | undefined {
+  // SAFETY: This projection selects the stored message JSON.
+  const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { json: string } | undefined;
+  return row && rowToMessage(row);
 }
 
 /** The active path newest first, one row at a time, or null when the thread has no stored leaf. */

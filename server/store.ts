@@ -1332,8 +1332,10 @@ export class Store {
     return this.thread(threadId).messages;
   }
 
-  hasUnansweredQuickAsk(threadId: string): boolean {
-    return mdb.hasUnansweredQuickAsk(threadId);
+  /** One row by id: the cached copy when the thread is loaded, else a key read. */
+  row(threadId: string, messageId: string): Message | undefined {
+    const t = this.threads.get(threadId);
+    return t ? t.messages.find((m) => m.id === messageId) : mdb.readMessage(threadId, messageId);
   }
 
   activeLeaf(threadId: string): string | null {
@@ -1512,6 +1514,19 @@ export class Store {
     if (t.messages[idx].comm?.mailKey && t.messages[idx].comm?.peer === "reply") this.indexMail(threadId, t.messages[idx]);
     this.emit({ type: "message.patch", threadId, message: t.messages[idx] });
     return t.messages[idx];
+  }
+
+  /** patchMessage for a thread that may not be loaded: reads and writes the one row by key and loads nothing. */
+  patchRow(threadId: string, messageId: string, patch: Partial<Message>): Message | null {
+    if (this.threads.has(threadId)) return this.patchMessage(threadId, messageId, patch);
+    const row = mdb.readMessage(threadId, messageId);
+    if (!row) return null;
+    const next = redactBotAuthored({ ...row, ...patch, card: patch.card ?? row.card });
+    this.beforeWrite(threadId);
+    this.persistThread(threadId, [{ kind: "row", value: next }], () => mdb.updateMessage(threadId, next));
+    if (next.comm?.mailKey && next.comm?.peer === "reply") this.indexMail(threadId, next);
+    this.emit({ type: "message.patch", threadId, message: next });
+    return next;
   }
 
   private indexMail(threadId: string, row: Message): void {

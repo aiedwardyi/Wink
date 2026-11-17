@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
 import { isVoiceLine } from "../shared/live-call.ts";
+import type { BootRows } from "./boot-reads.ts";
 import { lastMessageAt, withMessageTransaction } from "./message-db.ts";
 import { soonAfterWake, wakeClock } from "./pc-wake.ts";
 import { publishThreadPictures } from "./picture-sync.ts";
@@ -54,6 +55,19 @@ export interface SyncStoreHost {
   maintenance(): void | Promise<void>;
   /** Owners of `room-*` scopes; the store's bot calls go here for them. */
   rooms?: RoomThreads;
+  /** Boot's notice finders, run off the main thread (boot-reads.ts); a saved task publishes only after its cleanup lands. */
+  bootReads(): Promise<Pick<BootRows, "migration" | "conflicts">>;
+}
+
+/** The cutover time v1 notices are cleaned from, or null before a cutover. */
+export function migrationCutoverAt(dataDir: string): number | null {
+  const path = join(dataDir, "thread-sync-v2-cutover.json");
+  if (!existsSync(path)) return null;
+  try {
+    return z.object({ version: z.literal(2), cutoverAt: z.number().finite().nonnegative() }).parse(JSON.parse(readFileSync(path, "utf8"))).cutoverAt;
+  } catch {
+    return null;
+  }
 }
 
 export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
@@ -216,7 +230,8 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     task.deleted = 0;
   }
 
-  function notifyConflict(task: StoredTask): void {
+  /** `onPath`: boot's worker already walked the active path; those notice ids are read again by key. */
+  function notifyConflict(task: StoredTask, onPath?: string[]): void {
     if (host.running(task.threadId)) return;
     withMessageTransaction((db) => {
       const conflict = db.prepare("SELECT cursor FROM sync_v2_changes WHERE thread = ? AND conflict = 1 AND cursor <= ? ORDER BY cursor DESC LIMIT 1")
@@ -227,12 +242,12 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       db.prepare("INSERT INTO sync_v2_notices VALUES (?, ?) ON CONFLICT(thread) DO UPDATE SET cursor = excluded.cursor")
         .run(task.threadId, conflict);
       if (!engine.conflicted(task)) return;
-      addNotice(task, db);
+      addNotice(task, db, onPath);
     });
   }
 
-  function addNotice(task: StoredTask, db: DatabaseSync): void {
-    const noticed = db.prepare(`WITH RECURSIVE path(id) AS (
+  function addNotice(task: StoredTask, db: DatabaseSync, onPath?: string[]): void {
+    const noticed = onPath ? onPath.some((id) => host.store.row(task.threadId, id)) : db.prepare(`WITH RECURSIVE path(id) AS (
       SELECT active_leaf_id FROM thread_state WHERE thread_id = ?
       UNION SELECT json_extract(m.json, '$.parentId') FROM messages m JOIN path ON m.id = path.id WHERE m.thread_id = ?
     ) SELECT 1 FROM path JOIN messages m ON m.id = path.id
@@ -248,23 +263,13 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     noticeHeads.set(task.threadId, { threadId: task.threadId, leaf: message.id, parent: message.parentId ?? null });
   }
 
-  function removeMigrationNotices(task: StoredTask): void {
-    const path = join(host.dataDir, "thread-sync-v2-cutover.json");
-    if (!existsSync(path) || host.running(task.threadId)) return;
-    let cutoverAt: number;
-    try {
-      cutoverAt = z.object({ version: z.literal(2), cutoverAt: z.number().finite().nonnegative() }).parse(JSON.parse(readFileSync(path, "utf8"))).cutoverAt;
-    } catch {
-      return;
-    }
+  /** `ids` are the boot worker's v1 notices; the task's sync_v2_notices row goes with them so the finder runs once. */
+  function removeMigrationNotices(task: StoredTask, ids: string[]): void {
+    if (host.running(task.threadId)) return;
     withMessageTransaction((db) => {
       if (!db.prepare("SELECT 1 FROM sync_v2_notices WHERE thread = ?").get(task.threadId)) return;
-      const notices = db.prepare(`SELECT id FROM messages m WHERE thread_id = ? AND at >= ? AND kind = 'activity'
-        AND json_extract(json, '$.tool.name') = ?
-        AND NOT EXISTS (SELECT 1 FROM sync_v2_snapshot s WHERE s.thread = m.thread_id AND s.row_id = m.id)`)
-        .all(task.threadId, cutoverAt, `error: ${CONFLICT_NOTICE}`);
-      if (!notices.length || engine.hadNativeConflict(task)) return;
-      host.store.removeSyncNotices(task.threadId, notices.map((row) => String(row.id)));
+      if (ids.length && !engine.hadNativeConflict(task)) host.store.removeSyncNotices(task.threadId, ids);
+      db.prepare("DELETE FROM sync_v2_notices WHERE thread = ?").run(task.threadId);
     });
   }
 
@@ -275,9 +280,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
   }
   const saved = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store").all()));
+  // a task's notices are cleaned before its first flush; until then publish waits
+  const cleaning = new Map<string, StoredTask>();
   for (const task of saved) {
     if (room(task) ? !room(task)!.owns(task.botId) : !host.store.bot(task.botId)) continue;
-    removeMigrationNotices(task);
+    cleaning.set(task.threadId, task);
     const change: SyncChange = task.deleted
       ? { cursor: 0, kind: "delete", rowId: "", value: { deletedAt: 0 }, conflict: false }
       : { cursor: 0, kind: "metadata", rowId: "", value: { title: task.title, createdAt: task.createdAt }, conflict: false };
@@ -285,20 +292,27 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (task.deleted || !current || current.title !== task.title || current.createdAt !== task.createdAt) {
       applyTo(task, task.threadId, [change]);
     }
-    if (task.eligible) {
-      consume(task, 1);
-      notifyConflict(task);
-    }
+    if (task.eligible) consume(task, 1);
   }
+  void host.bootReads().then((rows) => {
+    for (const { threadId, ids } of rows.migration) {
+      const task = cleaning.get(threadId);
+      if (task) removeMigrationNotices(task, ids);
+    }
+    for (const { threadId, notices } of rows.conflicts) {
+      const task = cleaning.get(threadId);
+      if (task?.eligible) notifyConflict(task, notices);
+    }
+  }).catch((error: unknown) => console.warn("chat sync v2: boot notice cleanup failed", error)).finally(() => cleaning.clear());
 
   function project(threadId: string, target: Target, mutations: SyncMutation[]): SyncMutation[] {
     if (!mutations.some((mutation) => mutation.kind === "row" || mutation.kind === "head")) return mutations;
-    const messages = host.store.messagesFor(threadId);
     const lift = (id: string | null) => {
       const visited = new Set<string>();
       while (id && !visited.has(id)) {
         visited.add(id);
-        const parent = messages.find((message) => message.id === id);
+        // by key: a synced write to an unloaded chat must not load the whole transcript
+        const parent = host.store.row(threadId, id);
         if (!parent || !isConflictNotice(parent)) break;
         id = parent.parentId ?? null;
       }
@@ -388,7 +402,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   async function flush(threadId: string): Promise<"running" | "written" | "skipped"> {
-    if (host.running(threadId)) return "running";
+    if (host.running(threadId) || cleaning.has(threadId)) return "running";
     const task = stored(threadId);
     if (!task?.eligible) return "skipped";
     const transport = await client();

@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { _loadPending, bindPeerTurn, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
+import { recoverHandedMail } from "./mail-index.ts";
 import { handMail, mailForTurn, settleMail } from "./mail.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { Store } from "./store.ts";
 
@@ -131,6 +133,7 @@ it("releases a reply handed to a room turn after a restart", () => {
   expect(mailForTurn(store, room.threadId)).toEqual([]);
   _loadPending();
   discardOrphanedDelegations(bus);
+  recoverHandedMail(store, bootRowsNow().handed);
   expect(mailForTurn(store, room.threadId).map((part) => part.id)).toEqual([row.id]);
 });
 

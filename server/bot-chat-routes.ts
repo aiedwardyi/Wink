@@ -16,7 +16,7 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, requeueDroppedCall, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
+import { answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -312,6 +312,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       }
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
+      await quickAskRecovery(threadId);
       const sendId = parseSendId(body.sendId);
       const queueId = parseSendId(body.queueId);
       if (sendId) {
