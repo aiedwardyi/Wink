@@ -2,7 +2,7 @@
 // against cost, per model and effort, so picking a model never needs a web
 // search. Numbers come only from shared/model-index-data.ts; nothing is fetched.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useStore } from "@/state/store";
 import { localeTag, useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
@@ -31,6 +31,7 @@ import {
 } from "@/lib/model-index";
 import { MODEL_INDEX_SOURCES, type ModelIndexKey, type ModelPrice } from "../../shared/model-index-data.ts";
 import "./ModelIndexSection.css";
+import { PROVIDER_NAME, PhoneChart, PhoneRanked, PhoneSwitch, PhoneTabs, ProviderChips, bestValue, rankModels } from "./ModelIndexPhone";
 import { Segmented } from "./Segmented";
 
 type View = "scatter" | "bars";
@@ -92,14 +93,6 @@ const BENCH_KEY = {
 
 const PERCENT = new Set<ModelIndexKey>(["coding", "agentic", "security", "legal"]);
 const RATING = new Set<ModelIndexKey>(["general"]);
-
-const PROVIDER_NAME: Record<Exclude<ChartProvider, "other">, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  google: "Google",
-  xai: "xAI",
-  meta: "Meta",
-};
 
 // Color names the lab; shape names the model within it.
 const SHAPES = [
@@ -386,7 +379,7 @@ function Scatter({
   const caption = wrapLines(`${t(COST_KEY.get(index) ?? "modelIndex.axis.cost")}\u00a0→`, right - left, (text) => (measure(text) * 11) / 10.5);
   const height =
     fitHeight ??
-    Math.round(Math.min(420, Math.max(300, width * 0.62, phone ? Math.min(360, width * 1.15) : 0))) + (caption.length - 1) * CAPTION_LINE;
+    Math.round(Math.min(420, Math.max(300, width * 0.62))) + (caption.length - 1) * CAPTION_LINE;
   const bottom = height - (caption.length - 1) * CAPTION_LINE - MARGIN.bottom;
   const svgRef = useRef<SVGSVGElement>(null);
   const input = full ? "touch" : phone ? undefined : "mouse";
@@ -784,7 +777,9 @@ export function ModelIndexSection() {
   const [tab, setTab] = useState<Tab>(TABS[0] ?? "intelligence");
   const [coding, setCoding] = useState<Coding>(CODING[0] ?? "agentic");
   const index: ModelIndexKey = tab === "coding" ? coding : tab;
-  const [view, setView] = useState<View>("scatter");
+  // Phones open on the ranked list; the chart is one tab away.
+  const [view, setView] = useState<View>(() => (isPhone() ? "bars" : "scatter"));
+  const [only, setOnly] = useState<ChartProvider | null>(null);
   const [hover, setHover] = useState<Hover | null>(null);
   const [place, setPlace] = useState<{ key: string; left: number; top: number } | null>(null);
   const [full, setFull] = useState(false);
@@ -823,6 +818,12 @@ export function ModelIndexSection() {
             .replace(/ /g, "\u00a0"),
         })
       : formatPrice(price);
+  const ranked = rankModels(points, index === "cost");
+  // A filter left over from another benchmark that lacks the lab shows everyone.
+  const lab = only && providers.includes(only) ? only : null;
+  const phoneRows = lab ? ranked.filter((row) => row.provider === lab) : ranked;
+  const chips = <ProviderChips providers={providers} value={lab} onChange={setOnly} t={t} />;
+  const valueText = (point: ModelIndexPoint) => formatValue(index, point, priceText);
   const stale = (date: string) => {
     const now = new Date();
     return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.parse(date.slice(0, 10)) > STALE_DAYS * DAY_MS;
@@ -892,10 +893,9 @@ export function ModelIndexSection() {
     <div className="model-index flex flex-col gap-4">
       <div className="rounded-xl border border-hairline/40 bg-card shadow-sm max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none">
         <div className="flex flex-col gap-2.5 p-4 pb-3 max-md:px-0 max-md:pt-0">
-          <div className="flex min-w-0 items-center gap-3">
-            <Segmented
+          {phone ? (
+            <PhoneTabs
               label={t("modelIndex.indexLabel")}
-              peek
               value={tab}
               options={TABS.map((id) => ({ id, label: t(INDEX_KEY[id]) }))}
               onChange={(id) => {
@@ -903,8 +903,21 @@ export function ModelIndexSection() {
                 setTab(id);
               }}
             />
+          ) : (
+            <div className="flex min-w-0 items-center gap-3">
+              <Segmented
+                label={t("modelIndex.indexLabel")}
+                peek
+                value={tab}
+                options={TABS.map((id) => ({ id, label: t(INDEX_KEY[id]) }))}
+                onChange={(id) => {
+                  setHover(null);
+                  setTab(id);
+                }}
+              />
 
-          </div>
+            </div>
+          )}
           {tab === "coding" && (
             <Segmented<Coding>
               label={t("modelIndex.codingLabel")}
@@ -916,38 +929,43 @@ export function ModelIndexSection() {
               }}
             />
           )}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Segmented<View>
-              label={t("modelIndex.viewLabel")}
-              value={shown}
-              options={[
-                { id: "scatter", label: t("modelIndex.view.scatter") },
-                { id: "bars", label: t("modelIndex.view.bars") },
-              ]}
-              onChange={(id) => {
-                setHover(null);
-                setView(id);
-              }}
-              disabled={(id) => id === "scatter" && !priced}
-            />
-            {phone && shown === "scatter" && points.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
+          {phone ? (
+            <PhoneSwitch>
+              <Segmented<View>
+                label={t("modelIndex.viewLabel")}
+                value={shown}
+                options={[
+                  { id: "bars", label: t("modelIndex.view.bars") },
+                  { id: "scatter", label: t("modelIndex.view.chart") },
+                ]}
+                onChange={(id) => {
                   setHover(null);
-                  setFull(true);
+                  setView(id);
                 }}
-                className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-control"
-                aria-label={t("modelIndex.fullScreen")}
-              >
-                <Maximize2 size={16} />
-              </button>
-            )}
-          </div>
+                disabled={(id) => id === "scatter" && !priced}
+              />
+            </PhoneSwitch>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Segmented<View>
+                label={t("modelIndex.viewLabel")}
+                value={shown}
+                options={[
+                  { id: "scatter", label: t("modelIndex.view.scatter") },
+                  { id: "bars", label: t("modelIndex.view.bars") },
+                ]}
+                onChange={(id) => {
+                  setHover(null);
+                  setView(id);
+                }}
+                disabled={(id) => id === "scatter" && !priced}
+              />
+            </div>
+          )}
         </div>
 
         <div className="px-4 pb-4 max-md:px-0 max-md:pb-2">
-          {shown === "bars" && points.length > 0 && (
+          {shown === "bars" && !phone && points.length > 0 && (
             <div className="mb-2 text-[11.5px] font-medium text-ink-secondary">{t(AXIS_KEY[index])}</div>
           )}
           <div ref={wrapRef} data-mi-full={full ? "" : undefined} className={full ? "fixed inset-0 z-[60] flex flex-col gap-2 overflow-hidden bg-panel px-3 pb-3 pt-2" : "relative min-w-0"}>
@@ -993,7 +1011,28 @@ export function ModelIndexSection() {
               <p className="py-10 text-center text-[13px] text-ink-secondary">{t("modelIndex.empty")}</p>
             ) : (
               <div key={shown} ref={chartRef} data-mi-view className={full ? "min-h-0 flex-1 overflow-y-auto" : undefined}>
-                {shown === "scatter" ? (
+                {shown === "scatter" && phone && !full ? (
+                  <PhoneChart
+                    rows={phoneRows}
+                    width={width}
+                    title={t(AXIS_KEY[index])}
+                    percent={PERCENT.has(index)}
+                    tick={(value) => formatTick(unitOf(index), value)}
+                    chips={chips}
+                    foot={
+                      <>
+                        {t("modelIndex.chart.line")}
+                        {noCost > 0 && ` ${t("modelIndex.noCost", { count: noCost })}`}
+                      </>
+                    }
+                    valueText={valueText}
+                    onFull={() => {
+                      setHover(null);
+                      setFull(true);
+                    }}
+                    t={t}
+                  />
+                ) : shown === "scatter" ? (
                   <Scatter
                     index={index}
                     marks={MARKS}
@@ -1011,6 +1050,16 @@ export function ModelIndexSection() {
                     phone={phone}
                     hover={hover?.key ?? null}
                     onHover={onHover}
+                    t={t}
+                  />
+                ) : phone ? (
+                  <PhoneRanked
+                    rows={phoneRows}
+                    value={index === "cost" ? undefined : bestValue(ranked)}
+                    title={t(index === "cost" ? "modelIndex.tooltip.blended" : AXIS_KEY[index])}
+                    hint={t(index === "cost" ? "modelIndex.cheapestFirst" : "modelIndex.higherBetter")}
+                    chips={chips}
+                    valueText={valueText}
                     t={t}
                   />
                 ) : (
@@ -1075,7 +1124,7 @@ export function ModelIndexSection() {
           </div>
         </div>
 
-        {providers.length > 0 && (
+        {providers.length > 0 && !phone && (
           <div className="flex flex-col gap-1.5 border-t border-hairline/30 px-4 py-3 text-[12px] text-ink-secondary max-md:px-0">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               {providers.map((provider) => (

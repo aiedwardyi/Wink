@@ -1,11 +1,11 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-function edgeFade(el: HTMLElement): string | undefined {
+export function edgeFade(el: HTMLElement, fade = 24): string | undefined {
   const start = el.scrollLeft > 1;
   const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 1;
   if (!start && !end) return undefined;
-  return `linear-gradient(to right, ${start ? "transparent" : "black"}, black 24px, black calc(100% - 24px), ${end ? "transparent" : "black"})`;
+  return `linear-gradient(to right, ${start ? "transparent" : "black"}, black ${fade}px, black calc(100% - ${fade}px), ${end ? "transparent" : "black"})`;
 }
 
 export interface SegmentedProps<T extends string> {

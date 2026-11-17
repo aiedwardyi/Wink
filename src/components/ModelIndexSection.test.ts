@@ -3,7 +3,7 @@ import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { I18nProvider, applyLocale, localeTag } from "@/lib/i18n";
+import { I18nProvider, applyLocale, localeTag, t } from "@/lib/i18n";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { MODEL_INDEX_ENTRIES, MODEL_INDEX_SOURCES } from "../../shared/model-index-data.ts";
 
@@ -13,6 +13,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 import { ModelIndexSection } from "./ModelIndexSection";
+import { placeNames } from "./ModelIndexPhone";
 
 let root: Root;
 let host: HTMLElement;
@@ -574,29 +575,6 @@ describe("score vs cost axis", () => {
     expect(host.querySelector("svg[role=img]")?.getAttribute("width")).toBe("260");
   });
 
-  it("gives phones a taller plot than desktop at the same width, never a shorter one", async () => {
-    const svgHeight = () => Number(host.querySelector("svg[role=img]")?.getAttribute("height"));
-    const media = vi.spyOn(window, "matchMedia");
-    const heights = async (width: number) => {
-      // SAFETY: the chart reads only `matches` from its media queries.
-      media.mockReturnValue({ matches: false } as MediaQueryList);
-      await rebuild(width);
-      const desktop = svgHeight();
-      // SAFETY: the chart reads only `matches` from its media queries.
-      media.mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
-      await rebuild(width);
-      return { desktop, phone: svgHeight() };
-    };
-    try {
-      const narrow = await heights(294);
-      expect(narrow.phone - narrow.desktop).toBeGreaterThanOrEqual(30);
-      const wide = await heights(640);
-      expect(wide.phone).toBe(wide.desktop);
-    } finally {
-      media.mockRestore();
-    }
-  });
-
   it("measures labels in the font the app is drawn in", async () => {
     const fonts: string[] = [];
     const ctx = {
@@ -650,6 +628,7 @@ describe("full screen chart", () => {
     host.innerHTML = "";
     root = createRoot(host);
     await act(async () => root.render(createElement(I18nProvider, null, createElement(settings ? SettingsChart : ModelIndexSection))));
+    if (phone) pick(t("modelIndex.viewLabel"), t("modelIndex.view.chart"));
   };
   const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   const svg = () => host.querySelector<SVGSVGElement>("svg[role=img]")!;
@@ -966,5 +945,100 @@ describe("full screen chart", () => {
       expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
       expect(svg().getAttribute("data-mi-zoom")).toBeNull();
     });
+  });
+});
+
+describe("phone model index", () => {
+  const rebuild = async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private cb: (entries: unknown[]) => void) {}
+        observe = () => this.cb([{ contentRect: { width: 360, height: 600 } }]);
+        disconnect = () => undefined;
+      },
+    );
+    // SAFETY: isPhone only reads .matches
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
+    await mount();
+  };
+  const rows = () => [...host.querySelectorAll<HTMLButtonElement>("[data-mi-row]")];
+  const intelligence = () => {
+    const models = new Map<string, string>();
+    for (const entry of MODEL_INDEX_ENTRIES) if (entry.index === "intelligence") models.set(entry.model, entry.label);
+    return models;
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("opens on Ranked with one row per model at its best effort and every name whole", async () => {
+    await rebuild();
+    expect(chosen("Chart")).toBe("Ranked");
+    const shown = rows();
+    expect(shown.length).toBeGreaterThan(5);
+    expect(new Set(shown.map((row) => row.dataset.miRow)).size).toBe(shown.length);
+    const labels = intelligence();
+    for (const row of shown) {
+      const name = row.querySelector("[data-mi-name]")!;
+      expect(name.textContent).toBe(labels.get(row.dataset.miRow!));
+      expect(name.className).not.toMatch(/truncate|ellipsis/);
+    }
+    const best = Math.max(...MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === shown[0]!.dataset.miRow).map((entry) => entry.score));
+    expect(shown[0]!.textContent).toContain(best.toFixed(1));
+    expect(host.textContent).toContain("Tap a model for every effort level");
+  });
+
+  it("opens a model's every effort on tap", async () => {
+    await rebuild();
+    const row = rows().find((el) => MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === el.dataset.miRow).length > 2)!;
+    const efforts = MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === row.dataset.miRow);
+    act(() => row.click());
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    for (const entry of efforts) expect(row.textContent).toContain(`${entry.effort} ${entry.score.toFixed(1)}`);
+  });
+
+  it("filters by lab and keeps every lab's chip", async () => {
+    await rebuild();
+    const chip = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((el) => el.textContent === name)!;
+    for (const name of ["All", "Anthropic", "OpenAI", "Google"]) expect(chip(name)).toBeTruthy();
+    act(() => chip("Anthropic").click());
+    const anthropic = new Set(MODEL_INDEX_ENTRIES.filter((entry) => entry.provider === "anthropic").map((entry) => entry.model));
+    expect(rows().length).toBeGreaterThan(0);
+    expect(rows().every((row) => anthropic.has(row.dataset.miRow!))).toBe(true);
+    act(() => chip("All").click());
+    expect(rows().some((row) => !anthropic.has(row.dataset.miRow!))).toBe(true);
+  });
+
+  it("names only the top 3 on the chart and shows a tapped dot's callout", async () => {
+    await rebuild();
+    pick("Chart", "Chart");
+    const chart = host.querySelector("[data-mi-phone-chart]")!;
+    const names = [...chart.querySelectorAll("text[data-mi-name]")].map((el) => el.getAttribute("data-mi-name"));
+    expect(names).toHaveLength(3);
+    expect(chart.querySelectorAll("[data-mi-line], line[stroke-dasharray]")).toHaveLength(0);
+    const dots = [...chart.querySelectorAll<SVGElement>('[data-mi-dot] [role="button"]')];
+    const fifth = dots.find((dot) => !names.includes(dot.closest("[data-mi-dot]")!.getAttribute("data-mi-dot")))!;
+    const model = fifth.closest("[data-mi-dot]")!.getAttribute("data-mi-dot")!;
+    act(() => void fifth.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(chart.querySelector("[data-mi-callout]")!.textContent).toContain(intelligence().get(model));
+    expect(fifth.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("keeps a gap between two chart names so they never read as one", () => {
+    const named = [
+      { id: "gemini", text: "Gemini 4 Carbon", at: { x: 302, y: 251 } },
+      { id: "opus", text: "Opus 5.5", at: { x: 321, y: 246 } },
+    ];
+    const placed = placeNames(named, named.map((name) => name.at), { left: 34, top: 14, right: 380, bottom: 346 });
+    const [a, b] = named.map(({ id, text }) => {
+      const { x, y, anchor } = placed.get(id)!;
+      const w = text.length * 7;
+      const left = anchor === "end" ? x - w : anchor === "middle" ? x - w / 2 : x;
+      return { left, right: left + w, top: y - 11, bottom: y + 3 };
+    });
+    const apart = Math.max(b!.left - a!.right, a!.left - b!.right) >= 10 || Math.max(b!.top - a!.bottom, a!.top - b!.bottom) >= 2;
+    expect(apart).toBe(true);
   });
 });
