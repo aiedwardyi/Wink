@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -490,7 +490,7 @@ describe("task state clipping", () => {
     const clipped: string[] = [];
     const parsed = taskStateUpdateSchema(clipped).safeParse({ fromBotId: "bot-1", fromThreadId: "thread-1", ...fields });
     if (!parsed.success) return { error: taskStateUpdateError(parsed.error), saved: undefined, clipped, kept: [], dropped: [] };
-    return { saved: parsed.data, clipped, ...groundTaskArtifacts(parsed.data.artifacts ?? [], cwd) };
+    return { saved: parsed.data, clipped, ...groundTaskArtifacts(parsed.data.artifacts ?? [], cwd, { kind: "any" }) };
   };
   const rejection = (parsed: z.ZodSafeParseResult<unknown>) => (parsed.success ? "saved" : taskStateUpdateError(parsed.error));
 
@@ -538,6 +538,14 @@ describe("task state clipping", () => {
       { ref: realpathSync(outsideFile), label: "Notes" },
     ]);
     expect(result.dropped).toEqual([join(cwd, "repro"), device, join(outside, "gone.md")]);
+  });
+
+  it("keeps only files under the roots when scoped, refusing traversal and absolute paths outside", () => {
+    const outsideFile = join(outside, "notes.md");
+    const refs = ["brief.md", `..${sep}outside${sep}notes.md`, outsideFile];
+    const { kept, dropped } = groundTaskArtifacts(refs.map((ref) => ({ ref, label: "L" })), cwd, { kind: "roots", roots: [cwd] });
+    expect(kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "L" }]);
+    expect(dropped).toEqual(refs.slice(1));
   });
 
   it("saves a mixed update and reports the clip and the drop in one line", () => {

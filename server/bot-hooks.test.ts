@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ATTACHMENTS_DIR } from "./attachments.ts";
@@ -116,6 +116,15 @@ describe("picture gate routes", () => {
     const result = await call(routes(false, readOnly).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path: picture });
     expect(result.status).toBe(status);
     expect(appendMessage).toHaveBeenCalledTimes(status === 201 ? 1 : 0);
+  });
+
+  it("a read-only turn cannot reach outside the bot's folders by traversal", async () => {
+    const away = mkdtempSync(join(DATA_DIR, "away-"));
+    writeFileSync(join(away, "pic.gif"), pixels);
+    const traversal = join(folder, "..", basename(away), "pic.gif");
+    const result = await call(routes(false, true).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path: traversal });
+    expect(result.status).toBe(403);
+    expect(appendMessage).not.toHaveBeenCalled();
   });
 
   it.each(["working folder", "workspace"])("refuses stamps inside the bot's %s in PATCH", async (root) => {

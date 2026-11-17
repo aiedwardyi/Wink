@@ -129,16 +129,23 @@ export function sniffImageMime(bytes: Buffer): string | null {
   return null;
 }
 
-// Reject network paths before fs access, which can block on a share. Null roots: any local path.
-export function resolveLocalFile(path: string, roots: readonly string[] | null, kind = "file"): { path: string; size: number } {
+/** Where a caller may read: every local file, or only under these folders. Every reader must pick one. */
+export type FileScope = { kind: "any" } | { kind: "roots"; roots: readonly string[] };
+
+export function inScope(scope: FileScope, real: string): boolean {
+  return scope.kind === "any" || scope.roots.some((root) => under(root, real) !== null);
+}
+
+// Reject network paths before fs access, which can block on a share.
+export function resolveLocalFile(path: string, scope: FileScope, kind = "file"): { path: string; size: number } {
   const fail = (status: number, msg: string) => Object.assign(new Error(msg), { status });
-  const folders = roots?.join(", ") || "none set";
-  const outside = roots
+  const folders = scope.kind === "roots" ? scope.roots.join(", ") || "none set" : "";
+  const outside = scope.kind === "roots"
     ? `${path}: ${kind} must be inside your project or workspace folder (${folders}); save it there first`
     : `${path}: network and device paths aren't supported`;
   const missing = `${path}: file not found`;
   if (/^[\\/]{2}/.test(path)) throw fail(403, outside);
-  if (!isAbsolute(path)) throw fail(400, roots ? `${path}: path must be absolute, inside ${folders}` : `${path}: path must be absolute`);
+  if (!isAbsolute(path)) throw fail(400, scope.kind === "roots" ? `${path}: path must be absolute, inside ${folders}` : `${path}: path must be absolute`);
   let real: string;
   try {
     real = realpathSync.native(path);
@@ -146,7 +153,7 @@ export function resolveLocalFile(path: string, roots: readonly string[] | null, 
     throw fail(404, missing);
   }
   if (/^[\\/]{2}/.test(real)) throw fail(403, outside);
-  if (roots && !roots.some((root) => under(root, real) !== null)) throw fail(403, outside);
+  if (!inScope(scope, real)) throw fail(403, outside);
   let size: number;
   try {
     const stat = statSync(real);
@@ -172,7 +179,7 @@ function under(root: string, real: string): string | null {
 
 /** A host file a room may copy: an upload, or a project file outside dot folders, AppData and Wink's data. */
 export function sharableLocalFile(path: string, roots: readonly string[]): { path: string; size: number } {
-  const file = resolveLocalFile(path, [ATTACHMENTS_DIR, ...roots]);
+  const file = resolveLocalFile(path, { kind: "roots", roots: [ATTACHMENTS_DIR, ...roots] });
   if (under(ATTACHMENTS_DIR, file.path) !== null) return file;
   const allowed = under(DATA_DIR, file.path) === null && roots.some((root) =>
     under(root, file.path)?.split(/[\\/]/).every((part) => !part.startsWith(".") && part.toLowerCase() !== "appdata"));
@@ -180,8 +187,8 @@ export function sharableLocalFile(path: string, roots: readonly string[]): { pat
   return file;
 }
 
-export function importLocalImage(path: string, roots: readonly string[] | null): SavedAttachment & { name: string } {
-  const { path: real, size } = resolveLocalFile(path, roots, "image");
+export function importLocalImage(path: string, scope: FileScope): SavedAttachment & { name: string } {
+  const { path: real, size } = resolveLocalFile(path, scope, "image");
   const fail = (status: number, msg: string) => Object.assign(new Error(msg), { status });
   if (size === 0) throw fail(400, "empty image");
   if (size > IMAGE_MAX_BYTES) throw fail(413, `image exceeds ${IMAGE_MAX_BYTES} bytes`);

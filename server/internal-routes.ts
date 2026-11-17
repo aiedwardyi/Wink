@@ -9,7 +9,7 @@ import { EXTENDED_REACTIONS } from "../shared/reactions.ts";
 import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
-import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
+import { importLocalImage, saveImage, type FileScope, type SavedAttachment } from "./attachments.ts";
 import type { BoardCalls } from "./board-calls.ts";
 import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
@@ -164,7 +164,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 400, { error: "this task has no working folder for artifacts" });
       }
       const folder = taskCwd ?? "";
-      const { kept: artifacts, dropped } = groundTaskArtifacts(body.artifacts ?? [], folder);
+      // read-only turns were refused above
+      const scope: FileScope = { kind: "any" };
+      const { kept: artifacts, dropped } = groundTaskArtifacts(body.artifacts ?? [], folder, scope);
 
       const next = structuredClone(current);
       // Dropping the anchor is how the bot claims a field: a later instruction
@@ -486,9 +488,10 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         from.cwd,
         workspaceDir(from.id),
       ].filter((root): root is string => Boolean(root));
+      const scope: FileScope = deps.readOnlyTurn(from.id, fromThreadId) ? { kind: "roots", roots } : { kind: "any" };
       let saved: ReturnType<typeof importLocalImage>;
       try {
-        saved = importLocalImage(String(body.path ?? ""), deps.readOnlyTurn(from.id, fromThreadId) ? roots : null);
+        saved = importLocalImage(String(body.path ?? ""), scope);
       } catch (e) {
         return json(res, (e as { status?: number }).status ?? 400, { error: (e as Error).message });
       }

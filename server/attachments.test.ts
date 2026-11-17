@@ -174,6 +174,8 @@ describe("importLocalImage", () => {
   const src = join(DATA_ROOT, "src");
   const outside = join(DATA_ROOT, "outside");
   const roots = [src];
+  const scope = { kind: "roots", roots } as const;
+  const ANY = { kind: "any" } as const;
   beforeEach(() => {
     rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
     mkdirSync(src, { recursive: true });
@@ -188,7 +190,7 @@ describe("importLocalImage", () => {
   it("copies a real PNG into the store under a generated name", () => {
     const file = join(src, "mockup.png");
     writeFileSync(file, PNG);
-    const saved = importLocalImage(file, roots);
+    const saved = importLocalImage(file, scope);
     expect(saved.mime).toBe("image/png");
     expect(saved.path.startsWith(ATTACHMENTS_DIR)).toBe(true);
     expect(saved.name).not.toContain("mockup");
@@ -199,38 +201,38 @@ describe("importLocalImage", () => {
     mkdirSync(join(outside, "shots"), { recursive: true });
     const file = join(outside, "shots", "a.png");
     writeFileSync(file, PNG);
-    expect(importLocalImage(file, [src, outside]).mime).toBe("image/png");
+    expect(importLocalImage(file, { kind: "roots", roots: [src, outside] }).mime).toBe("image/png");
   });
 
   it("stores by sniffed format, not by extension", () => {
     const file = join(src, "shot.jpg");
     writeFileSync(file, PNG);
-    expect(importLocalImage(file, roots).name.endsWith(".png")).toBe(true);
+    expect(importLocalImage(file, scope).name.endsWith(".png")).toBe(true);
   });
 
   it("rejects a text file named .png", () => {
     const file = join(src, "fake.png");
     writeFileSync(file, "hello");
-    expect(() => importLocalImage(file, roots)).toThrow(/not a PNG, JPEG, GIF, or WebP/);
+    expect(() => importLocalImage(file, scope)).toThrow(/not a PNG, JPEG, GIF, or WebP/);
   });
 
   it("rejects missing, relative, directory, empty, and oversized paths", () => {
-    expect(() => importLocalImage(join(src, "nope.png"), roots)).toThrow(/file not found/);
-    expect(() => importLocalImage("mockup.png", roots)).toThrow(/absolute/);
-    expect(() => importLocalImage(src, roots)).toThrow(/regular file/);
+    expect(() => importLocalImage(join(src, "nope.png"), scope)).toThrow(/file not found/);
+    expect(() => importLocalImage("mockup.png", scope)).toThrow(/absolute/);
+    expect(() => importLocalImage(src, scope)).toThrow(/regular file/);
     const empty = join(src, "empty.png");
     writeFileSync(empty, "");
-    expect(() => importLocalImage(empty, roots)).toThrow(/empty/);
+    expect(() => importLocalImage(empty, scope)).toThrow(/empty/);
     const big = join(src, "big.png");
     writeFileSync(big, Buffer.concat([PNG, Buffer.alloc(IMAGE_MAX_BYTES)]));
-    expect(() => importLocalImage(big, roots)).toThrow(/exceeds/);
+    expect(() => importLocalImage(big, scope)).toThrow(/exceeds/);
   });
 
-  it.each([["scoped", roots], ["unscoped", null]] as const)("rejects UNC and device paths before touching the filesystem (%s)", (_, scope) => {
+  it.each([["scoped", scope], ["unscoped", ANY]] as const)("rejects UNC and device paths before touching the filesystem (%s)", (_, pick) => {
     const calls = [fs.realpathSync, fs.realpathSync.native, fs.statSync, fs.readFileSync].map((fn) => vi.mocked(fn));
     for (const path of ["\\\\server\\share\\a.png", "//server/share/a.png", "\\\\?\\C:\\a.png", "\\\\.\\C:\\a.png"]) {
       calls.forEach((fn) => fn.mockClear());
-      expect(() => importLocalImage(path, scope)).toThrow(expect.objectContaining({ status: 403 }));
+      expect(() => importLocalImage(path, pick)).toThrow(expect.objectContaining({ status: 403 }));
       calls.forEach((fn) => expect(fn).not.toHaveBeenCalled());
     }
   });
@@ -238,42 +240,47 @@ describe("importLocalImage", () => {
   it("takes an image from any folder when unscoped, stored as an attachment copy", () => {
     const file = join(outside, "pic.png");
     writeFileSync(file, PNG);
-    const saved = importLocalImage(file, null);
+    const saved = importLocalImage(file, ANY);
     expect(dirname(saved.path)).toBe(ATTACHMENTS_DIR);
     expect(readAttachment(saved.name)?.bytes.equals(PNG)).toBe(true);
-    expect(() => importLocalImage(file, roots)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => importLocalImage(file, scope)).toThrow(expect.objectContaining({ status: 403 }));
   });
 
   it("still wants an absolute path, existing file and real image when unscoped", () => {
-    expect(() => importLocalImage("pic.png", null)).toThrow(/absolute/);
-    expect(() => importLocalImage(join(outside, "nope.png"), null)).toThrow(/file not found/);
+    expect(() => importLocalImage("pic.png", ANY)).toThrow(/absolute/);
+    expect(() => importLocalImage(join(outside, "nope.png"), ANY)).toThrow(/file not found/);
     const fake = join(outside, "fake.png");
     writeFileSync(fake, "hello");
-    expect(() => importLocalImage(fake, null)).toThrow(/not a PNG, JPEG, GIF, or WebP/);
+    expect(() => importLocalImage(fake, ANY)).toThrow(/not a PNG, JPEG, GIF, or WebP/);
   });
 
   it("rejects a file outside every root with a 403 that says where to save", () => {
     const file = join(outside, "private.png");
     writeFileSync(file, PNG);
-    expect(() => importLocalImage(file, roots)).toThrow(
+    expect(() => importLocalImage(file, scope)).toThrow(
       expect.objectContaining({ status: 403, message: expect.stringContaining("project or workspace folder") }),
     );
-    expect(() => importLocalImage(file, roots)).toThrow(roots.join(", "));
-    expect(() => importLocalImage(file, roots)).toThrow(file);
-    expect(() => importLocalImage(file, [])).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => importLocalImage(file, scope)).toThrow(roots.join(", "));
+    expect(() => importLocalImage(file, scope)).toThrow(file);
+    expect(() => importLocalImage(file, { kind: "roots", roots: [] })).toThrow(expect.objectContaining({ status: 403 }));
   });
 
   it("names the submitted path in missing and relative path errors", () => {
     const missing = join(src, "nope.png");
-    expect(() => importLocalImage(missing, roots)).toThrow(`${missing}: file not found`);
-    expect(() => importLocalImage("mockup.png", roots)).toThrow("mockup.png");
-    expect(() => importLocalImage("mockup.png", roots)).toThrow(roots.join(", "));
+    expect(() => importLocalImage(missing, scope)).toThrow(`${missing}: file not found`);
+    expect(() => importLocalImage("mockup.png", scope)).toThrow("mockup.png");
+    expect(() => importLocalImage("mockup.png", scope)).toThrow(roots.join(", "));
+  });
+
+  it("refuses a traversal path out of the root when scoped", () => {
+    writeFileSync(join(outside, "private.png"), PNG);
+    expect(() => importLocalImage(join(src, "..", basename(outside), "private.png"), scope)).toThrow(expect.objectContaining({ status: 403 }));
   });
 
   it("rejects a link inside a root that resolves outside it", () => {
     writeFileSync(join(outside, "private.png"), PNG);
     symlinkSync(outside, join(src, "escape"), "junction");
-    expect(() => importLocalImage(join(src, "escape", "private.png"), roots)).toThrow(
+    expect(() => importLocalImage(join(src, "escape", "private.png"), scope)).toThrow(
       expect.objectContaining({ status: 403 }),
     );
   });
@@ -308,7 +315,8 @@ describe("show-image route", () => {
 
   it("publishes into the sender's own thread as a screen message", () => {
     expect(route).toContain("connectorThread(from.id, fromThreadId)");
-    expect(route).toContain("importLocalImage(String(body.path ?? \"\"), deps.readOnlyTurn(from.id, fromThreadId) ? roots : null)");
+    expect(route).toContain("importLocalImage(String(body.path ?? \"\"), scope)");
+    expect(route).toContain('const scope: FileScope = deps.readOnlyTurn(from.id, fromThreadId) ? { kind: "roots", roots } : { kind: "any" };');
     expect(route).toContain("workspaceDir(from.id)");
     expect(route).toContain('kind: "screen"');
     expect(route).toContain("image: saved.name,");

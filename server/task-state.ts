@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { inScope, type FileScope } from "./attachments.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -500,24 +501,24 @@ function clipText(text: string, max: number): string {
 
 const NETWORK_PATH = /^[\\/]{2}/;
 
-function groundedTaskArtifact(cwd: string, ref: string): string | null {
+function groundedTaskArtifact(cwd: string, ref: string, scope: FileScope): string | null {
   // a share can block the event loop, so refuse before any fs call
   if (NETWORK_PATH.test(ref)) return null;
   try {
     const candidate = realpathSync(resolve(cwd, ref));
-    return !NETWORK_PATH.test(candidate) && statSync(candidate).isFile() ? candidate : null;
+    return !NETWORK_PATH.test(candidate) && inScope(scope, candidate) && statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }
 }
 
 /** Keeps the artifacts that are local files, resolved to their real path; relative refs start at the task folder. */
-export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
+export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string, scope: FileScope) {
   const kept: TaskArtifact[] = [];
   const dropped: string[] = [];
   for (const artifact of artifacts) {
     if (artifact.ref.length > LIMITS.ref) { dropped.push(artifact.ref); continue; }
-    const ref = groundedTaskArtifact(cwd, artifact.ref);
+    const ref = groundedTaskArtifact(cwd, artifact.ref, scope);
     if (ref) kept.push({ ref, label: artifact.label });
     else dropped.push(artifact.ref);
   }
