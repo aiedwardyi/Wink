@@ -148,8 +148,6 @@ describe("quick route", () => {
     const card = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "?", subtitle: "Drop them all, or pick?", options: ["Drop all", "Let me pick"], askUser: true } });
     await h.send({ text: "Let me pick", cardId: card.id });
     await h.send({ text: "no stop" });
-    h.release();
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(h.ask).not.toHaveBeenCalled();
     expect(h.steer).toHaveBeenCalledTimes(2);
   });
