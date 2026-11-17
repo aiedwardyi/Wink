@@ -409,6 +409,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_RETRY_SCALE;
     delete process.env.FAKE_CLAUDE_RATE_LIMITS;
     delete process.env.FAKE_CLAUDE_USER_ALLOW;
+    delete process.env.FAKE_CLAUDE_TOOL;
     delete process.env.FAKE_CLAUDE_TASK_GATE;
     delete process.env.FAKE_CLAUDE_WAKE_DELAY_MS;
     delete process.env.FAKE_CLAUDE_NOTIFY_REPEAT_MS;
@@ -2957,6 +2958,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("denies a destructive ask from a helper an unattended Auto turn left running", async () => {
     await create("background-task");
+    mkdirSync(join(scratch, "build"), { recursive: true });
+    writeFileSync(join(scratch, "build", "out.js"), "keep");
     const harness = instance.adapter.onEvent((e) => {
       if (e.type !== "request.opened" || !e.requestId) return;
       const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended, workspace: scratch });
@@ -3596,6 +3599,54 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
     expect(argv).not.toContain("--settings");
+  });
+
+  describe("Wink tools in Ask and Auto", () => {
+    const stdio = { command: process.execPath, args: ["/fake/proxy.js"], env: {} };
+    const play = async (approval: "ask" | "auto", tool: string) => {
+      process.env.FAKE_CLAUDE_TOOL = tool;
+      await create("wink-tool");
+      const threadId = `t-wink-${approval}-${tool}`;
+      await instance.adapter.sendTurn({ threadId, text: "go", cwd: scratch, approval, integrations: { agents: stdio, phone: stdio } });
+      return { threadId, first: await recorder.until((e) => e.type === "turn.completed" || e.type === "request.opened") };
+    };
+    it.each(["mcp__agents__generate_image", "mcp__agents__call_api", "mcp__agents__create_bot", "mcp__phone__tap"])(
+      "Ask holds %s for the Ask card and never runs it on a deny",
+      async (tool) => {
+        const { threadId, first } = await play("ask", tool);
+        expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+        await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+      },
+    );
+
+    it.each(["mcp__agents__generate_image", "mcp__phone__tap"])("Ask holds %s for the card over the user's own allow rule", async (tool) => {
+      process.env.FAKE_CLAUDE_USER_ALLOW = "mcp__agents,mcp__phone";
+      const { threadId, first } = await play("ask", tool);
+      expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+      await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+    });
+
+    it.each(["mcp__agents__list_bots", "mcp__agents__ask_user", "mcp__agents__update_task_state", "mcp__phone__read_screen"])(
+      "Ask runs read-only %s with no card",
+      async (tool) => {
+        const { first } = await play("ask", tool);
+        expect(first.type).toBe("turn.completed");
+        expect(readFileSync(join(scratch, "ran-tool.txt"), "utf8")).toBe(tool);
+      },
+    );
+
+    it.each(["mcp__agents__generate_image", "mcp__agents__create_bot", "mcp__phone__tap", "mcp__agents__list_bots"])(
+      "Auto still runs %s with no card",
+      async (tool) => {
+        const { first } = await play("auto", tool);
+        expect(first.type).toBe("turn.completed");
+        expect(readFileSync(join(scratch, "ran-tool.txt"), "utf8")).toBe(tool);
+      },
+    );
   });
 
   it("leaves the permission mode to a defaultMode in the user's own settings", async () => {

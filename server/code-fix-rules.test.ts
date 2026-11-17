@@ -28,7 +28,7 @@ const RULES = [
   "A report is a claim, not proof.",
 ];
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
-const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
+const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM = "When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
 const CUSTOM = "Keep build notes in the team wiki.";
 const DECISIONS = [
@@ -86,6 +86,7 @@ describe("code-fix rules on every engine", () => {
     for (const rule of RULES) expect(prompt).toContain(rule);
     expect(prompt).toContain(PLAIN_WORDS);
     expect(prompt).toContain(REPEAT_MISTAKES);
+    expect(prompt).not.toContain("build a guard that day");
     expect(prompt).toContain(FORUM);
     expect(prompt).toContain(MODEL_PICKS);
     for (const rule of DECISIONS) expect(prompt).toContain(rule);

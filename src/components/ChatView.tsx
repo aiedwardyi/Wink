@@ -1630,9 +1630,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
-
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
+
+          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
           </ChatPeekPart>
         </div>
       </div>

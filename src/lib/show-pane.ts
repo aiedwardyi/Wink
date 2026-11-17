@@ -63,13 +63,14 @@ let media: string | null = null;
 let checking: string | null = null;
 let mapping: string | null = null;
 let working: string | null = null;
+let timeline: string | null = null;
 const last = new Map<string, ShowItem>();
 const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
 export const PANE_TAB_KEY = "omb-pane-tab";
-const paneTab = z.union([z.enum(["media", "map", "workers"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text", "folder"]), src: z.string().optional() })]);
+const paneTab = z.union([z.enum(["media", "map", "workers", "timeline"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text", "folder"]), src: z.string().optional() })]);
 type PaneTab = z.infer<typeof paneTab>;
 const picked = new Map<string, PaneTab>();
 
@@ -95,12 +96,13 @@ let pulses = 0;
 /** False when this exact file was already on the Show tab, so nothing changed. */
 function openItem(next: ShowItem): boolean {
   last.set(next.threadId, next);
-  if (!media && !checking && !mapping && !working && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return false;
+  if (!media && !checking && !mapping && !working && !timeline && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return false;
   showing = next;
   media = null;
   checking = null;
   mapping = null;
   working = null;
+  timeline = null;
   emit();
   return true;
 }
@@ -123,6 +125,7 @@ function openMedia(threadId: string) {
   checking = null;
   mapping = null;
   working = null;
+  timeline = null;
   emit();
 }
 
@@ -138,18 +141,20 @@ export function showCheck(threadId: string) {
   media = null;
   mapping = null;
   working = null;
+  timeline = null;
   emit();
 }
 
 export const checkThread = () => checking;
 
 export function closeShow() {
-  if (!showing && !media && !checking && !mapping && !working) return;
+  if (!showing && !media && !checking && !mapping && !working && !timeline) return;
   showing = null;
   media = null;
   checking = null;
   mapping = null;
   working = null;
+  timeline = null;
   emit();
 }
 
@@ -157,11 +162,12 @@ export const lastShown = (threadId: string) => last.get(threadId);
 
 /** The header button: shuts this chat's pane, or opens Workers while the chat lists any, else the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map`; a room's runs on each person's own PC. */
 export function togglePane(threadId: string, map?: "idle" | "live", workers = false) {
-  if (showing?.threadId === threadId || media === threadId || mapping === threadId || working === threadId) return closeShow();
+  if (showing?.threadId === threadId || media === threadId || mapping === threadId || working === threadId || timeline === threadId) return closeShow();
   if (workers) return openWorkers(threadId);
   const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
   if (tab === "map" && map) openMap(threadId);
-  else if (tab === "map" || tab === "workers") openMedia(threadId);
+  else if (tab === "timeline" && map) openTimeline(threadId);
+  else if (tab === "map" || tab === "workers" || tab === "timeline") openMedia(threadId);
   else if (tab === "media") openMedia(threadId);
   else openItem(last.get(threadId) ?? tab);
 }
@@ -186,6 +192,7 @@ function openMap(threadId: string) {
   checking = null;
   media = null;
   working = null;
+  timeline = null;
   emit();
 }
 
@@ -204,6 +211,7 @@ function openWorkers(threadId: string) {
   checking = null;
   media = null;
   mapping = null;
+  timeline = null;
   emit();
 }
 
@@ -215,6 +223,26 @@ export function showWorkers(threadId: string) {
 /** The thread whose pane is on the Workers tab. */
 export function useWorkersThread(): string | null {
   return useSyncExternalStore(subscribe, () => working, () => null);
+}
+
+function openTimeline(threadId: string) {
+  if (timeline === threadId) return;
+  timeline = threadId;
+  checking = null;
+  media = null;
+  mapping = null;
+  working = null;
+  emit();
+}
+
+export function showTimeline(threadId: string) {
+  pick(threadId, "timeline");
+  openTimeline(threadId);
+}
+
+/** The thread whose pane is on the Timeline tab. */
+export function useTimelineThread(): string | null {
+  return useSyncExternalStore(subscribe, () => timeline, () => null);
 }
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
@@ -276,11 +304,12 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
   const onMedia = useMediaThread() !== null;
   const onMap = useMapThread() !== null;
   const onWorkers = useWorkersThread() !== null;
+  const onTimeline = useTimelineThread() !== null;
   const state = useRef<AutoShow>({ seen: null });
   const was = useRef(shown);
   const probe = useRef<AbortController>(undefined);
   // A probe still out when the user picks another tab or file, or a newer file arrives, is stale.
-  useEffect(() => () => probe.current?.abort(), [threadId, shown, free, onMedia, onMap, onWorkers]);
+  useEffect(() => () => probe.current?.abort(), [threadId, shown, free, onMedia, onMap, onWorkers, onTimeline]);
   useEffect(() => {
     const closed = Boolean(was.current && !shown && was.current.threadId === threadId);
     was.current = shown;
@@ -289,11 +318,11 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
     state.current = step.state;
     const item = step.item;
     // A file this PC can't serve would open a dead pane; its link still opens it in the browser.
-    if (item && free && !onMedia && !onMap && !onWorkers) {
+    if (item && free && !onMedia && !onMap && !onWorkers && !onTimeline) {
       probe.current?.abort();
       const { signal } = probe.current = new AbortController();
       fetch(linkedFileSrc(item.threadId, item.path), { headers: { Range: "bytes=0-0" }, signal })
         .then((res) => { if (!signal.aborted && (res.ok || res.status === 416)) openItem(item); }, () => {});
     }
-  }, [threadId, messages, shown, free, onMedia, onMap, onWorkers]);
+  }, [threadId, messages, shown, free, onMedia, onMap, onWorkers, onTimeline]);
 }

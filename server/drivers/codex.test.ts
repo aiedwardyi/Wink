@@ -1135,19 +1135,19 @@ describe("CodexDriver turns (fake app-server)", () => {
       composio: stdio,
       computer: { boxId: "box-1", token: "box-token" },
     };
-    const elicit = async (target: string, extra: object = {}) => {
+    const elicit = async (target: string, extra: object = {}, approval: "ask" | "auto" = "ask") => {
       await create({ mode: "mcp-elicitation" });
       const dump = join(scratch, "elicit.json");
       process.env.FAKE_CODEX_DUMP = dump;
       process.env.FAKE_CODEX_ELICIT = target;
-      await instance.adapter.sendTurn({ threadId: "t-owned", text: "go", approval: "ask", integrations: { ...integrations, ...extra } });
+      await instance.adapter.sendTurn({ threadId: "t-owned", text: "go", approval, integrations: { ...integrations, ...extra } });
       return dump;
     };
 
     it.each([
       ["agents/update_task_state", {}],
-      ["openmausbot_phone/phone_tap", {}],
-      ["browser/browser_navigate", {}],
+      ["agents/list_bots", {}],
+      ["openmausbot_phone/read_screen", {}],
       ["computer/click", {}],
       ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32" } }],
       ["terminal/terminal_read", {}],
@@ -1174,6 +1174,28 @@ describe("CodexDriver turns (fake app-server)", () => {
       await instance.adapter.respondToRequest("t-owned", opened.requestId!, { behavior: "deny" });
       await recorder.until((e) => e.type === "turn.completed");
     });
+
+    it.each(["agents/generate_image", "agents/call_api", "agents/create_bot", "openmausbot_phone/tap", "browser/browser_click"])(
+      "holds %s for the Ask card and declines it on a deny",
+      async (target) => {
+        const dump = await elicit(target);
+        const first = await recorder.until((e) => e.type === "request.opened" || e.type === "turn.completed");
+        expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool: target.split("/")[1] });
+        await instance.adapter.respondToRequest("t-owned", first.requestId!, { behavior: "deny" });
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "decline" });
+      },
+    );
+
+    it.each(["agents/generate_image", "agents/create_bot", "openmausbot_phone/tap", "browser/browser_click"])(
+      "Auto still accepts %s with no card",
+      async (target) => {
+        const dump = await elicit(target, {}, "auto");
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+        expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "accept", content: {} });
+      },
+    );
   });
 
   it("stamps approvalScope on cards only when the turn controls this Mac", async () => {

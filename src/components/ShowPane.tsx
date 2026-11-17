@@ -6,10 +6,11 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { mediaFile, type MediaSource } from "@/lib/show-media";
 import { openOutside, saveFile } from "@/lib/open-file";
-import { lastShown, linkedFileSrc, linkedFolder, showCheck, showItem, showMap, showMedia, showName, showWorkers, takeFolder, usePanePulse, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { lastShown, linkedFileSrc, linkedFolder, showCheck, showItem, showMap, showMedia, showName, showTimeline, showWorkers, takeFolder, usePanePulse, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
 import { MediaFiles, ShowMedia } from "./ShowMedia";
+import { TimelinePane } from "./TimelinePane";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import { VerifyWatchFrame } from "./VerifyWatch";
 import { listedFor, useSharedWorkers, WorkerPage } from "./WorkerRows";
@@ -32,6 +33,8 @@ interface ShowPaneProps {
   map?: boolean;
   /** the Workers tab is open */
   workers?: boolean;
+  timeline?: boolean;
+  profileName?: string;
   botId?: string;
   /** the chat's last check, which the Check tab opens */
   card?: VerifyCardData;
@@ -41,7 +44,7 @@ interface ShowPaneProps {
 }
 
 /** The right slot's one pane: the chat's workers, a bot's file, the checker and the chat's media, a tab each. A phone gets it as a full-screen sheet. */
-export function ShowPane({ item, watch, media = false, check = false, map = false, workers = false, botId, card, source, hidden, closing = false }: ShowPaneProps) {
+export function ShowPane({ item, watch, media = false, check = false, map = false, workers = false, timeline = false, profileName, botId, card, source, hidden, closing = false }: ShowPaneProps) {
   const { t } = useI18n();
   const phone = useIsPhone();
   const [maximized, setMaximized] = useState(false);
@@ -51,7 +54,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
   const [pulsed, setPulsed] = useState(pulses);
   const crew = useSharedWorkers(source?.threadId);
   const hasWorkers = Boolean(crew && (crew.onOpenTerminal || listedFor(crew).length > 0));
-  const tab = workers && source ? "workers" : map ? "map" : media && source ? "media" : watch && (check || !item) ? "check" : "show";
+  const tab = workers && source ? "workers" : map ? "map" : timeline ? "timeline" : media && source ? "media" : watch && (check || !item) ? "check" : "show";
   // A phone watches a doc check live; only a site check waits for the end.
   const action = card && verifyCardAction(card, phone && !card.doc);
   const checkable = Boolean(watch) || action === "live" || action === "watch";
@@ -85,6 +88,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
           {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
           {source && botId && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
+          {source && botId && <button type="button" role="tab" aria-selected={tab === "timeline"} onClick={() => showTimeline(source.threadId)}>{t("show.timeline")}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
@@ -99,6 +103,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
       {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
       {tab === "workers" && <WorkerPage source={crew} maximized={expanded} onClose={closePane} />}
       {tab === "map" && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
+      {tab === "timeline" && botId && source && <TimelinePane key={botId} botId={botId} threadId={source.threadId} maximized={expanded} profileName={profileName} />}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons. One portal box moves between the dock and the body, so crossing the phone width keeps the pane mounted.

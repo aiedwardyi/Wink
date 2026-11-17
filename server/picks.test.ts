@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPicks, currentOnly, currentPicks, parseTimeline, pickKeysList, picksBlock, promptTokens, renderTimeline, type PickChange } from "./picks.ts";
+import { applyPicks, currentOnly, currentPicks, mergeTimelines, parseTimeline, pickKeysList, picksBlock, promptTokens, renderTimeline, type PickChange } from "./picks.ts";
 
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 10, day, hour, minute).getTime();
 const pick = (key: string, picked: string, said: string, when: number, extra: Partial<Extract<PickChange, { kind: "pick" }>> = {}): PickChange =>
@@ -8,6 +8,60 @@ const pick = (key: string, picked: string, said: string, when: number, extra: Pa
 const tweak = (key: string, said: string, when: number): PickChange => ({ kind: "tweak", at: when, key, said });
 
 describe("applyPicks", () => {
+  it("keeps precise action time in metadata readable by older timeline parsers", () => {
+    const time = at(17, 10) + 5_000;
+    const text = applyPicks("", [pick("forum", "C - Reddit cards", "c", time)])!.text;
+    expect(text).toContain("## 2026-11-17 10:00 | forum | current");
+    expect(text).toContain(`- At: ${time}`);
+    expect(parseTimeline(text).entries[0]?.at).toBe(time);
+  });
+  it("merges a legacy roll file with a timeline without losing either", () => {
+    const timeline = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10))])!.text;
+    const merged = mergeTimelines("# Older decisions\n- Keep the old note\n", timeline)!;
+    expect(currentPicks(merged)[0]?.picked).toBe("C - Reddit cards");
+    expect(merged).toContain("Keep the old note");
+    expect(mergeTimelines(timeline, "# Older decisions\n- Keep the old note\n")).toBe(merged);
+  });
+
+  it("preserves known replacement order for old minute ids", () => {
+    const text = '# Decision timeline\n\n## 2026-11-17 10:00 | palette | replaced by 2026-11-17 10:00 (2)\n- Picked: ~~Zinc~~\n- Said: "zinc"\n\n## 2026-11-17 10:00 (2) | palette | current\n- Picked: Amber\n- Said: "amber"\n';
+    const other = applyPicks("", [pick("layout", "Cards", "cards", at(17, 11))])!.text;
+    const merged = mergeTimelines(text, other)!;
+    expect(currentPicks(merged).find(({ key }) => key === "palette")?.picked).toBe("Amber");
+    expect(mergeTimelines(merged, text)).toBe(merged);
+  });
+  it("never lets a card tap from another PC replace a typed pick", () => {
+    const typed = applyPicks("", [pick("theme", "Dark", "dark", at(17, 10))])!.text;
+    const tapped = applyPicks("", [pick("theme", "Light", "light", at(17, 10) + 5_000, { tapped: true })])!.text;
+    const merged = mergeTimelines(typed, tapped)!;
+    expect(currentPicks(merged).map(({ picked }) => picked)).toEqual(["Dark"]);
+    expect(parseTimeline(merged).entries).toHaveLength(2);
+    expect(mergeTimelines(tapped, typed)).toBe(merged);
+    expect(mergeTimelines(merged, typed)).toBe(merged);
+    expect(mergeTimelines(merged, merged)).toBe(merged);
+  });
+  it("keeps same-minute tweaks in the order the user said them through a merge", () => {
+    const first = applyPicks("", [pick("header", "Big header", "big header", at(17, 12))])!.text;
+    const text = applyPicks(first, [tweak("header", "make the header smaller", at(17, 12, 1)), tweak("header", "keep the header large", at(17, 12, 1) + 20_000)])!.text;
+    expect(currentPicks(mergeTimelines(text, text))[0]!.tweaks.map(({ said }) => said)).toEqual(["make the header smaller", "keep the header large"]);
+  });
+  it("keeps the later choice when two PCs pick within the same minute", () => {
+    const early = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10) + 5_000)])!.text;
+    const late = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10) + 10_000)])!.text;
+    expect(currentPicks(mergeTimelines(early, late))[0]?.picked).toBe("A - plain list");
+  });
+  it("merges colliding ids deterministically without duplicating picks on replay", () => {
+    const a = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10)), tweak("forum", "smaller header", at(17, 10, 1))])!.text;
+    const b = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10)), pick("theme", "Dark", "dark", at(17, 10))])!.text;
+    const merged = mergeTimelines(a, b)!;
+    expect(mergeTimelines(b, a)).toBe(merged);
+    expect(mergeTimelines(merged, a)).toBe(merged);
+    expect(mergeTimelines(merged, b)).toBe(merged);
+    expect(parseTimeline(merged).entries).toHaveLength(3);
+    expect(new Set(parseTimeline(merged).entries.map(({ id }) => id)).size).toBe(3);
+    expect(currentPicks(merged)).toHaveLength(2);
+    expect(parseTimeline(merged).entries.find(({ picked }) => picked === "A - plain list")?.tweaks).toHaveLength(1);
+  });
   it("replaces the current pick on the same question in one write, the old one struck with a pointer", () => {
     const first = applyPicks("", [pick("Forum look", "A - plain list", "a looks cleanest", at(17, 10))])!;
     const next = applyPicks(first.text, [pick("forum  LOOK!", "C - Reddit cards", "actually c", at(17, 10, 40))])!;
@@ -37,6 +91,32 @@ describe("applyPicks", () => {
     expect(currentPicks(next.text)).toMatchObject([{ picked: "C - Reddit cards", tweaks: [{ at: "2026-11-17 10:41", said: "make the header smaller" }] }]);
   });
 
+  it("never lets a card tap replace a typed pick, however late", () => {
+    const typed = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10))])!.text;
+    expect(applyPicks(typed, [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true })])).toBeNull();
+    expect(applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true }), pick("forum", "A - plain list", "a", at(17, 10))])!.text).toContain("- Picked: A - plain list");
+  });
+  it("lets typing replace a card tap even when the tap is stamped later", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true })])!.text;
+    expect(parseTimeline(tapped).entries[0]?.tapped).toBe(true);
+    const next = applyPicks(tapped, [pick("forum", "A - plain list", "a", at(17, 10))])!.text;
+    expect(currentPicks(next).map(({ picked }) => picked)).toEqual(["A - plain list"]);
+    expect(currentPicks(next)[0]?.tapped).toBeUndefined();
+  });
+  it("makes a tap's option typed when the user types the same option", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
+    expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 12), { tapped: true })])).toBeNull();
+  });
+  it("dates a retyped tap at the typing, so an older delayed pick never replaces it", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
+    expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 10, 30))])).toBeNull();
+    const merged = mergeTimelines(tapped, typed)!;
+    expect(parseTimeline(merged).entries).toHaveLength(1);
+    expect(currentPicks(merged)[0]?.tapped).toBeUndefined();
+    expect(applyPicks(merged, [pick("forum", "B - tiles", "b", at(17, 10, 30))])).toBeNull();
+  });
   it("changes nothing for a restated pick, a repeated tweak or a tweak with no pick", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
     expect(applyPicks(first.text, [pick("Forum Look", "C - Reddit cards", "c again", at(17, 12)), tweak("forum look", "make the header smaller", at(17, 13))])).toBeNull();
@@ -165,6 +245,15 @@ describe("applyPicks order", () => {
   it("treats the same option in other words as a restatement that keeps its tweaks", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
     expect(applyPicks(first.text, [pick("forum look", "C - Reddit-style cards", "yes, c with the reddit style cards", at(17, 12))])).toBeNull();
+  });
+
+  it("replaces a pick when the same letter names a changed option", () => {
+    const blue = applyPicks("", [pick("Header color", "A - blue header", "a", at(17, 10))])!;
+    const red = applyPicks(blue.text, [pick("Header color", "A - red header", "For Header color, pick A - red header instead.", at(17, 10, 2))])!;
+    expect(red).toMatchObject({ picks: 1, replaced: 1 });
+    expect(red.text).toContain("- Picked: ~~A - blue header~~");
+    expect(currentPicks(red.text).map(({ picked }) => picked)).toEqual(["A - red header"]);
+    expect(applyPicks(red.text, [pick("Header color", "A - red header bar", "a, the red header bar", at(17, 10, 3))])).toBeNull();
   });
 
   it("lands a tweak the user asks for again after reversing it", () => {

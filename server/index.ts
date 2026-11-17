@@ -3923,7 +3923,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.action ?? event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused, workspace: turnCwdByThread.get(event.threadId) })
+        ? autoVerdict(asker, event.tool, unattended ? event.action ?? "" : event.approvalScope ? event.action ?? event.summary : event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused ?? (unattended && event.action === undefined ? "unreadable" : undefined), workspace: turnCwdByThread.get(event.threadId) })
         : null;
       const skipNote = verdict?.source === "away-desktop-deny"
         ? AWAY_DESKTOP_DENY_NOTE
@@ -4383,10 +4383,10 @@ bus.subscribe((event: RuntimeEvent) => {
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
           clearSendRunning(bot.id);
+          memoryPass.onSettled(bot.id, event.threadId, flushNotes);
           if (!store.groupByThread(event.threadId)) {
             summaryBuild.onSettled(bot.id, event.threadId);
             summaryRepair.onSettled(bot.id, event.threadId);
-            memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
@@ -4433,6 +4433,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
       if (speaker && group?.busyBotId === speaker.botId) {
+        memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
@@ -4902,6 +4903,7 @@ type StartTurnOptions = {
   sendId?: string;
   call?: CallTag;
   answersCard?: string;
+  actedAt?: number;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4935,7 +4937,7 @@ const CORPUS_SEARCH_INSTRUCTIONS =
 const PLAIN_WORDS_INSTRUCTIONS =
   " Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES_INSTRUCTIONS =
-  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
+  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
   " When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
 // One block for every route, so none can carry one rule set without the other.
@@ -5214,6 +5216,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sendId: opts?.sendId,
           call: opts?.call,
           answersCard: opts?.answersCard,
+          actedAt: opts?.actedAt,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7376,12 +7379,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = []) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
-  const shared = hosted && answersCard ? store.patchMessage(group.threadId, hosted.id, { answersCard }) ?? hosted : hosted;
+  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7397,6 +7400,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     sendId,
     ...(askerId ? { askedBy: askerId } : {}),
     answersCard,
+    actedAt,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -8005,7 +8009,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId), roomTail });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   firstTurnLaunch,
@@ -8960,7 +8964,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
-    if (m && method === "POST") return await liveCall(req, res, m);
+    if (m && method === "POST") {
+      if (m[2] === "token") botCalls.answered(m[1]!);
+      return await liveCall(req, res, m);
+    }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);

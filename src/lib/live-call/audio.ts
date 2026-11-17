@@ -3,6 +3,7 @@ import { boop } from "./call-sounds";
 import { CAPTURE_WORKLET } from "./capture-worklet";
 import { OUTPUT_GAIN } from "../../../shared/live-call";
 import { Stretch } from "./stretch";
+import type { CallSound } from "./warm-audio";
 
 const VOICE_RATE = 24_000;
 const FADE_SAMPLES = 0.3 * VOICE_RATE;
@@ -29,7 +30,8 @@ export class CallAudio {
   private readonly voice: AnalyserNode;
   private readonly out: GainNode;
   private readonly destination: MediaStreamAudioDestinationNode;
-  private readonly output = new Audio();
+  readonly ctx: AudioContext;
+  private readonly output: HTMLAudioElement;
   private mic: AnalyserNode | null = null;
   private tailMs = 0;
   private faded = 0;
@@ -37,8 +39,9 @@ export class CallAudio {
   onIdle: () => void = () => {};
   onStart: () => void = () => {};
 
-  // The context comes from the call tap, the only moment a phone lets it play.
-  constructor(readonly ctx: AudioContext) {
+  constructor({ ctx, voice }: CallSound) {
+    this.ctx = ctx;
+    this.output = voice;
     this.voice = ctx.createAnalyser();
     this.voice.fftSize = this.samples.length;
     this.destination = ctx.createMediaStreamDestination();
