@@ -61,6 +61,8 @@ type InternalRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
   readOnlyTurn: (botId: string, threadId: string) => boolean;
+  /** The user line a running room turn was dispatched to answer. */
+  answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold">;
@@ -414,7 +416,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
-      const target = store.activePath(fromThreadId).findLast((m) => m.role === "user" && m.kind === "text");
+      const lines = store.activePath(fromThreadId).filter((m) => m.role === "user" && m.kind === "text");
+      const answered = deps.answeredLine(fromThreadId);
+      const target = lines.find((m) => m.id === answered) ?? lines.at(-1);
       if (!target) return json(res, 200, { error: "no user message to react to yet" });
       if (!(EXTENDED_REACTIONS as readonly string[]).includes(emoji) && !target.reactions?.some((reaction) => reaction.emoji === emoji && reaction.by === fromBotId)) {
         return json(res, 400, { error: "unsupported emoji" });
