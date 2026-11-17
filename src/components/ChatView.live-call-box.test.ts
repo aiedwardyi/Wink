@@ -254,12 +254,25 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("has no gear: a right-click on End opens the small call menu and a click still ends", async () => {
+  it("shows the call settings gear that opens the small menu, and a right-click on End still does", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      expect(button(frame(host), "Call settings")).toBeNull();
       expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.title).toBe("Call settings");
+      expect(gear.compareDocumentPosition(button(frame(host), "End")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      await act(async () => gear.click());
+      const small = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
+      expect(small.querySelector('input[aria-label="Speed"]')).not.toBeNull();
+      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
+      await act(async () => small.click());
+      expect(document.querySelector("[data-call-settings-menu]:not([data-closing])")).not.toBeNull();
+      await act(async () => {
+        gear.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        gear.click();
+      });
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(frame(host), "End")!.dispatchEvent(right));
       expect(right.defaultPrevented).toBe(true);
