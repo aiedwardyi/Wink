@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { intakeFiles } from "@/lib/composer-attachments";
-import { trayMedia } from "@/lib/tray-media";
+import { forgetTrayMedia, trayMedia } from "@/lib/tray-media";
 
 import { ComposerAttachments } from "./ComposerAttachments";
 
@@ -105,6 +105,8 @@ describe("ComposerAttachments media previews", () => {
     expect(host.querySelector('img[alt="shot.png"]')?.getAttribute("src")).toMatch(/^blob:/);
     expect(host.textContent).toContain("IMAGE");
     expect(host.querySelectorAll(".relative.h-\\[76px\\]")).toHaveLength(2);
+    forgetTrayMedia(attachments[0]!.id);
+    expect(trayMedia(attachments[0]!.id)).toBeUndefined();
     await act(async () => root.unmount());
     host.remove();
   });

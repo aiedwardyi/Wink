@@ -246,6 +246,7 @@ function useClipLength(src: string | undefined): string | undefined {
     return () => {
       video.onloadedmetadata = null;
       video.removeAttribute("src");
+      video.load();
     };
   }, [src]);
   return length;

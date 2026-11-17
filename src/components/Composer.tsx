@@ -60,6 +60,7 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { forgetTrayMedia } from "@/lib/tray-media";
 import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
@@ -367,6 +368,7 @@ export function Composer({
         dropRoomFile(id);
       // a finished file may already be in a sent message, so only unfinished uploads are cancelled
       } else if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
+      forgetTrayMedia(id);
       editAttachments((prev) => prev.filter((a) => a.id !== id));
     },
     [editAttachments, peopleRoom, roomSending],
@@ -418,7 +420,8 @@ export function Composer({
     shownProblems.current = uploadProblems;
     if (uploadProblems) showNotice(uploadProblems);
     else if (last) setAttachmentNotice((notice) => (notice === last ? null : notice));
-  }, [uploadProblems, showNotice]);  const repickInput = useRef<HTMLInputElement>(null);
+  }, [uploadProblems, showNotice]);
+  const repickInput = useRef<HTMLInputElement>(null);
   const repickTarget = useRef<string | null>(null);
   const repick = (file: File | undefined) => {
     const target = attachmentsRef.current.find((a) => a.id === repickTarget.current);
@@ -847,6 +850,7 @@ export function Composer({
       const pending = { text: t, replyToId: replyTo?.id, at: Date.now(), draft: sentDraft };
       commitQueued([...queuedRef.current, pending]);
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       onConsumeReply?.();
       onSend?.();
@@ -876,6 +880,7 @@ export function Composer({
       });
     }
     setText("");
+    for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
     setAttachments([]);
     onConsumeReply?.();
     onSend?.();
@@ -921,6 +926,7 @@ export function Composer({
       });
       if (inputRef.current) inputRef.current.value = "";
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       setTerminalSendPreview(null);
     } catch (cause) {

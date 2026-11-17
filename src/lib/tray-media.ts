@@ -6,3 +6,8 @@ export function keepTrayMedia(id: string, file: Blob): void {
 }
 
 export const trayMedia = (id: string): Blob | undefined => kept.get(id);
+
+/** Lets go of a chip's file once it is removed or sent. */
+export function forgetTrayMedia(id: string): void {
+  kept.delete(id);
+}
