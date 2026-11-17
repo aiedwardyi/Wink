@@ -64,9 +64,7 @@ export interface Point { x: number; y: number }
 export const TREE = { BOX: 26, VGAP: 22, LINE: 17, TOUCH: 44, SGAP: 7, GAP: 10, SMALL: 40, SQ: 9, ELBOW: 4 };
 const { BOX, VGAP, LINE, SGAP, GAP, SMALL, SQ, ELBOW } = TREE;
 // The narrowest a file stack goes: four squares across.
-const STACK_MIN = 58;
-const MAX_EXTRA_FOLDS = 12;
-const byPath = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+const STACK_MIN = 58;const byPath = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const dirOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 export const fmt = (n: number) => n.toLocaleString("en-US");
 
@@ -289,7 +287,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false, ex
   // A small project too wide to open every folder lays out like a big one: changed branches only.
   if (overlap && small) return treeLayout(index, o, true);
   // A last row that cannot narrow any further folds one more branch in the row above, the way an over-wide row does.
-  if (stuck && spent && (o.phone || !o.current) && extra.reduce((sum, n) => sum + (n ?? 0), 0) < MAX_EXTRA_FOLDS) { const more = Array.from({ length: stuck }, (_, i) => (extra[i] ?? 0) + (i === stuck - 1 ? 1 : 0)); return treeLayout(index, o, crowded, more); }
+  if (stuck && spent && (o.phone || !o.current)) { const more = Array.from({ length: stuck }, (_, i) => (extra[i] ?? 0) + (i === stuck - 1 ? 1 : 0)); return treeLayout(index, o, crowded, more); }
   return { items, height: y - VGAP + 2, lit };
 }
 
