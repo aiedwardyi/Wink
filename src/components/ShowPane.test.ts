@@ -8,6 +8,7 @@ import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
+import { parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
 
 const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
@@ -274,7 +275,7 @@ it("shares one pane with the checker, and Bot Details still takes the spot", asy
   await act(async () => root.render(createElement(Slot)));
   expect(seen.at(-1)).toEqual([false, false]);
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('...(watch || show || media || mapping || crewThread ? ["show" as const] : [])');
+  expect(app).toContain('...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : [])');
 });
 
 const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
@@ -290,13 +291,13 @@ const probe = async (read: () => void) => {
 
 it("has no Check tab without a check", async () => {
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map"]);
+  expect(tabs()).toEqual(["Show", "Media", "Map", "Timeline"]);
 });
 
 it("renders the Map tab in Korean with the surrounding labels", async () => {
   await act(async () => applyLocale("ko"));
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["보기", "미디어", "맵"]);
+  expect(tabs()).toEqual(["보기", "미디어", "맵", "타임라인"]);
 });
 
 it("the checker opens on Check, and Show keeps its file", async () => {
@@ -307,7 +308,7 @@ it("the checker opens on Check, and Show keeps its file", async () => {
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
   expect(aside.dataset.tab).toBe("check");
@@ -343,7 +344,7 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
   await render({ item: item("C:\\w\\a.png", "image"), card: done, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
   await probe(() => { watching = useVerifyWatch(); });
@@ -373,16 +374,16 @@ it("speaks Korean on the Check tab", async () => {
 it("hides only Show and Check behind the other tabs, never the Media list", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
   const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
-  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers)');
+  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane)');
 });
 
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
   await render({ item: item("C:\\w\\a.png", "image"), card: running, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map"]);
+  expect(tabs()).toEqual(["Show", "Media", "Map", "Timeline"]);
   await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
 });
 
 it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {
@@ -438,4 +439,55 @@ it("pulses the pane once when its file is clicked again, and not when a click on
   await act(async () => showMap("t1"));
   await act(async () => showItem(shown));
   expect(lit()).toBe(false);
+});
+
+const timeline = readFileSync("test/fixtures/decision-timeline/decisions.md", "utf8");
+const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url) === "/api/bots/b1/memory/topics/decisions.md" ? reply() : new Response(null, { status: 404 })));
+const openTimeline = () => render({ timeline: true, profileName: "Edward", botId: "b1", source: { threadId: "t1", messages: [] }, hidden: false });
+const rows = () => [...host.querySelectorAll("[data-timeline-row]")];
+
+it("lists the bot's picks on the Timeline tab, newest day first, with a replaced pick folded under the newer one", async () => {
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
+  await openTimeline();
+  const tab = [...host.querySelectorAll(".show-pane-tabs [role=tab]")].find((each) => each.textContent === "Timeline");
+  expect(tab?.getAttribute("aria-selected")).toBe("true");
+  await until(() => rows().length > 0);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
+  expect(rows().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Timeline place", "Model Index on phone", "Forum look", "Map on phone", "Speed board look"]);
+  const forum = rows()[2]!;
+  expect(forum.querySelector(".timeline-pick")?.textContent).toBe("Reddit-style list (mock 2)");
+  const fold = forum.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!;
+  expect(fold.textContent).toBe("Replaced pick · 11:05 · Bot to bot, like Reddit");
+  expect(fold.querySelector("s")?.textContent).toBe("Bot to bot, like Reddit");
+  expect(host.textContent).not.toContain("i thot this is bot to bot forum");
+  await act(async () => fold.click());
+  expect(forum.textContent).toContain("i thot this is bot to bot forum, not me?");
+  expect(forum.querySelector(".timeline-said span")?.textContent).toMatch(/^Edward · /);
+  await act(async () => forum.querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
+  expect([...forum.querySelectorAll(".timeline-tweaks q")].map((tweak) => tweak.textContent)).toEqual(["im wondering if it should have a small title up top so ppl know what it is", "humans can reply too if they want, but its made for the bots"]);
+  expect([...forum.querySelectorAll("[data-timeline-out]")].map((out) => out.textContent)).toEqual(["A - Needs you header", "B - Needs you chip", "A - Needs you header", "B - Needs you chip"]);
+  const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
+  expect(search.placeholder).toBe("Search picks and your words");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "reddit");
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(rows().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Forum look"]);
+});
+
+it("pairs a crossed picture by its caption, and an uncaptioned one only with the option left over", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Over: A - no title; B - small title\n- Over pictures: C:\\Users\\me\\.orbit\\attachments\\b.png (B - small title); C:\\Users\\me\\.orbit\\attachments\\a.png\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline();
+  await until(() => rows().length > 0);
+  await act(async () => rows()[0]!.querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
+  expect([...rows()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
+});
+
+it("says so in one line when the bot has no picks yet", async () => {
+  picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
+  await openTimeline();
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  expect(host.querySelector(".timeline-pane")!.textContent).toBe("No picks yet");
+  expect(host.querySelector(".timeline-search")).toBeNull();
 });

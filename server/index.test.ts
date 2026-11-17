@@ -4452,6 +4452,29 @@ describe("bot memory API", () => {
     }
   });
 
+  it("serves the decision timeline with its entries for the Timeline tab", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const memDir = join(workspaceOf(bot.id), "memory");
+      mkdirSync(memDir, { recursive: true });
+      const text = readFileSync("test/fixtures/decision-timeline/decisions.md", "utf8");
+      writeFileSync(join(memDir, "decisions.md"), text);
+      const topic = await api("GET", `/api/bots/${bot.id}/memory/topics/decisions.md`);
+      expect(topic.body.text).toBe(text);
+      expect(topic.body.entries.map((entry: { key: string; replacedBy?: string }) => [entry.key, entry.replacedBy ?? null])).toEqual([
+        ["Speed board look", "2026-11-14 20:00"],
+        ["Speed board look", null],
+        ["Map on phone", null],
+        ["Forum look", "2026-11-17 11:18"],
+        ["Forum look", null],
+        ["Model Index on phone", null],
+        ["Timeline place", null],
+      ]);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("refuses every coat of path traversal without reading the target", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     try {
