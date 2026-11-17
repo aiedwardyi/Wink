@@ -71,7 +71,7 @@ it("keeps Coding, Commit, Push and the line up to the PR white-gray, with color 
 it("keeps the stops clear of the PR summary at every pane width, giving way from the far end", () => {
   const css = readFileSync("src/components/MapGitFlow.css", "utf8");
   const columns = [...css.matchAll(/\.map-flow-list \{[^}]*grid-template-columns: ([^;]+);/g)].map(match => match[1]);
-  expect(columns).toHaveLength(3);
+  expect(columns).toHaveLength(4);
   for (const each of columns) expect(each).toMatch(/ minmax\(min-content, 1fr\) auto$/);
   expect(css).toMatch(/\.map-flow-list \{[^}]*overflow: hidden auto;/);
   // measured in the pane beside a scrollbar: the full row needs 683px, the row with the short right side 553px
