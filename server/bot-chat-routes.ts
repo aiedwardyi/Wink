@@ -312,7 +312,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       }
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
-      await quickAskRecovery(threadId);
+      // a failed recovery is logged where it runs; the send goes on
+      await quickAskRecovery(threadId)?.catch(() => {});
       const sendId = parseSendId(body.sendId);
       const queueId = parseSendId(body.queueId);
       if (sendId) {

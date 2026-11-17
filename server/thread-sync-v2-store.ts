@@ -296,16 +296,29 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
     if (task.eligible) consume(task, 1);
   }
-  void host.bootReads().then((rows) => {
+  // per task: one chat's bad row must not leave the rest uncleaned
+  const isolated = (threadId: string, work: () => void) => {
+    try {
+      work();
+    } catch (error) {
+      console.warn("chat sync v2: boot notice cleanup failed", threadId, error);
+    }
+  };
+  const cleaned = host.bootReads().then((rows) => {
     for (const { threadId, ids } of rows.migration) {
       const task = cleaning.get(threadId);
-      if (task) removeMigrationNotices(task, ids);
+      if (task) isolated(threadId, () => removeMigrationNotices(task, ids));
     }
     for (const { threadId, notices } of rows.conflicts) {
       const task = cleaning.get(threadId);
-      if (task?.eligible) notifyConflict(task, notices);
+      if (task?.eligible) isolated(threadId, () => notifyConflict(task, notices));
     }
   }).catch((error: unknown) => console.warn("chat sync v2: boot notice cleanup failed", error)).finally(() => cleaning.clear());
+  // the cleanup is awaited outside serial(): a task in it flushes when it lands, not on a retry timer, and other tasks don't queue behind it
+  const flushNow = async (threadId: string) => {
+    if (cleaning.has(threadId)) await cleaned;
+    return serial(() => flush(threadId));
+  };
 
   function project(threadId: string, target: Target, mutations: SyncMutation[]): SyncMutation[] {
     if (!mutations.some((mutation) => mutation.kind === "row" || mutation.kind === "head")) return mutations;
@@ -422,7 +435,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   function publish(threadId: string): Promise<"running" | "written" | "skipped"> {
-    return serial(() => flush(threadId)).then((result) => {
+    return flushNow(threadId).then((result) => {
       if (result === "running") schedule(threadId);
       else if (result === "written") retry.delete(threadId);
       return result;
@@ -656,7 +669,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     for (const { threadId } of tasks) {
       publishThreadPictures({ folder, dataDir: host.dataDir, messages: host.store.messagesFor(threadId) });
       republishing++;
-      void serial(() => flush(threadId)).then((result) => {
+      void flushNow(threadId).then((result) => {
         if (result === "running") schedule(threadId);
       }, () => { retry.add(threadId); }).finally(() => { republishing--; });
     }
@@ -708,7 +721,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   return {
     schedule,
     migrationStatus,
-    flush: (threadId: string) => serial(() => flush(threadId)),
+    flush: flushNow,
     /** A settled turn publishes now instead of on the three-second timer. */
     settle(threadId: string): Promise<"running" | "written" | "skipped"> {
       clearTimeout(timers.get(threadId));
