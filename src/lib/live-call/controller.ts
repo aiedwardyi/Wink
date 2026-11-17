@@ -71,8 +71,6 @@ type Deps = {
   opener?: string;
   /** The bot's call picks as the app shows them: its own save may still be in flight when the call starts. */
   prefs?: CallPrefs;
-  /** The chat's key card for a call that needs a key: it may be an old one far up the history. */
-  onKeyCard?: (cardId: string) => void;
   /** The team room the call was placed from: its chat rides along as silent context. */
   room?: CallRoom;
 };
@@ -562,7 +560,6 @@ export class LiveCall {
     }
     if (posted.status === 409 && !this.callId) {
       this.set({ status: "needsKey" });
-      if (posted.data.cardId) this.deps.onKeyCard?.(String(posted.data.cardId));
       return null;
     }
     if (posted.status === 429) {
@@ -1193,7 +1190,7 @@ export class LiveCall {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
-      this.open.add(this.stats.userLines, text);
+      // a card answer that does not land is said again on the card, never resent bare at hang-up
       const at = this.now();
       void this.send(`${card.prefix}${text}`, { ask: true }).then((result) => {
         if (reached(result)) {

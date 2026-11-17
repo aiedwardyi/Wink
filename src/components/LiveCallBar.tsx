@@ -174,7 +174,7 @@ export function LiveCallHost() {
 }
 
 function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
-  const { state, dispatch } = useStore();
+  const { state } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
@@ -189,7 +189,6 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       post,
       opener: active.opener,
       prefs: bot.call,
-      onKeyCard: (messageId) => dispatch({ type: "focusMessage", threadId: bot.threadId, messageId }),
       room: active.room && { id: active.room.id, kind: active.room.kind },
     });
     return { call, level: (mic) => audio.level(mic) };
@@ -215,10 +214,8 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   useEffect(() => {
     if (!state.config || kicked.current) return;
     kicked.current = true;
-    // A rung call with no key only opens the chat, so the server keeps ringing until the blocker clears.
-    if (active.opener && !state.config.gemini?.configured) return onEnd();
     if (!intro) void call.start();
-  }, [active.opener, call, intro, onEnd, state.config]);
+  }, [call, intro, state.config]);
 
   useEffect(() => {
     mounted.current = true;

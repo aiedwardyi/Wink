@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
 import { applyLocale } from "@/lib/i18n";
-import { answerCall } from "@/lib/live-call/active";
 import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
@@ -205,16 +204,14 @@ describe("call button in the message box", () => {
     }
   });
 
-  it("opens call settings on a right-click on Call and still calls on a left-click", async () => {
+  it("opens nothing on a right-click on Call and still calls on a left-click", async () => {
     const { host, unmount } = await mount();
     try {
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      expect(document.querySelector("[data-call-settings-menu] [data-call-settings]")).not.toBeNull();
+      expect(right.defaultPrevented).toBe(false);
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       expect(tokens()).toBe(0);
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       await connect(host);
       expect(tokens()).toBe(1);
     } finally {
@@ -561,28 +558,6 @@ describe("live call in the message box", () => {
       expect(document.querySelector("[data-live-call-resume]")).toBeNull();
     } finally {
       applyLocale("en");
-      await unmount();
-    }
-  });
-
-  it("an answered bot call with no key opens the chat with no call and no token request", async () => {
-    const { host, unmount } = await mount();
-    try {
-      expect(answerCall(atlas, "Sign in to Claude on Home.")).not.toBeNull();
-      await act(() => new Promise((done) => setTimeout(done, 300)));
-      expect(tokens()).toBe(0);
-      expect(host.querySelector("[data-live-call]")).toBeNull();
-    } finally {
-      await unmount();
-    }
-  });
-
-  it("an answered bot call with a key still opens the call", async () => {
-    const { unmount } = await mount(true);
-    try {
-      await act(async () => void answerCall(atlas, "Sign in to Claude on Home."));
-      await vi.waitFor(() => expect(intro()).not.toBeNull());
-    } finally {
       await unmount();
     }
   });

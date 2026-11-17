@@ -15,7 +15,6 @@
 // `alwaysAllow`, so the two sides never disagree about what was granted.
 
 import { newId } from "./contracts.ts";
-import { peerCardRows } from "./message-db.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
@@ -186,16 +185,17 @@ export function cancelPeerApprovalsForThread(threadId: string): void {
 /** Cards left on disk by a previous run can never be answered — their
  * in-memory approval died with the process. Settle them at boot so a
  * crashed run doesn't leave a thread with a permanently blocked composer. */
-export function dismissStalePeerCards(bus: ApprovalBus): number {
+export function dismissStalePeerCards(bus: ApprovalBus, rows: Array<{ threadId: string; id: string }>): number {
   let dismissed = 0;
   const threadIds = new Set([...bus.store.bots, ...bus.store.groups].flatMap((conversation) => [conversation.threadId, ...(conversation.tasks ?? []).map((task) => task.threadId)]));
-  for (const row of peerCardRows()) {
+  for (const row of rows) {
     if (!threadIds.has(row.threadId)) continue;
-    const card = bus.store.messagesFor(row.threadId).find((message) => message.id === row.id)?.card;
+    // the ids come from boot-reads.ts and may be stale, so each card is read again by key
+    const card = bus.store.row(row.threadId, row.id)?.card;
     if (!card?.requestId || card.answered || card.dismissed) continue;
     if (card.tool !== "ask_bot" && card.tool !== "delegate_bot") continue;
     if (pendingComms.has(card.requestId)) continue;
-    const patched = bus.store.patchMessage(row.threadId, row.id, {
+    const patched = bus.store.patchRow(row.threadId, row.id, {
       card: { ...card, answered: "deny", dismissed: true },
     });
     if (patched) dismissed += 1;

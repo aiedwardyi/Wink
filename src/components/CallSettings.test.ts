@@ -18,7 +18,7 @@ vi.mock("@/lib/live-call/volume", async (importOriginal) => {
 import { applyLocale } from "@/lib/i18n";
 import { setCallVolume } from "@/lib/live-call/volume";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
-import { CallSettings, CallSettingsHold, VoiceChatSettings } from "./CallSettings";
+import { CallSettings, CallSettingsHold } from "./CallSettings";
 import { MENU_CLASS } from "./MessageMenu";
 
 const ada = { id: "bot-1", name: "Ada", color: "iris", messages: [] } as unknown as Bot;
@@ -166,6 +166,28 @@ it("fades the voice grid while more voices sit below, and drops the fade at the 
   expect(grid.hasAttribute("data-cut")).toBe(false);
 });
 
+it("puts the Captions switch on the Style row, after the pills", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const pills = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Style"]')!;
+  const row = pills.parentElement!;
+  const captions = row.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Captions"]');
+  expect(captions).not.toBeNull();
+  expect(host.querySelectorAll('[role="switch"]')).toHaveLength(1);
+  expect(pills.compareDocumentPosition(captions!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(row.firstElementChild!.textContent).toBe("Style");
+  expect(captions!.parentElement!.parentElement).toBe(row);
+  expect(captions!.parentElement!.textContent).toBe("Captions");
+});
+
+it("tightens the Style row gaps and pill padding below 380px so it fits a 360 phone", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const pills = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Style"]')!;
+  const row = pills.parentElement!;
+  expect(row.className).toContain("max-[379px]:gap-2");
+  expect(row.lastElementChild!.className).toContain("max-[379px]:gap-1.5");
+  for (const pill of pills.querySelectorAll("[role=radio]")) expect(pill.className).toContain("max-[379px]:px-1.5");
+});
+
 it("patches the bot with the whole merged call object", async () => {
   store.bots = [tuned];
   const host = await render(createElement(CallSettings, { bot: tuned }));
@@ -305,19 +327,4 @@ it("labels the panel in Korean", async () => {
   expect(button(host, "언어")!.textContent).toBe("자동 감지");
   expect(button(host, "Jenn 들어보기")).not.toBeNull();
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
-});
-
-it("shows the voice and speed in the Bot details row and opens the panel there", async () => {
-  store.bots = [tuned];
-  const host = await render(createElement(VoiceChatSettings, { bot: tuned }));
-  expect(host.querySelector("h3")!.textContent).toBe("Voice chat");
-  const row = host.querySelector<HTMLButtonElement>("[data-call-voice-row]")!;
-  expect(row.textContent).toBe("Puck 1.2x");
-  expect(button(host, "Language")!.textContent).toBe("Auto-detect");
-  expect(host.querySelector("[data-call-settings]")).toBeNull();
-  await act(async () => row.click());
-  expect(row.getAttribute("aria-expanded")).toBe("true");
-  const panel = host.querySelector("[data-call-settings]")!;
-  expect(panel.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-  expect(panel.querySelectorAll('button[aria-label="Language"]')).toHaveLength(0);
 });

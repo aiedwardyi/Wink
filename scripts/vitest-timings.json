@@ -723,7 +723,6 @@
   "src/components/ModelChart.test.ts": 1.1,
   "src/components/ModelDial.test.ts": 22.5,
   "src/components/ModelIndexSection.test.ts": 10.7,
-  "src/components/ModelMachine.test.ts": 3.8,
   "src/components/ModelPicker.close.test.ts": 0.6,
   "src/components/ModelPicker.navigation.test.ts": 1.4,
   "src/components/ModelPicker.test.ts": 0.9,

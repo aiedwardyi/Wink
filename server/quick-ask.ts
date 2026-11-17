@@ -97,7 +97,7 @@ export function quickAnswersTaken(store: Pick<Store, "messagesFor" | "patchMessa
 }
 
 export interface QuickDeps {
-  store: Pick<Store, "bot" | "activePath" | "messagesFor" | "appendMessage" | "patchMessage">;
+  store: Pick<Store, "bot" | "activePath" | "messagesFor" | "appendMessage" | "patchMessage" | "patchRow">;
   instance(bot: BotRecord, threadId: string): ProviderInstance | null | undefined;
   ask: QuickAsk;
   userName: string;
@@ -107,7 +107,7 @@ export interface QuickDeps {
   usage?: { start(botId: string, threadId: string, id: string): void; settle(id: string): void };
 }
 
-type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage">;
+type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage" | "patchRow">;
 
 /** Still on the active path with its text and not yet handed to the bot; an edit or rewind drops it on purpose. */
 export const pending = (store: Pick<Store, "activePath">, threadId: string, ask: Message) =>
@@ -117,9 +117,9 @@ export const pending = (store: Pick<Store, "activePath">, threadId: string, ask:
 function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
   try {
     const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
-    store.patchMessage(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
+    store.patchRow(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
   } catch (error) {
-    store.patchMessage(threadId, ask.id, { quick: undefined });
+    store.patchRow(threadId, ask.id, { quick: undefined });
     const name = `error: queued message could not start - ${error instanceof Error ? error.message : String(error)}`;
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name, ok: false } });
   }
@@ -207,18 +207,46 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
   }
 }
 
-/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
-  // the open chats plus the threads of asks still running at shutdown; no other thread is read
+/** The open chats plus the threads of asks still running at shutdown; no other thread can hold a recovered ask. */
+export function quickAskThreads(store: Pick<Store, "bots" | "taskByThread">): Map<string, string> {
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
-  for (const [threadId, id] of threads) {
-    // Loading every open chat here held the server for ~30 s on a big messages.db.
-    if (!store.hasUnansweredQuickAsk(threadId)) continue;
-    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
-    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
-  }
-  saveRunning();
+  return threads;
+}
+
+const recovering = new Map<string, Promise<void>>();
+
+/** A send to this chat waits here first, so a recovered ask still queues ahead of it. */
+export const quickAskRecovery = (threadId: string): Promise<void> | undefined => recovering.get(threadId);
+
+/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. `asks` come from boot-reads.ts. */
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByThread" | "activePathBack">, asks: Promise<Array<{ threadId: string; id: string; at: number }>>): Promise<void> {
+  const threads = quickAskThreads(store);
+  const done = asks.then((found) => {
+    for (const [threadId, botId] of threads) {
+      const ids = new Map(found.filter((ask) => ask.threadId === threadId).map((ask) => [ask.id, ask.at]));
+      if (!ids.size) continue;
+      const path: Message[] = [];
+      // newest first by key, and only until every ask is seen: timestamps need not fall along the path
+      let left = ids.size;
+      // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
+      const answered = new Set<string>();
+      for (const row of store.activePathBack(threadId)) {
+        if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
+        if (ids.has(row.id)) {
+          left--;
+          if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
+        }
+        if (!left) break;
+      }
+      for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
+    }
+    saveRunning();
+  }).finally(() => {
+    for (const threadId of threads.keys()) if (recovering.get(threadId) === done) recovering.delete(threadId);
+  });
+  for (const threadId of threads.keys()) recovering.set(threadId, done);
+  return done;
 }
 
 async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message): Promise<QuickResult> {

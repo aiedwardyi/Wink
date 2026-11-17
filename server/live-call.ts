@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
-import { CALL_KEY_CARD, CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
+import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
 import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, STYLE_LINES, type CallLine, type CallRoom, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { callPrefsSchema } from "./bot-profile.ts";
@@ -53,8 +53,6 @@ type LiveCallDeps = {
   fetch?: typeof fetch;
   now?: () => number;
   catalog?: ModelCatalogLookup;
-  /** A minted token is the pick-up: a refused one leaves a ringing bot call ringing. */
-  answered?: (botId: string) => void;
   roomTail?: (room: CallRoom, host: string) => RoomVoiceTail | undefined;
 };
 
@@ -88,6 +86,7 @@ const statsSchema = z.object({
 }).partial();
 const endSchema = z.object({ callId: z.string().regex(CALL_ID), stats: statsSchema });
 
+const KEY_CARD = "call-";
 
 export function parseCallTag(value: unknown): CallTag | undefined {
   const tag = value as Partial<Record<keyof CallTag, unknown>> | null;
@@ -97,7 +96,7 @@ export function parseCallTag(value: unknown): CallTag | undefined {
 
 /** The key card a keyless call tap puts in chat: saving it starts the call, not a bot turn. */
 export function isCallKeyCard(secret: Pick<SecretRequestCardData, "requestKey">): boolean {
-  return secret.requestKey.startsWith(CALL_KEY_CARD);
+  return secret.requestKey.startsWith(KEY_CARD);
 }
 
 export function newCallId(): string {
@@ -287,7 +286,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
         description: "Open Get API key, sign in, click Create API key (top right), paste it here.",
         placeholder: target.placeholder,
         helpUrl: target.helpUrl,
-        requestKey: `${CALL_KEY_CARD}${randomBytes(8).toString("hex")}`,
+        requestKey: `${KEY_CARD}${randomBytes(8).toString("hex")}`,
       },
     }).id;
   };
@@ -330,7 +329,6 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!response.ok) return json(res, response.status === 429 ? 429 : 502, { error: googleError(response.status, data) });
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
-    deps.answered?.(bot.id);
     return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice, locale, style });
   };
 
