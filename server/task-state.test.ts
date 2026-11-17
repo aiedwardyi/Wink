@@ -152,6 +152,14 @@ describe("task resume packets", () => {
     expect(writeTaskResumePacket(packet(), { dir })).not.toHaveProperty("asks");
   });
 
+  it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {
+    const old = [{ id: "A1", ask: "Send the brief", status: "open" as const, due: 1_800_000_000_000, wake: "wake-1", at: 100, changedAt: 100 }];
+    writeFileSync(join(dir, "thread-1.json"), JSON.stringify(packet({ asks: old })));
+    const loaded = readTaskResumePacket("thread-1", { dir });
+    expect(loaded?.asks).toEqual(old);
+    expect(loaded?.plan).toEqual(packet().plan);
+  });
+
   it("drops closed asks first to fit 16 KiB beside the open ones and never an open one", () => {
     const many = Array.from({ length: 40 }, (_, index): TaskAsk => ({
       id: `A${index + 1}`,
@@ -183,12 +191,6 @@ describe("task resume packets", () => {
     expect(statSync(join(dir, "thread-1.json")).size).toBeGreaterThan(TASK_STATE_MAX_BYTES);
     expect(saved.asks).toEqual(open);
     expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(open);
-  });
-
-  it("keeps an ask's due time and its wake across saves", () => {
-    const due: TaskAsk = { id: "A1", ask: "Phone designs", status: "open", due: 500, wake: "routine-1", at: 100, changedAt: 100 };
-    expect(writeTaskResumePacket(packet({ asks: [due] }), { dir }).asks).toEqual([due]);
-    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([due]);
   });
 
   it("keeps the highest ask id across saves after that ask is gone", () => {
@@ -384,15 +386,6 @@ describe("task state asks update", () => {
     expect(parsed.data.asks?.[0]?.ref).toBe("PR #1348");
     expect(parsed.data.asks?.[1]).toEqual({ id: "A2", status: "done" });
     expect(clipped).toEqual(["asks.0.ask (116 > 80)"]);
-  });
-
-  it("takes a due time with an offset, clears it with an empty string and refuses one without", () => {
-    const parsed = parse({ asks: [{ ask: "Phone designs", status: "open", due: "2026-11-17T07:30:00+09:00" }, { id: "A2", status: "open", due: "" }] });
-    expect(parsed.success).toBe(true);
-    if (!parsed.success) return;
-    expect(parsed.data.asks?.map((item) => item.due)).toEqual([Date.UTC(2026, 10, 16, 22, 30), null]);
-    const local = parse({ asks: [{ ask: "Phone designs", status: "open", due: "2026-11-17T07:30:00" }] });
-    expect(local.success).toBe(false);
   });
 
   it("rejects an unknown status and names asks among the allowed fields", () => {

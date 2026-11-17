@@ -2,7 +2,6 @@ import { useState, type FormEvent } from "react";
 import { Check, ExternalLink, KeyRound, Loader2, LockKeyhole, RefreshCw, X } from "lucide-react";
 
 import {
-  CALL_KEY_CARD,
   credentialResumeOutcome,
   customCredentialId,
   customKeyRecord,
@@ -33,9 +32,6 @@ export function SecretRequestCard({
   const error = localError ?? secret.error;
   const outcome = credentialResumeOutcome(secret);
   const provided = outcome === "provided";
-  // the server writes this card once, in English
-  const callKey = secret.requestKey.startsWith(CALL_KEY_CARD);
-  const label = callKey ? t("secret.callKeyTitle") : secret.label;
   const declined = outcome === "dismissed";
   const description = provided
     ? secret.resumed
@@ -43,7 +39,7 @@ export function SecretRequestCard({
       : t("secret.savedWillContinue")
     : declined
       ? t("secret.declined")
-      : callKey ? t("secret.callKeySteps") : secret.description;
+      : secret.description;
   const footerLabel = declined
     ? t("secret.footerDeclineFailed")
     : secret.resumed
@@ -120,7 +116,7 @@ export function SecretRequestCard({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="truncate text-[14px] font-semibold text-ink">{label}</span>
+              <span className="truncate text-[14px] font-semibold text-ink">{secret.label}</span>
               {provided && (
                 <span className="flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-medium text-success">
                   <Check size={11} /> {t("secret.saved")}
@@ -162,7 +158,7 @@ export function SecretRequestCard({
                 onChange={(event) => setValue(event.target.value)}
                 placeholder={secret.placeholder}
                 disabled={saving || savedLocally}
-                aria-label={label}
+                aria-label={secret.label}
                 className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-60 max-md:text-[16px]"
               />
               <button

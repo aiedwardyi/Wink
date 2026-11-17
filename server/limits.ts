@@ -158,10 +158,6 @@ export const PROMPT_WORDING: Limits = {
 /** Limits other cards own or a follow-up removes; delete the entry with the limit. */
 export const PENDING_LIMITS: Limits = {
   "server/bot-routes.ts": { "this workspace is limited to": "Owned by CREATE-BOT-OPEN (workspace bot cap)." },
-  "server/drivers/agents-proxy.ts": {
-    MAX_CREATED_PER_TURN: "Owned by CREATE-BOT-OPEN.",
-    "You can create at most": "Owned by CREATE-BOT-OPEN.",
-  },
   "server/index.ts": { MAX_WORKSPACE_BOTS: "Owned by CREATE-BOT-OPEN (workspace bot cap)." },
   "server/internal-routes.ts": {
     "this workspace is limited to": "Owned by CREATE-BOT-OPEN (workspace bot cap).",

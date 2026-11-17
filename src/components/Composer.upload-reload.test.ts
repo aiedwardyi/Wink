@@ -281,6 +281,19 @@ describe("big file recovery", () => {
     expect(routes).toEqual(expected);
   });
 
+  it("says in the box why an upload is stuck and clears it once the upload is removed", async () => {
+    const { host } = await mount(async (url, init) => {
+      if (url === "/api/uploads") return Response.json({ id, offset: 0, chunkBytes: 8388608 }, { status: 201 });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (url === `/api/uploads/${id}`) return Response.json({ offset: 0, size: 10, done: false });
+      throw new TypeError("Failed to fetch");
+    });
+    await pick(host.querySelector<HTMLInputElement>('input[type="file"]')!, clip());
+    await vi.waitFor(() => expect(host.textContent).toContain("Can't reach the PC for clip.mp4"));
+    await act(async () => host.querySelector<HTMLElement>('[aria-label="Cancel upload"]')!.click());
+    await vi.waitFor(() => expect(host.textContent).not.toContain("Can't reach the PC"));
+  });
+
   it("removing a finished file chip leaves the file on the PC", async () => {
     const sent = fileAttachment("clip.mp4", "/pc/Wink/clip.mp4", 10, "video/mp4");
     sent.uploadId = id;
