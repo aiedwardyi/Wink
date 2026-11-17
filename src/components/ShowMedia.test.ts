@@ -631,6 +631,25 @@ it("a video whose frame can't be read keeps its play icon and name", async () =>
   expect(tile.querySelector(".truncate")!.textContent).toBe("broken.mov");
 });
 
+it("a tap on a video tile plays it in the viewer, between its neighbours, with no download", async () => {
+  frames(true);
+  const bot = (n: number, name: string): Message => ({ id: "m" + n, role: "bot", kind: "text", at: n, text: `[${name}](C:\\w\\${name})` });
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [bot(1, "a.png"), bot(2, "walk.mp4"), bot(3, "c.png")] });
+  await settle();
+  expect(host.querySelector("[data-media-grid] a[download]")).toBeNull();
+  await click(host.querySelector('[data-media-grid] [title="walk.mp4"]'));
+  expect(host.querySelector("[data-media-grid] a[download]")).toBeNull();
+  const video = () => document.querySelector("[data-media-viewer] video");
+  expect(video()!.getAttribute("src")).toBe(linked("C:\\w\\walk.mp4"));
+  await key("ArrowRight");
+  expect(video()).toBeNull();
+  expect(viewed()).toBe(linked("C:\\w\\a.png"));
+  await key("ArrowLeft");
+  await key("ArrowLeft");
+  expect(viewed()).toBe(linked("C:\\w\\c.png"));
+});
+
 const mock = String.raw`C:\cards\forum-look-mock-2`;
 const listing = {
   files: [
