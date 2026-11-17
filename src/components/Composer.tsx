@@ -64,7 +64,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, PendingQuestionPanel } from "./PendingQuestion";
+import { PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -91,7 +91,7 @@ import { RainbowRing } from "./RainbowRing";
 import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { asksForTyping, chatMovedOn, useShownQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -223,6 +223,7 @@ export function Composer({
   call,
   onCall,
   callButton,
+  callBot,
   heldSlot,
 }: {
   bot?: Bot;
@@ -245,6 +246,8 @@ export function Composer({
   /** Starts a call from the empty box's Send spot; absent where calls can't work. */
   onCall?: () => void;
   callButton?: ReactNode;
+  /** Who a room's call button calls; a bot chat calls its own bot. */
+  callBot?: Bot;
   /** The room transcript's tail, where Ctrl+Enter holds show as 1:1 queued bubbles. */
   heldSlot?: HTMLElement | null;
 }) {
@@ -255,6 +258,7 @@ export function Composer({
   const nativeSizing = phone && window.CSS?.supports?.("field-sizing", "content") === true;
   const { capabilities } = useDesktopCapabilities();
   const rainbow = useRainbowBox();
+  const caller = bot ?? callBot;
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
@@ -279,12 +283,8 @@ export function Composer({
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
-  const pinned = pinnedQuestion(chatMessages, threadMessages);
-  const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show an older open question until a newer one arrives
-  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
-  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
-  const questionIndex = question ? questions.indexOf(question) : -1;
+  const shownQuestion = useShownQuestion(chatMessages, threadMessages);
+  const { question } = shownQuestion;
   const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
   const questionAsker = question
     ? group
@@ -1222,14 +1222,9 @@ export function Composer({
             key={question.id}
             message={question}
             askerName={questionAsker}
-            count={questions.length}
-            index={questionIndex}
-            onStep={(step) => {
-              const next = questions[questionIndex + step];
-              if (!next || !pinned) return;
-              foldQuestion(next.id);
-              setQuestionPick({ id: next.id, newest: pinned.id });
-            }}
+            count={shownQuestion.count}
+            index={shownQuestion.index}
+            onStep={shownQuestion.step}
             typed={text}
             attached={attachments.length}
             replying={Boolean(replyTo)}
@@ -1434,7 +1429,7 @@ export function Composer({
               ? t("composer.finishSetup")
               : recording
               ? t("composer.listening")
-              : pinned && !pinned.card?.options.length
+              : asksForTyping(question)
               ? t("ask.typeAnswer")
               : busyChrome.placeholder
           }
@@ -1484,14 +1479,14 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <CallSettingsHold bot={bot}><button
+          {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
+            <CallSettingsHold bot={caller}><button
               type="button"
               onClick={onCall}
               onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
               onFocus={warmCallAudio}
-              aria-label={t("composer.call", { name: bot.name })}
-              title={t("composer.call", { name: bot.name })}
+              aria-label={t("composer.call", { name: caller.name })}
+              title={t("composer.call", { name: caller.name })}
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
             >
               <Phone size={16} />

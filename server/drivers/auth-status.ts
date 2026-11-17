@@ -8,7 +8,8 @@ function fileIdentity(path: string): string {
   return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
-export function storedSignIn(path: string, classify: (text: string) => boolean): boolean {
+/** Only a missing file is signed out; an unreadable or half-written one keeps the last answer. */
+export function storedSignIn(path: string, classify: (text: string) => boolean): boolean | undefined {
   try {
     const identity = fileIdentity(path);
     const cached = fileChecks.get(path);
@@ -16,7 +17,9 @@ export function storedSignIn(path: string, classify: (text: string) => boolean):
     const authenticated = classify(readFileSync(path, "utf8"));
     fileChecks.set(path, { identity, authenticated });
     return authenticated;
-  } catch {
+  } catch (error) {
+    // SAFETY: Filesystem failures expose Node's errno code; a parse error has none.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fileChecks.get(path)?.authenticated;
     fileChecks.delete(path);
     return false;
   }

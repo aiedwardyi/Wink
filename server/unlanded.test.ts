@@ -3,8 +3,10 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { notesBack } from "./message-db.ts";
 import { Store } from "./store.ts";
-import { createUnlandedWork, reportedPrs, UNLANDED_REFRESH_MS, unlandedHeader, type UnlandedPr } from "./unlanded.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
+import { createUnlandedWork, reportedPrs, reportNotes, UNLANDED_REFRESH_MS, unlandedHeader, type UnlandedPr } from "./unlanded.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 15, 9).getTime();
@@ -50,6 +52,28 @@ describe("reportedPrs", () => {
       { at: 2, number: 8 },
       { at: 1, number: 1640 },
     ]);
+  });
+});
+
+describe("boot's report rows", () => {
+  it("are the rows the store read, up to the 40th report, and name the same PRs", () => {
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    for (let i = 0; i < 60; i++) {
+      store.appendMessage(bot.threadId, { role: "user", kind: "text", text: `ask ${i}` });
+      store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: report(0, `PR ${1000 + i} | done`, `fix/b${i}`).text });
+      if (i % 3 === 0) store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: "[pane 1234abcd] from Mentor (bot-1): PR 99 is up" });
+    }
+    store.flushSaves();
+    const [boot] = bootRowsNow([], undefined, undefined, [bot.threadId]).reports;
+    const before = [...notesBack(bot.threadId)];
+    const fortieth = before.filter((row) => reportedPrs([row]).length).at(39)!;
+    expect(boot!.threadId).toBe(bot.threadId);
+    expect(boot!.notes).toEqual(before.slice(0, before.indexOf(before.find((row) => row.id === fortieth.id)!) + 1));
+    expect(boot!.notes).toEqual([...reportNotes(before)]);
+    expect(reportedPrs(boot!.notes)).toEqual(reportedPrs(notesBack(bot.threadId)));
+    expect(reportedPrs(boot!.notes)).toEqual(reportedPrs(store.notesBack(bot.threadId)));
+    expect(reportedPrs(boot!.notes)).toHaveLength(40);
   });
 });
 
@@ -305,7 +329,8 @@ describe("unlanded wiring", () => {
     expect(source).toContain('const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";');
     expect(source).toContain("...(unlandedNotice ? [unlandedNotice] : [])");
     expect(source).toContain("void unlandedWork.refresh(bot.id, event.threadId);");
-    expect(source).toContain('startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });');
+    expect(source).toContain("for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));");
+    expect(source).toContain("reportThreads: store.bots.map((bot) => bot.threadId),");
     expect(source).toContain("const pinned = store.taskByThread(botId, threadId)?.cwd;");
     expect(source).not.toContain("store.bot(botId)?.lastProjectCwd");
   });

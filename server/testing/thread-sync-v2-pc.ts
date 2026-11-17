@@ -12,6 +12,7 @@ import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "../thread-sync-v2-gate.ts";
 import { createSyncEngine } from "../thread-sync-v2-engine.ts";
 import type { ContextCompactionV1 } from "../../shared/context-compaction.ts";
+import { testBootReads } from "./boot-rows.ts";
 
 export interface TestArgs {
   threadId?: string;
@@ -41,6 +42,8 @@ export interface Snapshot {
   noticeChecks: number;
   historyScans: number;
   headChecks: number;
+  conflictScans: number;
+  memo: number | null;
   pulls: string[];
   logs: string[];
 }
@@ -63,6 +66,7 @@ const host = () => ({
   store,
   dataDir: input.dataDir,
   deviceId: input.deviceId,
+  bootReads: testBootReads(input.dataDir),
   folder: () => input.folder,
   enabled: () => true,
   openThread: () => openThread,
@@ -93,11 +97,13 @@ const v1: ThreadSyncHost = {
 let noticeChecks = 0;
 let historyScans = 0;
 let headChecks = 0;
+let conflictScans = 0;
 function traceQueries(): void {
   const prepare = messageDatabase().prepare.bind(messageDatabase());
   messageDatabase().prepare = (sql: string) => {
     if (sql.includes("WITH RECURSIVE path")) noticeChecks++;
     if (sql.includes("WITH RECURSIVE ancestry")) headChecks++;
+    if (sql.includes("GROUP BY kind, row_id")) conflictScans++;
     if (sql.includes("SELECT MAX(at)") || sql === "SELECT COUNT(*) AS n FROM sync_v2_snapshot") historyScans++;
     return prepare(sql);
   };
@@ -245,7 +251,8 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         const outbox = hasSync ? Number(db.prepare("SELECT COUNT(*) AS n FROM sync_v2_packets WHERE writer = (SELECT writer FROM sync_v2_identity)").get()!.n) : 0;
         const pending = hasSync ? Number(db.prepare("SELECT COUNT(*) AS n FROM sync_v2_packets WHERE applied = 0").get()!.n) : 0;
         const disk = db.prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid").all(threadId).map((row) => JSON.parse(String(row.json)));
-        value = { rows: store.messagesFor(threadId), disk, leaf: store.activeLeaf(threadId), events: events.splice(0), tasks: store.tasks(bot.id), outbox, pending, files: readdirSync(input.dataDir), hasSync, noticeChecks, historyScans, headChecks, pulls: pulls.splice(0), logs };
+        value = { rows: store.messagesFor(threadId), disk, leaf: store.activeLeaf(threadId), events: events.splice(0), tasks: store.tasks(bot.id), outbox, pending, files: readdirSync(input.dataDir), hasSync, noticeChecks, historyScans, headChecks, conflictScans,
+          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), logs };
         break;
       }
       case "close":

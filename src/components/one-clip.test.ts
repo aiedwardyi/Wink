@@ -65,14 +65,14 @@ describe("one clip at a time", () => {
   });
 
   it("a hover preview does not pause a playing chat clip", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.mocked(useThumb).mockReturnValue("blob:poster");
     const chat = await render(createElement(PhoneVideo, { src: "c.mp4" }));
     const phone = chat.querySelector("video")!;
     playing(phone);
     const tile = await render(createElement(MediaClip, { src: "hover.mp4", name: "hover", children: "tile" }));
-    vi.useFakeTimers();
     await act(async () => { tile.firstElementChild!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); });
-    await act(async () => { vi.advanceTimersByTime(300); });
+    await act(async () => vi.advanceTimersByTimeAsync(300));
     expect(tile.querySelector("video")).not.toBeNull();
     expect(phone.pause).not.toHaveBeenCalled();
   });

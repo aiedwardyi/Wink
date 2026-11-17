@@ -6,6 +6,7 @@ import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
+import { setCallCaptions, useCallCaptions } from "@/lib/live-call/captions";
 import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
 import { hapticTick } from "@/lib/phone-swipe";
@@ -14,9 +15,9 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, STYLE_GAIN, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
+import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
 import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { ROW_BUTTON } from "./SettingsPrimitives";
@@ -57,19 +58,20 @@ function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { p
   useEffect(() => (onCall ? stop() : undefined), [onCall]);
   useEffect(() => () => clip.current?.pause(), []);
   // the call's own level and pitch-kept speed, so the sample sounds like the call
-  const level = OUTPUT_GAIN * STYLE_GAIN[style] * useCallVolume();
+  const level = OUTPUT_GAIN * useCallVolume();
+  const pace = callPace({ speed, style });
   useEffect(() => {
     if (!clip.current) return;
     clip.current.volume = level;
-    clip.current.playbackRate = speed;
-  }, [level, speed]);
+    clip.current.playbackRate = pace;
+  }, [level, pace]);
   const preview = (name: LiveVoice) => {
     const was = playing;
     stop();
     if (was === name) return;
     const audio = new Audio(`/voice-preview/${name}-${language}.mp3`);
     audio.volume = level;
-    audio.playbackRate = speed;
+    audio.playbackRate = pace;
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);
@@ -159,10 +161,15 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
   const volume = useCallVolume();
+  const captions = useCallCaptions();
   const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed, prefs.style);
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
+      <div className="flex items-center justify-between gap-3">
+        <span className={LABEL}>{t("callMenu.captions")}</span>
+        <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
+      </div>
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />

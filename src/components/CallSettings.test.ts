@@ -258,15 +258,18 @@ it("Speed changes the sample while it plays and the next one", async () => {
   expect(clips[1]!.playbackRate).toBe(1.3);
 });
 
-it("Style changes the sample's level while it plays, as on a call", async () => {
+it("Style changes the sample's pace while it plays, never its level, as on a call", async () => {
   const { host, clip, moved } = await playJenn();
   await moved(() => act(async () => radio(host, "Lively").click()));
-  expect(clip.volume).toBeCloseTo(0.7 * 1.12);
+  expect(clip.playbackRate).toBe(1.1);
+  expect(clip.volume).toBeCloseTo(0.7);
   await moved(() => act(async () => radio(host, "Calm").click()));
-  expect(clip.volume).toBeCloseTo(0.7 * 0.6);
+  expect(clip.playbackRate).toBe(0.88);
+  expect(clip.volume).toBeCloseTo(0.7);
   expect(clip.paused).toBe(false);
   await act(async () => button(host, "Play Eddie")!.click());
-  expect(clips[1]!.volume).toBeCloseTo(0.7 * 0.6);
+  expect(clips[1]!.playbackRate).toBe(0.88);
+  expect(clips[1]!.volume).toBeCloseTo(0.7);
 });
 
 it("resets the preview button when the clip will not play, and stops on unmount", async () => {

@@ -85,7 +85,7 @@ describe("Back with the pane open on a phone", () => {
       entries.pop();
       window.dispatchEvent(new PopStateEvent("popstate", { state: entries.at(-1) ?? null }));
     });
-    const sheet = () => document.querySelector("body > aside.show-pane:not([data-closing])");
+    const sheet = () => document.querySelector("body > div > aside.show-pane:not([data-closing])");
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     try {
