@@ -205,6 +205,23 @@ describe("Bots", () => {
     expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { memberIds: ["b1", "b2"] } });
   });
 
+  it("shows each bot's current model under its name, in the room list and the Add bot picker", async () => {
+    const withModel = { ...bot("b1", "Wink"), modelSelection: { instanceId: "codex-1", model: "codex-pro" } };
+    const noEngine = { ...bot("b2", "Ada"), modelSelection: { instanceId: "gone", model: "x" } };
+    mock.state.bots = [withModel, noEngine];
+    mock.state.instances = [{
+      instanceId: "codex-1", driverKind: "codex", displayName: "Codex", snapshot: { state: "available", authenticated: true },
+      models: { default: "codex-default", options: [{ id: "codex-default", label: "Codex Default" }, { id: "codex-pro", label: "Codex Pro" }] },
+    }];
+    await open({ group: { ...group, memberIds: ["b1", "b2"] } });
+    const line = (row: Element | null) => row?.querySelector("[data-bot-model-line]")?.textContent ?? null;
+    expect(line(section("bots").querySelector('[data-room-bot="b1"]'))).toBe("Codex Pro");
+    expect(line(section("bots").querySelector('[data-room-bot="b2"]'))).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
+    const picks = [...section("bots").querySelectorAll('[role="checkbox"]')];
+    expect(picks.map(line)).toEqual(["Codex Pro", null]);
+  });
+
   it.each([[false, "smooth"], [true, "instant"]] as const)("Add bot scrolls the opened picker into view, reduced motion %s", async (reduced, behavior) => {
     mock.state.bots = [bot("b1", "Wink"), bot("b2", "Ada")];
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} }));
