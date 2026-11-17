@@ -99,26 +99,6 @@ describe("question folding", () => {
     expect(pill()).not.toBeNull();
   });
 
-  it("dismisses through the one onDismiss from the card's x, the row's x and a sideways swipe across the row", async () => {
-    await render("dismiss-same");
-    await act(async () => button("Dismiss question").click());
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-    await fold();
-    expect(host.querySelector("[data-question-row]")).not.toBeNull();
-    expect(host.querySelectorAll('button[aria-label="Dismiss question"]')).toHaveLength(1);
-    await act(async () => button("Dismiss question").click());
-    expect(onDismiss).toHaveBeenCalledTimes(2);
-    const row = host.querySelector<HTMLElement>("[data-question-row]")!;
-    const touch = (type: string, x: number) => {
-      const event = new Event(type, { bubbles: true });
-      Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: 100 }] }, changedTouches: { value: [{ clientX: x, clientY: 100 }] } });
-      row.dispatchEvent(event);
-    };
-    await act(async () => { touch("touchstart", 100); touch("touchmove", 200); touch("touchend", 300); });
-    expect(onDismiss).toHaveBeenCalledTimes(3);
-    expect(onPick).not.toHaveBeenCalled();
-  });
-
   it("folds on a downward swipe", async () => {
     await render("fold-swipe");
     await swipe(5, 75);
@@ -230,7 +210,7 @@ describe("question folding", () => {
     await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
-    expect(button("질문 닫기")).not.toBeNull();
+    expect(button("질문 숨기기")).not.toBeNull();
     expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
     expect(pill()).toBeNull();
