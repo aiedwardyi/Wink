@@ -73,7 +73,7 @@ describe("picksBlock", () => {
       "- Bigger scroll handle (11-15)",
     ]);
     expect(pickKeysList(text)).toContain("- forum look: C - Reddit cards");
-    expect(picksBlock(text).split("\n")[0]).toContain("Auto Notes keeps the history in the user's words in memory/decisions.md; read it, never edit it.");
+    expect(picksBlock(text).split("\n")[0]).toContain("History: memory/decisions.md (Auto Notes writes it; never edit).");
   });
 
   it("shows the note-taker what the newest picks beat", () => {
@@ -103,7 +103,7 @@ describe("picksBlock", () => {
       const block = picksBlock(text);
       expect(promptTokens(block)).toBeLessThanOrEqual(300);
       expect(block).toContain("- question 40 (11-10):");
-      expect(block).toMatch(/\n\d+ older current picks are only in memory\/decisions\.md\.$/);
+      expect(block).toMatch(/\nAlso current, on file: question 39; .* \(\+\d+ more\)$/);
     }
   });
 
@@ -121,5 +121,62 @@ describe("currentOnly", () => {
     expect(only.split("\n")).toHaveLength(text.split("\n").length);
     expect(only).not.toMatch(/plain list|cleanest/);
     expect(only).toContain('- Picked: C - Reddit cards\n- Said: "actually c"');
+  });
+});
+
+describe("picks index", () => {
+  const keys = (count: number) => Array.from({ length: count }, (_, i) => `area ${i + 1} look`);
+
+  it("names every current pick's key within the cap at 34 picks", () => {
+    const text = applyPicks("", keys(34).map((key, i) => pick(key, `answer ${i + 1} with a few words`, "yes", at(1 + Math.floor(i / 4), i % 4))))!.text;
+    const block = picksBlock(text);
+    expect(promptTokens(block)).toBeLessThanOrEqual(300);
+    expect(block).toContain("- area 34 look (11-09): answer 34 with a few words");
+    for (const key of keys(34)) expect(block).toContain(key);
+  });
+
+  it("names every key of eight picture picks with tweaks, the newest in full", () => {
+    const text = applyPicks("", keys(8).flatMap((key, i) => [
+      pick(key, `C - option ${i + 1} cards`, "c", at(10 + i, 9), { picture: { path: `C:\\Users\\me\\Desktop\\Orbit-cards\\day-11${i}\\mock\\C.png` } }),
+      tweak(key, "make the header a bit smaller", at(10 + i, 10)),
+      tweak(key, "and use a blue accent instead of orange", at(10 + i, 11)),
+    ]))!.text;
+    const block = picksBlock(text);
+    expect(promptTokens(block)).toBeLessThanOrEqual(300);
+    expect(block).toContain('- area 8 look (11-17): C - option 8 cards (C:\\Users\\me\\Desktop\\Orbit-cards\\day-117\\mock\\C.png) + tweaks: "make the header a bit smaller" (11-17), "and use a blue accent instead of orange" (11-17)');
+    for (const key of keys(8)) expect(block).toContain(key);
+  });
+
+  it("keeps a long non-Latin newest pick and the other keys in view", () => {
+    const korean = "포럼 화면은 레딧처럼 카드가 쌓이는 모양으로 하고 제목과 미리보기와 댓글 수를 보여준다".repeat(2);
+    const text = applyPicks("", [
+      ...keys(9).map((key, i) => pick(key, `answer ${i + 1}`, "yes", at(10, 9, i))),
+      pick("포럼 화면 모양", korean, "그걸로 해", at(17, 10)),
+      ...["헤더를 더 작게 해 줘 지금보다 반 정도로", "주황 대신 파란 포인트 색으로 바꿔 줘", "댓글 수는 오른쪽 위에 작게 보여 줘"].map((said, i) => tweak("포럼 화면 모양", said, at(17, 11, i))),
+    ])!.text;
+    const block = picksBlock(text);
+    expect(promptTokens(block)).toBeLessThanOrEqual(300);
+    expect(block).toContain("- 포럼 화면 모양 (11-17): 포럼 화면은");
+    for (const key of keys(9)) expect(block).toContain(key);
+  });
+});
+
+describe("applyPicks order", () => {
+  it("treats the same option in other words as a restatement that keeps its tweaks", () => {
+    const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
+    expect(applyPicks(first.text, [pick("forum look", "C - Reddit-style cards", "yes, c with the reddit style cards", at(17, 12))])).toBeNull();
+  });
+
+  it("lands a tweak the user asks for again after reversing it", () => {
+    const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
+    const back = applyPicks(first.text, [tweak("forum look", "keep the header large", at(17, 12)), tweak("forum look", "make the header smaller", at(17, 13))])!;
+    expect(currentPicks(back.text)[0]!.tweaks.map(({ said }) => said)).toEqual(["make the header smaller", "keep the header large", "make the header smaller"]);
+    expect(applyPicks(back.text, [tweak("forum look", "keep the header large", at(17, 12)), tweak("forum look", "make the header smaller", at(17, 13))])).toBeNull();
+  });
+
+  it("never lets a replayed older pick replace a newer one", () => {
+    const a = applyPicks("", [pick("forum look", "A - plain list", "a", at(17, 10))])!;
+    const c = applyPicks(a.text, [pick("forum look", "C - Reddit cards", "actually c", at(17, 10, 1))])!;
+    expect(applyPicks(c.text, [pick("forum look", "A - plain list", "a", at(17, 10))])).toBeNull();
   });
 });

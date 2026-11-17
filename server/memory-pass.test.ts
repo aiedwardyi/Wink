@@ -977,6 +977,11 @@ describe("memory pass filters", () => {
     });
   });
 
+  it("names no example key the note-taker could copy as a pick's question", () => {
+    expect(notePrompt("", [{ text: "x" }])).not.toMatch(/key[^\n.]*like "/);
+    expect(notePrompt("", [{ text: "x" }])).toContain("key is the thing decided, never the option");
+  });
+
   it("grows the note prompt by 1.3 KB at most", () => {
     expect(Buffer.byteLength(notePrompt("", [{ text: "x" }]), "utf8") - 992).toBeLessThanOrEqual(1_300);
   });

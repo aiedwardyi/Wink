@@ -19,12 +19,14 @@ const TITLE = "# Decision timeline";
 const INTRO =
   "The user's picks in their own words, oldest first. Auto Notes writes this file from the chat; bots read it and never edit it. A newer pick on the same question replaces the old one, which stays here struck out with a pointer to the newer pick. A tweak adds to the pick it changes. Only current picks load into the bot's prompt.";
 const LEGACY = "## Older picks, before the timeline (no words kept)";
-const HEADER = `Current picks, newest first. Each is the user's own choice and beats any older note that disagrees; build from a pick's picture plus every tweak, never a new option. Auto Notes keeps the history in the user's words in memory/${PICKS_FILE}; read it, never edit it.`;
+const HEADER = `Current picks, newest first: the user's own, each beating older notes unless they changed it since. Build from a pick's picture plus its tweaks, never a new option. History: memory/${PICKS_FILE} (Auto Notes writes it; never edit).`;
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
 const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
+/** An option's letter or number before its words, like "C - Reddit cards". */
+export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
 const CAPTIONED = /^(.+?\.(?:png|jpe?g|gif|webp|svg)) \((.*)\)$/i;
 const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|svg)$/i;
 
@@ -79,6 +81,17 @@ const pictureText = ({ path, caption }: Picture) => (caption && IMAGE_FILE.test(
 
 /** One question, however it is cased or spaced. */
 export const pickKey = (key: string) => key.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
+
+/** Two names of one option: the same letter or number with no words that differ in full, else the same words. */
+export function sameOption(a: string, b: string): boolean {
+  const [x, y] = [LABELED.exec(a.trim())?.[1]?.toLowerCase(), LABELED.exec(b.trim())?.[1]?.toLowerCase()];
+  const [p, q] = [a.trim().replace(LABELED, ""), b.trim().replace(LABELED, "")];
+  if (!x || !y) return pickKey(p) === pickKey(q);
+  const [s, t] = [stems(p), stems(q)];
+  return x === y && (!s.size || !t.size || [...s].some((stem) => t.has(stem)));
+}
 
 export function pickStamp(ms: number): string {
   const date = new Date(ms);
@@ -161,16 +174,20 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const current = entries.findLast((entry) => !entry.replacedBy && pickKey(entry.key) === pickKey(asked));
     const key = current?.key ?? asked;
     const said = clip(change.said, SAID_MAX);
+    const stamp = pickStamp(change.at);
+    // a replayed batch from before the current pick never lands on it
+    if (current && stamp < current.id.slice(0, 16)) continue;
     if (change.kind === "tweak") {
-      // a retried batch or a repeated ask adds nothing
-      if (!current || !said || current.tweaks.some((tweak) => same(tweak.said, said))) continue;
-      current.tweaks.push({ at: pickStamp(change.at), said });
+      const last = current?.tweaks.at(-1);
+      // a retried batch or an ask said twice in a row adds nothing; asking again after a reversal does
+      if (!current || !said || (last && same(last.said, said)) || current.tweaks.some((tweak) => tweak.at === stamp && same(tweak.said, said))) continue;
+      current.tweaks.push({ at: stamp, said });
       tweaks += 1;
       continue;
     }
     const picked = clip(change.picked, PICKED_MAX);
-    if (!picked || (current && same(current.picked, picked))) continue;
-    const id = fresh(pickStamp(change.at));
+    if (!picked || (current && sameOption(current.picked, picked))) continue;
+    const id = fresh(stamp);
     if (change.legacy) {
       entries.push({ id: fresh(change.legacy.day), key, replacedBy: id, picked: clip(change.legacy.line, PICKED_MAX), over: [], overPictures: [], files: [], tweaks: [], extra: [] });
       replaced += 1;
@@ -218,10 +235,31 @@ export function pickKeysList(text: string | null | undefined): string {
 function pickLine(entry: PickEntry): string {
   const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
   const earlier = entry.tweaks.length - shown.length;
-  const head = pickKey(entry.key) === pickKey(entry.picked) ? `${entry.picked} (${monthDay(entry.id)})` : `${entry.key} (${monthDay(entry.id)}): ${entry.picked}`;
   const tweaks = shown.length ? ` + tweaks: ${shown.join(", ")}${earlier ? ` (+${earlier} earlier in memory/${PICKS_FILE})` : ""}` : "";
-  const line = `- ${head}${entry.picture ? ` (${entry.picture.path})` : ""}${tweaks}`;
+  const line = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}${tweaks}`;
   return line.length > LINE_MAX ? `${line.slice(0, LINE_MAX - 3)}...` : line;
+}
+
+const pickHead = (entry: PickEntry) => (pickKey(entry.key) === pickKey(entry.picked) ? `${entry.picked} (${monthDay(entry.id)})` : `${entry.key} (${monthDay(entry.id)}): ${entry.picked}`);
+
+/** The pick alone, its picture and tweaks left to the file. */
+function shortLine(entry: PickEntry): string {
+  const count = entry.tweaks.length;
+  const left = [...(entry.picture ? ["picture"] : []), ...(count ? [count === 1 ? "1 tweak" : `${count} tweaks`] : [])];
+  return `- ${pickHead(entry)}${left.length ? ` (+${left.join(", ")} on file)` : ""}`;
+}
+
+/** The other current picks by key, as many as fit in `room` tokens. */
+function keyIndex(entries: PickEntry[], room = Infinity): string {
+  if (!entries.length) return "";
+  const more = (count: number) => (count ? `${count === entries.length ? "" : " "}(+${count} more)` : "");
+  let out = "\nAlso current, on file: ";
+  for (const [index, entry] of entries.entries()) {
+    const next = `${out}${index ? "; " : ""}${entry.key}`;
+    if (promptTokens(next + more(entries.length - index - 1)) > room) return index || promptTokens(out + more(entries.length)) <= room ? out + more(entries.length - index) : "";
+    out = next;
+  }
+  return out;
 }
 
 export function promptTokens(text: string): number {
@@ -230,19 +268,20 @@ export function promptTokens(text: string): number {
   return tokens;
 }
 
-/** The prompt's current picks, newest first, whole lines up to `max` estimated tokens; empty when there are none. */
+/** The prompt's current picks, newest first, within `max` estimated tokens: whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
 export function picksBlock(text: string | null | undefined, max = PICKS_PROMPT_TOKENS): string {
   const live = currentPicks(text).reverse();
   if (!live.length) return "";
-  const rest = (count: number) => `\n${count} older current ${count === 1 ? "pick is" : "picks are"} only in memory/${PICKS_FILE}.`;
   let out = HEADER;
+  const listed: PickEntry[] = [];
   for (const [index, entry] of live.entries()) {
-    const line = `\n${pickLine(entry)}`;
-    const after = live.length - index - 1;
-    if (promptTokens(out + line + (after ? rest(after) : "")) > max) return out + rest(live.length - index);
-    out += line;
+    const rest = keyIndex([...listed, ...live.slice(index + 1)]);
+    const line = [pickLine(entry), shortLine(entry)].find((option) => promptTokens(`${out}\n${option}${rest}`) <= max);
+    // the newest pick always shows, its words if not its picture and tweaks
+    if (line || !index) out += `\n${line ?? shortLine(entry)}`;
+    else listed.push(entry);
   }
-  return out;
+  return out + keyIndex(listed, max - promptTokens(out));
 }
 
 /** The file with replaced entries blanked, so recall never finds an old pick and line numbers still match. */

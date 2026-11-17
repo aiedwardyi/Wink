@@ -259,6 +259,11 @@ const LESSON_RULE =
   " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn" +
   " without being asked, replacing any wrong line; never save passwords, keys, tokens or account numbers.";
 
+/** The current picks block, the one copy chats and calls both read. */
+export function picksPrompt(botId: string): string {
+  return picksBlock(readMemoryTopic(botId, PICKS_FILE));
+}
+
 /** The memory block appended to a bot's system prompt. A short starter block
  * while the file is missing or seed-only, so a new bot starts its notes but a
  * first "hey" does not start with a memory scan. Content from other bots or
@@ -272,7 +277,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
     .filter((name) => PARKED_COPY.test(name));
   const memoryFile = join(workspaceDir(botId), "MEMORY.md");
   const topicDir = join(workspaceDir(botId), "memory");
-  const current = picksBlock(readMemoryTopic(botId, PICKS_FILE));
+  const current = picksPrompt(botId);
   const picks = current ? `\n\n${current}` : "";
   if (!notesEnabled) {
     const rules = " Memory notes are off. Never save passwords, keys, tokens or account numbers in memory." +

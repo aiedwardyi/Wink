@@ -31,7 +31,7 @@ const TIMELINE = [
   '- Tweak 2026-11-17 10:06: "make the header smaller"',
   "",
 ].join("\n");
-const HEADER = "Current picks, newest first.";
+const HEADER = "Current picks, newest first:";
 const PICK = '- forum look (11-17): C - Reddit cards (C:\\mock\\C.png) + tweaks: "make the header smaller" (11-17)';
 
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok", "muse"] as const;

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { applyPicks, currentPicks, PICKS_FILE, pickKey, pickKeysList, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
@@ -222,7 +222,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
     "- CONTEXT is the end of the bot's message before a user line, PICTURES the pictures it showed: use them only to see what a short answer like \"c\" picked. The pick must be in the user's own line; quote it. A bot idea the user did not take is not a decision.",
     `- kind: "decision", "tweak" or "fact". At most ${DECISIONS_PER_PASS} decisions, one per thing.`,
-    `- decision: key is the thing in 2-6 words, like "picker look", copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with the bot's letter or number, like "C - Reddit cards"; over: the options it beat, the same way; picture, over_pictures: their paths copied exactly from PICTURES or CURRENT PICKS.`,
+    `- decision: key is the thing decided, never the option, in 2-6 chat words, copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with the bot's letter or number, like "C - Reddit cards"; over: the options it beat, the same way; picture, over_pictures: their paths copied exactly from PICTURES or CURRENT PICKS.`,
     "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
     "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
     "- Never record passwords, PINs, codes, keys, tokens, account numbers or one-time codes.",
@@ -301,6 +301,20 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
 
+/** The one stamped Auto Notes line in the Decisions section on this question: "key: pick" first, else one that opens with the key. */
+function legacyLine(key: string, lines: string[], taken: Set<string>): string | undefined {
+  const span = decisionSpan(lines);
+  const asked = pickKey(key);
+  if (!span || !asked) return undefined;
+  const noted = lines.slice(span[0] + 1, span[1]).map((line) => line.replace(/\r$/, "")).filter((line) => NOTED.test(line) && !taken.has(line));
+  const subject = (line: string) => NOTED.exec(line)![1]!;
+  for (const opens of [(text: string) => /^[^:]+:/.test(text) && pickKey(text.slice(0, text.indexOf(":"))) === asked, (text: string) => `${pickKey(text)} `.startsWith(`${asked} `)]) {
+    const found = noted.filter((line) => opens(subject(line)));
+    if (found.length) return found.length === 1 && lines.filter((line) => sameLine(line, found[0]!)).length === 1 ? found[0] : undefined;
+  }
+  return undefined;
+}
+
 /** The `## Decisions` section as [heading index, end index), or null. */
 function decisionSpan(lines: string[]): [number, number] | null {
   const start = lines.findIndex((line) => /^##\s+decisions\b/i.test(line));
@@ -321,13 +335,16 @@ const LITERALS = [
   /`[^`]+`/g,
 ];
 
-/** A decision whose words come from the quoted user line or the bot text before it, and whose URLs, paths and commands only from the user. */
-function grounded(line: string, said: string, sources: UserLine[]): boolean {
+/** A decision whose words come from the user's lines or the bot text and pictures before the quoted one, and whose URLs, paths and commands only from the user. */
+function grounded(line: string, said: string, sources: UserLine[], picked = line): boolean {
   const own = sources.filter(({ text }) => squash(text).includes(squash(said)));
+  const label = LABELED.exec(picked.trim())?.[1]?.toLowerCase();
+  // a switch by letter ("actually c") is grounded in any bot list in these lines that names that letter
+  const lists = label ? sources.filter(({ context, pictures }) => new RegExp(`(?:^|\\s)${label}\\s*[-.):]\\s`, "i").test(context ?? "") || pictures?.some(({ caption }) => caption !== undefined && sameOption(caption, picked))) : [];
   const typed = squash(sources.map(({ text }) => text).join("\n"));
   if (LITERALS.some((pattern) => (line.match(pattern) ?? []).some((literal) => !typed.includes(squash(literal))))) return false;
-  // the user may name the options in one line and pick in the next; bot text grounds only the line it precedes
-  const known = contentWords([...sources.map(({ text }) => text), ...own.flatMap(({ context, pictures }) => [context ?? "", ...(pictures ?? []).map(({ caption }) => caption ?? "")])].join("\n"));
+  // the user may name the options in one line and pick in the next; other bot text grounds only the line it precedes
+  const known = contentWords([...sources.map(({ text }) => text), ...[...own, ...lists].flatMap(({ context, pictures }) => [context ?? "", ...(pictures ?? []).map(({ caption }) => caption ?? "")])].join("\n"));
   const needed = contentWords(line);
   const hits = needed.filter((word) => known.some((source) => sameStem(word, source))).length;
   return hits > 0 && hits * 2 >= needed.length;
@@ -335,9 +352,10 @@ function grounded(line: string, said: string, sources: UserLine[]): boolean {
 
 const ASKED = /\?|(?:^|\s)(?:[1-9]|[a-h])[.):]\s|\boption\s+[a-h1-9]\b/i;
 const LABEL = /^(?:option\s+)?([a-z]|\d{1,2})\b/i;
-const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
-const LEAD = /^(.*?)([,;.!?]|\s+(?:and|but)\s|\s+-\s|$)/i;
-const NEGATED = /\b(?:not|no|don't|dont|never|instead)\b/i;
+const CLAUSE = /[,;.!?]+|\s(?:and|but|or)\s|\s-\s/g;
+const NEGATED = /(?:^|\s)(?:not|no|nope|nah|don't|dont|never|without|hate|dislike|except|skip|instead of|rather than|other than)(?:\s|$)/;
+const ASKING = /^(?:what|which|how|why|should|shall|would|could|can|is|are|does|did|will|maybe)$/;
+const CHOOSING = /(?:^|\s)(?:yes|yeah|yep|yup|sure|definitely|absolutely|agreed|perfect|sounds good|do it|go ahead|go with it|that one|this one|first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|네|넵|응|좋아|좋아요|그래|그래요)(?:\s|$)/;
 
 /** The quote is in the text, a short one as whole words, so "c" never matches inside "cards". */
 function quotes(text: string, said: string): boolean {
@@ -347,22 +365,49 @@ function quotes(text: string, said: string): boolean {
   return Boolean(spoken) && ` ${words(text).join(" ")} `.includes(` ${spoken} `);
 }
 
-/** The user's words name the pick or its label, or briefly answer a question the bot asked; "ok thanks" after a bot idea never picks it. */
-function userChose(picked: string, said: string, own: UserLine[]): boolean {
-  const typed = contentWords(said);
-  if (contentWords(picked).some((word) => typed.some((source) => sameStem(word, source)))) return true;
-  const short = words(said).length <= SHORT_ANSWER;
-  const label = LABEL.exec(picked.trim())?.[1]?.toLowerCase();
-  if (label && (short ? words(said).includes(label) : leadsWith(said, label))) return true;
-  return short && own.some(({ context }) => Boolean(context && ASKED.test(context)));
+/** The quote with the rest of its clause around it, the marks between clauses kept, so "not" or "?" next to a quoted "tiles" still counts. */
+function clauseOf(text: string, said: string): string {
+  const line = squash(text);
+  const target = squash(said);
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const at = target.length >= 4 ? line.indexOf(target) : line.search(new RegExp(`(?<![\\p{L}\\p{N}'])${escaped}(?![\\p{L}\\p{N}'])`, "u"));
+  if (at < 0) return target;
+  const marks = [...line.matchAll(CLAUSE)];
+  const start = marks.filter((mark) => mark.index! + mark[0].length <= at).at(-1)?.index ?? 0;
+  const end = marks.find((mark) => mark.index! >= at + target.length);
+  return line.slice(start, end ? end.index! + end[0].length : line.length);
 }
 
-/** "i choose c but make the header smaller": a short opening clause names the label, "a" or "i" only as its last word. */
-function leadsWith(said: string, label: string): boolean {
-  const [, lead = "", end] = LEAD.exec(said.trim()) ?? [];
-  const opening = words(lead);
-  if (end === "?" || opening.length > SHORT_ANSWER || NEGATED.test(lead)) return false;
-  return label === "a" || label === "i" ? opening.at(-1) === label : opening.includes(label);
+/** Its clauses in order, each asked when it ends on "?", sits beside "or" or opens like a question. */
+function clauses(text: string): Array<{ words: string[]; asked: boolean }> {
+  const parts = text.split(new RegExp(`(${CLAUSE.source})`));
+  const out: Array<{ words: string[]; asked: boolean }> = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const said = words(parts[i]!);
+    const [before = "", after = ""] = [parts[i - 1], parts[i + 1]];
+    if (said.length) out.push({ words: said, asked: after.includes("?") || /^\s*or\s*$/.test(before) || /^\s*or\s*$/.test(after) || ASKING.test(said[0]!) });
+  }
+  return out;
+}
+
+/** The user's words name the pick or its label in a clause that neither asks nor turns it down, or say yes or "the second one" to a question the bot asked; "ok thanks", "no thanks" or "not b" never pick. */
+function userChose(picked: string, said: string, own: UserLine[]): boolean {
+  const label = LABEL.exec(picked.trim())?.[1]?.toLowerCase();
+  const stems = contentWords(picked);
+  return (own.length ? own : [{ text: said }]).some(({ text, context }) => {
+    const spoken = clauseOf(text, said);
+    const long = words(spoken).length > SHORT_ANSWER;
+    const parts = clauses(spoken);
+    const named = parts.flatMap(({ words: clause, asked }, index) => {
+      let at = clause.findIndex((word) => contentWords(word).length > 0 && stems.some((stem) => sameStem(stem, word)));
+      // a label counts in a short answer, or in a short opening clause of a longer line: "a" or "i" only as its last word
+      if (at < 0 && label && (!long || (index === 0 && clause.length <= SHORT_ANSWER))) at = long && (label === "a" || label === "i") ? (clause.at(-1) === label ? clause.length - 1 : -1) : clause.indexOf(label);
+      return at < 0 ? [] : [!asked && !NEGATED.test(clause.slice(0, at).join(" "))];
+    });
+    if (named.length) return named.includes(true);
+    const plain = parts.every(({ words: clause, asked }) => !asked && !NEGATED.test(clause.join(" ")));
+    return !long && plain && CHOOSING.test(words(spoken).join(" ")) && Boolean(context && ASKED.test(context));
+  });
 }
 
 /** An option the pick beat, grounded like a decision; a bare label like "B" only from the text around the pick. */
@@ -374,12 +419,6 @@ function optionNamed(option: string, said: string, sources: UserLine[], own: Use
 
 const listOf = (value: string | string[] | null | undefined) =>
   (Array.isArray(value) ? value : value ? [value] : []).map((item) => item.replace(/\s+/g, " ").trim()).filter(Boolean);
-
-/** Two names of one option: the same letter or number, else the same words. */
-function sameOption(a: string, b: string): boolean {
-  const [x, y] = [LABELED.exec(a.trim())?.[1]?.toLowerCase(), LABELED.exec(b.trim())?.[1]?.toLowerCase()];
-  return x && y ? x === y : pickKey(a.trim().replace(LABELED, "")) === pickKey(b.trim().replace(LABELED, ""));
-}
 
 /** The user's short answer a bot line restates, like "actually c" before "C it is": it ends on the letter of the option it switches to, and names no other. */
 function confirmed(sources: UserLine[], said: string, picked: string, before: PickEntry): string | undefined {
@@ -400,7 +439,7 @@ function shownPicture(value: string | null | undefined, shown: Picture[]): Pictu
   return shown.find(({ path, caption }) => asked === path.toLowerCase() || (caption !== undefined && asked === `${path} (${caption})`.toLowerCase()));
 }
 
-/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, 3 at most, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
+/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, on 3 questions at most, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
   const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretLike(paragraph));
@@ -416,7 +455,8 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   const live = new Set(current.keys());
   const seen = new Set<string>();
   const decided = new Set<string>();
-  let decisions = 0;
+  const keys = new Set<string>();
+  const taken = new Set<string>();
   const accept = (fact: Fact): Note | null => {
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
@@ -445,9 +485,14 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const named = pickKey(thing) === pickKey(line) ? line : `${thing}: ${line}`;
       const recorded = before ? [before.picture, ...before.overPictures].filter((picture): picture is Picture => Boolean(picture)) : [];
       const known = before ? [...sources, { text: [before.key, before.picked, ...before.over, ...recorded.map(({ caption }) => caption ?? "")].join("\n") }] : sources;
-      if (decisions >= DECISIONS_PER_PASS || seen.has(`pick ${pickKey(thing)}`) || !grounded(named, said, known) || !userChose(line, said, own)) return null;
-      const target = replaceable(replaces, lines, claims) && inSection(replaces) ? replaces : undefined;
-      const shown = [...own.flatMap(({ pictures }) => pictures ?? []), ...recorded];
+      // a second pick on one question in the same lines is a change of mind: both land, in the order said
+      const id = `pick ${pickKey(thing)} ${squash(said)}`;
+      if ((keys.size >= DECISIONS_PER_PASS && !keys.has(pickKey(thing))) || seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, own)) return null;
+      // an older Auto Notes line on this question leaves MEMORY.md for the timeline, named by the note-taker or not
+      const listed = replaceable(replaces, lines, claims) && inSection(replaces) && !taken.has(replaces) ? replaces : undefined;
+      const target = listed ?? legacyLine(thing, lines, taken);
+      if (target) taken.add(target);
+      const shown = [...sources.flatMap(({ pictures }) => pictures ?? []), ...recorded];
       let picture = shownPicture(fact.picture, shown);
       // a switch to an option the pick beat keeps that option's picture, copied or not
       if (!picture) picture = recorded.find(({ caption }) => caption !== undefined && sameOption(caption, line));
@@ -462,10 +507,10 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       if (picture && !overPictures.length && recorded.includes(picture)) overPictures.push(...recorded.filter((other) => other.path !== picture.path));
       const files = [...new Set(own.flatMap(({ files }) => files ?? []))];
       const old = target ? NOTED.exec(target) : null;
-      seen.add(`pick ${pickKey(thing)}`);
+      seen.add(id);
+      keys.add(pickKey(thing));
       live.add(pickKey(thing));
       decided.add(squash(said));
-      decisions += 1;
       const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at, key: thing, picked: line, said };
       if (over.length) pick.over = over;
       if (picture) pick.picture = picture;
@@ -720,7 +765,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const rows = pendingRows(messages, ids);
     const typed = ids.flatMap((id) => {
       const row = rows.get(id);
-      const text = eligibleRow(row) ? userTyping(row.text) : "";
+      // a pasted tag cannot open or close a prompt block
+      const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
       return text ? [{ id, text, at: row!.at, files: attachedImages(row!.text ?? "") }] : [];
     });
     const contexts = replyContexts(messages, typed.filter(({ text }) => text.length <= CONTEXT_LINE_MAX).map(({ id }) => id));
