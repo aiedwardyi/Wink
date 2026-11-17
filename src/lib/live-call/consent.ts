@@ -10,6 +10,7 @@ const YES_ALONE_EN = /^(right|correct|please|uh-huh|mm-hmm|go)[.!]*$/i;
 const BUT_EN = /\b(no|not|don'?t|do not|wait|hold on|stop|cancel|later|but|want me to|shall i|should i)\b/i;
 const BUT_KO = /말고|근데|그런데|하지만|대신|잠깐|기다려/;
 const FILLER = /^(uh|um|er|hmm|mm)\b(?!-)[\s,.]*/i;
+const THANKS = /^(?:(?:thanks|thank you)\b[\s,.!]*)+/i;
 const NO_EN = /^(no(?! problem| worries)|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
 // 됐어 and 괜찮아 can mean either, and 잠깐 is a hold, so they keep waiting.
 // 어 is a yes only with a yes after it, or alone: "어..." trails off.
@@ -60,7 +61,7 @@ function koWords(text: string): string[] {
 }
 
 export function consentOf(said: string): "yes" | "no" | null {
-  const text = said.trim().replace(FILLER, "");
+  const text = said.trim().replace(FILLER, "").replace(THANKS, "");
   const [first = "", second = ""] = koWords(text);
   // "아니면 내일 해줘" offers another way: neither a no nor a yes.
   if (/^아니(?:면|라)/.test(first)) return null;

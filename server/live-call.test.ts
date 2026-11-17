@@ -678,6 +678,22 @@ describe("call context on sends", () => {
 });
 
 describe("call lines and end", () => {
+  it("strips model markers from both sides before writing chat rows", async () => {
+    const h = harness();
+    const { data } = await h.post("token");
+    const result = await h.post("lines", { callId: data.callId, lines: [
+      { who: "voice", text: "<no speech>" },
+      { who: "voice", text: "<no speech>" },
+      { who: "user", text: "{pause}" },
+      { who: "voice", text: "{instruction:none" },
+      { who: "voice", text: "Hello <no speech> there {pause}" },
+      { who: "user", text: "Thank you. {pause} Do that." },
+    ] });
+    expect(result.data.ids).toHaveLength(2);
+    const rows = h.store.activePath(h.bot.threadId).filter((row) => row.call?.id === data.callId);
+    expect(rows.map((row) => row.text)).toEqual(["Hello there", "Thank you. Do that."]);
+  });
+
   it("appends user and voice rows tagged with the call", async () => {
     const h = harness();
     const callId = "c-0123456789ab";

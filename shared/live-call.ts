@@ -48,6 +48,12 @@ export type CallTag = { id: string; voice?: true; notice?: true; order?: true; a
 export type CallRoom = { id: string; kind: "host" | "joined" };
 export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number };
 
+/** Model markers are never speech, including a marker left open at the end of a chunk. */
+export function spokenText(text: string): string {
+  const clean = text.replace(/<[^>]*>?|\{[^}]*\}?/g, " ").replace(/\s+/g, " ").trim();
+  return /[\p{L}\p{N}]/u.test(clean) ? clean : "";
+}
+
 // Korean trails off mid-thought (음, 그러니까...), so both ends are LOW and the pause is long.
 export const LIVE_VAD = {
   startOfSpeechSensitivity: "START_SENSITIVITY_LOW",

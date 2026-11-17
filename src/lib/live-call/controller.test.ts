@@ -112,8 +112,134 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe("spokenText", () => {
   it("drops transcript markers", () => {
     expect(spokenText("<no speech>{pause}")).toBe("");
+    expect(spokenText("<no speech")).toBe("");
     expect(spokenText("...")).toBe("");
     expect(spokenText(" Hi {pause} there ")).toBe("Hi there");
+  });
+});
+
+describe("CALL-YES", () => {
+  it("drops two marker-only audio turns after the last real line", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    turn(engine(), "I'm hanging up now.", "Bye.");
+    for (let i = 0; i < 2; i++) {
+      engine().events.answering();
+      engine().events.said("<no ");
+      engine().events.audio(new Int16Array([500]));
+      engine().events.said("speech>");
+      engine().events.turnDone();
+    }
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).toEqual(["I'm hanging up now.", "Bye."]);
+    call.end();
+    await flush();
+  });
+
+  it("cuts On it when no work was sent", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    engine().events.heard("Save the Samurai theme note.");
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain("On it.");
+    call.end();
+    await flush();
+  });
+
+  it.each(["Do that", "Thank you. Do that.", "yes do it", "go ahead", "please", "응", "해줘", "그래"])("sends the pending note on %s without a tap", async (said) => {
+    vi.useFakeTimers();
+    const { call, engine, posts } = await started();
+    engine().events.toolCall([{ id: "note", name: "propose_work", args: { order: "Add a note about the Samurai theme's mobile polish." } }]);
+    engine().events.heard(said);
+    await vi.advanceTimersByTimeAsync(LIVE_VAD.silenceDurationMs);
+    expect(call.state().pending).toBeUndefined();
+    expect(messagesOf(posts).map((post) => post.body.text)).toEqual(["Add a note about the Samurai theme's mobile polish."]);
+    expect(engine().results).toContainEqual({ id: "note", result: expect.stringMatching(/^sent\b/) });
+    call.end();
+    await flush();
+  });
+
+  it.each([
+    "On it.",
+    "That update will start as soon as you confirm the request on your screen.",
+    "The update to your auto-notes will start as soon as you approve the prompt on your screen.",
+  ])("cuts an unsupported acknowledgement before its audio: %s", async (said) => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Add a note about the Samurai theme's mobile polish.", ["note"]);
+    engine().events.answering();
+    engine().events.said(said);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain(said);
+    expect(engine().texts.join("\n")).not.toMatch(/on (?:their|your) screen/);
+    call.end();
+    await flush();
+  });
+
+  it("waits for the receipt before accepting On it", async () => {
+    let receipt!: (result: Posted) => void;
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({ "/messages": () => new Promise((resolve) => { receipt = resolve; }) }, audio);
+    call.propose("Add a note about the Samurai theme's mobile polish.", ["note"]);
+    const sent = call.answer(true);
+    await flush();
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain("On it.");
+    receipt({ status: 200, data: {} });
+    await sent;
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledTimes(1);
+    call.end();
+    await flush();
+  });
+
+  it("holds audio arriving before the words of an unsupported acknowledgement", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    engine().events.answering();
+    engine().events.audio(new Int16Array([500]));
+    engine().events.said("On ");
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said("it.");
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    call.end();
+    await flush();
+  });
+
+  it.each([false, true])("allows On it after an accepted receipt with queued=%s", async (queued) => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({ "/messages": { status: 202, data: { queued } } }, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    await call.answer(true);
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("On it.");
+    call.end();
+    await flush();
   });
 });
 
@@ -360,10 +486,10 @@ describe("LiveCall", () => {
     engine().events.answering();
     engine().events.said("<no speech>");
     expect(call.state().caption?.who).toBe("user");
-    engine().events.said("Sure, {pause} on it.");
-    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    engine().events.said("Want me to {pause} fix it?");
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Want me to fix it?" });
     engine().events.turnDone();
-    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Want me to fix it?" });
     engine().events.said("Next.");
     expect(call.state().caption).toEqual({ id: 3, who: "voice", text: "Next." });
   });
@@ -1322,7 +1448,7 @@ describe("VOICE-SEND: promise guard", () => {
     const { engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
     turn(engine(), "Hmm, maybe.", "On it.");
-    expect(engine().texts.at(-1)).toBe(`[Wink] Not done: "Open the Orbit folder." starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`);
+    expect(engine().texts.at(-1)).toBe(`[Wink] Not sent: "Open the Orbit folder." starts only once they say yes. A spoken yes is enough. Say that plainly in one short line; don't ask it again or offer it again.`);
   });
 
   it("a relayed result turn is not guarded", async () => {
