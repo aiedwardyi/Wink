@@ -2,6 +2,29 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.279] - 2026-11-18
+
+### Added
+- A Timeline tab in the side pane lists the open bot's picks by day, newest first, with search; a replaced pick folds under the newer one.
+
+### Changed
+- Question cards are back to their earlier behavior: they fold to one row, close with x, a tapped choice sends as your own message, and a closed or answered card stays greyed in the chat.
+- Files open the same way everywhere: pictures and clips in the viewer, audio in place, PDFs and text in the side pane, the rest downloads; a phone opens files from your PC and says when the PC is offline.
+- In Ask mode, Wink tools that spend, change the workspace or drive a device wait for the Ask card.
+- About You in Settings is now Import Memory, and its prompt sits in a box with a copy icon.
+- The Model Index chart shows each model as a provider logo with its name, and draws effort lines only for the model you pick or hover.
+- The update prompt says workers keep running.
+- Settings > Shortcuts no longer lists Toggle Picker Style or Cycle Model Index Tab; the keys still work.
+
+### Fixed
+- Newest pick wins across chats and sync; a typed answer beats an older card tap.
+- A changed option under the same letter replaces the old pick instead of being dropped.
+- Show me on a What's New tile opens the feature, and the 1.0.278 tile opens the workers list.
+- Unattended Auto checks a tool's full input and refuses when it can't, and delete limits follow real paths, including junctions.
+- A call takes "thanks, yes" as a yes, never says an order was sent before it was, and keeps speech markers out of the voice and transcript.
+- An auto-approved request no longer marks a routine's chat unread.
+- A Live Verify replay missing on this PC says so instead of saying it expired.
+
 ## [1.0.278] - 2026-11-18
 
 ### Added
