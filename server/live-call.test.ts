@@ -332,6 +332,20 @@ describe("call token", () => {
     expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
   });
 
+  it("brief carries the current picks with the notes", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Picker" }, { seedMessages: false });
+    mkdirSync(join(workspaceDir(bot.id), "memory"), { recursive: true });
+    writeFileSync(join(workspaceDir(bot.id), "MEMORY.md"), "- Likes short answers (noted 2026-11-10)\n");
+    writeFileSync(join(workspaceDir(bot.id), "memory", "decisions.md"), '# Decision timeline\n\n## 2026-11-17 10:00 | forum look | replaced by 2026-11-17 10:03\n- Picked: ~~A - plain list~~\n\n## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Said: "actually c"\n- Tweak 2026-11-17 10:04: "make the header smaller"\n');
+    await h.post("token", {}, bot.id);
+    const brief = String(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text);
+    const notes = brief.slice(brief.indexOf("YOUR NOTES:\n"), brief.indexOf("RECENT CHAT:"));
+    expect(notes).toContain("Likes short answers");
+    expect(notes).toContain('- forum look (11-17): C - Reddit cards + tweaks: "make the header smaller" (11-17)');
+    expect(notes).not.toContain("plain list");
+  });
+
   it("brief answers the question asked first; role and notes never decline it", async () => {
     const h = harness();
     const bot = h.store.createBot({ name: "Teacher", description: "your Wink project teacher. Protect Wink's direction. Avoid feature sprawl." }, { seedMessages: false });
