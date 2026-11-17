@@ -190,8 +190,8 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   );
 }
 
-/** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls. */
-export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactNode }) {
+/** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls, or with `tap` toggles it. */
+export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: ReactNode; tap?: boolean }) {
   const { t } = useI18n();
   const anchor = useRef<HTMLSpanElement>(null);
   const press = useRef<{ x: number; y: number; held: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -207,12 +207,19 @@ export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactN
   };
   useEffect(() => () => clearTimeout(press.current?.timer), []);
   // The Language menu is portaled outside the panel.
-  useListMenuDismiss('[data-call-settings-menu], [role="menu"]', "[data-call-hold]", !at, close);
+  useListMenuDismiss(`[data-call-settings-menu], [role="menu"]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
   useBackLayer(Boolean(at), close);
   const rect = shown.value;
   const width = Math.min(360, window.innerWidth - 16);
   return (
     <span ref={anchor} data-call-hold="" className="flex select-none [-webkit-touch-callout:none]"
+      data-call-tap={tap || undefined}
+      onClick={tap ? (event) => {
+        // the menu is portaled, but its clicks still bubble here through the React tree
+        if (!(event.target instanceof Node && anchor.current?.contains(event.target))) return;
+        if (at) close();
+        else open();
+      } : undefined}
       onContextMenu={(event) => {
         event.preventDefault();
         open();

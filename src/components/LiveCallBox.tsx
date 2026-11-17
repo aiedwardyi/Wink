@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Captions, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { Captions, Loader2, Mic, MicOff, PhoneOff, Settings } from "lucide-react";
 
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -63,7 +63,7 @@ function CaptionLine({ caption, who }: { caption: NonNullable<CallState["caption
 }
 
 function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boolean }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
@@ -108,6 +108,11 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
             </>}
         </p>
         <span className="ml-auto" />
+        <CallSettingsHold bot={bot} tap>
+          <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(icon, "text-ink-secondary hover:bg-control hover:text-ink")}>
+            <Settings size={17} />
+          </button>
+        </CallSettingsHold>
         {talking && (
           <>
             <button type="button" aria-pressed={captions} aria-label={words.captions} title={words.captions} onClick={toggleCaptions} className={cn(icon, captions ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-control hover:text-ink")}>

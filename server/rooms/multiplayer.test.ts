@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR } from "../config.ts";
+import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
 import { ASK_DENY_NOTE, askById, askRiders, asksWork, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
@@ -381,6 +382,31 @@ describe("a teammate's request under the host's setting for the bot", () => {
     await vi.waitFor(() => expect(runs.respondToRequest).toHaveBeenCalledWith(group.threadId, "r1", { behavior: "allow" }));
   });
 
+  it("answers a teammate without the switch on every engine, read-only, never with the can't-work line", async () => {
+    const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    let gate: ts.IfStatement | undefined;
+    const walk = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && node.thenStatement.getText(index).includes("cantWorkLine(")) gate ??= node;
+      ts.forEachChild(node, walk);
+    };
+    walk(runner);
+    expect(gate).toBeDefined();
+    const { ask } = hostedSend(group, said(sora), "@Wink hi.");
+    expect(startAsk(ask!.id)).toBe(true);
+    const works = turnWorks(ask!.id);
+    expect(works).toBe(false);
+    for (const driver of BUILT_IN_DRIVERS.filter((candidate) => candidate.driverKind !== "boxAgent")) {
+      const instance = await driver.create({ instanceId: `read-only-${driver.driverKind}`, displayName: undefined, environment: {}, enabled: false, config: driver.defaultConfig() });
+      const endAsk = vi.fn();
+      const refused = new Function("works", "instance", "authority", "endAsk", "cantWorkLine", "bot", "userName", js(`${gate!.getText(index)}\nreturn false;`))(
+        works, instance, ask!.id, endAsk, (bot: string, host: string) => `${bot} can't take requests from you yet. ${host} has to turn on "Can make bots work" for you.`, { name: "Wink" }, "Edward",
+      );
+      await instance.dispose();
+      expect({ engine: driver.driverKind, refused, said: endAsk.mock.calls }).toEqual({ engine: driver.driverKind, refused: false, said: [] });
+    }
+    expect(turnAccess(ask!.id, { autoApprove: true }, false, works)).toEqual({ approval: "ask", readOnly: true });
+  });
+
   it("lets a read-only turn @ no other bot, since the next one would run without the asker's limits", () => {
     const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
     const chains: ts.IfStatement[] = [];
@@ -397,16 +423,18 @@ describe("a teammate's request under the host's setting for the bot", () => {
 
   it("marks Board posts from a joined room's task as room posts, and clears no read-only mark it never set", () => {
     let roomTurn = "";
+    let readOnlyRoomTurn = "";
     let wiring = "";
     const walk = (node: ts.Node) => {
       if (ts.isPropertyAssignment(node) && node.name.getText(index) === "roomTurn") roomTurn = node.initializer.getText(index);
+      if (ts.isFunctionDeclaration(node) && node.name?.text === "readOnlyRoomTurn") readOnlyRoomTurn = node.getText(index);
       if (ts.isPropertyAssignment(node) && node.name.getText(index) === "startTurn" && node.initializer.getText(index).includes("transcriptText: typed")) wiring = node.initializer.getText(index);
       ts.forEachChild(node, walk);
     };
     walk(index);
     expect(wiring).toContain("joinedRoomThreads.add(threadId)");
     const joinedRoomThreads = new Set(["joined-task"]);
-    const turn = new Function("store", "readOnlyTurnThreads", "readOnlyAskTurn", "joinedRoomThreads", `return ${js(roomTurn)};`)(
+    const turn = new Function("store", "readOnlyTurnThreads", "readOnlyAskTurn", "joinedRoomThreads", `${js(readOnlyRoomTurn)}; return ${js(roomTurn)};`)(
       { groupByThread: () => undefined }, new Set(["read-only-task"]), () => false, joinedRoomThreads,
     );
     expect(turn({ botId: "b", threadId: "joined-task" })).toBe("room");

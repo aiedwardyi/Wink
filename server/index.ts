@@ -372,7 +372,7 @@ import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } fr
 import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
-import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
+import { effectiveModelDial } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
 import { TeamReports } from "./team-reports.ts";
@@ -611,7 +611,6 @@ const phoneVisits = new PhoneVisits(DATA_DIR);
 // Absent unless phoneRelay.base is configured and enabled; it starts only
 // once handleRequest exists, so early static serving is never reachable.
 let relayPresenceHost: string | null = null;
-let relayModelDial = false;
 const phoneAccess: PhoneAccess = new PhoneAccess({
   dataDir: DATA_DIR,
   env: process.env,
@@ -629,11 +628,6 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
   room: handleRoomDoor,
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
-    const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
-    if (dial !== relayModelDial) {
-      relayModelDial = dial;
-      broadcast({ kind: "config", ...configStatus() });
-    }
     const host = phoneAccess.presenceHost();
     void teamSnags?.sync();
     if (host === relayPresenceHost) return;
@@ -5952,7 +5946,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const routinePrompt = canMessage
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation. For a one-off later step in this chat, call wake_me instead of a countdown in a terminal pane."
         : "";
-      const taskStatePrompt = integrations.agents
+      const taskStatePrompt = integrations.agents && !readOnly
         ? ` Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`
         : "";
       const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
@@ -6797,7 +6791,7 @@ async function runGroupMemberTurn(
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   // the lane runs beside the 1:1 in its folder, so only an engine that can deny edits and shell gets one
   const lane = !hands && botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
-    botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
+    botAccounts.instance(bot, threadId)?.adapter.capabilities.laneTurns === true && roomLanes.claim(botId, threadId);
   if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands, chainAsk);
   }
@@ -7056,7 +7050,7 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   // automatic routing can resolve to an engine that cannot run read-only
-  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
+  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.laneTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority, hands, chainAsk);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
@@ -7785,7 +7779,7 @@ function configStatus() {
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
       terminalLive: true,
-      modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
+      modelDial: effectiveModelDial(cfg),
     },
   };
 }
@@ -7842,18 +7836,22 @@ const groupRoutes = createGroupRoutes({
   },
   syncSettled: (threadId) => threadSyncGate.enabled ? syncHold.settle(threadId) : Promise.resolve(),
 });
+function readOnlyRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
+}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
   roomTurn: ({ botId, threadId }) => {
-    const hosted = store.groupByThread(threadId)?.hosted;
-    if (readOnlyTurnThreads.has(threadId) || (hosted && readOnlyAskTurn(hosted.roomId, threadId, botId))) return "read-only";
-    return hosted || joinedRoomThreads.has(threadId) ? "room" : null;
+    if (readOnlyRoomTurn(botId, threadId)) return "read-only";
+    return store.groupByThread(threadId)?.hosted || joinedRoomThreads.has(threadId) ? "room" : null;
   },
 });
 const internalRoutes = createInternalRoutes({
+  readOnlyTurn: readOnlyRoomTurn,
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,

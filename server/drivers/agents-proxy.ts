@@ -60,7 +60,7 @@ const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
-export const READ_ONLY_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
+export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
