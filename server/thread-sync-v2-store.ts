@@ -104,6 +104,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     CREATE TABLE IF NOT EXISTS sync_v2_pictures (id INTEGER PRIMARY KEY, thread TEXT NOT NULL, json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sync_v2_migration_log (id INTEGER PRIMARY KEY, ended INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS sync_v2_notices (thread TEXT PRIMARY KEY, cursor INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS sync_v2_cleaned (thread TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS sync_v2_joins (thread TEXT PRIMARY KEY, missed INTEGER NOT NULL, tip TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sync_v2_conflict_changes ON sync_v2_changes(thread, cursor) WHERE conflict = 1;
     INSERT OR IGNORE INTO sync_v2_migration_log VALUES (1, 0);
@@ -265,13 +266,13 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     noticeHeads.set(task.threadId, { threadId: task.threadId, leaf: message.id, parent: message.parentId ?? null });
   }
 
-  /** `ids` are the boot worker's v1 notices; the task's sync_v2_notices row goes with them so the finder runs once. */
+  /** `ids` are the boot worker's v1 notices; sync_v2_cleaned marks the task so the finder runs once, and sync_v2_notices stays notifyConflict's memo. */
   function removeMigrationNotices(task: StoredTask, ids: string[]): void {
     if (host.running(task.threadId)) return;
     withMessageTransaction((db) => {
       if (!db.prepare("SELECT 1 FROM sync_v2_notices WHERE thread = ?").get(task.threadId)) return;
       if (ids.length && !engine.hadNativeConflict(task)) host.store.removeSyncNotices(task.threadId, ids);
-      db.prepare("DELETE FROM sync_v2_notices WHERE thread = ?").run(task.threadId);
+      db.prepare("INSERT OR IGNORE INTO sync_v2_cleaned VALUES (?)").run(task.threadId);
     });
   }
 

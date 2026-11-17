@@ -252,7 +252,7 @@ describe("boot reads of messages.db", () => {
         handed: marks.get("mark-handed")?.comm?.read?.state,
       };
     };
-    const want = { notice: false, noticeRow: 0, reparented: "mark-mail", ask: true, queued: true, card: true, handed: "read" };
+    const want = { notice: false, noticeRow: 1, reparented: "mark-mail", ask: true, queued: true, card: true, handed: "read" };
     while (Date.now() < servingAt + WINDOW_MS && JSON.stringify(handled()) !== JSON.stringify(want)) await new Promise((resolve) => setTimeout(resolve, 250));
     expect(handled()).toEqual(want);
     const notes = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });

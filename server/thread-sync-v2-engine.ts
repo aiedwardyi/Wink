@@ -816,11 +816,14 @@ export function createSyncEngine(input: SyncOptions) {
 
   function conflicted(scope: SyncScope): boolean {
     const deletes = variants(scope, "delete").filter((item) => !item.version.legacy);
-    return deletes.some((item) => all(writerSeqSchema,
-      "SELECT writer, seq FROM sync_v2_frontier WHERE thread = ? AND kind != 'delete' AND json_extract(json, '$.legacy') IS NULL", scope.threadId)
-      .some((row) => !saw(item.version, row.writer, row.seq))) || Boolean(sql(
-      "SELECT 1 FROM sync_v2_frontier WHERE thread = ? AND kind != 'head' AND json_extract(json, '$.legacy') IS NULL GROUP BY kind, row_id HAVING COUNT(*) > 1 LIMIT 1",
-    ).get(scope.threadId));
+    const rows = deletes.length ? all(writerSeqSchema,
+      "SELECT writer, seq FROM sync_v2_frontier WHERE thread = ? AND kind != 'delete' AND json_extract(json, '$.legacy') IS NULL", scope.threadId) : [];
+    // duplicate keys come from the primary key alone; json is read only for those groups, CROSS JOIN keeps them outer
+    return deletes.some((item) => rows.some((row) => !saw(item.version, row.writer, row.seq))) || Boolean(sql(
+      `SELECT 1 FROM (SELECT kind, row_id FROM sync_v2_frontier WHERE thread = ? AND kind != 'head' GROUP BY kind, row_id HAVING COUNT(*) > 1) d
+        CROSS JOIN sync_v2_frontier f ON f.thread = ? AND f.kind = d.kind AND f.row_id = d.row_id
+        WHERE json_extract(f.json, '$.legacy') IS NULL GROUP BY d.kind, d.row_id HAVING COUNT(*) > 1 LIMIT 1`,
+    ).get(scope.threadId, scope.threadId));
   }
 
   function hadNativeConflict(scope: SyncScope): boolean {

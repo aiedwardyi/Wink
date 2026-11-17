@@ -540,6 +540,28 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     expect((await b.snapshot()).noticeChecks).toBe(second.noticeChecks);
   });
 
+  it("keeps a checked conflict's memo through migration cleanup and never rescans it on boot", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    const row = await a.call<Message>("append", { text: "base" });
+    await a.call("flush");
+    await b.call("pull");
+    await a.call("patch", { id: row.id, patch: { text: "a" } });
+    await b.call("patch", { id: row.id, patch: { text: "b" } });
+    await a.call("flush");
+    await b.call("pull");
+    const checked = await b.snapshot();
+    expect(checked.memo).toBeGreaterThan(0);
+    writeFileSync(join(b.dataDir, "thread-sync-v2-cutover.json"), JSON.stringify({ version: 2, cutoverAt: 1 }));
+    for (const _ of [1, 2]) {
+      await b.call("restart");
+      await b.call("poll");
+    }
+    const booted = await b.snapshot();
+    expect({ conflictScans: booted.conflictScans, memo: booted.memo }).toEqual({ conflictScans: checked.conflictScans, memo: checked.memo });
+  });
+
   it("keeps v1 working until both fresh PCs update, then migrates once", async () => {
     const folder = temp();
     const now = Date.now();

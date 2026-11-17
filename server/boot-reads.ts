@@ -24,9 +24,9 @@ export interface BootReadInput {
 
 export interface BootRows {
   receipts: ReceiptRow[];
-  /** Saved sync tasks with a sync_v2_notices row: their v1 notices written since the cutover and never synced. */
+  /** Saved sync tasks with a sync_v2_notices row and no sync_v2_cleaned row: their v1 notices written since the cutover and never synced. */
   migration: Array<{ threadId: string; ids: string[] }>;
-  /** Eligible saved tasks with a conflict change: conflict notices on their active path. */
+  /** Eligible saved tasks whose latest conflict change is not their sync_v2_notices memo: conflict notices on their active path. */
   conflicts: Array<{ threadId: string; notices: string[] }>;
   asks: Array<{ threadId: string; id: string; at: number }>;
   peerCards: Array<{ threadId: string; id: string }>;
@@ -53,7 +53,7 @@ export function findBootRows(input: BootReadInput): BootRows {
     const synced = tables.has("sync_v2_store") && tables.has("sync_v2_notices") && tables.has("sync_v2_changes") && tables.has("sync_v2_snapshot");
     // SAFETY: Both task queries select sync_v2_store's text threadId.
     const migration = synced && input.cutoverAt !== null
-      ? (db.prepare("SELECT s.threadId FROM sync_v2_store s JOIN sync_v2_notices n ON n.thread = s.threadId").all() as Array<{ threadId: string }>).map(({ threadId }) => ({
+      ? (db.prepare(`SELECT s.threadId FROM sync_v2_store s JOIN sync_v2_notices n ON n.thread = s.threadId${tables.has("sync_v2_cleaned") ? " WHERE NOT EXISTS (SELECT 1 FROM sync_v2_cleaned c WHERE c.thread = s.threadId)" : ""}`).all() as Array<{ threadId: string }>).map(({ threadId }) => ({
         threadId,
         // SAFETY: The query selects the message table's typed id.
         ids: (db.prepare(`SELECT id FROM messages m WHERE thread_id = ? AND at >= ? AND kind = 'activity'
@@ -64,7 +64,9 @@ export function findBootRows(input: BootReadInput): BootRows {
       : [];
     const conflicts = synced
       ? (db.prepare(`SELECT s.threadId FROM sync_v2_store s WHERE s.eligible = 1 AND EXISTS (
-          SELECT 1 FROM sync_v2_changes c WHERE c.thread = s.threadId AND c.conflict = 1 AND c.cursor <= s.cursor)`).all() as Array<{ threadId: string }>).map(({ threadId }) => ({
+          SELECT 1 FROM sync_v2_changes c WHERE c.thread = s.threadId AND c.conflict = 1 AND c.cursor <= s.cursor)
+        AND NOT EXISTS (SELECT 1 FROM sync_v2_notices n WHERE n.thread = s.threadId AND n.cursor = (SELECT MAX(c.cursor) FROM sync_v2_changes c
+          WHERE c.thread = s.threadId AND c.conflict = 1 AND c.cursor <= s.cursor))`).all() as Array<{ threadId: string }>).map(({ threadId }) => ({
         threadId,
         // SAFETY: The query selects the message table's typed id.
         notices: (db.prepare(`WITH RECURSIVE path(id) AS (
