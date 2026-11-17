@@ -14,7 +14,7 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, type CallPrefs, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, STYLE_GAIN, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
 import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
 import { Fold } from "./Fold";
@@ -45,7 +45,7 @@ function useCallPrefs(bot: Bot) {
 }
 
 /** No preview during a call: it would play into the open mic, and a pick is heard on the next words anyway. */
-export function usePreview(language: "en" | "ko"): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
+function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
   const onCall = Boolean(useActiveCall());
   const [playing, setPlaying] = useState<LiveVoice | null>(null);
   const clip = useRef<HTMLAudioElement | null>(null);
@@ -56,16 +56,20 @@ export function usePreview(language: "en" | "ko"): { playing: LiveVoice | null; 
   };
   useEffect(() => (onCall ? stop() : undefined), [onCall]);
   useEffect(() => () => clip.current?.pause(), []);
-  const volume = useCallVolume();
+  // the call's own level and pitch-kept speed, so the sample sounds like the call
+  const level = OUTPUT_GAIN * STYLE_GAIN[style] * useCallVolume();
   useEffect(() => {
-    if (clip.current) clip.current.volume = volume;
-  }, [volume]);
+    if (!clip.current) return;
+    clip.current.volume = level;
+    clip.current.playbackRate = speed;
+  }, [level, speed]);
   const preview = (name: LiveVoice) => {
     const was = playing;
     stop();
     if (was === name) return;
     const audio = new Audio(`/voice-preview/${name}-${language}.mp3`);
-    audio.volume = volume;
+    audio.volume = level;
+    audio.playbackRate = speed;
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);
@@ -155,7 +159,7 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
   const volume = useCallVolume();
-  const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"));
+  const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed, prefs.style);
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
