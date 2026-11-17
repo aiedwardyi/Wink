@@ -24,7 +24,7 @@ const messaging = source.slice(source.indexOf("      const canMessage ="), sourc
 const preparation = source.slice(source.indexOf("  const folded = currentTurnEpoch"), source.indexOf("\n  const persona = [", source.indexOf("  const folded = currentTurnEpoch")));
 const marker = "const started = await dispatchAdapterTurn(threadId, async () => {";
 const start = source.indexOf(marker) + marker.length;
-const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start)).replace("(base: string)", "(base)").replace("const late: string[]", "const late");
+const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start)).replaceAll("(base: string)", "(base)").replace("const late: string[]", "const late");
 const delivery = source.slice(source.indexOf("      if (holdNotes) newestPaneNoteId = undefined;"), source.indexOf("      store.markReactionsDelivered", start));
 const runDispatch = new Function("scope", `with (scope) { return (async () => {${messaging}\n${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`);
 
