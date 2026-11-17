@@ -8,6 +8,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { parseAt } from "./self-wake.ts";
 import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
@@ -170,6 +171,7 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
     const at = Math.max(0, Math.trunc(item.at));
     return [{
       id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), ...(item.kind ? { kind: item.kind } : {}), ...(choices ? { choices } : {}),
+      ...(item.due === undefined ? {} : { due: Math.max(0, Math.trunc(item.due)) }), ...(item.wake ? { wake: item.wake } : {}),
       at, changedAt: Math.max(0, Math.trunc(item.changedAt)),
     }];
   });
@@ -362,6 +364,9 @@ export function taskStateUpdateSchema(clipped: string[]) {
     ask: z.string().trim().min(1).optional(),
     status: z.enum(ASK_STATUSES),
     ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
+    due: z.string().trim()
+      .refine((value) => value === "" || Number.isFinite(parseAt(value)), "use RFC3339 with an offset, like 2026-11-17T07:30:00+09:00, or an empty string to clear it")
+      .transform((value) => value === "" ? null : parseAt(value)).optional(),
   }).strict()).transform((items) =>
     items.map((item, index) => ({
       ...item,
