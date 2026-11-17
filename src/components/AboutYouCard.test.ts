@@ -74,6 +74,16 @@ describe("About You card", () => {
     expect(button("Add More")).toBeDefined();
   });
 
+  it("keeps the copy tap area real and shows focus only for the keyboard", async () => {
+    await render();
+    const copy = button("Copy Prompt");
+    expect(copy.className).toContain("[@media(pointer:coarse)]:after:content-['']");
+    const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
+    expect(prompt.className).not.toMatch(/(^|\s)focus:outline-none/);
+    expect(prompt.className).toContain("focus-visible:outline-none");
+    expect(prompt.className).toContain("focus-visible:ring-2 focus-visible:ring-accent/50");
+  });
+
   const type = (value: string) => act(async () => {
     const box = host.querySelector("textarea")!;
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);
