@@ -344,7 +344,6 @@ const TOOLS = [
               ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
               status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
               ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
-              due: { type: "string", maxLength: 40, pattern: "^$|\\S", description: "When you promise a time, set due: RFC3339 with offset, like 2026-11-17T07:30:00+09:00. Wink wakes you once then if the ask is still open. Empty string clears it." },
             },
             required: ["status"],
           },
@@ -695,7 +694,6 @@ interface TaskStateAsk {
   ask?: string;
   status: string;
   ref?: string;
-  due?: string;
 }
 
 interface TaskStateToolArgs {

@@ -1,5 +1,4 @@
 import type { Routine, RoutineManager, RoutineRun } from "./routines.ts";
-import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
 
 export const WAKE_MAX_PENDING = 10;
 export const WAKE_NOTE_MAX = 500;
@@ -20,7 +19,7 @@ export function pendingWakes(routines: RoutineManager, botId: string): Routine[]
   return routines.listRoutines().filter((routine) => routine.wake && routine.botId === botId && routine.nextRunAt !== null);
 }
 
-export function parseAt(raw: string): number {
+function parseAt(raw: string): number {
   const match = RFC3339_WITH_OFFSET.exec(raw);
   const at = match ? Date.parse(raw) : NaN;
   if (!match || !Number.isFinite(at)) return NaN;
@@ -57,50 +56,6 @@ export function setWake(
 
 export function cancelWake(routines: RoutineManager, botId: string, id: string): boolean {
   return pendingWakes(routines, botId).some((routine) => routine.id === id) && routines.remove(id);
-}
-
-// a room member may move or close another member's ask, so its wake is cancelled as the bot that set it
-function cancelAskWake(routines: RoutineManager, threadId: string, id: string): void {
-  const owner = routines.listRoutines().find((routine) => routine.wake && routine.id === id && routine.sourceThreadId === threadId);
-  if (owner) cancelWake(routines, owner.botId, id);
-}
-
-/** An open ask with a due time holds one wake; moving the time or closing the ask cancels it, reopening sets it again, and one that rang is not set again. */
-export function syncAskWakes(
-  routines: RoutineManager,
-  chat: { botId: string; threadId: string },
-  before: readonly TaskAsk[] | undefined,
-  after: TaskAsk[],
-  now = Date.now(),
-): string[] {
-  const notes: string[] = [];
-  // a closed ask the cap dropped takes its wake with it
-  for (const gone of before ?? []) {
-    if (gone.wake && !after.some((ask) => ask.id === gone.id)) cancelAskWake(routines, chat.threadId, gone.wake);
-  }
-  for (const ask of after) {
-    const was = before?.find((item) => item.id === ask.id);
-    const moved = was?.due !== ask.due;
-    if (ask.wake && (moved || !isOpenAsk(ask))) {
-      cancelAskWake(routines, chat.threadId, ask.wake);
-      delete ask.wake;
-    }
-    const reopened = was !== undefined && !isOpenAsk(was) && isOpenAsk(ask);
-    if (!(moved || reopened) || ask.due === undefined || !isOpenAsk(ask)) continue;
-    if (ask.due <= now) {
-      notes.push(`No wake for ${ask.id}: its due time already passed.`);
-      continue;
-    }
-    const note = `Ask ${ask.id} is due: ${ask.ask}. If it isn't started, start it now; otherwise update its due time.`;
-    const set = setWake(routines, { ...chat, at: new Date(ask.due).toISOString(), note }, now);
-    if (set.ok) ask.wake = set.id;
-    else notes.push(`No wake for ${ask.id}: ${set.error}`);
-  }
-  return notes;
-}
-
-export function dropNewAskWakes(routines: RoutineManager, botId: string, before: readonly TaskAsk[] | undefined, after: readonly TaskAsk[]): void {
-  for (const ask of after) if (ask.wake && !before?.some((was) => was.wake === ask.wake)) cancelWake(routines, botId, ask.wake);
 }
 
 export function wakeFireLine(run: Pick<RoutineRun, "scheduledFor" | "late">, note: string, now: number): string {
