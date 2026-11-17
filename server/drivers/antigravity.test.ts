@@ -1203,6 +1203,7 @@ describe("Antigravity computer MCP config", () => {
   const staticEntries = {
     "openmausbot-agents": { command: process.execPath, args: [SPAWNED_PROXIES.agents], env: { ELECTRON_RUN_AS_NODE: "1" } },
     "openmausbot-terminal": { command: process.execPath, args: [SPAWNED_PROXIES.terminal], env: { ELECTRON_RUN_AS_NODE: "1" } },
+    "openmausbot-web": { command: process.execPath, args: [SPAWNED_PROXIES.web], env: { ELECTRON_RUN_AS_NODE: "1" } },
   };
   const botIntegrations = (bot: string) => ({
     agents: {

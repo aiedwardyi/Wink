@@ -132,6 +132,12 @@
     "tests": ["server/drivers/terminal-proxy.test.ts"]
   },
   {
+    "path": "server/drivers/web-proxy.ts",
+    "reads": "Engine MCP stdio read_url requests and the pages they fetch",
+    "status": "pending",
+    "tests": ["server/drivers/web-proxy.test.ts"]
+  },
+  {
     "path": "server/mcp-bridge.ts",
     "reads": "Engine MCP tools/call frames for the computer control gate",
     "status": "pending",
