@@ -73,6 +73,15 @@ describe("chat header worker badge", () => {
     } finally { await unmount(); }
   });
 
+  it.each([false, true])("puts the side pane toggle after the model picker with phone=%s", async (phone) => {
+    const { header, unmount } = await mount(7, phone);
+    try {
+      const picker = header.querySelector("[data-model-label]")!;
+      const button = header.querySelector("[data-show-pane-button]")!;
+      expect(picker.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally { await unmount(); }
+  });
+
   it("has no badge and no worker line without workers", async () => {
     const { header, unmount } = await mount(0, false);
     try {
