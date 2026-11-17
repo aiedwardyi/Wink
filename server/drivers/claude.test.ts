@@ -3415,6 +3415,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       for (const [id, input, reason] of [
         ["ask-big", { text: "a".repeat(70_000) }, "too large"],
         ["ask-odd", "rm -rf ~", "can't be read"],
+        ["ask-deep", Array.from({ length: 100 }).reduce<object>((inner) => ({ a: inner }), { text: "rm -rf ~" }), "can't be read"],
       ] as const) {
         const { respondToRequest, pushMessage } = harness(await opened("t-host-big", { id, tool: "mcp__computer__type_text", input }));
         await vi.waitFor(() => expect(pushMessage).toHaveBeenCalled());

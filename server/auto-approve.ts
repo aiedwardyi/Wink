@@ -167,8 +167,9 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
   return scope ? `${scope}:${key}` : key;
 }
 
-// The most of a desktop call the guard reads; a longer one is skipped, never cut.
+// The most of a desktop call the guard reads; a longer or deeper one is skipped, never cut.
 const GUARD_INPUT_MAX = 65_536;
+const GUARD_INPUT_DEPTH = 64;
 
 /** Every key and string a desktop call carries, whole, for the guard to judge. */
 export function guardInput(input: unknown): { action: string } | { actionRefused: "too-large" | "unreadable" } {
@@ -181,18 +182,19 @@ export function guardInput(input: unknown): { action: string } | { actionRefused
   }
   if (size > GUARD_INPUT_MAX) return { actionRefused: "too-large" };
   const parts: string[] = [];
-  const walk = (value: unknown) => {
+  const walk = (value: unknown, depth: number): boolean => {
+    if (depth > GUARD_INPUT_DEPTH) return false;
     if (typeof value === "string") parts.push(value);
-    else if (Array.isArray(value)) value.forEach(walk);
+    else if (Array.isArray(value)) return value.every((inner) => walk(inner, depth + 1));
     else if (value && typeof value === "object") {
       for (const [key, inner] of Object.entries(value)) {
         parts.push(key);
-        walk(inner);
+        if (!walk(inner, depth + 1)) return false;
       }
     }
+    return true;
   };
-  walk(input);
-  return { action: parts.join("\n") };
+  return walk(input, 0) ? { action: parts.join("\n") } : { actionRefused: "unreadable" };
 }
 
 /** The deny for an Auto bot's desktop ask the guard could not read whole. */
