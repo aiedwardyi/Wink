@@ -1407,7 +1407,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               summary: askSummary(ask),
               inputDigest: inputDigest(ask.input ?? askArgs(ask)),
               approvalScope,
-              ...(approvalScope ? guardInput(ask.input) : {}),
+              ...guardInput(ask.input),
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
               ...(ask.background ? { background: true } : {}),
               ...(unattended ? { unattended: true } : {}),

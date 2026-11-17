@@ -18,6 +18,7 @@ import { z } from "zod";
 
 import { applyCredentialAllowlist } from "../config.ts";
 import { computerProxyEnv } from "../container-computer.ts";
+import { guardInput } from "../auto-approve.ts";
 import { describeSpawnFailure, execCli, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { captureToolDetail } from "../tool-detail.ts";
@@ -691,6 +692,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           tool,
           summary,
           choices,
+          ...(controlsHost && turn.attended ? {} : guardInput(params)),
           approvalScope: controlsHost ? "local-computer" : undefined,
         });
       };

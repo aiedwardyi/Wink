@@ -222,7 +222,7 @@ function cleanable(path: string, workspace: string): boolean {
   const live = realPath(workspace);
   if (!real || !live || within(real, live)) return false;
   const root = realPath(worktreeRoot());
-  return (!!root && real !== root && within(root, real)) || inOwnedWorktree(real, live);
+  return (!!root && real !== root && within(root, real)) || inOwnedWorktree(stat?.isDirectory() ? real : dirname(real), live);
 }
 
 /**
@@ -233,6 +233,14 @@ function cleanable(path: string, workspace: string): boolean {
  */
 function checkDeletes(tool: string, summary: string, workspace: string): { outside: string | null; rest: string } {
   const root = resolve(workspace);
+  const real = (path: string | null) => {
+    try {
+      return path === null ? null : realpathSync.native(path);
+    } catch {
+      return null;
+    }
+  };
+  const live = real(root);
   // a relative path under a folder we lost track of could be anywhere
   const place = (path: string, dir: string | null) => (dir === null && !isRooted(path) ? null : resolve(dir ?? root, expandHome(path)));
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
@@ -259,10 +267,11 @@ function checkDeletes(tool: string, summary: string, workspace: string): { outsi
   }
   let outside: string | null = null;
   const rest: string[] = [];
-  for (const { text, paths } of segments) {
-    const clears = paths.length > 0 && paths.every(({ at }) => at !== null && cleanable(at, root));
+  for (const { text, paths: lexical } of segments) {
+    const paths = lexical.map(({ word, at }) => ({ word, at: real(at) }));
+    const clears = live !== null && paths.length > 0 && paths.every(({ at }, i) => at !== null && cleanable(lexical[i].at!, live));
     if (!clears) rest.push(text);
-    outside ??= clears ? null : (paths.find(({ at }) => at === null || !within(root, at))?.word ?? null);
+    outside ??= clears ? null : (paths.find(({ at }) => live === null || at === null || !within(live, at))?.word ?? null);
   }
   return { outside, rest: rest.length === segments.length ? summary : rest.join(" ; ") };
 }
@@ -285,11 +294,11 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
   return scope ? `${scope}:${key}` : key;
 }
 
-// The most of a desktop call the guard reads; a longer or deeper one is skipped, never cut.
+// A longer or deeper input is skipped, never cut.
 const GUARD_INPUT_MAX = 65_536;
 const GUARD_INPUT_DEPTH = 64;
 
-/** Every key and string a desktop call carries, whole, for the guard to judge. */
+/** Every key and string a tool call carries, whole, for the guard to judge. */
 export function guardInput(input: unknown): { action: string } | { actionRefused: "too-large" | "unreadable" } {
   if (!input || typeof input !== "object" || Array.isArray(input)) return { actionRefused: "unreadable" };
   let size: number;
@@ -380,7 +389,7 @@ export function autoVerdict(
     scope?: "local-computer";
     /** the folder the turn runs in; unattended deletes stay inside it */
     workspace?: string;
-    /** why a desktop call reached the guard without its whole input */
+    /** why a tool call reached the guard without its whole input */
     refused?: "too-large" | "unreadable";
   },
 ): AutoVerdict {
@@ -404,6 +413,7 @@ export function autoVerdict(
     return { approve: null, source: "away-desktop-deny" };
   }
   if (context?.unattended && bot.autoApprove) {
+    if (context.refused) return { approve: null, source: "unattended-deny", rule: context.refused };
     // a file tool's summary carries the file's text, which runs nothing
     const runs = !FILE_TOOLS.has(tool.replace(/^mcp__[^_]+__/, "").toLowerCase());
     // no folder (an API engine, a cloud run): only the destructive rule applies

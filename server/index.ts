@@ -3923,7 +3923,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.action ?? event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused, workspace: turnCwdByThread.get(event.threadId) })
+        ? autoVerdict(asker, event.tool, unattended ? event.action ?? "" : event.approvalScope ? event.action ?? event.summary : event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused ?? (unattended && event.action === undefined ? "unreadable" : undefined), workspace: turnCwdByThread.get(event.threadId) })
         : null;
       const skipNote = verdict?.source === "away-desktop-deny"
         ? AWAY_DESKTOP_DENY_NOTE
