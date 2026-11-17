@@ -104,6 +104,8 @@ export function pickStamp(ms: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
+
 const entryTime = (entry: PickEntry) => {
   const stamp = entry.id.replace(/ \(\d+\)$/, "");
   return entry.at ?? new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime();
@@ -211,7 +213,10 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (!picked) continue;
     if (current && sameOption(current.picked, picked)) {
       if (overTap) {
+        // pinned first: the identity hashes the time, and a merge must still find the tap
+        current.source = identity(current);
         delete current.tapped;
+        current.at = change.at;
         retyped = true;
       }
       continue;
@@ -255,8 +260,10 @@ export function mergeTimelines(a: string, b: string): string | null {
   const merged = new Map<string, PickEntry>();
   const parents = new Map<string, Set<string>>();
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-  const union = <T>(x: T[], y: T[]) => [...new Map([...x, ...y].map((item) => [JSON.stringify(item), item])).values()].sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
-  const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
+  const unique = <T>(x: T[], y: T[]) => [...new Map([...x, ...y].map((item) => [JSON.stringify(item), item])).values()];
+  const union = <T>(x: T[], y: T[]) => unique(x, y).sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
+  // same-minute tweaks keep the order they were said in; the sort is stable
+  const said = (x: Tweak[], y: Tweak[]) => unique(x, y).sort((x, y) => compare(x.at, y.at));
   for (const { entries } of timelines) {
     const sources = new Map(entries.map((entry) => [entry.id, identity(entry)]));
     const byId = new Map(entries.map((entry) => [entry.id, entry]));
@@ -271,7 +278,8 @@ export function mergeTimelines(a: string, b: string): string | null {
         ...before,
         picture: before.picture ?? entry.picture,
         over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
-        files: union(before.files, entry.files), tweaks: union(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
+        files: union(before.files, entry.files), tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
+        ...(before.tapped && !entry.tapped ? { tapped: undefined, at: entry.at } : {}),
       } : { ...entry, source: key, replacedBy: undefined });
     }
   }
