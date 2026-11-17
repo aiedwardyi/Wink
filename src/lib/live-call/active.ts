@@ -45,7 +45,12 @@ export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: Ac
 export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
   if (!bot || !opener || call || !callsSupported()) return null;
   const sound = callAudio();
-  if (sound.ctx.state === "suspended") addEventListener("pointerdown", () => void sound.ctx.resume(), { once: true });
+  if (sound.ctx.state === "suspended") {
+    addEventListener("pointerdown", () => {
+      void sound.ctx.resume();
+      sound.voice.play().catch(() => {});
+    }, { once: true });
+  }
   return placeCall(bot, sound, opener);
 }
 
