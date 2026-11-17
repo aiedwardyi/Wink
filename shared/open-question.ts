@@ -50,10 +50,14 @@ export function answerPrefix(card: Row): string {
   return `Re: “${question.length > QUOTE_CHARS ? `${question.slice(0, QUOTE_CHARS - 1).trimEnd()}…` : question}”\n`;
 }
 
-/** What an answer to `card` sends: a card some newer question follows names its question, so the bot knows which one it answers. */
-export function answerText(messages: readonly Row[], card: Row, answer: string): string {
-  const index = messages.indexOf(card);
-  return index >= 0 && messages.slice(index + 1).some(isAskUserCard) ? `${answerPrefix(card)}${answer}` : answer;
+/** What a tap on `card` sends: always naming its question, the same words a call's spoken answer sends, so the server can tell a second answer. */
+export function answerText(card: Row, answer: string): string {
+  return `${answerPrefix(card)}${answer}`;
+}
+
+/** The ask_user card a "Re: “question”" line names, the newest that matches. */
+export function quotedCard<T extends Row>(messages: readonly T[], text: string): T | undefined {
+  return text.startsWith("Re: “") ? messages.findLast((message) => isAskUserCard(message) && text.startsWith(answerPrefix(message))) : undefined;
 }
 
 const sameAsker = (left: Row, right: Row) => left.from?.botId === right.from?.botId;
@@ -97,7 +101,7 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
       if (open.includes(tapped)) answer(tapped, text.startsWith(answerPrefix(tapped)) ? text.slice(answerPrefix(tapped).length) : text, message);
       continue;
     }
-    const quoted = text.startsWith("Re: “") ? asked.findLast((card) => text.startsWith(answerPrefix(card))) : undefined;
+    const quoted = quotedCard(asked, text);
     if (quoted) {
       if (open.includes(quoted)) answer(quoted, text.slice(answerPrefix(quoted).length), message);
       continue;
@@ -123,6 +127,23 @@ export function typedReply(card: Row, text: string): string | null {
 /** True when the person's line `text`, landing next, settles `card` by itself: the server then takes no second answer for it. */
 export function lineSettles(messages: readonly Row[], card: Row, text: string): boolean {
   return askStates([...messages, { role: "user", kind: "text", text }]).get(card)?.state === "answered";
+}
+
+/** The card from before cards stayed open that the person's `text` types past, closing it unanswered; a room passes the member that asked. */
+export function typedPastCard<T extends Row>(messages: readonly T[], text: string, askerId?: string): T | null {
+  const line = { role: "user", kind: "text", text } as T;
+  for (const [card, state] of askStates([...messages, line])) {
+    // a tapped choice can arrive before its answered patch
+    if (state.state !== "answered" || state.by !== line || card.card!.staysOpen || card.card!.options?.includes(text.trim())) continue;
+    if (!askerId || card.from?.botId === askerId) return card;
+  }
+  return null;
+}
+
+/** The waiting cards ask_user close:true settles: `question` word for word, from the member that asked in a room, or with no asker in a 1:1 chat. */
+export function cardsToClose<T extends Row>(messages: readonly T[], question: string, askerId?: string): T[] {
+  return [...askStates(messages)].flatMap(([card, state]) =>
+    state.state === "waiting" && card.card!.subtitle?.trim() === question && (askerId ? card.from?.botId === askerId : !card.from) ? [card] : []);
 }
 
 /** The chat's newest waiting ask_user card, if any. */

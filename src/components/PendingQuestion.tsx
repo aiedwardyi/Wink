@@ -6,38 +6,17 @@
 // it never takes the composer over: the bot keeps working, and typing a reply
 // answers it only when it has no choices. The x on the row and a sideways swipe
 // across it dismiss the question, exactly like the open card's x.
-import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, type MouseEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
+import { useQuestionView } from "@/lib/open-question";
+import { lockAxis, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
-
-// Per question id, outside the store, so each chat's question stays as it was left.
-const rowQuestions = new Set<string>();
-const shrunkQuestions = new Set<string>();
-const glowedQuestions = new Set<string>();
-const watchers = new Set<() => void>();
-function subscribe(notify: () => void) {
-  watchers.add(notify);
-  return () => { watchers.delete(notify); };
-}
-function mark(questions: Set<string>, id: string, value: boolean) {
-  if (value) questions.add(id);
-  else questions.delete(id);
-  for (const notify of watchers) notify();
-}
-const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
-
-/** Shows a question as its row from now on; it never shrinks by itself after that. */
-export function foldQuestion(id: string) {
-  shrunkQuestions.add(id);
-  mark(rowQuestions, id, true);
-}
 
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
 let stepFocus = 0;
@@ -85,19 +64,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   onDismiss: () => void;
 }) {
   const { t } = useI18n();
-  const drafting = Boolean(typed.trim()) || attached > 0 || replying;
-  // read in render so a question arriving over a draft never paints as the card first
-  const folded = useMarked(rowQuestions, message.id) || (drafting && !shrunkQuestions.has(message.id));
-  const [glowing, setGlowing] = useState(() => !glowedQuestions.has(message.id) && !reducedMotion());
-  useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
-  const draft = useRef({ typed, attached });
-  useEffect(() => {
-    const was = draft.current;
-    draft.current = { typed, attached };
-    if (shrunkQuestions.has(message.id) || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
-    setGlowing(false);
-    foldQuestion(message.id);
-  }, [typed, attached, drafting, movedOn, message.id]);
+  const view = useQuestionView(message.id, { typed, attached, replying, movedOn });
+  const { folded, glowing } = view;
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
   const rowButton = useRef<HTMLButtonElement>(null);
@@ -118,13 +86,10 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     }
     stepFocus = 0;
   }, []);
-  // a question that leaves mid-glow must not pulse again when it comes back;
   // focus follows only a key press, as a scripted move after a click inherits the ring of any earlier key press
   const fold = (value: boolean, keyboard = false) => {
-    setGlowing(false);
     moveFocus.current = keyboard;
-    if (value) foldQuestion(message.id);
-    else mark(rowQuestions, message.id, false);
+    view.fold(value);
   };
   const step = (by: number) => {
     stepFocus = by;
@@ -227,7 +192,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
           aria-label={label}
           data-pending-question={message.id}
           onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
+            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) view.endGlow();
           }}
           onTouchStart={(event) => {
             touch.current = null;
