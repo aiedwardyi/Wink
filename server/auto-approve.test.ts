@@ -437,7 +437,7 @@ describe("unattended worktree cleanup", () => {
   let leftover = "";
   let elsewhere = "";
   const savedRoot = process.env.ORBIT_WORKTREE_ROOT;
-  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", windowsHide: true });
   const link = (target: string, path: string) => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
   const away = () => ({ unattended: true, workspace: home });
   const verdict = (command: string) => autoVerdict(bot, "PowerShell", command, away());
