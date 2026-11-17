@@ -89,7 +89,6 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
-import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
 import { asksForTyping, chatMovedOn, useShownQuestion } from "@/lib/open-question";
@@ -1491,7 +1490,7 @@ export function Composer({
           </>
           )}
           {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <CallSettingsHold bot={caller}><button
+            <button
               type="button"
               onClick={onCall}
               onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
@@ -1501,7 +1500,7 @@ export function Composer({
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
             >
               <Phone size={16} />
-            </button></CallSettingsHold>
+            </button>
           ))}
           </div>
         </div>
