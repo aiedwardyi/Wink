@@ -744,6 +744,52 @@ describe("LiveCall", () => {
     expect(voice.text).toBe("This is a l…");
   });
 
+  it("asks for a tap for sound when the phone will not play the voice, and a tap clears it", async () => {
+    const audio = { ...fakeAudio(), async capture() { return false; }, heal: vi.fn(async () => true) };
+    const { call, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    expect(call.state()).toMatchObject({ status: "paused", noSound: true });
+    expect(engine().texts).toEqual([]);
+    call.resume();
+    await flush();
+    expect(call.state().noSound).toBeUndefined();
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("flags voice lines the phone never sounded as not heard", async () => {
+    const audio = { ...fakeAudio(), async capture() { return false; } };
+    const { call, engine, posts } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    engine().events.heard("Hello?");
+    engine().events.answering();
+    engine().events.said("Hey, I'm here.");
+    engine().events.audio(new Int16Array(240));
+    engine().events.turnDone();
+    const voice = posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines as CallLine[]).filter((line) => line.who === "voice");
+    expect(voice).toEqual([expect.objectContaining({ text: "Hey, I'm here.", unheard: true })]);
+  });
+
+  it("greets once a call: a drop mid-greeting never says hello again", async () => {
+    const audio = fakeAudio();
+    const { call, engines, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    expect(engine().texts[0]).toMatch(/^\[Wink\] The call just started/);
+    engine().events.resumable("h1");
+    engine().events.answering();
+    engine().events.said("Hey, I'm");
+    engine().events.audio(new Int16Array(240));
+    audio.onStart();
+    engine().events.closed(1006, "");
+    await flush();
+    expect(engines).toHaveLength(2);
+    engine().events.ready();
+    await flush();
+    expect(engine().texts.filter((text) => text.includes("The call just started"))).toEqual([]);
+  });
+
   it("reconnects with a fresh token and the handle after GoAway", async () => {
     const { engines, posts, engine } = await started();
     engine().events.resumable("h1");

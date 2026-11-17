@@ -30,9 +30,7 @@ export function useCallControls(bot: Bot | undefined, hidden: boolean, room?: Ac
   // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
   const start = useCallback(() => {
     if (!bot) return;
-    const ctx = callAudio();
-    void ctx.resume();
-    placeCall(bot, ctx, undefined, roomId && roomKind ? { id: roomId, kind: roomKind, name: roomName } : undefined);
+    placeCall(bot, callAudio(), undefined, roomId && roomKind ? { id: roomId, kind: roomKind, name: roomName } : undefined);
   }, [bot, roomId, roomKind, roomName]);
   if (!bot) return { on: false, bar: null, composer: {} };
   const available = ready && capabilities.dictation.available && Boolean(window.ogb?.speechStart);

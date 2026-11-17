@@ -318,6 +318,24 @@ describe("call token", () => {
     expect(setup.tools[0].functionDeclarations[0].description).not.toMatch(/bot/i);
   });
 
+  it("brief opens once a call", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Open once a call: asked if you're there or can hear them, say yes in a few words.");
+  });
+
+  it("keeps a voice line the phone never sounded marked not heard, for the chat and the next session", async () => {
+    const h = harness();
+    const callId = "c-0123456789ab";
+    await h.post("lines", { callId, lines: [{ who: "user", text: "Hello?" }, { who: "voice", text: "Hey, I'm here.", unheard: true }, { who: "voice", text: "Yes, I can hear you." }] });
+    const rows = h.store.activePath(h.bot.threadId).filter((row) => row.call?.id === callId);
+    expect(rows.map((row) => row.call)).toEqual([{ id: callId }, { id: callId, voice: true, unheard: true }, { id: callId, voice: true }]);
+    const [block] = callLinesSinceLastUserTurn(rows, new Set());
+    expect(block).toContain("Voice, not heard: Hey, I'm here.");
+    expect(block).toContain("Voice: Yes, I can hear you.");
+  });
+
   it("brief talks like a person on the phone, not a script", async () => {
     const h = harness();
     await h.post("token");

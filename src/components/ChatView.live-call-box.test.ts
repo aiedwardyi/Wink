@@ -13,7 +13,7 @@ import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, played: undefined as boolean | undefined, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -33,7 +33,8 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
+    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; return fakes.played; }
+    async heal() { return true; }
     stopMic() {}
     play() {}
     endTurn() {}
@@ -129,6 +130,7 @@ afterEach(() => {
   fakes.token = undefined;
   fakes.messages = undefined;
   fakes.key = false;
+  fakes.played = undefined;
   fakes.sse = undefined;
   Reflect.deleteProperty(window, "ogb");
   Reflect.deleteProperty(navigator, "mediaDevices");
@@ -534,6 +536,28 @@ describe("live call in the message box", () => {
       expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
       expect(hint.querySelector("button, a")).toBeNull();
     } finally {
+      await unmount();
+    }
+  });
+
+  it.each([["en", "Tap to hear Atlas"], ["ko", "Atlas 목소리 듣기"]])("puts one %s sound pill in the call row when the phone won't play, gone after the tap", async (locale, label) => {
+    applyLocale(locale as "en" | "ko");
+    fakes.played = false;
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => corner(host).click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      await act(async () => fakes.engines[0]!.events.ready());
+      const pills = () => [...document.querySelectorAll<HTMLButtonElement>("[data-live-call-sound]")];
+      await vi.waitFor(() => expect(pills()).toHaveLength(1));
+      expect(frame(host).contains(pills()[0]!)).toBe(true);
+      expect(pills()[0]!.textContent).toBe(label);
+      expect(document.querySelector("[data-live-call-resume]")).toBeNull();
+      await act(async () => pills()[0]!.click());
+      await vi.waitFor(() => expect(pills()).toHaveLength(0));
+      expect(document.querySelector("[data-live-call-resume]")).toBeNull();
+    } finally {
+      applyLocale("en");
       await unmount();
     }
   });
