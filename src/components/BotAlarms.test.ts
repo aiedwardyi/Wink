@@ -109,6 +109,19 @@ describe("Alarms line in Bot details", () => {
     expect(onDelete).toHaveBeenCalledExactlyOnceWith("r2");
   });
 
+  it("ignores another click on a trash button until its delete settles", async () => {
+    let settle!: () => void;
+    const onDelete = vi.fn(() => new Promise<void>((resolve) => { settle = resolve; }));
+    render([routine({})], "en", onDelete);
+    act(() => toggle()!.click());
+    const trash = host.querySelector<HTMLButtonElement>("[data-alarm] button")!;
+    act(() => { trash.click(); trash.click(); });
+    expect(onDelete).toHaveBeenCalledOnce();
+    await act(async () => settle());
+    act(() => trash.click());
+    expect(onDelete).toHaveBeenCalledTimes(2);
+  });
+
   it("reveals the trash on hover and focus, always on touch", () => {
     render([routine({})]);
     act(() => toggle()!.click());

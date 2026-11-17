@@ -829,7 +829,7 @@ export function SettingsPanel({
               <BotAlarms
                 routines={state.routines.filter((each) => each.botId === bot.id)}
                 onDelete={(routineId) =>
-                  void api(`/api/routines/${routineId}`, { method: "DELETE" })
+                  api(`/api/routines/${routineId}`, { method: "DELETE" })
                     .then(() => dispatch({ type: "routineDeleted", routineId }))
                     .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }))
                 }

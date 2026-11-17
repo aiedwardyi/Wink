@@ -1,5 +1,5 @@
 import { ChevronDown, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -19,9 +19,11 @@ function when(schedule: Routine["schedule"], tag: string, everyDay: string) {
 }
 
 /** A bot's routines, behind one Alarms line that shows only when it has some. Its own wake_me wakes are not alarms. */
-export function BotAlarms({ routines: all, onDelete }: { routines: Routine[]; onDelete: (routineId: string) => void }) {
+export function BotAlarms({ routines: all, onDelete }: { routines: Routine[]; onDelete: (routineId: string) => Promise<unknown> | void }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
+  // a second DELETE for an id already gone fails and shows an error toast
+  const deleting = useRef(new Set<string>());
   const routines = all.filter((routine) => !routine.wake);
   if (!routines.length) return null;
   const tag = localeTag(locale);
@@ -48,7 +50,11 @@ export function BotAlarms({ routines: all, onDelete }: { routines: Routine[]; on
                 <button
                   type="button"
                   aria-label={`${t("chrome.delete")} ${routine.name}`}
-                  onClick={() => onDelete(routine.id)}
+                  onClick={() => {
+                    if (deleting.current.has(routine.id)) return;
+                    deleting.current.add(routine.id);
+                    void Promise.resolve(onDelete(routine.id)).finally(() => deleting.current.delete(routine.id));
+                  }}
                   className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary opacity-0 hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
                 >
                   <Trash2 size={14} />
