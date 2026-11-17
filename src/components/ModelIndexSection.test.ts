@@ -996,7 +996,7 @@ describe("phone model index", () => {
     const efforts = MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === row.dataset.miRow);
     act(() => row.click());
     expect(row.getAttribute("aria-expanded")).toBe("true");
-    for (const entry of efforts) expect(row.textContent).toContain(`${entry.effort} ${entry.score.toFixed(1)}`);
+    for (const entry of efforts) expect(row.textContent).toContain(entry.effort === "all" ? entry.score.toFixed(1) : `${entry.effort} ${entry.score.toFixed(1)}`);
   });
 
   it("filters by lab and keeps every lab's chip", async () => {
@@ -1024,6 +1024,14 @@ describe("phone model index", () => {
     act(() => void fifth.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(chart.querySelector("[data-mi-callout]")!.textContent).toContain(intelligence().get(model));
     expect(fifth.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("titles the phone Cost list with the input / output prices it shows", async () => {
+    await rebuild();
+    pick("Benchmark", "Cost");
+    const meta = host.querySelector("[data-mi-row]")!.closest(".model-index")!.textContent!;
+    expect(meta).toContain("Price per 1M, in / out");
+    expect(meta).not.toContain("Blended");
   });
 
   it("keeps a gap between two chart names so they never read as one", () => {

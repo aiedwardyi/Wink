@@ -1056,7 +1056,7 @@ export function ModelIndexSection() {
                   <PhoneRanked
                     rows={phoneRows}
                     value={index === "cost" ? undefined : bestValue(ranked)}
-                    title={t(index === "cost" ? "modelIndex.tooltip.blended" : AXIS_KEY[index])}
+                    title={t(index === "cost" ? "modelIndex.tooltip.cost" : AXIS_KEY[index])}
                     hint={t(index === "cost" ? "modelIndex.cheapestFirst" : "modelIndex.higherBetter")}
                     chips={chips}
                     valueText={valueText}
