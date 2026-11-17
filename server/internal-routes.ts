@@ -551,12 +551,15 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     },
     callKeyApi: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const fromThreadId = String(body.fromThreadId ?? "");
-      const from = store.bot(String(body.fromBotId ?? ""));
-      if (!from) return json(res, 403, { error: "unknown sender" });
-      if (!fromThreadId) return json(res, 400, { error: "no active thread" });
+      const source = deps.resolveCommsCaller?.(req.headers.authorization);
+      const from = source ? store.bot(source.botId) : undefined;
+      if (!source || !from || body.fromBotId !== source.botId || body.fromThreadId !== source.threadId) return json(res, 403, { error: "unknown sender" });
+      const fromThreadId = source.threadId;
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) {
+        return json(res, 403, { error: 'call_api is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
+      }
       const parsed = callApiRequestSchema.safeParse(body);
       if (!parsed.success) return json(res, 400, { error: "needs credential_id, method, and url; headers must be strings" });
       try {
