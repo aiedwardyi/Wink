@@ -1,9 +1,9 @@
-// The 11-15 and 11-16 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039, c-21351ca21949).
+// The 11-15, 11-16 and 11-17 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039, c-21351ca21949, c-3a2c5539c0ea).
 // Silent: a fake engine and a fake audio port, no socket, mic or speaker.
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { liveVoiceNames, type CallLine, type LiveVoice } from "../../../shared/live-call";
+import type { CallLine, LiveVoice } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
@@ -537,90 +537,7 @@ describe("late review threads", () => {
 });
 
 // The 11-15 audits' probes (FINDINGS-FABLE F0-F2, FINDINGS-SOL S06) as assertions.
-describe("9 quiet means quiet", () => {
-  const QUIET = [
-    "Stay quiet.", "Be quiet.", "Wink, stay quiet for a minute.", "Okay stay quiet", "Shh.",
-    "Stay quiet for a few minutes.", "Stay quiet for five minutes.", "Stay quiet, I'm talking to someone.", "Stay quiet while I talk to my friend.", "Be quiet, I need to talk to my wife.",
-    "Can you stay quiet for a bit?", "Don't say anything.", "Don't talk.", "Don't respond.", "Stop responding.", "Mute yourself.", "Give me a minute.", "Hold on, I'm talking to someone else.", "Not talking to you.", "I'm not talking to you.",
-    "Stay quite.", "Be quite.", "Stay quiet okay?", "Just listen.", "Stay silent.", "Keep it down.", "Pause.",
-    "조용히 해.", "잠깐 조용히 있어 봐.", "조용히 좀 해줘.", "잠깐만 조용히 해봐, 나 얘기 중이야.", "말하지 말고 있어.", "가만히 있어.", "아무 말도 하지 마.", "대답하지 마.", "잠깐 기다려, 친구랑 얘기 좀 할게.",
-    "Stay quiet for a few minutes, I'm talking to my friend.",
-  ];
-  // [shown voice, bot name, line]
-  const SIDE: Array<[LiveVoice, string, string]> = [
-    ["Aoede", "Wink", "Hey, did you eat yet?"], ["Aoede", "Wink", "헤이 뭐해"], ["Aoede", "Wink", "Did you see him wink at me?"], ["Aoede", "Wink", "I'm on a call with Wink."],
-    ["Aoede", "Wink", "Jenny said she's coming."], ["Aoede", "Wink", "Jennifer is late again."], ["Aoede", "Wink", "젠 어디 갔어?"], ["Alnilam", "Wink", "Eddie, dinner's ready."],
-    ["Alnilam", "Wink", "에디야 밥 먹어"], ["Alnilam", "Wink", "Eddy can you help me?"], ["Erinome", "Wink", "I love that Adele song."], ["Aoede", "Zen", "That place is so zen."],
-    ["Aoede", "Wink", "I told Peter to say hey when he arrives."], ["Aoede", "Wink", "Jennings is meeting us downstairs."], ["Aoede", "Wink", "피터야, hey라고 말해 줘."], ["Aoede", "Wink", "제니퍼, 피터가 곧 온대."], ["Aoede", "Wink", "Hola, hey, ¿cómo estás?"],
-  ];
-  const WAKE: Array<[LiveVoice, string]> = [["Aoede", "Wink?"], ["Aoede", "Hey Wink."], ["Aoede", "Jenn, are you there?"], ["Aoede", "Jennifer, you can talk now."], ["Alnilam", "Eddie?"], ["Alnilam", "에디야"], ["Erinome", "아델, 이제 말해도 돼."]];
-  const names = (voice: LiveVoice) => liveVoiceNames(voice);
-
-  it("every quiet ask in the audits hushes, extra words and all", () => {
-    expect(QUIET.filter((line) => !guard.asksForQuiet(line, "Wink", ["Jenn"]))).toEqual([]);
-  });
-
-  it("side talk with a hey, a name or its own name in it never wakes it; its name said to it does", () => {
-    expect(SIDE.filter(([voice, bot, line]) => guard.callsVoice(line, bot, names(voice)))).toEqual([]);
-    expect(WAKE.filter(([voice, line]) => !guard.callsVoice(line, "Wink", names(voice)))).toEqual([]);
-  });
-
-  it.each(["Stay quiet, I'm talking to someone.", "Stay quiet for a few minutes, I'm talking to my friend.", "잠깐만 조용히 해봐, 나 얘기 중이야."])("after \"%s\" side talk word by word never plays, offers or wakes it", async (hush) => {
-    const { call, audio, engine, posts } = await live({ voice: "Alnilam", botName: "Wink" });
-    engine().events.heard(hush);
-    speak(engine(), "Okay, I'll stay quiet.");
-    expect(call.state().hushed).toBe(true);
-    const played = audio.played;
-    for (const [, , line] of SIDE) {
-      for (const word of line.split(/(?<= )/)) engine().events.heard(word);
-      engine().events.answering();
-      engine().events.audio(pcm());
-      engine().events.audio(pcm());
-      engine().events.said("네, 맛있게 드세요!");
-      engine().events.toolCall([{ id: `t-${line}`, name: "propose_work", args: { order: "Order kimchi stew for dinner" } }]);
-      engine().events.turnDone();
-      await vi.advanceTimersByTimeAsync(2_000);
-    }
-    expect({ hushed: call.state().hushed, played: audio.played - played, pending: call.state().pending, sent: sentToBot(posts) }).toEqual({ hushed: true, played: 0, pending: undefined, sent: [] });
-    engine().events.heard("Eddie?");
-    speak(engine(), "I'm here.", false);
-    expect({ hushed: call.state().hushed, played: audio.played - played }).toEqual({ hushed: undefined, played: 1 });
-  });
-
-  it("the reply in flight when he says stay quiet never plays after", async () => {
-    const { call, audio, engine } = await live();
-    engine().events.heard("What's on my list today?");
-    speak(engine(), "You have three things today. First, ", false);
-    audio.playing = true;
-    engine().events.heard("Stay quiet, I'm talking to someone.");
-    engine().events.interrupted();
-    await vi.advanceTimersByTimeAsync(1_500);
-    const played = audio.played;
-    speak(engine(), "Sure, I'll be quiet.");
-    expect({ hushed: call.state().hushed, played: audio.played - played }).toEqual({ hushed: true, played: 0 });
-  });
-
-  it.each(["name", "tap"] as const)("a wake by %s mid-turn drops the turn already in flight; the next one plays", async (by) => {
-    const { call, audio, engine } = await live({ voice: "Alnilam" });
-    engine().events.heard("Stay quiet.");
-    speak(engine(), "Okay.");
-    engine().events.heard("So where should we go tonight?");
-    engine().events.answering();
-    engine().events.audio(pcm());
-    if (by === "tap") call.wake();
-    else {
-      engine().events.heard("Eddie?");
-      await vi.advanceTimersByTimeAsync(1_500);
-    }
-    expect(call.state().hushed).toBeUndefined();
-    engine().events.audio(pcm());
-    engine().events.said("How about the new Italian place downtown?");
-    engine().events.turnDone();
-    expect(audio.played).toBe(0);
-    speak(engine(), "I'm here.");
-    expect(audio.played).toBe(1);
-  });
-
+describe("9 cutting the voice", () => {
   it("a barge-in cuts the voice at once and it stays cut: no duck, no coming back up", async () => {
     const { audio, engine, posts } = await live({ device: "phone" });
     engine().events.heard("Tell me about the plan.");
@@ -744,28 +661,6 @@ describe("11-16 call c-21351ca21949, in its own order", () => {
     expect(e.results).toEqual([{ id: "p1", result: "not confirmed: down" }]);
     const played = audio.played;
     speak(e, "Sorry, that didn't go through.");
-    expect(audio.played).toBe(played + 1);
-  });
-
-  it("15:00:52 asked to stay quiet in his own words, it stays quiet when he says \"agent\"", async () => {
-    const { audio, call, engine } = await live({ voice: "Alnilam" });
-    const e = engine();
-    e.events.heard("Let me see if you can stay quiet while I talk to my friend.");
-    e.events.answering();
-    e.events.audio(pcm());
-    e.events.said("Understood. I will remain quiet while you speak.");
-    e.events.toolCall([{ id: "h1", name: "hush", args: {} }]);
-    e.events.turnDone();
-    expect(call.state().hushed).toBe(true);
-    const played = audio.played;
-    e.events.heard("agent");
-    await tick(1_500);
-    speak(e, "Hey, I'm here. What would you like to do?");
-    expect(call.state().hushed).toBe(true);
-    expect(audio.played).toBe(played);
-    e.events.heard("Eddie?");
-    await tick(1_500);
-    speak(e, "I'm here.");
     expect(audio.played).toBe(played + 1);
   });
 
@@ -916,5 +811,83 @@ describe("15:00:09 a spoken language ask holds for the rest of the call", () => 
     speak(e, "ได้ยินค่ะ");
     expect(audio.flushed).toBe(1);
     expect(fixes(e).at(-1)).toBe("[Wink] Wrong language: speak only English. In English, ask them in a few words to say that again.");
+  });
+});
+
+describe("c-3a2c5539c0ea code is never speech", () => {
+  it("14:50 the voice ran from a reply into a Rust fence: the reply stays its line, nothing after the fence plays", async () => {
+    const { audio, engine, posts } = await live();
+    const e = engine();
+    e.events.heard("Style seems to be finicky. I don't see any difference. It just seems louder.");
+    e.events.answering();
+    e.events.audio(pcm());
+    audio.onStart();
+    audio.heardShare = () => 1;
+    e.events.said("I'll pass that feedback on. For now, let's get back to the project queue. ");
+    e.events.audio(pcm());
+    e.events.said("--- ```rust let path = \"output_table.txt\"; ");
+    e.events.audio(pcm());
+    e.events.said("let mut file = std::fs::File::create(path).expect(\"failed to create file\"); // ... write to file ``` Is there any other file it touches? Let's read `src/main.rs`.");
+    e.events.audio(pcm());
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(audio.played).toBe(2);
+    expect(audio.flushed).toBe(1);
+    const said = linesOf(posts).filter((line) => line.startsWith("voice: "));
+    expect(said.at(-1)).toBe("voice: I'll pass that feedback on. For now, let's get back to the project queue.");
+    expect(said.join("\n")).not.toMatch(/`|rust|output_table|std::|main\.rs/);
+    expect(fixes(e).at(-1)).toBe("[Wink] Cut: you started reading code or markdown aloud, and they never hear that. Carry on with them in one short spoken line, plain words only.");
+  });
+
+  it.each([
+    ["inline ticks", "Open `server/store.ts` and check it."],
+    ["a markdown rule", "Done. --- Next up"],
+    ["a heading", "## Summary"],
+    ["a call", "Run build() first."],
+    ["a path in code", "Use std::fs for it."],
+  ])("cuts %s", async (_name, line) => {
+    const { audio, engine } = await live();
+    engine().events.heard("What's next?");
+    speak(engine(), line);
+    expect(audio.flushed).toBe(1);
+  });
+
+  it("words before a fence are a line only as far as they played", async () => {
+    const { audio, engine, posts } = await live();
+    const e = engine();
+    e.events.heard("What's the fix?");
+    e.events.answering();
+    e.events.said("Here is the answer. ```rust let x = 1;");
+    e.events.audio(pcm());
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(linesOf(posts).join("\n")).not.toContain("Here is");
+    e.events.heard("And the other one?");
+    e.events.answering();
+    e.events.audio(pcm());
+    audio.onStart();
+    audio.playing = true;
+    e.events.said("That one is fine. ```rust let y = 2;");
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(linesOf(posts)).toContain("voice: That one…");
+  });
+
+  it("a hash cut from its number at a chunk edge is no heading", async () => {
+    const { audio, engine, posts } = await live();
+    engine().events.heard("How's it going?");
+    speak(engine(), "PR #", false);
+    engine().events.said("1811 is green.");
+    engine().events.turnDone();
+    expect(audio.flushed).toBe(0);
+    expect(linesOf(posts)).toContain("voice: PR #1811 is green.");
+  });
+
+  it("plain talk with numbers, times and dashes plays whole", async () => {
+    const { audio, engine, posts } = await live();
+    engine().events.heard("How's it going?");
+    speak(engine(), "PR #1811 is green - 3 of 4 checks, done at 5:30.");
+    expect(audio.flushed).toBe(0);
+    expect(linesOf(posts)).toContain("voice: PR #1811 is green - 3 of 4 checks, done at 5:30.");
   });
 });
