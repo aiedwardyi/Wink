@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { isVoiceLine } from "../shared/live-call.ts";
-import { isOpenRequest, scanQuestion, typedReply } from "../shared/open-question.ts";
+import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
@@ -50,9 +50,9 @@ function route(gate: QuickGate): ReturnType<typeof nominate> {
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return "main";
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return "main";
   if (!gate.instance.fork && !gate.instance.generateText) return "main";
-  // typing answers the pinned card, unless it only types past its choices
-  const question = scanQuestion(gate.messages);
-  if (question && typedReply(question, gate.text) !== null) return "main";
+  // typing answers a pinned card without choices, or a tapped choice's text
+  const question = scanQuestion(gate.messages)?.card;
+  if (question && (!question.staysOpen || !question.options.length || question.options.includes(gate.text.trim()))) return "main";
   if (gate.messages.some(isOpenRequest)) return "main";
   // a turn in another thread (a room hand-off, a routine) cannot take the line, so the helper answers or hands off any of it
   if ((bot.activeThreadId ?? threadId) !== threadId) return "quick";

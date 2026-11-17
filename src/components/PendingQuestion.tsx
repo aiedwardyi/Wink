@@ -4,19 +4,41 @@
 // its choices, and a tap on the row opens the card again. It arrives as the row
 // when the box already holds a draft, a reply or attachments. Unlike an approval
 // it never takes the composer over: the bot keeps working, and typing a reply
-// answers it only when it has no choices. The x on the row and a sideways swipe
-// across it dismiss the question, exactly like the open card's x.
-import { memo, useEffect, useLayoutEffect, useRef, type MouseEvent } from "react";
+// answers it only when it has no choices. The row's x or a sideways swipe only
+// hides it here; the bot still waits, and a count on the composer brings it back.
+import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { useQuestionView } from "@/lib/open-question";
 import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
+
+// Per question id, outside the store, so each chat's question stays as it was left.
+const rowQuestions = new Set<string>();
+const shrunkQuestions = new Set<string>();
+const hiddenQuestions = new Set<string>();
+const glowedQuestions = new Set<string>();
+const watchers = new Set<() => void>();
+function subscribe(notify: () => void) {
+  watchers.add(notify);
+  return () => { watchers.delete(notify); };
+}
+function mark(questions: Set<string>, id: string, value: boolean) {
+  if (value) questions.add(id);
+  else questions.delete(id);
+  for (const notify of watchers) notify();
+}
+const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
+
+/** Shows a question as its row from now on; it never shrinks by itself after that. */
+export function foldQuestion(id: string) {
+  shrunkQuestions.add(id);
+  mark(rowQuestions, id, true);
+}
 
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
 let stepFocus = 0;
@@ -64,8 +86,20 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   onDismiss: () => void;
 }) {
   const { t } = useI18n();
-  const view = useQuestionView(message.id, { typed, attached, replying, movedOn }, reducedMotion());
-  const { folded, glowing } = view;
+  const drafting = Boolean(typed.trim()) || attached > 0 || replying;
+  // read in render so a question arriving over a draft never paints as the card first
+  const folded = useMarked(rowQuestions, message.id) || (drafting && !shrunkQuestions.has(message.id));
+  const hidden = useMarked(hiddenQuestions, message.id);
+  const [glowing, setGlowing] = useState(() => !glowedQuestions.has(message.id) && !reducedMotion());
+  useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
+  const draft = useRef({ typed, attached });
+  useEffect(() => {
+    const was = draft.current;
+    draft.current = { typed, attached };
+    if (shrunkQuestions.has(message.id) || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
+    setGlowing(false);
+    foldQuestion(message.id);
+  }, [typed, attached, drafting, movedOn, message.id]);
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
   const rowButton = useRef<HTMLButtonElement>(null);
@@ -86,17 +120,24 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     }
     stepFocus = 0;
   }, []);
+  // a question that leaves mid-glow must not pulse again when it comes back;
   // focus follows only a key press, as a scripted move after a click inherits the ring of any earlier key press
   const fold = (value: boolean, keyboard = false) => {
+    setGlowing(false);
     moveFocus.current = keyboard;
-    view.fold(value);
+    if (value) foldQuestion(message.id);
+    else mark(rowQuestions, message.id, false);
+  };
+  const hide = () => {
+    setGlowing(false);
+    mark(hiddenQuestions, message.id, true);
   };
   const step = (by: number) => {
     stepFocus = by;
     onStep?.(by);
   };
   const card = message.card;
-  if (!card) return null;
+  if (!card || hidden) return null;
   const lead = count > 1 ? (
     <span ref={arrows} className="flex shrink-0 items-center gap-0.5">
       <button type="button" onClick={() => step(-1)} disabled={index <= 0} aria-label={t("ask.previousQuestion")} title={t("ask.previousQuestion")} className={ARROW}>
@@ -109,6 +150,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     </span>
   ) : <span className={BADGE}>{count}</span>;
   const label = t("ask.asks", { name: askerName });
+  // the row's x only hides it here, the card's x dismisses the question
   const controls = (open: boolean) => (
     <>
       <button
@@ -124,9 +166,9 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
       </button>
       <button
         type="button"
-        onClick={onDismiss}
-        aria-label={t("chat.dismissQuestion")}
-        title={t("chat.dismissQuestion")}
+        onClick={open ? onDismiss : hide}
+        aria-label={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
+        title={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
         className={cn(CONTROL, "-mr-1 pointer-coarse:after:-left-1 pointer-coarse:after:-right-3")}
       >
         <X size={14} aria-hidden="true" />
@@ -160,7 +202,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             if (!start || !end) return;
             const dx = end.clientX - start.x;
             if ((start.axis ?? lockAxis(dx, end.clientY - start.y)) !== "x") return;
-            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) onDismiss();
+            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) hide();
           }}
           onTouchCancel={(event) => {
             slide.current = null;
@@ -192,7 +234,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
           aria-label={label}
           data-pending-question={message.id}
           onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) view.endGlow();
+            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
           }}
           onTouchStart={(event) => {
             touch.current = null;
@@ -323,6 +365,25 @@ function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (c
       {/* its count and label are set by the fit above */}
       <button ref={more} hidden type="button" onClick={onMore} className={ROW_CHIP} />
     </span>
+  );
+}
+
+/** A hidden question's count on the composer's edge: a tap brings its row back. */
+export function HiddenQuestionDot({ id, count }: { id: string; count: number }) {
+  const { t } = useI18n();
+  const hidden = useMarked(hiddenQuestions, id);
+  if (!hidden) return null;
+  return (
+    <button
+      type="button"
+      data-hidden-question={id}
+      onClick={() => mark(hiddenQuestions, id, false)}
+      aria-label={t("ask.showQuestion")}
+      title={t("ask.showQuestion")}
+      className={cn(BADGE, "absolute -left-0.5 -top-0.5 z-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5")}
+    >
+      {count}
+    </button>
   );
 }
 

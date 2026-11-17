@@ -19,7 +19,7 @@ import {
 import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
 import { answerText } from "../../shared/open-question";
-import { answerPatch, canAnswerCard, settledBy, typedAnswer } from "@/lib/open-question";
+import { canAnswerCard } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -103,27 +103,6 @@ export function visibleMessages(bot: Pick<Bot, "messages" | "activeLeafId" | "ha
   const visible = walkVisible(bot.messages, leafId, hasMore);
   visibleCache.set(bot.messages, { leafId, hasMore, visible });
   return visible;
-}
-
-/** Undoes a rejected send's settlement, unless something settled the card since. */
-function reopenCard(state: AppState, threadId: string, settles: { cardId: string; answered: string }): AppState {
-  const bot = state.bots.find((candidate) => candidate.threadId === threadId);
-  if (bot && settledBy(bot.messages, settles)) return patchCard(state, bot.id, settles.cardId, { answered: undefined });
-  const group = state.groups.find((candidate) => candidate.threadId === threadId);
-  return group && settledBy(group.messages, settles) ? patchGroupCard(state, group.id, settles.cardId, { answered: undefined }) : state;
-}
-
-/** The open question a typed send settles in chat; a queued line's Send now was typed before. */
-function typedPast(state: AppState, action: Action) {
-  if (action.type === "send" && !action.queueId) {
-    const bot = state.bots.find((candidate) => candidate.id === action.botId);
-    return bot ? typedAnswer(visibleMessages(bot), action.text) : null;
-  }
-  if (action.type === "sendGroup" && !action.cardId) {
-    const group = state.groups.find((candidate) => candidate.id === action.groupId);
-    return group ? typedAnswer(group.messages, action.text) : null;
-  }
-  return null;
 }
 
 // Shared across callers, so nobody may mutate the returned array.
@@ -352,7 +331,11 @@ export function reducer(state: AppState, action: Action): AppState {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
       const card = bot?.messages.find((message) => message.id === action.messageId)?.card;
       if (bot && !canAnswerCard(visibleMessages(bot), action.messageId)) return state;
-      return withMascotMotion(patchCard(state, action.botId, action.messageId, answerPatch(card, action.answer)), action.botId, "working");
+      const patch: Partial<OptionCardData> = { answered: action.answer };
+      // talking past the first-run quiz hides it; live asks stay until
+      // resolved, and an ask_user question reads as answered, not dismissed
+      if (!card?.requestId && !card?.askUser) patch.dismissed = true;
+      return withMascotMotion(patchCard(state, action.botId, action.messageId, patch), action.botId, "working");
     }
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
@@ -805,8 +788,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "sendQueuedNow":
       return state;
     case "send": {
-      const typed = typedPast(state, action);
-      const dismissed = dismissOnboardingCard(typed ? patchCard(state, action.botId, typed.question.id, { answered: typed.answered }) : state, action.botId);
+      const dismissed = dismissOnboardingCard(state, action.botId);
       const bot = dismissed.bots.find((candidate) => candidate.id === action.botId);
       if (!bot) return withMascotMotion(dismissed, action.botId, "working");
       const sendId = action.sendId ?? crypto.randomUUID();
@@ -823,7 +805,6 @@ export function reducer(state: AppState, action: Action): AppState {
           text: action.text,
           at: Date.now(),
           after: action.after,
-          settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
       };
       if (paint.kind === "thinking") {
@@ -840,16 +821,12 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!group) return state;
       const sendId = action.sendId ?? crypto.randomUUID();
       const paint = acceptedSendPaint({ alreadyBusy: Boolean(group.busyBotId) });
-      const typed = typedPast(state, action);
-      if (typed) state = patchGroupCard(state, action.groupId, typed.question.id, { answered: typed.answered });
       return {
         ...state,
         acceptedSends: rememberAcceptedSend(state.acceptedSends, action.threadId ?? group.threadId, {
           sendId,
           kind: paint.kind,
           text: action.text,
-          answersCard: action.cardId,
-          settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
       };
     }
@@ -864,8 +841,6 @@ export function reducer(state: AppState, action: Action): AppState {
       );
       const acceptedSends = forgetAcceptedSend(state.acceptedSends, action.threadId, action.sendId);
       let next: AppState = { ...state, acceptedSends };
-      // a sync hold queued the send; only its paint goes
-      if (rejected?.settles && !action.held) next = reopenCard(next, action.threadId, rejected.settles);
       if (
         rejected?.kind === "thinking" &&
         action.botId &&
@@ -1381,7 +1356,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.type === "updateBot"
           ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
           : undefined;
-      const typedBeforeSend = typedPast(stateRef.current, action);
       const quizBeforeSend = (() => {
         if (action.type !== "send") return undefined;
         const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
@@ -1469,8 +1443,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
-          // only once the server took the send, so it routed it with the question still open; a line in the transcript settles it there
-          const saveTyped = (queued: boolean) => { if (typedBeforeSend && (queued || !typedBeforeSend.byLine)) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           const post = () =>
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1537,12 +1509,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
               });
-              if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId, held: true });
+              if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
             }
             if (typeof settledThread === "string") {
               rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.queued === true });
             }
-            saveTyped(body?.queued === true);
           };
           const sending = post()
             .then(settle)
@@ -1554,7 +1525,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
-                saveTyped(false);
                 return;
               }
               // A queued send stays off the transcript until drain; the same
@@ -1638,8 +1608,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }).catch(showError);
           } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
             const asked = bot?.messages.find((m) => m.id === action.messageId);
-            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined, actedAt: Date.now() });
-            void holdReload(persistCard(action.botId, action.messageId, answerPatch(card, action.answer))
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined, actedAt: Date.now() });
+            void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
               .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
           break;
@@ -1663,7 +1633,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const messages = room?.messages ?? [];
           if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
-          const text = asked ? answerText(asked, action.answer) : action.answer;
+          const text = asked ? answerText(messages, asked, action.answer) : action.answer;
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
             .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId, actedAt }); }));
           break;
@@ -1811,7 +1781,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
-          const saveTyped = () => { if (typedBeforeSend && !typedBeforeSend.byLine) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
@@ -1846,7 +1815,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 // idle: no turn will start, so settle it like a queued send or Thinking never ends
                 rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.idle === true });
               }
-              saveTyped();
             })
             .catch(async (error) => {
               cancelledSendsRef.current.delete(sendId);
@@ -1855,7 +1823,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (accepted && typeof threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
-                saveTyped();
                 return;
               }
               if (typeof threadId === "string") {

@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { lineSettles } from "../shared/open-question.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { planCompaction } from "./context-compaction.ts";
 import { SendSequencer } from "./send-idempotency.ts";
@@ -112,16 +111,14 @@ it("the model still reads a tapped answer on replay", async () => {
 });
 
 it.each([
-  { name: "without choices", card: { options: [], staysOpen: true as const }, text: "Polaris", saves: false },
-  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Polaris", saves: true },
-  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] }, text: "Polaris", saves: false },
-  { name: "with choices that stays open, typed as a choice", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Can't tonight", saves: false },
-])("the client saves a typed answer only when its line leaves a question $name open", async ({ card, text, saves }) => {
+  { name: "without choices", card: { options: [], staysOpen: true as const }, text: "Polaris", settles: true },
+  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Polaris", settles: false },
+  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] }, text: "Polaris", settles: true },
+  { name: "with choices that stays open, typed as a choice", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Can't tonight", settles: true },
+])("a typed line that settles a question $name takes no second answer", async ({ card, text, settles }) => {
   const h = harness();
   const asked = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Which star?", askUser: true, ...card } });
-  const byLine = lineSettles(h.store.activePath(h.bot.threadId), asked, text);
-  expect(byLine).toBe(!saves);
   h.busy();
   expect((await h.send({ text })).steered).toBe(true);
-  expect(await h.patchCard(asked.id, { answered: text })).toBe(byLine ? 409 : 200);
+  expect(await h.patchCard(asked.id, { answered: text })).toBe(settles ? 409 : 200);
 });

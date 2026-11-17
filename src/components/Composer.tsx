@@ -66,7 +66,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -92,7 +92,7 @@ import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { asksForTyping, chatMovedOn, useShownQuestion } from "@/lib/open-question";
+import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -284,8 +284,12 @@ export function Composer({
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
-  const shownQuestion = useShownQuestion(chatMessages, threadMessages);
-  const { question } = shownQuestion;
+  const pinned = pinnedQuestion(chatMessages, threadMessages);
+  const questions = pinned ? openQuestions(chatMessages) : [];
+  // the row's arrows show an older open question until a newer one arrives
+  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
+  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
+  const questionIndex = question ? questions.indexOf(question) : -1;
   const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
   const questionAsker = question
     ? group
@@ -1238,9 +1242,14 @@ export function Composer({
             key={question.id}
             message={question}
             askerName={questionAsker}
-            count={shownQuestion.count}
-            index={shownQuestion.index}
-            onStep={shownQuestion.step}
+            count={questions.length}
+            index={questionIndex}
+            onStep={(step) => {
+              const next = questions[questionIndex + step];
+              if (!next || !pinned) return;
+              foldQuestion(next.id);
+              setQuestionPick({ id: next.id, newest: pinned.id });
+            }}
             typed={text}
             attached={attachments.length}
             replying={Boolean(replyTo)}
@@ -1302,6 +1311,7 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
+          {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
             disabled={locked}
@@ -1445,7 +1455,7 @@ export function Composer({
               ? t("composer.finishSetup")
               : recording
               ? t("composer.listening")
-              : asksForTyping(question)
+              : pinned && !pinned.card?.options.length
               ? t("ask.typeAnswer")
               : busyChrome.placeholder
           }

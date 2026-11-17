@@ -13,10 +13,6 @@ export type AcceptedSend = {
   at?: number;
   /** Sent "after this turn": waits even on an engine that could steer it. */
   after?: boolean;
-  /** A tapped choice: its placeholder hides like the line it stands for. */
-  answersCard?: string;
-  /** The open card this typed send settled at once; a rejection reopens it. */
-  settles?: { cardId: string; answered: string };
 };
 
 export type AcceptedSends = Record<string, AcceptedSend[]>;
@@ -27,7 +23,7 @@ export function withAcceptedMessages(
   pending: readonly { queueId: string; text: string; at?: number; sendId?: string }[] = [],
 ): Message[] {
   const seen = new Set(messages.flatMap((message) => [message.id, message.sendId, message.queueId]));
-  const waiting: Array<Pick<AcceptedSend, "sendId" | "text" | "at" | "answersCard">> = [
+  const waiting = [
     ...pending.filter((entry) => !entry.sendId || !seen.has(entry.sendId)).map((entry) => ({ sendId: entry.queueId, text: entry.text, at: entry.at })),
     ...accepted.filter((entry) => !pending.some((held) => held.sendId === entry.sendId)),
   ];
@@ -43,7 +39,6 @@ export function withAcceptedMessages(
       text: entry.text,
       at: entry.at ?? 0,
       placeholder: true,
-      answersCard: entry.answersCard,
     });
   }
   return added.length ? [...messages, ...added] : messages;

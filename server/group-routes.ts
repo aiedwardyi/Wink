@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { answeredAgain, askUserCardPatchSchema, settledAsk } from "./ask-user.ts";
+import { askUserCardPatchSchema, settledAsk } from "./ask-user.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
@@ -20,7 +20,7 @@ import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/p
 import { hostRoomFiles, stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
-import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
+import { scanQuestion } from "../shared/open-question.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
@@ -119,7 +119,15 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
   };
   const channelTaskBlocked = (group: GroupRecord) =>
     groupIsWorking(group) ||
-    store.groupTasks(group.id).some((task) => store.messagesFor(task.threadId).some(isOpenRequest));
+    store.groupTasks(group.id).some((task) =>
+      store.messagesFor(task.threadId).some(
+        (message) =>
+          message.kind === "options" &&
+          message.card?.requestId &&
+          !message.card.answered &&
+          !message.card.dismissed,
+      ),
+    );
   return {
     order: async (req: IncomingMessage, res: ServerResponse) => {
       const parsed = z.object({ groupIds: z.array(z.string()) }).safeParse(await readBody(req));
@@ -446,9 +454,6 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
-      // a retry of a saved send replays its receipt below
-      const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(() => store.activePath(threadId), text);
-      if (again) return json(res, 409, { error: "question already settled", message: clientMessage(again) });
       // nobody was asked to answer: no busy patch will come to end the sender's Thinking
       const idle = () => !groupIsWorking(store.group(group.id) ?? group);
       const receipt = await sendSequencer.run(

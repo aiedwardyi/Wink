@@ -5,7 +5,7 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { answeredAgain, closedAskNotes, settledAsk } from "./ask-user.ts";
+import { closedAskNotes, settledAsk } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -333,9 +333,6 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // Send now on a held send: the user acted when they queued it
       const actedAt = (queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId)?.actedAt : undefined) ?? sentAt;
-      // a retry of a saved send replays its receipt below
-      const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(() => store.activePath(threadId), text);
-      if (again) return json(res, 409, { error: "question already settled", message: clientMessage(again) });
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
