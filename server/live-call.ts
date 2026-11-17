@@ -53,8 +53,6 @@ type LiveCallDeps = {
   fetch?: typeof fetch;
   now?: () => number;
   catalog?: ModelCatalogLookup;
-  /** A minted token is the pick-up: a refused one leaves a ringing bot call ringing. */
-  answered?: (botId: string) => void;
   roomTail?: (room: CallRoom, host: string) => RoomVoiceTail | undefined;
 };
 
@@ -330,7 +328,6 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!response.ok) return json(res, response.status === 429 ? 429 : 502, { error: googleError(response.status, data) });
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
-    deps.answered?.(bot.id);
     return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice, locale, style });
   };
 
