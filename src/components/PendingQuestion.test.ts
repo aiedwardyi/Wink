@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -187,6 +190,17 @@ describe("question folding", () => {
     expect(phone[0].target).toBeGreaterThanOrEqual(44);
     expect(phone[0].target - phone[0].height).toBeLessThanOrEqual(size(list, "gap-y", "pointer-coarse:") || size(list, "gap"));
     expect(choices.every((choice) => choice.classList.contains("text-center"))).toBe(true);
+  });
+
+  it("keeps the terminal skins' numbered choices left-aligned, in 44px touch rows that never overlap", async () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "styles.css"), "utf8");
+    const terminal = css.slice(css.indexOf('@scope (:is([data-skin="terminal"]')).split(/\r?\n\}/)[0];
+    expect(terminal).toMatch(/\[data-term-choices\] \{[^}]*gap: 0;/);
+    expect(terminal).toMatch(/\[data-term-choices\] > button \{[^}]*min-width: 0;[^}]*text-align: left;/);
+    // the list has no gap for a hit area to reach into, so each choice is its whole 44px target
+    expect(terminal).toMatch(/@media \(pointer: coarse\) \{\s*\[data-ask-choices\] > button \{ min-height: 44px; \}\s*\[data-ask-choices\] > button::after \{ inset-block: 0; \}/);
+    await render("terminal-choices", ["A", "Neither"]);
+    expect(host.querySelector("[data-term-choices]")?.matches("[data-ask-choices]")).toBe(true);
   });
 
   it("localizes folding and reopening in Korean", async () => {

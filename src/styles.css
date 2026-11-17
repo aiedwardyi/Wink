@@ -2233,9 +2233,17 @@ html:lang(ko) {
   [data-term-choices] > button {
     border: 0;
     background: transparent;
+    min-width: 0;
     padding: 2px 0;
+    text-align: left;
     font-weight: 400;
     counter-increment: term-choice;
+  }
+
+  /* the list has no gap for a hit area to reach into, so each choice is its whole 44px target */
+  @media (pointer: coarse) {
+    [data-ask-choices] > button { min-height: 44px; }
+    [data-ask-choices] > button::after { inset-block: 0; }
   }
 
   [data-term-choices] > button:not([class*="text-danger"]):not([class*="text-ink-secondary"]) {

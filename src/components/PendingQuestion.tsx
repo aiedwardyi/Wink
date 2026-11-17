@@ -386,7 +386,7 @@ export function AskChoices({ options, onPick }: { options: string[]; onPick: (ch
   if (!options.length) return null;
   // 34px pills on phone too, their 44px touch targets splitting the gap between rows
   return (
-    <div data-term-choices className="mt-2.5 flex shrink-0 flex-wrap gap-2 pointer-coarse:gap-y-2.5">
+    <div data-term-choices data-ask-choices className="mt-2.5 flex shrink-0 flex-wrap gap-2 pointer-coarse:gap-y-2.5">
       {options.map((choice) => (
         <button
           key={choice}
