@@ -410,7 +410,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
-  readSyncOperations,
+  readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
   syncOperationsSignature,
@@ -426,7 +426,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1095,6 +1095,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
   dataDir: DATA_DIR,
@@ -1467,6 +1468,7 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 
 let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
+let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
 
 function syncSectionId(section: string | undefined): string | null {
@@ -1609,7 +1611,7 @@ function localOrderChanges(assign: boolean): Record<string, unknown> {
   return { sectionOrder, itemOrder };
 }
 
-function profileSyncStatus() {
+async function profileSyncStatus() {
   const folder = profileSyncSettings.folder;
   if (!folder) {
     return {
@@ -1623,7 +1625,7 @@ function profileSyncStatus() {
     };
   }
   ensureProfileSyncWorkspace(folder);
-  const remote = syncOperationsStatus(folder);
+  const remote = await syncOperationsStatus(folder);
   const status = remote.invalidFiles.length > 0
     ? "needs-review"
     : remote.operations > 0
@@ -1750,13 +1752,17 @@ function applySyncedBotFields(
 }
 
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
-function importProfileChanges(): void | Promise<void> {
+async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
-  const remote = readSyncOperations(folder);
+  profileImports++;
+  // a newer import's read is the newer log, so this one drops too
+  const remote = await readSyncOperationsFor(folder, () => `${profileImports}\n${profileSyncSettings.folder}\n${profileSyncSettings.workspaceId}\n${profileSyncSettings.syncChats}`);
+  // profileSyncSeen is untouched, so the next poll reads the new target
+  if (!remote) return;
   if (remote.invalidFiles.length && signature !== profileSyncSeen.signature) {
     console.warn(`bot sync: skipped unreadable files [${remote.invalidFiles.slice(0, 5).join(", ")}]`);
   }
@@ -2292,6 +2298,7 @@ function initializeThreadSyncV2() {
     },
     rooms: roomThreads,
     bootReads,
+    painted: () => syncPainted,
   });
   return threadSyncV2;
 }
@@ -2406,14 +2413,25 @@ const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
 if (REMOTE_HOST !== undefined) startDevicePresence();
 else void remoteRetry.refresh();
 
+const memorySyncs = new Map<string, Promise<void>>();
+
+// one pass per bot at a time: a pass applies against the snapshots it read
 function syncMemory(botId: string): void {
+  const run = (memorySyncs.get(botId) ?? Promise.resolve()).then(() => syncMemoryOnce(botId));
+  memorySyncs.set(botId, run);
+  void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
+}
+
+async function syncMemoryOnce(botId: string): Promise<void> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
   if (!store.bot(botId)) return;
   const folder = profileSyncSettings.folder;
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger });
+    const snapshots = await readMemorySnapshots(folder, botSyncId);
+    if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
+    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
     // the poll runs for every idle bot, so only changed files refresh the check
     if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
   } catch (error) {
@@ -2996,7 +3014,11 @@ const unlandedWork = createUnlandedWork({
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
-startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });
+startupTiming.afterPaint("unlanded", async () => {
+  // the worker read each chat's reports; a chat loaded since then has them in memory
+  const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
+  for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+});
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -8397,7 +8419,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── shared bot profile sync ───────────────────────────────────────
     if (method === "GET" && path === "/api/profile-sync") {
       return json(res, 200, {
-        ...profileSyncStatus(),
+        ...(await profileSyncStatus()),
         chatSyncVersion: threadSyncGate.enabled ? 2 : 1,
         chatSyncWaitingFor: threadSyncGate.waitingFor,
         chatSyncMigration: threadSyncV2?.migrationStatus() ?? null,
@@ -8417,7 +8439,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
         syncAllThreads();
         publishDeviceRecord();
-        return json(res, 200, profileSyncStatus());
+        return json(res, 200, await profileSyncStatus());
       } catch (error) {
         return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -8427,7 +8449,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       threadSyncV2?.stop();
       profileSyncSettings.folder = null;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
     if (method === "PUT" && path === "/api/profile-sync/chats") {
       const body = await readBody(req);
@@ -8436,7 +8458,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       profileSyncSettings.syncChats = body.enabled;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
       syncAllThreads();
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
 
     if (method === "GET" && path === "/api/key-uses") {
@@ -8555,15 +8577,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
       const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
-        const tail = limit === undefined ? null : chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
+      const page = async (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const tail = limit === undefined ? null : await chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
         if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
         return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
       };
       if (typeof open === "string") warmFirst(open);
+      // taken before the cold pages are read off this thread: an event meanwhile replays, and the client folds repeats by id
+      const cursor = `${STREAM_ID}:${lastSeq}`;
+      const [bots, groups] = await Promise.all([
+        Promise.all(store.bots.map(async (bot) => ({ ...publicBotRecord(bot), ...(await page(bot)) }))),
+        Promise.all(store.groups.map(async (g) => ({ ...publicGroupState(g), ...(await page(g)) }))),
+      ]);
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...page(bot) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g) })),
+        bots,
+        groups,
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -8571,7 +8599,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }),
         ),
         queued: waitingSends(),
-        cursor: `${STREAM_ID}:${lastSeq}`,
+        cursor,
         ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });
     }
@@ -9528,6 +9556,7 @@ phoneAccess.start(handleRequest).catch((error) => {
 startupTiming.afterPaint("bootReads", () => startBootReads({
   dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
   notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
+  reportThreads: store.bots.map((bot) => bot.threadId),
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));

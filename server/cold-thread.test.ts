@@ -2,9 +2,10 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatListPage, warmChats } from "./cold-thread.ts";
+import { chatListPage, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
+import { messageDatabase } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -20,11 +21,11 @@ function fullPage(threadId: string, limit: number, chat?: Chat) {
   return { messages: all.slice(start), hasMore: start > 0 };
 }
 
-function expectSamePages(threadId: string) {
+async function expectSamePages(threadId: string) {
   for (const limit of [0, 1, 50, 200, 1000])
     for (const chat of [undefined, {}, { unread: true }, { unread: true, readAt: 150 }]) {
       const store = fresh();
-      expect(chatListPage(store, threadId, limit, chat), `limit ${limit} ${JSON.stringify(chat)}`).toEqual(fullPage(threadId, limit, chat));
+      expect(await chatListPage(store, threadId, limit, chat), `limit ${limit} ${JSON.stringify(chat)}`).toEqual(fullPage(threadId, limit, chat));
       expect(store.loaded(threadId)).toBe(false);
     }
 }
@@ -32,17 +33,17 @@ function expectSamePages(threadId: string) {
 const card = (subtitle: string): Omit<Message, "id" | "at"> => ({ role: "bot", kind: "options", card: { title: "Question", askUser: true, subtitle, options: ["Yes"] } });
 
 describe("chat list page from a thread's tail", () => {
-  it("matches the loaded page on a long thread with tool rows", () => {
+  it("matches the loaded page on a long thread with tool rows", async () => {
     const bot = fresh().createBot({}, { seedMessages: false });
     const store = fresh();
     for (let i = 0; i < 300; i++) {
       if (i % 40 === 0) store.appendMessage(bot.threadId, { role: "user", kind: "text", text: `go ${i}`, at: i });
       else store.appendMessage(bot.threadId, { role: "bot", kind: "activity", at: i, tool: { name: "Bash", ok: true, detail: { input: `step ${i}`, output: ["ok"] } } });
     }
-    expectSamePages(bot.threadId);
+    await expectSamePages(bot.threadId);
   });
 
-  it("matches when a reply quotes a question older than the tail", () => {
+  it("matches when a reply quotes a question older than the tail", async () => {
     const bot = fresh().createBot({}, { seedMessages: false });
     const store = fresh();
     store.appendMessage(bot.threadId, card("Which db?"));
@@ -51,34 +52,43 @@ describe("chat list page from a thread's tail", () => {
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Re: “Which db?”\nPostgres" });
     for (let i = 0; i < 120; i++) store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `ok ${i}` });
     expect(fullPage(bot.threadId, 200, {}).messages).toHaveLength(122);
-    expectSamePages(bot.threadId);
+    await expectSamePages(bot.threadId);
   });
 
-  it("matches on a branched thread", () => {
+  it("matches on a branched thread", async () => {
     const bot = fresh().createBot({}, { seedMessages: false });
     const store = fresh();
     const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "start" });
     for (let i = 0; i < 260; i++) store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `ok ${i}` });
     store.branchMessage(bot.threadId, first.id, "start over");
     for (let i = 0; i < 20; i++) store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `again ${i}` });
-    expectSamePages(bot.threadId);
+    await expectSamePages(bot.threadId);
     store.setActiveLeaf(bot.threadId, store.messagesFor(bot.threadId)[200]!.id);
-    expectSamePages(bot.threadId);
+    await expectSamePages(bot.threadId);
   });
 
-  it("matches on rows imported from a legacy file without parent ids", () => {
+  it("matches on rows imported from a legacy file without parent ids", async () => {
     const bot = fresh().createBot({}, { seedMessages: false });
     const legacy = Array.from({ length: 300 }, (_, i) => ({ id: `m${i}`, at: i, role: i % 30 ? "bot" : "user", kind: "text", text: `line ${i}` }));
     writeFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), JSON.stringify(legacy));
     fresh();
-    expectSamePages(bot.threadId);
+    await expectSamePages(bot.threadId);
   });
 
-  it("leaves a loaded thread to the store", () => {
+  it("leaves a loaded thread to the store", async () => {
     const bot = fresh().createBot({}, { seedMessages: false });
     const store = fresh();
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
-    expect(chatListPage(store, bot.threadId, 200)).toBeNull();
+    expect(await chatListPage(store, bot.threadId, 200)).toBeNull();
+  });
+
+  it("leaves a thread loaded during its read to the store", async () => {
+    const bot = fresh().createBot({}, { seedMessages: false });
+    fresh().appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    const store = fresh();
+    const page = chatListPage(store, bot.threadId, 200);
+    store.messagesFor(bot.threadId);
+    expect(await page).toBeNull();
   });
 
   it("reads the head without loading the thread", () => {
@@ -110,6 +120,25 @@ describe("warm chats", () => {
     await start();
     await vi.waitFor(() => expect(bots.every((bot) => store.loaded(bot.threadId))).toBe(true));
     expect(read.mock.calls.map(([threadId]) => threadId)).toEqual([bots[2]!.threadId, bots[0]!.threadId, bots[1]!.threadId]);
+  });
+
+  it("never loads a chat over the row cap, and warms the rest", async () => {
+    const setup = fresh();
+    const [big, small] = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];
+    setup.appendMessage(small!.threadId, { role: "user", kind: "text", text: "hi" });
+    const db = messageDatabase();
+    const insert = db.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, 'user', 'text', 'row', ?)");
+    db.exec("BEGIN");
+    for (let index = 0; index <= WARM_ROW_CAP; index++) insert.run(big!.threadId, `row-${index}`, index, JSON.stringify({ id: `row-${index}`, at: index, role: "user", kind: "text", text: "row" }));
+    db.exec("COMMIT");
+    const store = fresh();
+    const read = vi.spyOn(store, "messagesFor");
+    let start!: () => Promise<void>;
+    warmChats(store, () => [big!, small!], (begin) => (start = begin));
+    await start();
+    await vi.waitFor(() => expect(store.loaded(small!.threadId)).toBe(true));
+    expect(read.mock.calls.map(([threadId]) => threadId)).toEqual([small!.threadId]);
+    expect(store.loaded(big!.threadId)).toBe(false);
   });
 
   it("keeps warming past a thread that fails to load", async () => {
