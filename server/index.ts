@@ -6709,7 +6709,7 @@ _loadPending();
   const dropped = discardOrphanedDelegations(commsBus);
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
-void bootReads().then((rows) => recoverHandedMail(store, rows.handed));
+void bootReads().then((rows) => recoverHandedMail(store, rows.handed, performance.timeOrigin));
 
 configureRoomAsks({
   store,
@@ -9476,7 +9476,8 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error));
+// the boot drain has already run by the time the worker replies
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).then(drainQueuedSends, (error: unknown) => console.warn("[quick] recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();

@@ -40,7 +40,7 @@ export function findBootRows(input: BootReadInput): BootRows {
     const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row) => row.name));
     if (!tables.has("messages")) return EMPTY;
     // SAFETY: The query selects a text key and the message table's typed id and time.
-    // Per thread through messages_thread_at: a scan of every row reads the whole transcript file on a cold boot.
+    // The tautological thread_id IN (...) makes SQLite walk messages_thread_at per thread; a plain range on at scans every row on a cold boot.
     const receipts = db.prepare("SELECT json_extract(json, '$.mailbox.key') AS key, id, at FROM messages WHERE thread_id IN (SELECT DISTINCT thread_id FROM messages) AND at >= ? AND kind = 'note' AND json_type(json, '$.mailbox.key') = 'text' ORDER BY at DESC LIMIT ?")
       .all(input.now - MAILBOX_RECEIPT_WINDOW_MS, MAILBOX_RECEIPT_LIMIT) as ReceiptRow[];
     const synced = tables.has("sync_v2_store") && tables.has("sync_v2_notices") && tables.has("sync_v2_changes") && tables.has("sync_v2_snapshot");

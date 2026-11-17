@@ -2221,19 +2221,30 @@ export class Store {
   }
 
   removeSyncNotices(threadId: string, ids: string[]): void {
+    const moved = new Map<string, Message>();
+    let leaf: string | null | undefined;
     mdb.withMessageTransaction((db) => {
       for (const id of ids) {
         const row = db.prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id);
         if (!row) continue;
         const message: Message = JSON.parse(String(row.json));
         const parent = message.parentId ?? null;
+        // SAFETY: json is the stored Message.
+        for (const child of db.prepare("SELECT json FROM messages WHERE thread_id = ? AND json_extract(json, '$.parentId') = ?").all(threadId, id) as Array<{ json: string }>) {
+          const next: Message = { ...JSON.parse(child.json), parentId: parent };
+          moved.set(next.id, next);
+        }
         db.prepare("UPDATE messages SET json = json_set(json, '$.parentId', ?) WHERE thread_id = ? AND json_extract(json, '$.parentId') = ?")
           .run(parent, threadId, id);
-        db.prepare("UPDATE thread_state SET active_leaf_id = ? WHERE thread_id = ? AND active_leaf_id = ?").run(parent, threadId, id);
+        if (db.prepare("UPDATE thread_state SET active_leaf_id = ? WHERE thread_id = ? AND active_leaf_id = ?").run(parent, threadId, id).changes) leaf = parent;
         db.prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(threadId, id);
+        moved.delete(id);
       }
     });
     this.threads.delete(threadId);
+    // a client that already painted this chat follows the new parents and leaf
+    for (const message of moved.values()) this.emit({ type: "message.patch", threadId, message });
+    if (leaf) this.emit({ type: "thread", threadId, activeLeafId: leaf });
   }
 
   applySyncChanges(botId: string, threadId: string, changes: SyncChange[]): void {

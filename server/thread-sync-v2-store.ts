@@ -230,7 +230,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     task.deleted = 0;
   }
 
-  /** `onPath`: boot's worker already walked the active path; those notice ids are read again by key. */
+  /** `onPath`: boot's worker already walked the active path; those notice ids are read again by key. A rewind in the seconds before the worker replies can leave one off the path; the next conflict change notices again. */
   function notifyConflict(task: StoredTask, onPath?: string[]): void {
     if (host.running(task.threadId)) return;
     withMessageTransaction((db) => {

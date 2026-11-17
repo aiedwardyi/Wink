@@ -225,16 +225,15 @@ export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByT
     for (const [threadId, botId] of threads) {
       const ids = new Map(found.filter((ask) => ask.threadId === threadId).map((ask) => [ask.id, ask.at]));
       if (!ids.size) continue;
-      const oldest = Math.min(...ids.values());
       const path: Message[] = [];
-      // newest first by key, and only back to the oldest ask: the path above it is never read
+      // newest first by key, and only until every ask is seen: timestamps need not fall along the path
       let left = ids.size;
       for (const row of store.activePathBack(threadId)) {
         if (ids.has(row.id)) {
           left--;
           if (row.quick?.state === "asked") path.push(row);
         }
-        if (!left || row.at < oldest) break;
+        if (!left) break;
       }
       for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
     }

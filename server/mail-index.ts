@@ -15,13 +15,13 @@ export function rebuildMailIndex(task: TaskRecord, rows: Message[]): void {
   for (const row of rows) indexMailRow(task, row);
 }
 
-/** Mail a dead turn was handed goes back to unread; `rows` come from boot-reads.ts and are read again by key. */
-export function recoverHandedMail(store: Pick<Store, "botByThread" | "groupByThread" | "row" | "patchRow">, rows: Array<{ threadId: string; id: string }>): void {
+/** Mail a dead turn was handed goes back to unread; `rows` come from boot-reads.ts and are read again by key. A handoff at or after `since` belongs to a live turn of this process. */
+export function recoverHandedMail(store: Pick<Store, "botByThread" | "groupByThread" | "row" | "patchRow">, rows: Array<{ threadId: string; id: string }>, since = Infinity): void {
   for (const { threadId, id } of rows) {
     if (!store.botByThread(threadId) && !store.groupByThread(threadId)) continue;
     const row = store.row(threadId, id);
     const read = row?.comm?.read;
-    if (read?.state !== "handed") continue;
+    if (read?.state !== "handed" || (read.at ?? 0) >= since) continue;
     store.patchRow(threadId, id, { comm: { ...row!.comm!, read: read.upto ? { ...read, state: "read" } : undefined } });
   }
 }
