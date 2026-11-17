@@ -64,10 +64,12 @@ async function mount(
   bots: Bot[] = [bot],
   groups: Group[] = [group],
   snapshot: object = {},
+  cardPatch?: () => Promise<Response>,
 ) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {}, ...snapshot });
+    if (init?.method === "PATCH" && path.includes("/cards/") && cardPatch) return cardPatch();
     if (init?.method === "POST" && (path.endsWith("/messages") || path.endsWith("/respond"))) return post(init);
     const page = path.match(/^\/api\/threads\/([\w-]+)\/messages\?/);
     if (page) return threadPage(page[1]!, init);
@@ -103,6 +105,35 @@ const sends = [
 const messagesOf = (threadId: string) =>
   store.state.bots.find((b) => b.threadId === threadId)?.messages ??
   store.state.groups.find((g) => g.threadId === threadId)?.messages;
+
+it("captures a tap before card persistence can delay its message", async () => {
+  const ask = { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: "Swap?", options: ["Yes, swap"], askUser: true } } as Message;
+  let release!: (response: Response) => void;
+  const saving = new Promise<Response>((resolve) => { release = resolve; });
+  const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: bot.threadId }));
+  await mount(() => Response.json({ messages: [], hasMore: false }), post, [{ ...bot, messages: [ask] }], [], {}, () => saving);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: ask.id, answer: "Yes, swap" }));
+  expect(post).not.toHaveBeenCalled();
+  clock.mockReturnValue(3_000);
+  await act(async () => { release(Response.json({})); await saving; });
+  await vi.waitFor(() => expect(post).toHaveBeenCalled());
+  expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_000, cardId: ask.id });
+});
+
+it("keeps a room tap's action time while its card save waits", async () => {
+  const ask = { id: "ask", at: 1, role: "bot", kind: "options", from: { botId: bot.id, name: "Bot", color: "green" }, card: { title: "Q", subtitle: "Swap?", options: ["Yes, swap"], askUser: true } } as Message;
+  let release!: (response: Response) => void;
+  const saving = new Promise<Response>((resolve) => { release = resolve; });
+  const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: group.threadId }));
+  await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...group, messages: [ask] }], {}, () => saving);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  await act(async () => store.dispatch({ type: "answerGroupCard", groupId: group.id, messageId: ask.id, answer: "Yes, swap" }));
+  clock.mockReturnValue(3_000);
+  await act(async () => { release(Response.json({})); await saving; });
+  await vi.waitFor(() => expect(post).toHaveBeenCalled());
+  expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_000, cardId: ask.id });
+});
 
 describe("send reject after the server accepted", () => {
   it("consumes a promoted receipt when accepted-send recovery finds its message", async () => {
@@ -268,8 +299,8 @@ describe("a group line nobody answers", () => {
     await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...idle, messages: [ask] }]);
     await act(async () => store.dispatch({ type: "answerGroupCard", groupId: idle.id, messageId: ask.id, answer: "Yes" }));
     await vi.waitFor(() => expect(post).toHaveBeenCalled());
-    expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ text: "Yes", cardId: ask.id });
-    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ text: "Yes", answersCard: ask.id })]);
+    expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ text: "Re: “Prod?”\nYes", cardId: ask.id });
+    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ text: "Re: “Prod?”\nYes", answersCard: ask.id })]);
   });
 
   it("sends a held line when its room settles with the room closed", async () => {
@@ -443,7 +474,7 @@ describe("update reload during a send", () => {
     await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Can't tonight" }));
     await vi.waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST")).toBe(true));
     const posted = fetch.mock.calls.find(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST");
-    expect(JSON.parse(String(posted?.[1]?.body))).toEqual({ text: "Can't tonight", threadId: "t-bot", cardId: "m-card" });
+    expect(JSON.parse(String(posted?.[1]?.body))).toEqual({ text: "Re: “Dinner?”\nCan't tonight", threadId: "t-bot", cardId: "m-card", actedAt: expect.any(Number) });
   });
 
   it.each([
@@ -738,7 +769,7 @@ describe("typing while a question is open", () => {
     await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Sure" }));
     await act(async () => {});
     const posts = fetch.mock.calls.filter(([url, init]) => url === "/api/bots/b1/messages" && (init as RequestInit | undefined)?.method === "POST");
-    expect(posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).text)).toEqual(["maybe at 8", "Sure"]);
+    expect(posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).text)).toEqual(["maybe at 8", "Re: “Dinner?”\nSure"]);
     expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Sure");
   });
 

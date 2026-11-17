@@ -48,18 +48,20 @@ describe("KeyboardShortcuts", () => {
   });
 
   it.each([
-    ["en", "Win32", "Toggle Picker Style (in Model Picker)", "Alt"],
-    ["ko", "MacIntel", "선택 방식 열기 / 닫기 (모델 선택에서)", "Option"],
-  ] as const)("lists the picker style keys only where the picker has styles, in %s on %s", (locale, platform, toggle, alt) => {
+    ["en", "Win32", "Alt", "Toggle Picker Style (in Model Picker)", "Cycle Model Index Tab (in Model Index)"],
+    ["ko", "Win32", "Alt", "선택 방식 열기 / 닫기 (모델 선택에서)", "모델 지표 탭 전환 (모델 지표 화면에서)"],
+    ["en", "MacIntel", "Option", "Toggle Picker Style (in Model Picker)", "Cycle Model Index Tab (in Model Index)"],
+    ["ko", "MacIntel", "Option", "선택 방식 열기 / 닫기 (모델 선택에서)", "모델 지표 탭 전환 (모델 지표 화면에서)"],
+  ] as const)("leaves the in-panel picker style and index tab keys off the list in %s on %s", (locale, platform, alt, pickerStyle, indexCycle) => {
     persistPreference(locale);
     vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-    const combos = (pickerStyle: boolean) => {
-      const host = document.createElement("div");
-      host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null, createElement(KeyboardShortcuts, { pickerStyle })));
-      return [...host.querySelectorAll("dl > div")].find((row) => row.querySelector("dt")?.textContent === toggle)?.querySelector("dd")?.getAttribute("aria-label");
-    };
-    expect(combos(true)).toBe(`${alt} + T`);
-    expect(combos(false)).toBeUndefined();
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null, createElement(KeyboardShortcuts)));
+    const rows = [...host.querySelectorAll("dl > div")];
+    expect(rows.map((row) => row.querySelector("dt")?.textContent)).not.toContain(pickerStyle);
+    expect(rows.map((row) => row.querySelector("dt")?.textContent)).not.toContain(indexCycle);
+    expect(rows.filter((row) => row.querySelector("dd")?.getAttribute("aria-label") === `${alt} + T`)).toHaveLength(1);
+    expect(rows.some((row) => row.querySelector("dd")?.getAttribute("aria-label") === `${alt} + Shift + I`)).toBe(false);
   });
 
   it("lists Toggle Model Index once with Alt+I only", () => {
@@ -94,7 +96,6 @@ describe("KeyboardShortcuts", () => {
       const html = renderToStaticMarkup(
         createElement(I18nProvider, null, createElement(KeyboardShortcuts)),
       );
-      expect(html).toContain(">Cycle Model Index Tab (in Model Index)<");
       expect(html).toContain(">Refresh Usage (in Usage)<");
       expect(html).toContain(">Toggle Terminal<");
 
@@ -102,7 +103,6 @@ describe("KeyboardShortcuts", () => {
       const ko = renderToStaticMarkup(
         createElement(I18nProvider, null, createElement(KeyboardShortcuts)),
       );
-      expect(ko).toContain(">모델 지표 탭 전환 (모델 지표 화면에서)<");
       expect(ko).toContain(">사용량 새로고침 (사용량 화면에서)<");
       expect(ko).toContain(">터미널 열기 / 닫기<");
     } finally {

@@ -1,10 +1,12 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { mergeTimelines, PICKS_FILE } from "./picks.ts";
 import { syncRoots, syncWriteRoot } from "./sync-roots.ts";
 import { isMemoryTopicName, MEMORY_SEED } from "./workspace.ts";
 
@@ -163,6 +165,35 @@ function readSnapshots(dir: string): Snapshot[] | undefined {
   });
 }
 
+async function readSnapshotsAsync(dir: string): Promise<Snapshot[] | undefined> {
+  if (!existsSync(dir)) return [];
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return undefined;
+  }
+  const read = await Promise.all(names.sort().map(async (name) => {
+    const device = SNAPSHOT_FILE.exec(name)?.[1];
+    try {
+      const parsed = device ? snapshotSchema.safeParse(JSON.parse(await readFile(join(dir, name), "utf8"))) : undefined;
+      return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
+    } catch {
+      return [];
+    }
+  }));
+  return read.flat();
+}
+
+/** One bot's snapshots per sync root, read off the event loop; pass them to syncBotMemory as `snapshots`. */
+export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<Array<Snapshot[] | undefined>> {
+  try {
+    return await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId))));
+  } catch {
+    return [undefined];
+  }
+}
+
 let machineId: string | undefined;
 
 function machine(): string {
@@ -293,7 +324,7 @@ function dropMergedCopies(workspace: string, files: Iterable<string>): string[] 
   return dropped;
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string };
+export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshot[] | undefined> };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -301,7 +332,7 @@ export function syncBotMemory(
   botSyncId: string,
   workspace: string,
   ledger: MemorySyncLedger,
-  { now = Date.now(), legacy, host = machine() }: MemorySyncOptions = {},
+  { now = Date.now(), legacy, host = machine(), snapshots: read }: MemorySyncOptions = {},
 ): Record<string, MemorySyncResult> {
   memorySyncDir(folder, botSyncId);
   const me = deviceId(ledger, host);
@@ -309,7 +340,7 @@ export function syncBotMemory(
   let groups: Array<Snapshot[] | undefined>;
   try {
     dir = join(syncWriteRoot(folder, MEMORY_SYNC_DIR, join(botSyncId, `${me}.json`)), botSyncId);
-    groups = syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshots(join(root, botSyncId)));
+    groups = read ?? syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshots(join(root, botSyncId)));
   } catch {
     return {};
   }
@@ -388,6 +419,14 @@ export function syncBotMemory(
         continue;
       }
       // changed on two PCs at once, or the same versions with different text from a copied ledger
+      const merged: string | null = file === `memory/${PICKS_FILE}` && typeof text === "string" && entry.text !== null ? mergeTimelines(text, entry.text) : null;
+      if (merged !== null) {
+        writeText(path, merged);
+        text = merged;
+        state = bot.files[file] = { vv: { ...joined(state.vv, entry.vv), [me]: tick(ledger) }, hash: hash(merged), at: Math.max(state.at, entry.at) };
+        result = "pulled";
+        continue;
+      }
       const keep = wins({ ...(state.by ?? mine), at: state.at }, { ...(by ?? mine), at: entry.at });
       const vv = joined(state.vv, entry.vv);
       const lost = keep ? entry.text : text;
@@ -407,6 +446,17 @@ export function syncBotMemory(
       console.warn(
         `memory sync: ${botSyncId}/${file} changed on two PCs; kept ${keep ? "this" : "the other"} PC's copy${parked ? `, set the other aside as ${parked.name}` : ""}`,
       );
+    }
+    if (file === `memory/${PICKS_FILE}` && typeof text === "string") {
+      for (const copy of files.filter((name) => /^memory\/decisions\.conflict-[0-9a-f]{8}\.md$/.test(name))) {
+        const body = texts.get(copy) ?? readText(join(workspace, copy), copy);
+        const merged: string | null = body ? mergeTimelines(text, body.replace(/^<!-- memory sync:[^\n]*\n/, "")) : null;
+        if (merged === null || merged === text) continue;
+        writeText(path, merged);
+        text = merged;
+        state = bot.files[file] = { vv: { ...state?.vv, [me]: tick(ledger) }, hash: hash(merged), at: now };
+        result = "pulled";
+      }
     }
     results[file] = result;
     texts.set(file, text);

@@ -1,15 +1,19 @@
 // Auto mode: when a bot may answer its own permission requests.
 //
 // Auto mode answers every permission request, destructive-looking ones
-// included, whether or not a person started the turn. Local-computer
-// requests keep the guard below even with auto mode on, and are skipped
-// when nobody started the turn.
+// included, in a turn a person started. When nobody started the turn it
+// still answers ordinary work, but skips destructive commands, deletes
+// outside the turn's folder, and local-computer requests.
 //
 // The guard is deliberately tiny and literal. It is NOT a security
 // boundary (an agent set on damage has a thousand spellings for `rm`);
 // it is a "you probably didn't mean to hand THIS one over unattended"
 // backstop for the obvious catastrophes. Real containment is the
 // sandbox and the bot's own computer, not a regex.
+
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const DESTRUCTIVE = [
   /\brm\s+(-[a-z]*\s+)*-[a-z]*[rf]/i, // rm -rf, rm -fr, rm -r -f
@@ -148,6 +152,129 @@ function matchDestructive(text: string): string | null {
   return matchFirst(DESTRUCTIVE, text) ?? matchPowerOffCommand(text);
 }
 
+const DELETE_PROGRAMS = new Set(["rm", "rmdir", "unlink", "del", "erase", "rd", "remove-item", "ri"]);
+// ACP kinds; Claude deletes and moves through Bash
+const DELETE_TOOLS = new Set(["delete", "move"]);
+// a quoted path keeps its spaces; a cmd switch (/q, /s) is not a path
+const argWords = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]).filter(Boolean);
+const CMD_SWITCH = /^\/[A-Za-z](?::\S*)?$/;
+const looksLikePath = (word: string) => /^(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$))/.test(word) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(word);
+
+const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "set-location", "sl"]);
+const expandHome = (path: string) => path.replace(/^~(?=[\\/]|$)/, homedir());
+const isRooted = (path: string) => isAbsolute(path) || /^~(?:[\\/]|$)/.test(path);
+
+/** Where worker panes keep their worktrees. */
+export const worktreeRoot = () => process.env.ORBIT_WORKTREE_ROOT || join(homedir(), "orbit-wt");
+
+const within = (root: string, path: string) => {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+
+/** The real path, through links, of a path that may not exist yet. */
+function realPath(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    const parent = dirname(path);
+    if (parent === path) return null;
+    const real = realPath(parent);
+    return real && join(real, basename(path));
+  }
+}
+
+function holdsLink(dir: string): boolean {
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || (entry.isDirectory() && holdsLink(join(dir, entry.name)))) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** True when `path` sits in a linked worktree registered to a repo inside `workspace`. */
+function inOwnedWorktree(path: string, workspace: string): boolean {
+  for (let dir = path; ; dir = dirname(dir)) {
+    const dotGit = lstatSync(join(dir, ".git"), { throwIfNoEntry: false });
+    if (dotGit?.isDirectory()) return false;
+    if (dotGit?.isFile()) {
+      try {
+        const gitdir = resolve(dir, readFileSync(join(dir, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim());
+        const back = realPath(resolve(gitdir, readFileSync(join(gitdir, "gitdir"), "utf8").trim()));
+        const repo = realPath(dirname(dirname(dirname(gitdir))));
+        return basename(dirname(gitdir)) === "worktrees" && back === join(dir, ".git") && !!repo && within(workspace, repo);
+      } catch {
+        return false;
+      }
+    }
+    if (dirname(dir) === dir) return false;
+  }
+}
+
+/** A stale worktree a routine may clear: never a link, never one holding a link, never the live checkout. */
+function cleanable(path: string, workspace: string): boolean {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat?.isSymbolicLink() || (stat?.isDirectory() && holdsLink(path))) return false;
+  const real = realPath(path);
+  const live = realPath(workspace);
+  if (!real || !live || within(real, live)) return false;
+  const root = realPath(worktreeRoot());
+  return (!!root && real !== root && within(root, real)) || inOwnedWorktree(stat?.isDirectory() ? real : dirname(real), live);
+}
+
+/**
+ * Checks an unattended request's deletes against `workspace`, following cd
+ * across the command. `outside` is the first path removed outside it that
+ * is not a cleanable worktree; `rest` is the request without the deletes
+ * that only clear worktrees, for the destructive rule.
+ */
+function checkDeletes(tool: string, summary: string, workspace: string): { outside: string | null; rest: string } {
+  const root = resolve(workspace);
+  const real = (path: string | null) => {
+    try {
+      return path === null ? null : realpathSync.native(path);
+    } catch {
+      return null;
+    }
+  };
+  const live = real(root);
+  // a relative path under a folder we lost track of could be anywhere
+  const place = (path: string, dir: string | null) => (dir === null && !isRooted(path) ? null : resolve(dir ?? root, expandHome(path)));
+  const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
+  const segments: { text: string; paths: { word: string; at: string | null }[] }[] = [];
+  if (DELETE_TOOLS.has(bare)) {
+    // an ACP title, not a command line; only a word that is plainly a path counts
+    segments.push({ text: summary, paths: argWords(summary).filter(looksLikePath).map((word) => ({ word, at: place(word, root) })) });
+  } else if (COMMAND_TOOLS.has(bare)) {
+    let dir: string | null = root;
+    for (const text of summary.split(/[;&|\n\r]+/)) {
+      const words = argWords(text);
+      let i = 0;
+      while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
+      const program = programName(words[i] ?? "");
+      const args = words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word));
+      if (CD_PROGRAMS.has(program)) {
+        const target = args[0];
+        dir = target === undefined ? homedir() : /[$%]/.test(target) || words[i + 1] === "-" ? null : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+      }
+      segments.push({ text, paths: DELETE_PROGRAMS.has(program) ? args.map((word) => ({ word, at: place(word, dir) })) : [] });
+    }
+  } else {
+    return { outside: null, rest: summary };
+  }
+  let outside: string | null = null;
+  const rest: string[] = [];
+  for (const { text, paths: lexical } of segments) {
+    const paths = lexical.map(({ word, at }) => ({ word, at: real(at) }));
+    const clears = live !== null && paths.length > 0 && paths.every(({ at }, i) => at !== null && cleanable(lexical[i].at!, live));
+    if (!clears) rest.push(text);
+    outside ??= clears ? null : (paths.find(({ at }) => live === null || at === null || !within(live, at))?.word ?? null);
+  }
+  return { outside, rest: rest.length === segments.length ? summary : rest.join(" ; ") };
+}
 
 export function approvalKey(tool: string, summary: string, scope?: "local-computer"): string | null {
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
@@ -167,9 +294,49 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
   return scope ? `${scope}:${key}` : key;
 }
 
+// A longer or deeper input is skipped, never cut.
+const GUARD_INPUT_MAX = 65_536;
+const GUARD_INPUT_DEPTH = 64;
+
+/** Every key and string a tool call carries, whole, for the guard to judge. */
+export function guardInput(input: unknown): { action: string } | { actionRefused: "too-large" | "unreadable" } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return { actionRefused: "unreadable" };
+  let size: number;
+  try {
+    size = JSON.stringify(input).length;
+  } catch {
+    return { actionRefused: "unreadable" };
+  }
+  if (size > GUARD_INPUT_MAX) return { actionRefused: "too-large" };
+  const parts: string[] = [];
+  const walk = (value: unknown, depth: number): boolean => {
+    if (depth > GUARD_INPUT_DEPTH) return false;
+    if (typeof value === "string") parts.push(value);
+    else if (Array.isArray(value)) return value.every((inner) => walk(inner, depth + 1));
+    else if (value && typeof value === "object") {
+      for (const [key, inner] of Object.entries(value)) {
+        parts.push(key);
+        if (!walk(inner, depth + 1)) return false;
+      }
+    }
+    return true;
+  };
+  return walk(input, 0) ? { action: parts.join("\n") } : { actionRefused: "unreadable" };
+}
+
+/** The deny for an Auto bot's desktop ask the guard could not read whole. */
+export const UNCHECKED_DESKTOP_DENY_NOTE = {
+  "too-large": "Wink: this desktop action is too large for Auto mode to check, so it was skipped. Split it into smaller steps.",
+  unreadable: "Wink: this desktop action's input can't be read, so Auto mode skipped it.",
+} as const;
+
 /** The deny for an Auto bot's desktop ask in a turn nobody started. */
 export const AWAY_DESKTOP_DENY_NOTE =
   "Wink: desktop control needs the user present. Skip this step and continue with the rest.";
+
+/** The deny for an Auto bot's destructive step or out-of-folder delete in a turn nobody started. */
+export const UNATTENDED_DENY_NOTE =
+  "Wink: nobody started this turn, so destructive commands and deletes outside the project folder are off. Skip this step and say so in your report.";
 
 /** The deny for a helper's ask that only a person could approve, once its turn has ended. */
 export const BACKGROUND_DENY_NOTE =
@@ -188,6 +355,8 @@ export type AutoVerdictSource =
   | "auto-mode"
   | "unattended-block"
   | "away-desktop-deny"
+  | "unattended-deny"
+  | "unchecked-desktop-deny"
   | "local-computer-block"
   | "destructive-guard"
   | "sensitive-guard"
@@ -218,6 +387,10 @@ export function autoVerdict(
     unattended?: boolean;
     /** the request controls the user's active desktop */
     scope?: "local-computer";
+    /** the folder the turn runs in; unattended deletes stay inside it */
+    workspace?: string;
+    /** why a tool call reached the guard without its whole input */
+    refused?: "too-large" | "unreadable";
   },
 ): AutoVerdict {
   // the guards outrank the grants, so an "always allow" can never widen
@@ -238,6 +411,15 @@ export function autoVerdict(
   if (context?.unattended && bot.autoApprove && context.scope === "local-computer") {
     // nobody can answer a desktop card, so skip the step instead of stalling the turn
     return { approve: null, source: "away-desktop-deny" };
+  }
+  if (context?.unattended && bot.autoApprove) {
+    if (context.refused) return { approve: null, source: "unattended-deny", rule: context.refused };
+    // a file tool's summary carries the file's text, which runs nothing
+    const runs = !FILE_TOOLS.has(tool.replace(/^mcp__[^_]+__/, "").toLowerCase());
+    // no folder (an API engine, a cloud run): only the destructive rule applies
+    const { outside, rest } = context.workspace ? checkDeletes(tool, summary, context.workspace) : { outside: null, rest: summary };
+    const rule = (runs ? (rest === summary ? destructive : (matchDestructive(rest) ?? matchDestructive(tool))) : null) ?? outside;
+    if (rule) return { approve: null, source: "unattended-deny", rule };
   }
   if (context?.unattended && !bot.autoApprove) {
     // Auto mode covers a turn nobody started, but an Ask bot's grants wait
@@ -260,12 +442,13 @@ export function autoVerdict(
   if (context?.scope === "local-computer") {
     // Auto mode past the warning still stops for a destructive-looking
     // host-control action.
+    if (context.refused) return { approve: null, source: "unchecked-desktop-deny", rule: context.refused };
     if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
     if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
     return { approve: `auto-approved ${tool}`, source: "auto-mode" };
   }
-  // Auto mode answers even a destructive-looking request instead of carding
-  // it. Ask mode keeps the guard.
+  // In a turn a person started, Auto mode answers even a destructive-looking
+  // request instead of carding it. Ask mode keeps the guard.
   if (bot.autoApprove) return { approve: `auto-approved ${tool}`, source: "auto-mode" };
   if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
   if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
@@ -283,6 +466,7 @@ export function autoDecision(
     unattended?: boolean;
     /** the request controls the user's active desktop */
     scope?: "local-computer";
+    workspace?: string;
   },
 ): string | null {
   return autoVerdict(bot, tool, summary, context).approve;

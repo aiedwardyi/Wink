@@ -17,9 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeMessage, fileAttachment } from "../../src/lib/composer-attachments.ts";
 import { saveImage } from "../attachments.ts";
+import ts from "typescript";
+
+import * as autoApprove from "../auto-approve.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, saveConfig, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
-import type { ProviderInstance } from "../contracts.ts";
+import type { ProviderInstance, RuntimeEvent } from "../contracts.ts";
 import { resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
@@ -406,6 +409,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_RETRY_SCALE;
     delete process.env.FAKE_CLAUDE_RATE_LIMITS;
     delete process.env.FAKE_CLAUDE_USER_ALLOW;
+    delete process.env.FAKE_CLAUDE_TOOL;
     delete process.env.FAKE_CLAUDE_TASK_GATE;
     delete process.env.FAKE_CLAUDE_WAKE_DELAY_MS;
     delete process.env.FAKE_CLAUDE_NOTIFY_REPEAT_MS;
@@ -2913,6 +2917,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       expect(recorder.events).toContainEqual(
         expect.objectContaining({ type: "request.opened", requestId: "ask-helper", background: true }),
       );
+      expect(recorder.events.find((e) => e.type === "request.opened" && e.requestId === "ask-helper")).not.toHaveProperty("unattended");
       expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(1);
       conn.end();
 
@@ -2932,7 +2937,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await create("background-task");
     const harness = instance.adapter.onEvent((e) => {
       if (e.type !== "request.opened" || !e.requestId) return;
-      const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary);
+      const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended });
       void instance.adapter.respondToRequest(e.threadId, e.requestId, { behavior: verdict.approve ? "allow" : "deny" });
     });
     try {
@@ -2943,12 +2948,68 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const { conn, answer } = await askBetween("t-helper-unattended", { id: "ask-unattended", tool: "Bash", input: { command: "git status" } });
       await expect(answer).resolves.toEqual({ t: "answer", id: "ask-unattended", behavior: "allow" });
       expect(recorder.events).toContainEqual(
-        expect.objectContaining({ type: "request.opened", requestId: "ask-unattended", background: true }),
+        expect.objectContaining({ type: "request.opened", requestId: "ask-unattended", background: true, unattended: true }),
       );
       conn.end();
     } finally {
       harness();
     }
+  });
+
+  it("denies a destructive ask from a helper an unattended Auto turn left running", async () => {
+    await create("background-task");
+    mkdirSync(join(scratch, "build"), { recursive: true });
+    writeFileSync(join(scratch, "build", "out.js"), "keep");
+    const harness = instance.adapter.onEvent((e) => {
+      if (e.type !== "request.opened" || !e.requestId) return;
+      const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended, workspace: scratch });
+      void instance.adapter.respondToRequest(e.threadId, e.requestId, { behavior: verdict.approve ? "allow" : "deny" });
+    });
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-helper-away-rm", text: "one", approval: "auto", attended: false });
+      await recorder.until((e) => e.type === "turn.completed");
+
+      const { conn, answer } = await askBetween("t-helper-away-rm", { id: "ask-away-rm", tool: "Bash", input: { command: "rm -rf ~/projects" } });
+      await expect(answer).resolves.toMatchObject({ id: "ask-away-rm", behavior: "deny" });
+      expect(recorder.events).toContainEqual(
+        expect.objectContaining({ type: "request.opened", requestId: "ask-away-rm", background: true, unattended: true }),
+      );
+      conn.end();
+
+      const outside = await askBetween("t-helper-away-rm", { id: "ask-away-del", tool: "Bash", input: { command: "rm ~/.bashrc" } });
+      await expect(outside.answer).resolves.toMatchObject({ id: "ask-away-del", behavior: "deny" });
+      outside.conn.end();
+      const inside = await askBetween("t-helper-away-rm", { id: "ask-away-keep", tool: "Bash", input: { command: "rm build/out.js" } });
+      await expect(inside.answer).resolves.toMatchObject({ id: "ask-away-keep", behavior: "allow" });
+      inside.conn.end();
+    } finally {
+      harness();
+    }
+  });
+
+  it("tags an unattended Auto turn's own asks, and not an attended one's", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-away-own", text: "go", approval: "auto", attended: false });
+    await recorder.until((e) => e.type === "session.started" && e.threadId === "t-away-own");
+    const away = await connectSocket(permissionSocketPath("t-away-own"));
+    away.write(JSON.stringify({ t: "ask", id: "ask-away-own", tool: "Bash", input: { command: "rm -rf dist" } }) + "\n");
+    const opened = await recorder.until((e) => e.type === "request.opened" && e.requestId === "ask-away-own");
+    expect(opened).toMatchObject({ unattended: true });
+    if (opened.type !== "request.opened") throw new Error("missing permission request");
+    expect(autoVerdict({ autoApprove: true }, opened.tool, opened.summary, { unattended: opened.unattended }).source).toBe("unattended-deny");
+    away.end();
+    await instance.adapter.interruptTurn("t-away-own");
+    await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-away-own");
+
+    await instance.adapter.sendTurn({ threadId: "t-here-own", text: "go", approval: "auto", attended: true });
+    await recorder.until((e) => e.type === "session.started" && e.threadId === "t-here-own");
+    const here = await connectSocket(permissionSocketPath("t-here-own"));
+    here.write(JSON.stringify({ t: "ask", id: "ask-here-own", tool: "Bash", input: { command: "rm -rf dist" } }) + "\n");
+    const attended = await recorder.until((e) => e.type === "request.opened" && e.requestId === "ask-here-own");
+    expect(attended).not.toHaveProperty("unattended");
+    here.end();
+    await instance.adapter.interruptTurn("t-here-own");
+    await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-here-own");
   });
 
   it("denies a desktop ask at once from a helper an unattended Auto turn left running", async () => {
@@ -3341,6 +3402,114 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
+  describe("the desktop guard in an attended Auto turn", () => {
+    const index = ts.createSourceFile("index.ts", readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts"), "utf8"), ts.ScriptTarget.Latest, true);
+    let fold: ts.CaseClause | undefined;
+    ts.forEachChild(index, function walk(node): void {
+      if (ts.isCaseClause(node) && node.expression.getText(index) === '"request.opened"') fold = node;
+      ts.forEachChild(node, walk);
+    });
+    const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const owner = { id: "b-owner", name: "Owner Bot", autoApprove: true };
+    const localComputer = { command: "/cua-driver", args: ["mcp"], env: {}, platform: "linux" as const, scope: "local-computer" as const };
+
+    /** index.ts's request.opened fold for an owner's direct chat, up to its first break. */
+    function harness(event: RuntimeEvent) {
+      expect(fold).toBeDefined();
+      const respondToRequest = vi.fn(async () => "delivered");
+      const pushMessage = vi.fn((message: object) => ({ id: "m1", ...message }));
+      const scope = {
+        ...autoApprove,
+        event, bot: owner, speaker: undefined, group: undefined, store: {}, readOnlyTurnThreads: new Set(), readOnlyAskTurn: () => false, teammateAskTurn: () => false,
+        isUnattended: () => false, turnCwdByThread: new Map(), registry: new Map(), botAccounts: { instance: () => ({ adapter: { respondToRequest } }) }, pushMessage, appendDecision: vi.fn(), DATA_DIR,
+      };
+      new Function(...Object.keys(scope), js(`switch (event.type) { ${fold!.getText(index)} }`))(...Object.values(scope));
+      return { respondToRequest, pushMessage };
+    }
+
+    /** The verdict that fold reaches, before it shows a card or answers. */
+    function verdictFor(event: RuntimeEvent) {
+      let init: ts.Expression | undefined;
+      fold!.forEachChild(function walk(node): void {
+        if (ts.isVariableDeclaration(node) && node.name.getText(index) === "verdict") init ??= node.initializer;
+        ts.forEachChild(node, walk);
+      });
+      expect(init).toBeDefined();
+      const scope = { ...autoApprove, event, asker: owner, permission: true, readOnly: false, cardless: Boolean((event as { background?: boolean }).background), unattended: false, turnCwdByThread: new Map() };
+      return new Function(...Object.keys(scope), js(`return (${init!.getText(index)});`))(...Object.values(scope)) as autoApprove.AutoVerdict | null;
+    }
+
+    const opened = async (threadId: string, ask: Record<string, unknown>) => {
+      const { conn } = await askBetween(threadId, ask);
+      const event = await recorder.until((e) => e.type === "request.opened" && e.requestId === ask.id);
+      conn.end();
+      return event;
+    };
+
+    it("judges a desktop action by its whole input, not the cut card summary", async () => {
+      await create("hang");
+      await instance.adapter.sendTurn({ threadId: "t-host-guard", text: "go", approval: "auto", attended: true, integrations: { localComputer } });
+      await recorder.until((e) => e.type === "session.started");
+
+      const typed = await opened("t-host-guard", { id: "ask-long", tool: "mcp__computer__type_text", input: { text: `${"meeting notes ".repeat(20)}\nrm -rf ~\n` } });
+      expect(typed).toMatchObject({ approvalScope: "local-computer" });
+      if (typed.type !== "request.opened") throw new Error("missing permission request");
+      expect(typed.summary).toHaveLength(200);
+      expect(typed.summary).not.toContain("rm -rf");
+      expect(verdictFor(typed)).toMatchObject({ approve: null, source: "destructive-guard" });
+
+      const keys = await opened("t-host-guard", { id: "ask-field", tool: "mcp__computer__computer_exec", input: { command: "cat notes.txt", files: ["~/.aws/credentials"] } });
+      expect(verdictFor(keys)).toMatchObject({ approve: null, source: "sensitive-guard" });
+
+      await instance.adapter.interruptTurn("t-host-guard");
+      await recorder.until((e) => e.type === "turn.completed");
+    });
+
+    it("skips a desktop action too large or malformed to check whole, telling the bot why", async () => {
+      await create("hang");
+      await instance.adapter.sendTurn({ threadId: "t-host-big", text: "go", approval: "auto", attended: true, integrations: { localComputer } });
+      await recorder.until((e) => e.type === "session.started");
+
+      for (const [id, input, reason] of [
+        ["ask-big", { text: "a".repeat(70_000) }, "too large"],
+        ["ask-odd", "rm -rf ~", "can't be read"],
+        ["ask-deep", Array.from({ length: 100 }).reduce<object>((inner) => ({ a: inner }), { text: "rm -rf ~" }), "can't be read"],
+      ] as const) {
+        const { respondToRequest, pushMessage } = harness(await opened("t-host-big", { id, tool: "mcp__computer__type_text", input }));
+        await vi.waitFor(() => expect(pushMessage).toHaveBeenCalled());
+        expect(respondToRequest.mock.calls).toEqual([["t-host-big", id, { behavior: "deny", message: expect.stringContaining(reason) }]]);
+      }
+
+      await instance.adapter.interruptTurn("t-host-big");
+      await recorder.until((e) => e.type === "turn.completed");
+    });
+
+    it("still auto-approves everyday Auto work, on the desktop and off it", async () => {
+      await create("hang");
+      await instance.adapter.sendTurn({ threadId: "t-host-ok", text: "go", approval: "auto", attended: true, integrations: { localComputer } });
+      await recorder.until((e) => e.type === "session.started");
+      for (const [id, tool, input] of [
+        ["ask-click", "mcp__computer__click", { x: 120, y: 48 }],
+        ["ask-prose", "mcp__computer__type_text", { text: "Dear team, ".repeat(40) }],
+        ["ask-shot", "mcp__computer__screenshot", {}],
+      ] as const) {
+        const { respondToRequest } = harness(await opened("t-host-ok", { id, tool, input }));
+        await vi.waitFor(() => expect(respondToRequest.mock.calls).toEqual([["t-host-ok", id, { behavior: "allow" }]]));
+      }
+      await instance.adapter.interruptTurn("t-host-ok");
+      await recorder.until((e) => e.type === "turn.completed");
+
+      await instance.adapter.sendTurn({ threadId: "t-plain-auto", text: "go", approval: "auto", attended: true });
+      await recorder.until((e) => e.type === "session.started" && e.threadId === "t-plain-auto");
+      for (const [id, command] of [["ask-test", "npm test"], ["ask-clean", "rm -rf dist"]]) {
+        const { respondToRequest } = harness(await opened("t-plain-auto", { id, tool: "Bash", input: { command } }));
+        await vi.waitFor(() => expect(respondToRequest.mock.calls).toEqual([["t-plain-auto", id, { behavior: "allow" }]]));
+      }
+      await instance.adapter.interruptTurn("t-plain-auto");
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-plain-auto");
+    });
+  });
+
   it("digests every ask field, so one URL with different prompts stays distinct", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-digest", text: "go" });
@@ -3430,6 +3599,54 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
     expect(argv).not.toContain("--settings");
+  });
+
+  describe("Wink tools in Ask and Auto", () => {
+    const stdio = { command: process.execPath, args: ["/fake/proxy.js"], env: {} };
+    const play = async (approval: "ask" | "auto", tool: string) => {
+      process.env.FAKE_CLAUDE_TOOL = tool;
+      await create("wink-tool");
+      const threadId = `t-wink-${approval}-${tool}`;
+      await instance.adapter.sendTurn({ threadId, text: "go", cwd: scratch, approval, integrations: { agents: stdio, phone: stdio } });
+      return { threadId, first: await recorder.until((e) => e.type === "turn.completed" || e.type === "request.opened") };
+    };
+    it.each(["mcp__agents__generate_image", "mcp__agents__call_api", "mcp__agents__create_bot", "mcp__phone__tap"])(
+      "Ask holds %s for the Ask card and never runs it on a deny",
+      async (tool) => {
+        const { threadId, first } = await play("ask", tool);
+        expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+        await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+      },
+    );
+
+    it.each(["mcp__agents__generate_image", "mcp__phone__tap"])("Ask holds %s for the card over the user's own allow rule", async (tool) => {
+      process.env.FAKE_CLAUDE_USER_ALLOW = "mcp__agents,mcp__phone";
+      const { threadId, first } = await play("ask", tool);
+      expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+      await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+    });
+
+    it.each(["mcp__agents__list_bots", "mcp__agents__ask_user", "mcp__agents__update_task_state", "mcp__phone__read_screen"])(
+      "Ask runs read-only %s with no card",
+      async (tool) => {
+        const { first } = await play("ask", tool);
+        expect(first.type).toBe("turn.completed");
+        expect(readFileSync(join(scratch, "ran-tool.txt"), "utf8")).toBe(tool);
+      },
+    );
+
+    it.each(["mcp__agents__generate_image", "mcp__agents__create_bot", "mcp__phone__tap", "mcp__agents__list_bots"])(
+      "Auto still runs %s with no card",
+      async (tool) => {
+        const { first } = await play("auto", tool);
+        expect(first.type).toBe("turn.completed");
+        expect(readFileSync(join(scratch, "ran-tool.txt"), "utf8")).toBe(tool);
+      },
+    );
   });
 
   it("leaves the permission mode to a defaultMode in the user's own settings", async () => {

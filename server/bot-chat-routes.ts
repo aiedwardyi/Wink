@@ -5,7 +5,7 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { closedAskNotes, settledAsk } from "./ask-user.ts";
+import { answeredAgain, closedAskNotes, settledAsk } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -16,7 +16,7 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
+import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -70,7 +70,7 @@ type BotChatRouteDeps = {
   turnStartClaims: Map<string, string | undefined>;
   botHasActiveTurn: (botId: string, threadId?: string) => boolean;
   taskResumes: TaskResumeScheduler;
-  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag; answersCard?: string }) => Promise<StartedTurn>;
+  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag; answersCard?: string; actedAt?: number }) => Promise<StartedTurn>;
   resolveAndSendRoutine: (res: ServerResponse, args: { botId: string; botName?: string; threadId: string; requestId: string; behavior: string }) => boolean;
   approvalBus: ApprovalBus;
   startGroupCardContinuation: (groupId: string, threadId: string, botId: string, prompt: string, owedLine?: string) => void;
@@ -142,7 +142,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     bot: BotRecord,
     threadId: string,
     text: string,
-    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string },
+    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number },
   ) => {
     let steered = false;
     let dropped = false;
@@ -222,6 +222,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           steered: true,
           call,
           answersCard,
+          actedAt,
         });
       if (call) callRow = message;
       peerInput?.accept(message);
@@ -235,7 +236,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
       // an idle bot takes the ask as an ordinary turn
       const userMessage = (ask && store.patchMessage(threadId, ask.id, { quick: undefined })) || undefined;
-      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage, call, answersCard });
+      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage, call, answersCard, actedAt });
       return sendPostReceipt(started, threadId);
     }
     const queued = queueId ? { id: queueId, skipped: false } : queueSteeredMessage(current.id, threadId, text, {
@@ -244,6 +245,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       after,
       call,
       answersCard,
+      actedAt,
       // Reply quote only - startTurn wraps reactions when this drains.
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
     });
@@ -266,6 +268,10 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       },
       drain: drainQueuedSends,
     }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
+  };
+  const startAck = (quick: QuickRouting, botId: string, threadId: string, sent: Message) => {
+    void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
+      .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`));
   };
   return {
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
@@ -324,6 +330,12 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const call = parseCallTag(body.call);
       const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
+      const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
+      // Send now on a held send: the user acted when they queued it
+      const actedAt = (queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId)?.actedAt : undefined) ?? sentAt;
+      // a retry of a saved send replays its receipt below
+      const again = answersCard || (sendId && store.messagesFor(threadId).some((message) => message.sendId === sendId)) ? null : answeredAgain(() => store.activePath(threadId), text);
+      if (again) return json(res, 409, { error: "question already settled", message: clientMessage(again) });
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
@@ -379,16 +391,21 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           if (currentAtStart.busy || botHasActiveTurn(bot.id, threadId)) {
             const after = body.deliver === "after";
             // a call order waited for a yes; it goes to the bot, never to Quick answers
-            if (!call?.order && quick && !switchHeld(currentAtStart) && routesQuick({
+            const gate: QuickGate | undefined = !call?.order && quick && !switchHeld(currentAtStart) ? {
               bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
               deliverAfter: after, replyTo, queueId, answersCard, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
-            })) {
-              const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call, answersCard });
+            } : undefined;
+            if (quick && gate && routesQuick(gate)) {
+              const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call, answersCard, actedAt });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            return await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard });
+            // a call line is spoken back, so only a typed send gets the reply beside it
+            const ack = Boolean(quick && gate && !call && routesAck(gate));
+            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt });
+            if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
+            return sent;
           }
           // Stop cleared `busy`, but the driver holds the thread for up to
           // the cancel grace and would refuse the dispatch. Queue it - that
@@ -404,6 +421,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               after: body.deliver === "after",
               call,
               answersCard,
+              actedAt,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             if (held.skipped) return { ok: true as const, cancelled: true as const, threadId };
@@ -413,13 +431,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           const syncUntil = !queueId && threadSyncGate.enabled ? syncHold.until(threadId) : undefined;
           if (syncUntil !== undefined) {
             const held = queueSteeredMessage(bot.id, threadId, text, {
-              replyToId: replyTo?.id, sendId, syncUntil, call, answersCard,
+              replyToId: replyTo?.id, sendId, syncUntil, call, answersCard, actedAt,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             markChatLatency({ sendId, threadId }, "queue.decided", { queueId: held.id });
             return { ok: true as const, queued: true as const, reason: "sync" as const, queueId: held.id, threadId };
           }
-          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call, answersCard });
+          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call, answersCard, actedAt });
           return sendPostReceipt(started, threadId);
         }),
       ).finally(() => { if (queueId) drainQueuedSends(); });

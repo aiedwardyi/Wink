@@ -30,7 +30,7 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
-import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
+import { isAskUserCard, useShownQuestionId } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
@@ -53,7 +53,7 @@ import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
-import { WorkerRow, WorkerChip, useWorkerRows, type ShownRun } from "./WorkerRows";
+import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
@@ -276,6 +276,7 @@ export const Transcript = memo(function Transcript({
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
+  const shownQuestionId = useShownQuestionId(group.messages);
   const items = useMemo(
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
@@ -443,7 +444,7 @@ export const Transcript = memo(function Transcript({
                 message={m}
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
-                pinned={pinnedQuestion(group.messages)?.id === m.id}
+                pinned={shownQuestionId === m.id}
                 onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
@@ -1369,10 +1370,9 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           <RoomTitle name={group.name} picture={<RoomPicture key={group.id} src={group.hosted && roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
         <div data-no-swipe className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
-          <WorkerChip name={group.name} runs={workers} livePanes={null} />
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
           <RoomAlertsBell chat={group.id} />
-          <ShowPaneButton threadId={group.threadId} />
+          <ShowPaneButton threadId={group.threadId} workers={{ name: group.name, runs: workers }} />
         </div>
       </div>
 

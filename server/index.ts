@@ -21,7 +21,7 @@ import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
-import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNATTENDED_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
 import { requestReview, resolveAutoReviewMode, shouldReview } from "./auto-review.ts";
 import {
   resolveAutomaticSelection,
@@ -410,7 +410,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
-  readSyncOperations,
+  readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
   syncOperationsSignature,
@@ -426,7 +426,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1095,6 +1095,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
   dataDir: DATA_DIR,
@@ -1467,6 +1468,7 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 
 let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
+let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
 
 function syncSectionId(section: string | undefined): string | null {
@@ -1609,7 +1611,7 @@ function localOrderChanges(assign: boolean): Record<string, unknown> {
   return { sectionOrder, itemOrder };
 }
 
-function profileSyncStatus() {
+async function profileSyncStatus() {
   const folder = profileSyncSettings.folder;
   if (!folder) {
     return {
@@ -1623,7 +1625,7 @@ function profileSyncStatus() {
     };
   }
   ensureProfileSyncWorkspace(folder);
-  const remote = syncOperationsStatus(folder);
+  const remote = await syncOperationsStatus(folder);
   const status = remote.invalidFiles.length > 0
     ? "needs-review"
     : remote.operations > 0
@@ -1750,13 +1752,17 @@ function applySyncedBotFields(
 }
 
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
-function importProfileChanges(): void | Promise<void> {
+async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
-  const remote = readSyncOperations(folder);
+  profileImports++;
+  // a newer import's read is the newer log, so this one drops too
+  const remote = await readSyncOperationsFor(folder, () => `${profileImports}\n${profileSyncSettings.folder}\n${profileSyncSettings.workspaceId}\n${profileSyncSettings.syncChats}`);
+  // profileSyncSeen is untouched, so the next poll reads the new target
+  if (!remote) return;
   if (remote.invalidFiles.length && signature !== profileSyncSeen.signature) {
     console.warn(`bot sync: skipped unreadable files [${remote.invalidFiles.slice(0, 5).join(", ")}]`);
   }
@@ -2292,6 +2298,7 @@ function initializeThreadSyncV2() {
     },
     rooms: roomThreads,
     bootReads,
+    painted: () => syncPainted,
   });
   return threadSyncV2;
 }
@@ -2406,14 +2413,25 @@ const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
 if (REMOTE_HOST !== undefined) startDevicePresence();
 else void remoteRetry.refresh();
 
+const memorySyncs = new Map<string, Promise<void>>();
+
+// one pass per bot at a time: a pass applies against the snapshots it read
 function syncMemory(botId: string): void {
+  const run = (memorySyncs.get(botId) ?? Promise.resolve()).then(() => syncMemoryOnce(botId));
+  memorySyncs.set(botId, run);
+  void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
+}
+
+async function syncMemoryOnce(botId: string): Promise<void> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
   if (!store.bot(botId)) return;
   const folder = profileSyncSettings.folder;
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger });
+    const snapshots = await readMemorySnapshots(folder, botSyncId);
+    if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
+    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
     // the poll runs for every idle bot, so only changed files refresh the check
     if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
   } catch (error) {
@@ -2996,7 +3014,11 @@ const unlandedWork = createUnlandedWork({
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
-startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });
+startupTiming.afterPaint("unlanded", async () => {
+  // the worker read each chat's reports; a chat loaded since then has them in memory
+  const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
+  for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+});
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -3511,6 +3533,9 @@ function staleTurnEvent(threadId: string, turnId: string | undefined): boolean {
 const unattendedBots = new Map<string, number>();
 const UNATTENDED_TTL_MS = 30 * 60_000;
 
+// The folder each thread's last turn was sent to; unattended deletes stay inside it.
+const turnCwdByThread = new Map<string, string>();
+
 function markUnattended(botId: string) {
   unattendedBots.set(botId, Date.now());
 }
@@ -3890,17 +3915,24 @@ bus.subscribe((event: RuntimeEvent) => {
         });
         break;
       }
-      // A background ask comes only from work an Auto turn started, and the
-      // driver kept desktop asks to attended ones; the mark may have aged since.
-      const unattended = permission && asker && event.requestId && !event.background ? isUnattended(asker.id) : false;
+      // A background ask comes only from work an Auto turn started; the driver
+      // tags it with that turn's origin, since the bot's mark may have aged since.
+      const unattended = permission && asker && event.requestId ? event.unattended === true || (!event.background && isUnattended(asker.id)) : false;
       // Verdicts run on the original event. The bus redacts only the NDJSON
       // tee; SSE/broadcast (PR72) redacts the client copy. Masking first
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
+        ? autoVerdict(asker, event.tool, unattended ? event.action ?? "" : event.approvalScope ? event.action ?? event.summary : event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused ?? (unattended && event.action === undefined ? "unreadable" : undefined), workspace: turnCwdByThread.get(event.threadId) })
         : null;
-      if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
+      const skipNote = verdict?.source === "away-desktop-deny"
+        ? AWAY_DESKTOP_DENY_NOTE
+        : verdict?.source === "unchecked-desktop-deny" && event.actionRefused
+          ? UNCHECKED_DESKTOP_DENY_NOTE[event.actionRefused]
+          : verdict?.source === "unattended-deny"
+            ? UNATTENDED_DENY_NOTE
+            : null;
+      if (skipNote && verdict && asker && event.requestId) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : botAccounts.instance(asker, event.threadId);
@@ -3909,7 +3941,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // answered at once: a desktop card nobody can see would stall the turn
         const deny = async () => {
           if (!instance) throw new Error("provider unavailable");
-          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: AWAY_DESKTOP_DENY_NOTE });
+          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: skipNote });
           if (outcome === "unavailable") throw new Error("the ask is no longer open");
         };
         void (async () => {
@@ -3919,7 +3951,7 @@ bus.subscribe((event: RuntimeEvent) => {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: `Skipped desktop control while you were away: ${summary.slice(0, 120)}`, ok: false },
+              tool: { name: `${verdict.source === "away-desktop-deny" ? "Skipped desktop control while you were away" : verdict.source === "unattended-deny" ? "Skipped while you were away" : "Skipped a desktop action Auto mode couldn't check"}: ${summary.slice(0, 120)}`, ok: false },
             });
             appendDecision(DATA_DIR, {
               threadId: event.threadId,
@@ -3930,7 +3962,8 @@ bus.subscribe((event: RuntimeEvent) => {
               summary,
               decision: "auto-denied",
               source: verdict.source,
-              unattended: true,
+              rule: verdict.rule,
+              unattended: unattended || undefined,
             });
           } catch {
             pushMessage({
@@ -4350,10 +4383,10 @@ bus.subscribe((event: RuntimeEvent) => {
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
           clearSendRunning(bot.id);
+          memoryPass.onSettled(bot.id, event.threadId, flushNotes);
           if (!store.groupByThread(event.threadId)) {
             summaryBuild.onSettled(bot.id, event.threadId);
             summaryRepair.onSettled(bot.id, event.threadId);
-            memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
@@ -4400,6 +4433,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
       if (speaker && group?.busyBotId === speaker.botId) {
+        memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
@@ -4869,6 +4903,7 @@ type StartTurnOptions = {
   sendId?: string;
   call?: CallTag;
   answersCard?: string;
+  actedAt?: number;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4902,7 +4937,7 @@ const CORPUS_SEARCH_INSTRUCTIONS =
 const PLAIN_WORDS_INSTRUCTIONS =
   " Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES_INSTRUCTIONS =
-  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
+  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
   " When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
 // One block for every route, so none can carry one rule set without the other.
@@ -5181,6 +5216,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sendId: opts?.sendId,
           call: opts?.call,
           answersCard: opts?.answersCard,
+          actedAt: opts?.actedAt,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -6132,6 +6168,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
         trace?.assembled(system, text);
+        if (cwd) turnCwdByThread.set(threadId, cwd);
+        else turnCwdByThread.delete(threadId);
         return live.adapter.sendTurn({
         ...(trace ? { trace } : {}),
         threadId,
@@ -7210,6 +7248,8 @@ async function runClaimedGroupMemberTurn(
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
       if (!lane) workerTurns.capture(bot.id, threadId, live);
       pendingInterruptThreads.started(threadId, turnKey, epoch);
+      if (cwd) turnCwdByThread.set(threadId, cwd);
+      else turnCwdByThread.delete(threadId);
       return live.adapter.sendTurn({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
@@ -7339,12 +7379,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = []) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
-  const shared = hosted && answersCard ? store.patchMessage(group.threadId, hosted.id, { answersCard }) ?? hosted : hosted;
+  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7360,6 +7400,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     sendId,
     ...(askerId ? { askedBy: askerId } : {}),
     answersCard,
+    actedAt,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -7870,6 +7911,7 @@ const internalRoutes = createInternalRoutes({
   computerControl,
   askBotAndWait,
   checkedMemberIds,
+  checkedGroupResponder,
   createdBotSelection,
   store,
   keepGoing,
@@ -7967,7 +8009,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId), roomTail });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   firstTurnLaunch,
@@ -8093,6 +8135,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/") && !(method === "GET" && path === "/api/health") && !credentials.phoneSession &&
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path, (holder) => relay ? holder !== PC_HOLDER : holder === PC_HOLDER)) {
+      if (remoteCookieAuthorized(req.headers.cookie, credentials.remoteKey)) return json(res, 403, { error: "forbidden" });
       return json(res, 401, { error: "unauthorized" });
     }
     const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
@@ -8397,7 +8440,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── shared bot profile sync ───────────────────────────────────────
     if (method === "GET" && path === "/api/profile-sync") {
       return json(res, 200, {
-        ...profileSyncStatus(),
+        ...(await profileSyncStatus()),
         chatSyncVersion: threadSyncGate.enabled ? 2 : 1,
         chatSyncWaitingFor: threadSyncGate.waitingFor,
         chatSyncMigration: threadSyncV2?.migrationStatus() ?? null,
@@ -8417,7 +8460,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
         syncAllThreads();
         publishDeviceRecord();
-        return json(res, 200, profileSyncStatus());
+        return json(res, 200, await profileSyncStatus());
       } catch (error) {
         return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -8427,7 +8470,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       threadSyncV2?.stop();
       profileSyncSettings.folder = null;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
     if (method === "PUT" && path === "/api/profile-sync/chats") {
       const body = await readBody(req);
@@ -8436,7 +8479,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       profileSyncSettings.syncChats = body.enabled;
       profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
       syncAllThreads();
-      return json(res, 200, profileSyncStatus());
+      return json(res, 200, await profileSyncStatus());
     }
 
     if (method === "GET" && path === "/api/key-uses") {
@@ -8555,15 +8598,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
       const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
-        const tail = limit === undefined ? null : chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
+      const page = async (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const tail = limit === undefined ? null : await chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
         if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
         return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
       };
       if (typeof open === "string") warmFirst(open);
+      // taken before the cold pages are read off this thread: an event meanwhile replays, and the client folds repeats by id
+      const cursor = `${STREAM_ID}:${lastSeq}`;
+      const [bots, groups] = await Promise.all([
+        Promise.all(store.bots.map(async (bot) => ({ ...publicBotRecord(bot), ...(await page(bot)) }))),
+        Promise.all(store.groups.map(async (g) => ({ ...publicGroupState(g), ...(await page(g)) }))),
+      ]);
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...page(bot) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g) })),
+        bots,
+        groups,
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -8571,7 +8620,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }),
         ),
         queued: waitingSends(),
-        cursor: `${STREAM_ID}:${lastSeq}`,
+        cursor,
         ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });
     }
@@ -8914,7 +8963,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
-    if (m && method === "POST") return await liveCall(req, res, m);
+    if (m && method === "POST") {
+      if (m[2] === "token") botCalls.answered(m[1]!);
+      return await liveCall(req, res, m);
+    }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
@@ -9528,6 +9580,7 @@ phoneAccess.start(handleRequest).catch((error) => {
 startupTiming.afterPaint("bootReads", () => startBootReads({
   dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
   notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
+  reportThreads: store.bots.map((bot) => bot.threadId),
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));

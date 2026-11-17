@@ -2170,7 +2170,7 @@ app.whenReady().then(async () => {
   startupWindowMs = Math.round(process.uptime() * 1000);
   if (resetFailed) void dialog.showMessageBox(win, { type: "info", message: nativeText("settings.startFresh.error") });
   slog(`window shown packaged=${app.isPackaged} serverReady=${serverReady} uptime=${process.uptime().toFixed(2)}s`);
-  if (!verifyProbe) startUpdater(win, nativeText);
+  if (!verifyProbe) startUpdater(win, nativeText, () => terminalHost.liveWorkerCount({ closing: true }));
   // Register before the packaged harness wait: on Darwin, closing the
   // connecting window does not quit, and a dock click in that interval
   // must be able to open a new one.

@@ -15,14 +15,13 @@ export type UploadDone = { path: string; name: string; size: number; type: strin
 export type UploadErrorKey =
   | "composer.uploadDiskFull"
   | "composer.uploadBusy"
-  | "composer.uploadFailed";
+  | "composer.uploadFailed"
+  | "composer.uploadNoAnswer"
+  | "composer.uploadFileChanged";
 
 /** A failure retrying will not fix by itself. `key` is what the user reads. */
 export class UploadError extends Error {
-  constructor(
-    readonly key: UploadErrorKey,
-    readonly coded = true,
-  ) {
+  constructor(readonly key: UploadErrorKey) {
     super(key);
   }
 }
@@ -59,6 +58,16 @@ const Progress = z.object({
   type: z.string().optional(),
 });
 type Progress = z.infer<typeof Progress>;
+
+// A File edited or still being written after it was picked can never be read again; fetch only says "Failed to fetch".
+async function unreadable(file: UploadFile, offset: number): Promise<boolean> {
+  try {
+    await file.slice(offset, offset + 1).arrayBuffer();
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 async function fail(response: Response): Promise<never> {
   const body = Failure.parse(await response.json().catch(() => ({})));
@@ -205,10 +214,11 @@ async function run(file: UploadFile, options: UploadOptions): Promise<UploadDone
       } catch (err) {
         if (signal?.aborted) throw aborted();
         if (err instanceof UploadError) throw err;
+        if (!(err instanceof Retry) && (await unreadable(file, offset))) throw new UploadError("composer.uploadFileChanged");
         resync = Boolean(id);
         if (nudged) continue;
         failures += 1;
-        if (failures >= MAX_FAILURES) throw new UploadError("composer.uploadFailed", false);
+        if (failures >= MAX_FAILURES) throw new UploadError("composer.uploadNoAnswer");
         onPhase?.("resuming");
         await pause(BACKOFF_MS[Math.min(failures, BACKOFF_MS.length) - 1]!);
       }
@@ -226,7 +236,7 @@ export type UploadJob = {
   uploadId?: string;
   sent: number;
   phase: "queued" | UploadPhase | "failed" | "done";
-  /** Only for a failure the user has to act on; plain retries exhausted leave it unset. */
+  /** Why it failed, in words the user reads. */
   error?: UploadErrorKey;
   result?: UploadDone;
   controller: AbortController;
@@ -238,9 +248,10 @@ export type UploadJob = {
 };
 
 // Module-level so an upload keeps going while its composer is unmounted;
-// keyed by chip id. One upload runs at a time.
+// keyed by chip id. One chunked upload runs at a time; a whole-file send never waits behind it.
 let jobs: ReadonlyMap<string, UploadJob> = new Map();
 let running: string | null = null;
+const sending = new Set<string>();
 const listeners = new Set<() => void>();
 
 function setJob(id: string, patch: Partial<UploadJob> | null) {
@@ -263,10 +274,15 @@ export function onUploadJobs(listener: () => void): () => void {
 }
 
 function pump() {
+  for (const [id, job] of jobs) if (job.send && job.phase === "queued" && !sending.has(id)) start(id, job);
   if (running) return;
-  const [id, job] = [...jobs].find(([, candidate]) => candidate.phase === "queued") ?? [];
-  if (!id || !job) return;
-  running = id;
+  const [id, job] = [...jobs].find(([, candidate]) => candidate.phase === "queued" && !candidate.send) ?? [];
+  if (id && job) start(id, job);
+}
+
+function start(id: string, job: UploadJob) {
+  if (job.send) sending.add(id);
+  else running = id;
   setJob(id, { phase: "uploading" });
   let uploadId = job.uploadId;
   const base = job.send?.(job.controller.signal) ?? Promise.all([
@@ -291,11 +307,13 @@ function pump() {
       (result) => setJob(id, { phase: "done", result, sent: result.size }),
       (err) => {
         if (job.controller.signal.aborted) return;
-        setJob(id, { phase: "failed", error: err instanceof UploadError && err.coded ? err.key : undefined });
+        const changed = err instanceof DOMException && err.name === "NotReadableError";
+        setJob(id, { phase: "failed", error: err instanceof UploadError ? err.key : changed ? "composer.uploadFileChanged" : "composer.uploadFailed" });
       },
     )
     .finally(() => {
-      running = null;
+      if (job.send) sending.delete(id);
+      else running = null;
       pump();
     });
 }
@@ -319,7 +337,7 @@ export function retryUpload(id: string): void {
 export function dropUpload(id: string, uploadId?: string): void {
   const job = jobs.get(id);
   setJob(id, null);
-  if (job && running === id) {
+  if (job && (running === id || sending.has(id))) {
     job.controller.abort();
     return;
   }

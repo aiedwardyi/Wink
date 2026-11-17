@@ -2,6 +2,51 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.278] - 2026-11-18
+
+### Added
+- Voice calls in team rooms: each person calls their own lead bot, the voice hears teammates' lines, and a finished voice order asks before posting in the room.
+- Bots keep a timeline of your decisions and work from only your current picks.
+- A line you type while the bot is working gets a short reply from the quick helper right under it.
+- Each alarm in Bot details has a trash icon that deletes it in one tap.
+
+### Changed
+- Workers live in the side pane as its first tab; the side pane button sits after the model picker and shows how many are running.
+- The call row is gear, mute and end; Captions is a switch on the call menu's Style row, on by default.
+- The call has no quiet mode; mute is the one way to stop the voice listening.
+- The call voice speaks only chat text, never worker screens or code, and every call style plays at the same volume.
+- Bot details no longer has a Voice chat section, and right-click or long-press on Call does nothing.
+- A bot call answered without a voice key rings again until the key is fixed.
+- Asks no longer carry due-time wakes.
+- The model picker styles are Dial, List and Chart, and the Theme look is now called Auto.
+- Room bot lists, the Add bot picker and the @ menu show each bot's current model.
+- Rooms a bot opens answer with everyone, like rooms you make.
+- Bots can make more than four bots in one turn.
+- The Map shows each checkout's Git rows at once, so it opens faster.
+- Wink stays responsive in its first minute after opening, even with very long chats.
+- Auto mode skips destructive commands and deletes outside the project in turns nobody started, like schedules and wakes.
+- Buttons press in slightly and hovers fade in smoothly.
+
+### Fixed
+- A phone call plays its voice from the first tap; if the phone blocks sound, one "Tap to hear" pill appears until it plays.
+- One tap on a question card sends one answer.
+- The limit bar shows at any usage level again.
+- Remote uploads send pictures right away, say why an upload stalls, and preview media.
+- Map folder boxes no longer overlap or spill past the tree.
+- The Forum shows "Loading posts…" instead of a blank page, and an empty Forum says what goes there.
+- An open Forum post has a "‹ Forum" back button, slides like a side panel, and closes with Esc.
+- The sidebar worker count no longer stops at 16 when viewing another PC.
+- A file another PC rewrites mid-download no longer stops sync.
+- Tapping a clip in Media plays it in the viewer.
+- Muse Ember bots reply when Muse contributor mode is on.
+- Group bots react to the line they answer.
+- A line typed while the bot works in a room goes to the quick helper instead of waiting.
+- Room bots see the host's "Can make bots work" switches as soon as they change.
+- The "Sign in to Claude" card follows the account the bot actually runs on.
+- On a phone, the menu button stays visible over moving themes.
+- Auto checks a whole desktop action, not just its card summary.
+- Remote browser access can no longer reach Wink's internal routes, and a bot's API calls run as that bot.
+
 ## [1.0.277] - 2026-11-17
 
 ### Added

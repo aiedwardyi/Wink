@@ -29,6 +29,7 @@ import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { inputDigest } from "../../repeat-detector.ts";
+import { guardInput } from "../../auto-approve.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
 import { exhaustedWindow, grokRateLimitWindows, isConfirmedNonUsage, usageLimitFromError } from "../rate-limits.ts";
 
@@ -1194,6 +1195,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             tool,
             summary,
             inputDigest: inputDigest(toolCall.rawInput ?? args),
+            ...(controlsHost && turn.attended ? {} : guardInput(toolCall.rawInput)),
             approvalScope: controlsHost ? "local-computer" : undefined,
           });
         };

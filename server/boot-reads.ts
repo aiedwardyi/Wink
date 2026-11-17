@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 
 import { MAILBOX_RECEIPT_LIMIT, MAILBOX_RECEIPT_WINDOW_MS, type ReceiptRow } from "./mailbox-receipts.ts";
+import { notesBackOn } from "./message-db.ts";
+import type { Message } from "./store.ts";
+import { reportNotes } from "./unlanded.ts";
 
 export interface BootReadInput {
   dataDir: string;
@@ -15,20 +18,24 @@ export interface BootReadInput {
   cutoverAt: number | null;
   /** The tool names of a v1 notice and of any conflict notice. */
   notices: { migration: string; conflict: string[] };
+  /** Chats whose orbit-msg reports the unlanded header reads after paint. */
+  reportThreads: string[];
 }
 
 export interface BootRows {
   receipts: ReceiptRow[];
-  /** Saved sync tasks with a sync_v2_notices row: their v1 notices written since the cutover and never synced. */
+  /** Saved sync tasks with a sync_v2_notices row and no sync_v2_cleaned row: their v1 notices written since the cutover and never synced. */
   migration: Array<{ threadId: string; ids: string[] }>;
-  /** Eligible saved tasks with a conflict change: conflict notices on their active path. */
+  /** Eligible saved tasks whose latest conflict change is not their sync_v2_notices memo: conflict notices on their active path. */
   conflicts: Array<{ threadId: string; notices: string[] }>;
   asks: Array<{ threadId: string; id: string; at: number }>;
   peerCards: Array<{ threadId: string; id: string }>;
   handed: Array<{ threadId: string; id: string }>;
+  /** Each report thread's note rows newest first, as far as unlanded.ts reads them. */
+  reports: Array<{ threadId: string; notes: Message[] }>;
 }
 
-const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [] };
+const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [] };
 
 /** Runs in boot-reads-worker.ts on its own read-only handle; never call it on the thread that serves the app. */
 export function findBootRows(input: BootReadInput): BootRows {
@@ -46,7 +53,7 @@ export function findBootRows(input: BootReadInput): BootRows {
     const synced = tables.has("sync_v2_store") && tables.has("sync_v2_notices") && tables.has("sync_v2_changes") && tables.has("sync_v2_snapshot");
     // SAFETY: Both task queries select sync_v2_store's text threadId.
     const migration = synced && input.cutoverAt !== null
-      ? (db.prepare("SELECT s.threadId FROM sync_v2_store s JOIN sync_v2_notices n ON n.thread = s.threadId").all() as Array<{ threadId: string }>).map(({ threadId }) => ({
+      ? (db.prepare(`SELECT s.threadId FROM sync_v2_store s JOIN sync_v2_notices n ON n.thread = s.threadId${tables.has("sync_v2_cleaned") ? " WHERE NOT EXISTS (SELECT 1 FROM sync_v2_cleaned c WHERE c.thread = s.threadId)" : ""}`).all() as Array<{ threadId: string }>).map(({ threadId }) => ({
         threadId,
         // SAFETY: The query selects the message table's typed id.
         ids: (db.prepare(`SELECT id FROM messages m WHERE thread_id = ? AND at >= ? AND kind = 'activity'
@@ -57,7 +64,9 @@ export function findBootRows(input: BootReadInput): BootRows {
       : [];
     const conflicts = synced
       ? (db.prepare(`SELECT s.threadId FROM sync_v2_store s WHERE s.eligible = 1 AND EXISTS (
-          SELECT 1 FROM sync_v2_changes c WHERE c.thread = s.threadId AND c.conflict = 1 AND c.cursor <= s.cursor)`).all() as Array<{ threadId: string }>).map(({ threadId }) => ({
+          SELECT 1 FROM sync_v2_changes c WHERE c.thread = s.threadId AND c.conflict = 1 AND c.cursor <= s.cursor)
+        AND NOT EXISTS (SELECT 1 FROM sync_v2_notices n WHERE n.thread = s.threadId AND n.cursor = (SELECT MAX(c.cursor) FROM sync_v2_changes c
+          WHERE c.thread = s.threadId AND c.conflict = 1 AND c.cursor <= s.cursor))`).all() as Array<{ threadId: string }>).map(({ threadId }) => ({
         threadId,
         // SAFETY: The query selects the message table's typed id.
         notices: (db.prepare(`WITH RECURSIVE path(id) AS (
@@ -69,15 +78,27 @@ export function findBootRows(input: BootReadInput): BootRows {
       }))
       : [];
     // SAFETY: Each query selects the message table's typed ids and time.
-    const asks = input.askThreads.flatMap((threadId) => (db.prepare(`SELECT id, at FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
-      AND json_extract(json, '$.quick.state') = 'asked'
-      AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
-        AND json_extract(json, '$.quick.askId') IS NOT NULL)`).all(threadId, threadId) as Array<{ id: string; at: number }>).map((row) => ({ threadId, ...row })));
+    const asks = input.askThreads.flatMap((threadId) => {
+      const found = db.prepare(`SELECT id, at FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
+        AND json_extract(json, '$.quick.state') = 'asked'
+        AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
+          AND json_extract(json, '$.quick.askId') IS NOT NULL)`).all(threadId, threadId) as Array<{ id: string; at: number }>;
+      // without a saved leaf main reads the path whole (Store.activePath), so every ask stays
+      if (!found.length || !db.prepare("SELECT 1 FROM thread_state WHERE thread_id = ? AND active_leaf_id IS NOT NULL").get(threadId)) return found.map((row) => ({ threadId, ...row }));
+      // only asks on the active path: main walks back until it sees each one, so an ask on a dropped branch would walk it to the root
+      // SAFETY: The query selects the message table's typed id.
+      const onPath = new Set((db.prepare(`WITH RECURSIVE path(id) AS (
+          SELECT active_leaf_id FROM thread_state WHERE thread_id = ?
+          UNION SELECT json_extract(m.json, '$.parentId') FROM messages m JOIN path ON m.id = path.id WHERE m.thread_id = ?
+        ) SELECT id FROM path WHERE id IN (SELECT value FROM json_each(?))`).all(threadId, threadId, JSON.stringify(found.map((row) => row.id))) as Array<{ id: string }>).map((row) => row.id));
+      return found.filter((row) => onPath.has(row.id)).map((row) => ({ threadId, ...row }));
+    });
     // SAFETY: Both queries select the message table's typed thread id and id.
     const peerCards = db.prepare(`SELECT thread_id AS threadId, id FROM messages WHERE kind = 'options'
       AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')`).all() as BootRows["peerCards"];
     const handed = db.prepare("SELECT thread_id AS threadId, id FROM messages WHERE json_extract(json, '$.comm.read.state') = 'handed'").all() as BootRows["handed"];
-    return { receipts, migration, conflicts, asks, peerCards, handed };
+    const reports = input.reportThreads.map((threadId) => ({ threadId, notes: [...reportNotes(notesBackOn(db, threadId))] }));
+    return { receipts, migration, conflicts, asks, peerCards, handed, reports };
   } finally {
     db.close();
   }

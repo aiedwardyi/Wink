@@ -11,6 +11,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { needsYou } from "@/lib/open-question";
+import { answerPrefix } from "../../shared/open-question";
 import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
 
 import { Composer } from "./Composer";
@@ -345,7 +346,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     await act(async () => rowButton("Staging").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: `${answerPrefix(question)}Staging`, threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number) }]);
   });
 
   it("glows once when it arrives, then never again", async () => {
@@ -420,7 +421,7 @@ describe("pinned ask_user question", () => {
     expect(choice).toContain("rounded-full");
     expect(choice).toContain("bg-control");
     expect(choice).toContain("border-ink-secondary ");
-    expect(choice).toContain("pointer-coarse:after:-inset-y-[6px]");
+    expect(choice).toContain("pointer-coarse:after:-inset-y-[5px]");
   });
 
   it("gives the open card's x a 44px touch target without growing the card", async () => {
@@ -445,7 +446,7 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: `${answerPrefix(question)}Prod`, threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number) }]);
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
@@ -533,7 +534,7 @@ describe("pinned ask_user question", () => {
     await act(async () => pinButton("Staging").click());
     expect(sent("PATCH", `/api/groups/room/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
     expect(sent("POST", "/api/groups/room/messages").map((call) => call.body)).toEqual([
-      expect.objectContaining({ text: "Staging", threadId: "room-thread", sendId: expect.any(String) }),
+      expect.objectContaining({ text: `${answerPrefix(question)}Staging`, threadId: "room-thread", sendId: expect.any(String) }),
     ]);
   });
 });

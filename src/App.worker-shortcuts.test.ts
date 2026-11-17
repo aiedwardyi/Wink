@@ -127,8 +127,13 @@ it.each([[true, false], [false, false], [false, true]])("matches the mounted men
 it("keeps the remembered worker after opening Main and switching away and back", async () => {
   const f = await mount();
   try {
-    await act(async () => f.host.querySelector<HTMLButtonElement>("[data-worker-strip]")!.click());
-    await act(async () => f.host.querySelector<HTMLButtonElement>("[data-worker-terminal]")!.click());
+    await act(async () => f.host.querySelector<HTMLButtonElement>("main [data-show-pane-button]")!.click());
+    const terminalRow = await vi.waitFor(() => {
+      const row = document.querySelector<HTMLButtonElement>("[data-side-panel] [data-worker-terminal]");
+      if (!row) throw new Error("no terminal row in the side pane");
+      return row;
+    });
+    await act(async () => terminalRow.click());
     await vi.waitFor(() => expect(f.terminal()?.querySelector("header [data-worker-strip]")).toBeTruthy());
     const rows = await f.list();
     await act(async () => rows.find((row) => row.title.startsWith("WORK-2 "))!.click());
