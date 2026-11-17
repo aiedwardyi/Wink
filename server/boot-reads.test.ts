@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { mailboxGrant, mailboxSecretFor } from "./mailbox.ts";
@@ -88,9 +88,13 @@ function seed(): void {
   closeMessageDb();
 }
 
+function logged(): Array<Statement | { t: number; tick: true }> {
+  // SAFETY: main-sql-spy.ts writes one Statement or tick per line.
+  return readFileSync(spyLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Statement | { t: number; tick: true });
+}
+
 function statements(): Statement[] {
-  // SAFETY: main-sql-spy.ts writes one Statement per line.
-  return readFileSync(spyLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Statement);
+  return logged().filter((row): row is Statement => !("tick" in row));
 }
 
 function plans(rows: Statement[]): Map<string, string[]> {
@@ -237,8 +241,7 @@ describe("boot reads of messages.db", () => {
   }, WINDOW_MS + 10_000);
 
   it("for 30 s after serving, reads only keyed or bounded rows on the main thread", async () => {
-    const left = servingAt + WINDOW_MS - Date.now();
-    if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+    await vi.waitFor(() => expect(logged().at(-1)!.t).toBeGreaterThanOrEqual(servingAt + WINDOW_MS), { timeout: WINDOW_MS + 5_000, interval: 500 });
     expect(unbounded(statements().filter((row) => row.t >= servingAt && row.t < servingAt + WINDOW_MS))).toEqual([]);
   }, WINDOW_MS + 10_000);
 });

@@ -9,6 +9,8 @@ if (isMainThread && file) {
   const owners = new WeakMap<StatementSync, DatabaseSync>();
   const planned = new Set<string>();
   let inside = false;
+  // boot-reads.test.ts waits on these ticks: a log that reaches the window's end proves the server lived through it
+  setInterval(() => appendFileSync(file, `${JSON.stringify({ t: Date.now(), tick: true })}\n`), 1000).unref();
   DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql: string) {
     const statement = prepare.call(this, sql);
     owners.set(statement, this);
