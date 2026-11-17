@@ -25,6 +25,7 @@ import type {
 import { newEventId, newId } from "../../contracts.ts";
 import { applyCredentialAllowlist } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
+import { guardInput } from "../../auto-approve.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
 import { execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
@@ -1110,6 +1111,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             requestType: "permission",
             tool,
             summary,
+              ...guardInput(params),
             choices: choices.map((c: ApprovalChoice) => String(c?.label ?? "")).filter(Boolean),
           });
         };
