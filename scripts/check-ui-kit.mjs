@@ -6,7 +6,7 @@ import { location, parseSource, readSource, runCheck, testFile, trackedFiles, wa
 // Each screen uses the shared parts in docs/ui-kit.md; a hand-rolled copy drifts from the rest of the app.
 const allowedUrl = new URL("./ui-kit.json", import.meta.url);
 const uiFile = /^src\/.+\.(?:tsx?|css)$/;
-const rules = ["motion", "back", "menu", "button", "switch", "segmented"];
+const rules = ["motion", "back", "menu", "button", "switch", "segmented", "press"];
 const tokenFiles = new Set(["src/motion.css", "src/lib/motion.ts", "src/lib/motion-character.ts", "src/lib/phone-swipe.ts"]);
 
 const fix = {
@@ -16,6 +16,7 @@ const fix = {
   button: "use PRIMARY_BUTTON from src/lib/button-style.ts (docs/ui-kit.md#buttons)",
   switch: "use <DetailsSwitch> or <SwitchRow> from src/components/BotDetailsRows.tsx (docs/ui-kit.md#settings-row)",
   segmented: "use <Segmented> or <SegmentedRow> from src/components/Segmented.tsx (docs/ui-kit.md#settings-row)",
+  press: "buttons get the shared press and hover fade from src/motion.css; drop the button's own transition-* (bare transition if it also moves) and active: classes, and make a clickable element a <button> (docs/ui-kit.md#hover-and-press)",
 };
 
 const time = /(?<![\w.-])(\d*\.?\d+)(m?s)\b/g;
@@ -167,6 +168,7 @@ function tsHits(file, text) {
     if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) {
       const tokens = words(textOf(node));
       if (motion && [...tokens].some(rawClass)) hit("motion", node, "raw duration, delay or easing class");
+      if ([...tokens].some((name) => /(?:^|[:-])active:\S/.test(name))) hit("press", node, "hand-rolled press state");
       if (!looked.has(node) && ["bg-card", "rounded-xl", "shadow-2xl", "shadow-black/60"].every((name) => tokens.has(name)) && !(ts.isVariableDeclaration(node.parent) && nameOf(node.parent.name) === "MENU_CLASS")) {
         hit("menu", node, "hand-rolled menu look");
       }
@@ -189,7 +191,10 @@ function tsHits(file, text) {
       if (className) walk(className, (child) => looked.add(child));
     }
     if (/^menuitem(?:radio|checkbox)?$/.test(role) && !/\bMENU_ITEM_HOVER\b/.test(cls)) hit("menu", node, "hand-rolled menu row");
-    if (nameOf(node.tagName) !== "button") return;
+    const tag = nameOf(node.tagName);
+    if (/^(?:div|span|li|img|p|td|tr|section|article)$/.test(tag) && attr("onClick") && role !== "separator" && role !== "button" && [...classes].some((name) => /(?:^|:)hover:/.test(name))) hit("press", node, `clickable <${tag}> with a hover`);
+    if ((tag === "button" || role === "button") && [...classes].some((name) => !name.startsWith("motion-reduce:") && /^transition-(?:colors|opacity|shadow|transform|none|\[.+\])$/.test(utility(name)))) hit("press", node, "own transition class on a button");
+    if (tag !== "button") return;
     const element = ts.isJsxOpeningElement(node) ? node.parent : undefined;
     const label = ["aria-label", "title", "onClick"].map((name) => attr(name)?.getText() ?? "").join(" ");
     if (classes.has("bg-accent") && classes.has("text-accent-ink") && !/\bPRIMARY_BUTTON\b/.test(cls)) hit("button", node, "hand-rolled primary button");

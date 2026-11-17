@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { checkUiKit, uiKitHits } from "./check-ui-kit.mjs";
 
@@ -25,6 +26,9 @@ describe("ui kit gate", () => {
     ["segmented", "export const A = ({ extra }) => <div role=\"radiogroup\" className={`rounded-lg bg-inset p-[3px] ${extra}`} />;", tsx],
     ["menu", 'export const A = () => <div role="menu" className="animate-pop-in fixed z-40 rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60" />;', tsx],
     ["motion", "el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, iterations: untilInfinityMs });", tsx],
+    ["press", 'export const A = () => <button className="rounded-md px-2 transition-colors hover:bg-raised">Save</button>;', tsx],
+    ["press", 'export const A = () => <button className="rounded-md px-2 hover:bg-raised active:scale-95">Save</button>;', tsx],
+    ["press", 'export const A = ({ go }) => <div onClick={go} className="rounded-lg px-3 hover:bg-raised">Open</div>;', tsx],
   ])("rejects a hand-rolled %s: %s", (rule, source, file) => {
     expect(uiKitHits(file, source).map((hit) => hit.rule)).toEqual([rule]);
   });
@@ -34,6 +38,9 @@ describe("ui kit gate", () => {
     [".card { animation: pop-in var(--motion-moderate) var(--ease-standard, cubic-bezier(.2, 0, .38, .9)) both; }", css],
     [".spinner { animation: spin 1s linear infinite; }", css],
     ['el.animate([{ rotate: "0deg" }, { rotate: "360deg" }], { duration: 1200, iterations: Infinity });', tsx],
+    ['export const A = () => <button className="rounded-md px-2 hover:bg-raised">Save</button>;', tsx],
+    ['export const A = () => <button className="transition hover:bg-raised motion-reduce:transition-none">Move</button>;', tsx],
+    ['export const A = ({ drag }) => <div role="separator" onClick={drag} className="hover:bg-accent/40" />;', tsx],
     ["@media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; } }", css],
     [":root { --motion-fast: 110ms; --ease-standard: cubic-bezier(0.2, 0, 0.38, 0.9); }", "src/motion.css"],
     ['export const A = () => <div className="animate-pop-in transition-opacity duration-(--motion-fast) ease-standard" />;', tsx],
@@ -64,5 +71,11 @@ describe("ui kit gate", () => {
 
   it("accepts the repository with only its listed hand-rolled parts", () => {
     expect(checkUiKit()).toEqual([]);
+  });
+
+  it("gives every button the shared press and fade", () => {
+    const css = readFileSync(new URL("../src/motion.css", import.meta.url), "utf8");
+    expect(css).toMatch(/@layer base \{\s*:where\(button[^{]*\{\s*transition-property:[^;]*\bscale;\s*transition-duration: var\(--motion-fast\);\s*transition-timing-function: var\(--ease-standard\);/);
+    expect(css).toMatch(/:where\(button, \[role="button"\]\):not\(:disabled\):active \{\s*scale: 0\.97;/);
   });
 });

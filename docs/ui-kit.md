@@ -60,7 +60,8 @@ Lint `button`: a button with `bg-accent` and `text-accent-ink` but not `PRIMARY_
 
 - Menu rows `MENU_ITEM_HOVER`; list rows `hover:bg-raised/50`; primary `hover:brightness-110`; danger `hover:bg-danger/10`.
 - Icon buttons `text-ink-secondary hover:text-ink`, with `hover:bg-raised` on a panel and `hover:bg-control` on a card.
-- No press state, and hovers change at once.
+- Press and fade come from one base rule in `src/motion.css`: every button dips to `scale: 0.97` while pressed, and every hover fades on `--motion-fast` with `--ease-standard`. Reduced motion makes both instant.
+- Don't give a button its own `transition-*` or `active:` class, and make anything clickable a `<button>`; `pnpm check:ui-kit` fails both.
 
 ## Tooltips
 
