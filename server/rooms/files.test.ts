@@ -183,7 +183,7 @@ describe("room file types", () => {
     const video = (await upload(room, clip, { name: "clip.mp4" }, "p1")).json.file;
     const played = await call("GET", `/rooms/${room}/files/${video.id}`, { owner: "p1" });
     expect(played.body.equals(clip)).toBe(true);
-    expect(played.headers).toMatchObject({ ...safe, "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/) });
+    expect(played.headers).toMatchObject({ ...safe, "content-type": "video/mp4", "content-disposition": expect.stringMatching(/^attachment;/) });
     expect((await call("GET", `/rooms/${room}/files/${video.id}/preview`)).status).toBe(404);
   });
 });
