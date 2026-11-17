@@ -40,13 +40,15 @@ button.map-tree-box { font: inherit; color: inherit; text-align: left; cursor: p
 .map-tree-legend span[data-now] { color: var(--color-ink); }
 .map-tree-legend i { flex: none; width: 8px; height: 8px; background: var(--c); }
 .map-tree-legend em { font: 400 10px/1 var(--font-sans, sans-serif); font-style: normal; font-variant-numeric: tabular-nums; opacity: .75; }
+/* drawn like the tree's "+N folders" box */
+.map-tree-legend button { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border: 1px dashed var(--color-hairline); font: inherit; color: var(--color-ink-secondary); white-space: nowrap; }
 .map-tree-clash { display: flex; align-items: center; gap: 7px; min-width: 0; font: 11px/17px var(--font-sans, sans-serif); color: var(--color-ink-secondary); white-space: nowrap; }
 .map-tree-clash code { font: 500 11px/1 var(--font-mono, monospace); color: var(--color-ink); }
 .map-tree-clash span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .map-tree-x { flex: none; width: 13px; height: 10px; overflow: visible; }
 .map-tree-x rect { fill: none; stroke: var(--color-warning); stroke-width: 1; }
 .map-tree-x path { fill: var(--color-warning); }
-@media (hover: hover) { .map-tree-file[data-state="changed"]:hover, button.map-tree-box:hover { background: var(--color-raised); } }
+@media (hover: hover) { .map-tree-file[data-state="changed"]:hover, button.map-tree-box:hover, .map-tree-legend button:hover { background: var(--color-raised); } }
 @container map-pane (max-width: 503px) {
   .map-tree-box b { font-size: 11px; }
   .map-tree-n[data-kind="root"] .map-tree-box b { font-size: 12px; }
