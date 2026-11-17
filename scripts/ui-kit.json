@@ -52,6 +52,7 @@
     "src/components/Onboarding.tsx": 3,
     "src/components/OnboardingFinish.tsx": 1,
     "src/components/PendingApproval.tsx": 1,
+    "src/components/PendingQuestion.tsx": 1,
     "src/components/PhoneSetupFlow.tsx": 5,
     "src/components/PluginsPanel.tsx": 1,
     "src/components/RemoteTerminalView.tsx": 1,
