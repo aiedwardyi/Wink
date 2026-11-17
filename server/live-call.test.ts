@@ -614,6 +614,18 @@ describe("c-3a2c5539c0ea only chat talk reaches the call", () => {
     expect(chat).toContain("User: nice, thanks");
     expect(brief.split("STATUS:\n")[1]).toContain("BUILD reported FAILED");
   });
+
+  it("a reply quoting a long fence keeps the person's own words, and inline ticks never reach the voice", async () => {
+    const h = harness();
+    const fix = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: `Here's the change to \`store.ts\`:\n\`\`\`ts\n${"const row = store.appendMessage(threadId, { role: \"user\", kind: \"text\" });\n".repeat(6)}\`\`\`` });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Will this overwrite my files?", replyToId: fix.id });
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const chat = brief.split("RECENT CHAT:\n")[1]!.split("\n\nSTATUS:")[0]!;
+    expect(chat).toContain("Will this overwrite my files?");
+    expect(chat).not.toMatch(/`|appendMessage/);
+    expect(chat).toContain("Here's the change to store.ts:");
+  });
 });
 
 describe("call styles", () => {

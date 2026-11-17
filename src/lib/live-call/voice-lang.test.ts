@@ -926,6 +926,8 @@ describe("c-3a2c5539c0ea code is never speech", () => {
     e.events.heard("Style seems to be finicky. I don't see any difference. It just seems louder.");
     e.events.answering();
     e.events.audio(pcm());
+    audio.onStart();
+    audio.heardShare = () => 1;
     e.events.said("I'll pass that feedback on. For now, let's get back to the project queue. ");
     e.events.audio(pcm());
     e.events.said("--- ```rust let path = \"output_table.txt\"; ");
@@ -953,6 +955,37 @@ describe("c-3a2c5539c0ea code is never speech", () => {
     engine().events.heard("What's next?");
     speak(engine(), line);
     expect(audio.flushed).toBe(1);
+  });
+
+  it("words before a fence are a line only as far as they played", async () => {
+    const { audio, engine, posts } = await live();
+    const e = engine();
+    e.events.heard("What's the fix?");
+    e.events.answering();
+    e.events.said("Here is the answer. ```rust let x = 1;");
+    e.events.audio(pcm());
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(linesOf(posts).join("\n")).not.toContain("Here is");
+    e.events.heard("And the other one?");
+    e.events.answering();
+    e.events.audio(pcm());
+    audio.onStart();
+    audio.playing = true;
+    e.events.said("That one is fine. ```rust let y = 2;");
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(linesOf(posts)).toContain("voice: That one…");
+  });
+
+  it("a hash cut from its number at a chunk edge is no heading", async () => {
+    const { audio, engine, posts } = await live();
+    engine().events.heard("How's it going?");
+    speak(engine(), "PR #", false);
+    engine().events.said("1811 is green.");
+    engine().events.turnDone();
+    expect(audio.flushed).toBe(0);
+    expect(linesOf(posts)).toContain("voice: PR #1811 is green.");
   });
 
   it("plain talk with numbers, times and dashes plays whole", async () => {
