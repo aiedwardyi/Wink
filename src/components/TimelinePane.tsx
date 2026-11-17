@@ -39,7 +39,7 @@ const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase
 // Captions name their option; without them a picture pairs by place only when every option has one.
 function crossedOf({ over, overPictures }: Entry): { label: string; picture?: Picture }[] {
   if (!over.length) return overPictures.map((each) => ({ label: each.caption ?? "", picture: each }));
-  return over.map((label, at) => ({ label, picture: overPictures.find((each) => same(each.caption, label)) ?? (overPictures.length === over.length ? overPictures[at] : undefined) }));
+  return over.map((label, i) => ({ label, picture: overPictures.find((each) => same(each.caption, label)) ?? (overPictures.length === over.length ? overPictures[i] : undefined) }));
 }
 
 function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[] {
