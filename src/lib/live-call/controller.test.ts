@@ -53,7 +53,7 @@ const flush = () => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : new Pro
 /** The quiet a held line waits for after the voice talks. */
 const gap = () => vi.advanceTimersByTimeAsync(GAP_MS);
 
-function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string) {
+function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string, room?: { id: string; kind: "host" | "joined" }) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
@@ -64,6 +64,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
     audio,
     now,
     opener,
+    ...{ room },
     post: async (path, body) => {
       posts.push({ path, body });
       const hit = Object.entries(responses).find(([suffix]) => path.endsWith(suffix));
@@ -83,6 +84,21 @@ async function started(responses?: Record<string, Posted | (() => Promise<Posted
   s.engine().events.turnDone();
   return s;
 }
+
+/** A call placed from a team room, past its greeting. */
+async function roomCall(kind: "host" | "joined" = "host", responses?: Record<string, Posted | (() => Promise<Posted>)>, audio = fakeAudio()) {
+  const s = setup(responses, audio, undefined, undefined, { id: "launch", kind });
+  await s.call.start();
+  s.engine().events.ready();
+  s.engine().events.turnDone();
+  return s;
+}
+
+type RoomPost = { postOffer?: { text: string; sendId: string }; postFailed?: boolean };
+const roomOffer = (call: LiveCall) => (call.state() as RoomPost).postOffer;
+const roomSends = (posts: Array<{ path: string; body: any }>) => posts.filter((post) => post.path.endsWith("/send"));
+const observeRoom = (call: LiveCall, lines: unknown[]) => (call as unknown as { observeRoom?: (lines: unknown[]) => void }).observeRoom?.(lines);
+const answerPost = (call: LiveCall, yes: boolean) => (call as unknown as { answerPost?: (yes: boolean) => Promise<void> }).answerPost?.(yes);
 
 const botRow = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "bot", kind: "text", text, at: 2_000, ...extra }) as Message;
 const userRow = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "user", kind: "text", text, at: 2_000, ...extra }) as Message;
@@ -2933,5 +2949,121 @@ describe("one voice per call", () => {
     expect(Socket.all.map(voiceOf)).toEqual(["Alnilam", "Alnilam", "Fenrir", "Fenrir"]);
     expect(new Set(ids)).toEqual(new Set(["c-0123456789ab"]));
     expect(resumed).toBe(Socket.all[1]);
+  });
+});
+
+describe("LiveCall in a team room", () => {
+  it("carries the room in the token body, including reconnects", async () => {
+    const { call, posts, engine } = await roomCall();
+    engine().events.resumable("resume");
+    engine().events.closed(1006, "dropped");
+    await flush();
+    expect(posts.filter((post) => post.path.endsWith("/call/token")).map((post) => post.body.room)).toEqual([{ id: "launch", kind: "host" }, { id: "launch", kind: "host" }]);
+    call.end();
+  });
+
+  it("keeps a bot call's token body free of any room", async () => {
+    const { call, posts } = await started();
+    expect(posts.find((post) => post.path.endsWith("/call/token"))!.body).not.toHaveProperty("room");
+    observeRoom(call, [{ id: "m1", author: { name: "Minji" }, text: "hi", files: [] }]);
+    observeRoom(call, [{ id: "m1", author: { name: "Minji" }, text: "hi", files: [] }, { id: "m2", author: { name: "Joon" }, text: "yo", files: [] }]);
+    call.propose("Check Safari", ["t1"]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o", "Check Safari"), botRow("r", "Fixed.")] });
+    await flush();
+    expect(roomOffer(call)).toBeUndefined();
+    call.end();
+  });
+
+  it("passes a new teammate line silently, once, never as a turn", async () => {
+    const { call, engine } = await roomCall();
+    const old = { id: "m1", author: { name: "Minji" }, text: "Safari login breaks", files: [] };
+    observeRoom(call, [old]);
+    const texts = engine().texts.length;
+    const next = { id: "m2", author: { name: "민지" }, text: "I can test once fixed", files: [{ name: "check.png", id: "secret-file-id" }] };
+    observeRoom(call, [old, next]);
+    observeRoom(call, [old, next]);
+    await flush();
+    call.observe({ busy: false, messages: [] });
+    const lines = engine().contexts.filter((text) => text.includes("Room chat"));
+    expect(lines).toEqual([expect.stringContaining("민지: I can test once fixed check.png")]);
+    expect(lines[0]).not.toContain("secret-file-id");
+    expect(lines[0]).not.toContain("Safari login breaks");
+    expect(engine().texts).toHaveLength(texts);
+    call.end();
+  });
+
+  it.each(["host", "joined"] as const)("offers a voice order's reply and posts it to the %s room only on a second yes", async (kind) => {
+    const { call, engine, posts } = await roomCall(kind);
+    call.propose("Check Safari", ["t1"]);
+    await call.answer(true);
+    expect(posts.find((post) => post.path.endsWith("/messages"))?.path).toBe("/api/bots/b1/messages");
+    call.observe({ busy: false, messages: [orderRow("o1", "Check Safari"), botRow("r1", "Found a cookie setting.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    expect(roomSends(posts)).toEqual([]);
+    engine().events.heard("응, 올려줘");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toEqual([{ path: `/api/${kind === "joined" ? "joined/" : ""}rooms/launch/send`, body: { text: "Nova: Found a cookie setting.", sendId: "send-1" } }]);
+    expect(roomOffer(call)).toBeUndefined();
+    engine().events.heard("yes");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toHaveLength(1);
+    call.end();
+  });
+
+  it("hears a yes that asks for new work as that ask, not as a room post", async () => {
+    const { call, engine, posts } = await roomCall();
+    call.observe({ busy: false, messages: [orderRow("o", "Check Safari"), botRow("r", "Found a cookie setting.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    engine().events.heard("Okay, check Firefox too");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toEqual([]);
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    engine().events.heard("Yes, post it.");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toHaveLength(1);
+    call.end();
+  });
+
+  it("declines a room post, and typed or asked replies are never offered", async () => {
+    const { call, engine, posts } = await roomCall();
+    call.observe({ busy: false, messages: [userRow("typed", "What broke?"), botRow("reply", "The cookie.")] });
+    await flush();
+    expect(roomOffer(call)).toBeUndefined();
+    call.observe({ busy: false, messages: [userRow("typed", "What broke?"), botRow("reply", "The cookie."), orderRow("o", "Check"), botRow("r", "Fixed.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Fixed.");
+    engine().events.heard("아니, 취소");
+    engine().events.answering();
+    await flush();
+    expect(roomOffer(call)).toBeUndefined();
+    expect(roomSends(posts)).toEqual([]);
+    call.end();
+  });
+
+  it("caps the posted result and retries with the same sendId", async () => {
+    let tries = 0;
+    const { call, posts } = await roomCall("joined", {
+      "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed. ".repeat(400)] } },
+      "/send": async () => ({ status: ++tries === 1 ? 503 : 200, data: {} }),
+    });
+    call.observe({ busy: false, messages: [orderRow("o", "Check"), botRow("r", "raw reply")] });
+    await flush();
+    expect(roomOffer(call)!.text.length).toBeLessThanOrEqual(1_500);
+    expect(roomOffer(call)!.text).toMatch(/^Nova: Fixed\./);
+    await answerPost(call, true);
+    expect((call.state() as RoomPost).postFailed).toBe(true);
+    await Promise.all([answerPost(call, true), answerPost(call, true)]);
+    const sent = roomSends(posts);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body).toEqual(sent[0]!.body);
+    expect(roomOffer(call)).toBeUndefined();
+    call.end();
   });
 });
