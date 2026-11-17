@@ -261,7 +261,7 @@ describe("system text on a resumed session", () => {
     const corrected = await send("it is a dog", current);
     expect(corrected.pid).toBe(first.pid);
     expect(corrected.text).toContain("- Pet: a dog named Mochi");
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await vi.waitFor(() => expect(() => process.kill(first.pid, 0)).toThrow(), { timeout: 5_000 });
 
     const cold = await send("what pet?", current);
     expect(cold.pid).not.toBe(first.pid);
