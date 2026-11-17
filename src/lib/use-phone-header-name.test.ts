@@ -12,8 +12,9 @@ let nameWidth = 120;
 let phone = true;
 let crowded: "cluster" | "child" | null = null;
 let chipWidth = 132;
+let toggleAt: number | null = null;
 
-function Harness({ botName = "A long bot name" }: { botName?: string }) {
+function Harness({ botName = "A long bot name", toggle = false }: { botName?: string; toggle?: boolean }) {
   const cluster = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
   usePhoneHeaderNameFloor(cluster, name, botName, false);
@@ -27,6 +28,7 @@ function Harness({ botName = "A long bot name" }: { botName?: string }) {
         createElement("span", { "data-model-label": true }, "Opus 5.5"),
         createElement("span", { "data-model-effort": true }, "Max"),
       ),
+      toggle && createElement("button", { "data-toggle": true }),
     ),
   );
 }
@@ -39,6 +41,7 @@ beforeEach(() => {
   phone = true;
   crowded = null;
   chipWidth = 132;
+  toggleAt = null;
   const matchMedia = window.matchMedia.bind(window);
   vi.spyOn(window, "matchMedia").mockImplementation(query => {
     const media = matchMedia(query);
@@ -57,12 +60,15 @@ beforeEach(() => {
       const controls = this.hasAttribute("data-controls") ? this : this.parentElement;
       left = overlaps && !controls?.style.columnGap ? 150 : 260;
       width = this.hasAttribute("data-chip") ? chipWidth : 132;
+      // With a toggle after it, a chip that may shrink ends 4px before the toggle; one pinned at max-content keeps its full width.
+      if (toggleAt !== null && this.hasAttribute("data-chip") && this.style.minWidth !== "max-content") width = toggleAt - 4 - left;
     }
+    else if (this.hasAttribute("data-toggle")) { left = toggleAt ?? 362; width = 30; }
     else if (this.hasAttribute("data-model-label")) {
       const room = host.querySelector<HTMLElement>("[data-controls]")?.style.columnGap && compactAvailable ? compactAvailable : available;
       left = 392 - room;
       width = this.style.display === "none" ? 0 : this.style.minWidth === "max-content" ? 80 : Math.min(40, room);
-    } else if (this.hasAttribute("data-model-effort")) { left = 370; width = this.style.display === "none" ? 0 : 30; }
+    } else if (this.hasAttribute("data-model-effort")) { left = 350; width = this.style.display === "none" ? 0 : 30; }
     return { x: left, y: 0, left, right: left + width, top: 0, bottom: 30, width, height: 30, toJSON() {} };
   });
   vi.spyOn(Range.prototype, "getBoundingClientRect").mockImplementation(function (this: Range) {
@@ -132,6 +138,24 @@ it("never writes a negative min-width when the chip is narrower than its label",
   expect(host.querySelector<HTMLElement>("[data-model-label]")!.style.textOverflow).toBe("ellipsis");
   expect(host.querySelector<HTMLElement>("[data-chip]")!.style.minWidth).toBe("max-content");
   expect(host.querySelector<HTMLElement>("[data-controls]")!.style.minWidth).toBe("");
+});
+
+it("keeps the model chip clear of the side pane toggle and keeps its effort word", async () => {
+  toggleAt = 330;
+  await act(async () => root.render(createElement(Harness, { toggle: true })));
+  const chip = host.querySelector<HTMLElement>("[data-chip]")!.getBoundingClientRect();
+  const toggle = host.querySelector<HTMLElement>("[data-toggle]")!.getBoundingClientRect();
+  expect(chip.right).toBeLessThanOrEqual(toggle.left);
+  expect(host.querySelector<HTMLElement>("[data-model-effort]")!.style.display).toBe("");
+  expect(host.querySelector<HTMLElement>("[data-model-label]")!.style.textOverflow).toBe("ellipsis");
+});
+
+it("does not settle on a chip that spills under the toggle when the label itself fits", async () => {
+  toggleAt = 330;
+  available = 100;
+  await act(async () => root.render(createElement(Harness, { toggle: true })));
+  const chip = host.querySelector<HTMLElement>("[data-chip]")!.getBoundingClientRect();
+  expect(chip.right).toBeLessThanOrEqual(host.querySelector<HTMLElement>("[data-toggle]")!.getBoundingClientRect().left);
 });
 
 it("leaves desktop sizing alone", async () => {

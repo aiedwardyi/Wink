@@ -5,14 +5,12 @@ export type PhoneHeaderSlot = {
   nameMin: number;
 };
 
-/** Give up effort, then shrink the bot name to its floor, then truncate the model. */
+/** Shrink the bot name to its floor, then truncate the model keeping its effort word; the effort word goes last. */
 export function phoneHeaderSlots(name: number, floor: number): PhoneHeaderSlot[] {
   const shrunk = Math.min(name, floor);
-  const slots: PhoneHeaderSlot[] = [
-    { showEffort: true, showLabel: true, nameMin: name },
-    { showEffort: false, showLabel: true, nameMin: name },
-  ];
-  if (name > floor) slots.push({ showEffort: false, showLabel: true, nameMin: floor });
+  const slots: PhoneHeaderSlot[] = [{ showEffort: true, showLabel: true, nameMin: name }];
+  if (name > floor) slots.push({ showEffort: true, showLabel: true, nameMin: floor });
+  slots.push({ showEffort: true, showLabel: true, truncateLabel: true, nameMin: shrunk });
   slots.push({ showEffort: false, showLabel: true, truncateLabel: true, nameMin: shrunk });
   return slots;
 }

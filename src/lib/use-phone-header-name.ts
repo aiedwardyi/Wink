@@ -215,6 +215,16 @@ export function usePhoneHeaderNameFloor(
           const rect = edge.getBoundingClientRect();
           if (rect.width >= 1 && rect.left < cluster.getBoundingClientRect().right - 1) return false;
         }
+        // The chip's wrapper can be squeezed narrower than a chip pinned at max-content, which then spills under the next control.
+        const boxes = [...controls?.children ?? []]
+          .filter((child): child is HTMLElement => child instanceof HTMLElement)
+          .map(child => (chip && child !== chip && child.contains(chip) ? chip : child).getBoundingClientRect())
+          .filter(rect => rect.width >= 1)
+          .sort((a, b) => a.left - b.left);
+        for (const [index, rect] of boxes.entries()) {
+          const next = boxes[index + 1];
+          if (next ? rect.right > next.left + 0.5 : rect.right > limit + 0.5) return false;
+        }
         const logo = chip?.querySelector("svg");
         if (logo) {
           const rect = logo.getBoundingClientRect();
@@ -237,9 +247,10 @@ export function usePhoneHeaderNameFloor(
       };
       const last = slots.at(-1);
       if (!last) return;
-      const fit = (truncate = false) => {
+      const fit = (last = false) => {
         for (const slot of slots) {
-          if (slot.truncateLabel && !truncate) continue;
+          // Spacing is spent before the label truncates or the effort word goes.
+          if (!last && (slot.truncateLabel || !slot.showEffort)) continue;
           paint(slot);
           if (fits(slot)) return true;
         }
