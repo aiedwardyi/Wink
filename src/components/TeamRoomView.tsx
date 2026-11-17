@@ -37,7 +37,7 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
   const skin = useSkin();
   const scene = sceneOf(skin);
   const sceneSend = useRef<(() => void) | null>(null);
-  const call = useCallControls(roomCallBot(state.bots), hidden, { id: group.hosted.roomId, kind: "host", name: group.name, lines });
+  const call = useCallControls(roomCallBot(state.bots), hidden, { id: group.hosted.roomId, kind: "host", name: group.name });
   return (
     <main data-team-room="host" data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {scene && <ChatScene scene={scene} skin={skin} working={Boolean(group.busyBotId || group.botChain)} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}

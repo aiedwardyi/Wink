@@ -87,7 +87,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
   const scene = sceneOf(skin);
   const sceneSend = useRef<(() => void) | null>(null);
   const seq = entries?.at(-1)?.seq;
-  const call = useCallControls(status === null ? roomCallBot(state.bots) : undefined, hidden, { id: roomId, kind: "joined", name, lines });
+  const call = useCallControls(status === null ? roomCallBot(state.bots) : undefined, hidden, { id: roomId, kind: "joined", name });
   useEffect(() => {
     if (preview) return;
     const read = () => {

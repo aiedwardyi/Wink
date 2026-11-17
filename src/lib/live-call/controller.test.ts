@@ -3014,6 +3014,23 @@ describe("LiveCall in a team room", () => {
     call.end();
   });
 
+  it("hears a yes that asks for new work as that ask, not as a room post", async () => {
+    const { call, engine, posts } = await roomCall();
+    call.observe({ busy: false, messages: [orderRow("o", "Check Safari"), botRow("r", "Found a cookie setting.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    engine().events.heard("Okay, check Firefox too");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toEqual([]);
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    engine().events.heard("Yes, post it.");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toHaveLength(1);
+    call.end();
+  });
+
   it("declines a room post, and typed or asked replies are never offered", async () => {
     const { call, engine, posts } = await roomCall();
     call.observe({ busy: false, messages: [userRow("typed", "What broke?"), botRow("reply", "The cookie.")] });

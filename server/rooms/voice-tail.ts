@@ -13,7 +13,7 @@ export function roomTail(room: CallRoom, host: string): RoomVoiceTail | undefine
   const entries = hosted ? recentRoomEntries(room.id, 2_000) : joinedEntries(room.id, 2_000);
   const lines: string[] = [];
   let used = 0;
-  for (const entry of entries.reverse()) {
+  for (const entry of entries.toReversed()) {
     const text = [entry.text, ...(entry.files ?? []).map((file) => file.name)].filter(Boolean).join(" ");
     const line = `${entry.author.name}: ${text}`;
     const tokens = estimateContextTokens([{ text: line }]);

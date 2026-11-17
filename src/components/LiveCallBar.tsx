@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
-import type { RoomLine } from "@/lib/team-rooms";
+import { useJoinedRoom } from "@/lib/joined-rooms";
+import { hostLines, isTeamRoom, joinedLines, roomTeamBots, type RoomLine } from "@/lib/team-rooms";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
@@ -261,7 +262,35 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const volume = useCallVolume();
   useEffect(() => call.retune(picks ?? {}, volume), [call, picks?.voice, picks?.speed, picks?.style, picks?.language, volume]);
 
-  return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
+  return (
+    <>
+      {active.room?.kind === "host" && <HostRoomFeed call={call} roomId={active.room.id} />}
+      {active.room?.kind === "joined" && <JoinedRoomFeed call={call} roomId={active.room.id} />}
+      {introShown.mounted && <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />}
+    </>
+  );
+}
+
+// The room a call was placed from keeps reaching the voice whatever screen is open.
+function useRoomFeed(call: LiveCall, lines: readonly RoomLine[] | undefined) {
+  useEffect(() => {
+    if (lines) call.observeRoom(lines);
+  }, [call, lines]);
+}
+
+function HostRoomFeed({ call, roomId }: { call: LiveCall; roomId: string }) {
+  const { state } = useStore();
+  const group = state.groups.find((candidate) => isTeamRoom(candidate) && candidate.hosted.roomId === roomId);
+  const messages = group?.messages;
+  const teamBots = group && roomTeamBots(group);
+  useRoomFeed(call, useMemo(() => messages && hostLines(messages, teamBots), [messages, teamBots]));
+  return null;
+}
+
+function JoinedRoomFeed({ call, roomId }: { call: LiveCall; roomId: string }) {
+  const room = useJoinedRoom(roomId);
+  useRoomFeed(call, useMemo(() => room ? joinedLines(room.entries, [...(room.state?.bots ?? []), ...(room.state?.teamBots ?? [])], room.me.id) : undefined, [room]));
+  return null;
 }
 
 const TARGET = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
@@ -316,13 +345,13 @@ export function ResumeButton({ live }: { live: Live }) {
   );
 }
 
-/** The call's notes and order card in its own chat or the team room it was placed from; `roomLines` is that room's chat. */
-export function LiveCallBar({ bot, roomLines }: { bot: Bot; roomLines?: readonly RoomLine[] }) {
+/** The call's notes and order card in its own chat or the team room it was placed from. */
+export function LiveCallBar({ bot }: { bot: Bot }) {
   const live = useLive(bot.id);
-  return live ? <Bar bot={bot} live={live} roomLines={roomLines} /> : null;
+  return live ? <Bar bot={bot} live={live} /> : null;
 }
 
-function Bar({ bot, live, roomLines }: { bot: Bot; live: Live; roomLines?: readonly RoomLine[] }) {
+function Bar({ bot, live }: { bot: Bot; live: Live }) {
   const { dispatch } = useStore();
   const room = useActiveCall()?.room;
   const { locale } = useI18n();
@@ -342,10 +371,6 @@ function Bar({ bot, live, roomLines }: { bot: Bot; live: Live; roomLines?: reado
       // shown again next time
     }
   }, [note, words.privacy]);
-
-  useEffect(() => {
-    if (roomLines) live.call.observeRoom(roomLines);
-  }, [live, roomLines]);
 
   useEffect(() => {
     if (!roomPrivacy) return;
