@@ -63,6 +63,8 @@ export interface Point { x: number; y: number }
 
 export const TREE = { BOX: 26, VGAP: 22, LINE: 17, TOUCH: 44, SGAP: 7, GAP: 10, SMALL: 40, SQ: 9, ELBOW: 4 };
 const { BOX, VGAP, LINE, SGAP, GAP, SMALL, SQ, ELBOW } = TREE;
+// The narrowest a file stack goes: four squares across.
+const STACK_MIN = 58;
 const byPath = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const dirOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 export const fmt = (n: number) => n.toLocaleString("en-US");
@@ -150,7 +152,7 @@ function build(index: TreeIndex, o: TreeOptions, crowded: boolean) {
   return { rows, small, lit };
 }
 
-function measure(it: TreeItem, o: TreeOptions, maxStack: number) {
+function measure(it: TreeItem, o: TreeOptions, maxStack: number, bare = false) {
   if (it.dir && it.kind !== "stack") {
     const label = it.kind === "root" ? it.dir.name : it.dir.name + "/";
     // 28 is what .map-tree-box draws around the two: 9px padding and a 1px border each side, and an 8px gap.
@@ -162,8 +164,9 @@ function measure(it: TreeItem, o: TreeOptions, maxStack: number) {
   else {
     const files = it.filesOnly || !it.dirs;
     it.label = files ? o.files(it.count!) : o.folders(it.dirs!);
-    it.sub = files || o.phone ? "" : fmt(it.count!);
-    it.w = it.bw = Math.ceil(o.measure(it.label, "dir") + (it.sub ? o.measure(it.sub, "count") + 6 : 0) + 18); it.h = BOX;
+    it.sub = files || o.phone || bare ? "" : fmt(it.count!);
+    // Same 20px of padding and border as a folder box, and the 8px gap when it has a count.
+    it.w = it.bw = Math.ceil(o.measure(it.label, "dir") + (it.sub ? o.measure(it.sub, "count") + 8 : 0) + 20); it.h = BOX;
   }
 }
 
@@ -175,14 +178,14 @@ function measureStack(it: TreeItem, o: TreeOptions, maxStack: number): [number, 
   if (it.squares) {
     w = Math.max(w, Math.min(it.squares.length, 10) * SQ - 2);
     const sw = Math.min(maxStack, Math.ceil(w + 36));
-    it.per = Math.max(4, Math.min(it.squares.length, Math.floor((sw - 22) / SQ)));
+    it.per = Math.max(Math.min(4, it.squares.length), Math.min(it.squares.length, Math.floor((sw - 22) / SQ)));
     it.squaresHeight = Math.ceil(it.squares.length / it.per) * SQ + 2;
     return [sw, it.squaresHeight + it.files!.length * line + 4];
   }
   return [Math.min(maxStack, Math.ceil(w + 36)), it.files!.length * line + (it.hidden ? LINE - 2 : 0) + 4];
 }
 
-export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
+export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false, extra: number[] = []): { items: TreeItem[]; height: number; lit: Set<string> } {
   const { rows, small, lit } = build(index, o, crowded);
   const W = o.width;
   let maxStack = o.phone ? 160 : 230;
@@ -191,6 +194,8 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
   let y = 0;
   let tight = false;
   let overlap = false;
+  let stuck = 0;
+  let spent = true;
   const gone = new Set<TreeItem>();
   rows.forEach((row, r) => {
     for (let i = row.length; i--;) if (gone.has(row[i].parent!)) { gone.add(row[i]); row.splice(i, 1); }
@@ -229,9 +234,11 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
     const span = () => { for (const group of groups) group.w = width(group.items); return groups.reduce((sum, group) => sum + group.w, 0) + GAP * 2 * (groups.length - 1); };
     for (let guard = 0; span() > W && guard < 14; guard++) { maxStack = Math.max(96, maxStack - 12); for (const it of row) measure(it, o, maxStack); }
     // Siblings that still cannot fit fold, rightmost first, into their parent's "+N folders" box; the current file's path stays open.
-    if (o.phone || !o.current) while (span() > W) {
+    let spare = extra[r] ?? 0;
+    if (o.phone || !o.current) while (span() > W || spare > 0) {
       const last = row.findLast(it => (it.kind === "dir" || it.kind === "col" || it.kind === "box") && !o.current?.startsWith(it.dir!.path + "/"));
       if (!last) break;
+      spare--;
       const parent = last.parent!;
       let more = row.find(it => it.id === "m:" + parent.dir!.path);
       if (!more) { more = { kind: "more", id: "m:" + parent.dir!.path, dirs: 0, count: 0, parent, x: 0, y: 0, w: 0, h: 0, bw: 0 }; row.splice(row.indexOf(last) + 1, 0, more); }
@@ -242,7 +249,13 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
       parent.kids = row.filter(it => it.parent === parent);
       groups = group();
     }
-    if (span() > W) tight = true;
+    // What cannot fold narrows: the "+N folders" counts go first, as on a phone, then the file stacks.
+    let bare = false;
+    let narrow = maxStack;
+    if ((o.phone || !o.current) && span() > W) { bare = true; for (const it of row) measure(it, o, narrow, bare); }
+    while ((o.phone || !o.current) && span() > W && narrow > STACK_MIN) { narrow = Math.max(STACK_MIN, narrow - 12); for (const it of row) measure(it, o, narrow, bare); }
+    if (spare > 0) spent = false;
+    if (span() > W) { tight = true; if (!stuck && r > 1) stuck = r; }
     let end = -GAP * 2;
     for (const group of groups) {
       const center = group.parent ? group.parent.x + group.parent.bw / 2 : W / 2;
@@ -251,6 +264,8 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
     let limit = W;
     for (const group of groups.toReversed()) { group.x = Math.max(0, Math.min(group.x, limit - group.w)); limit = group.x - GAP * 2; }
     for (let i = 1; i < groups.length; i++) if (groups[i].x < groups[i - 1].x + groups[i - 1].w) overlap = true;
+    // A row that still cannot fit runs past the edge instead of piling its groups on each other.
+    for (let i = 1; i < groups.length; i++) groups[i].x = Math.max(groups[i].x, groups[i - 1].x + groups[i - 1].w + GAP * 2);
     let h = 0;
     const first = items.length;
     for (const group of groups) {
@@ -268,6 +283,8 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
   if (tight && !o.phone && o.current) return treeLayout(index, { ...o, phone: true });
   // A small project too wide to open every folder lays out like a big one: changed branches only.
   if (overlap && small) return treeLayout(index, o, true);
+  // A last row that cannot narrow any further folds one more branch in the row above, the way an over-wide row does.
+  if (stuck && spent && (o.phone || !o.current) && extra.reduce((sum, n) => sum + (n ?? 0), 0) < 12) { const more = Array.from({ length: stuck }, (_, i) => (extra[i] ?? 0) + (i === stuck - 1 ? 1 : 0)); return treeLayout(index, o, crowded, more); }
   return { items, height: y - VGAP + 2, lit };
 }
 
