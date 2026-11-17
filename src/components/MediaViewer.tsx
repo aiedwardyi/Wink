@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, ImageOff, LoaderCircle, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
-import { pauseOtherClips } from "@/lib/one-clip";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
 import {
@@ -52,10 +51,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   // a removed video keeps its decoder and connection until collected, so let go of both now
   const play = useCallback((video: HTMLVideoElement) => {
     video.setAttribute("src", src);
-    const oneClip = () => pauseOtherClips(video);
-    video.addEventListener("play", oneClip);
     return () => {
-      video.removeEventListener("play", oneClip);
       video.pause();
       video.removeAttribute("src");
       video.load();
