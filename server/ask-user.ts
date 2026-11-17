@@ -6,7 +6,7 @@
 // activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { ANSWERED_IN_CHAT, askStates, scanQuestion } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, askStates, isSentByPerson, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -106,7 +106,6 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
 }
 
 const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
-const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
 /** The stored row of a question already answered, dismissed or closed: it takes no second answer, such as a tap from a screen that missed the close. */
 export function settledAsk(messages: readonly Message[], messageId: string): Message | null {
@@ -117,7 +116,7 @@ export function settledAsk(messages: readonly Message[], messageId: string): Mes
 /** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
 export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
   const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
-  if (end < 0 || (closerId !== undefined && !sentByPerson(messages[end]!))) return [];
+  if (end < 0 || (closerId !== undefined && !isSentByPerson(messages[end]!))) return [];
   const before = messages.slice(0, end);
   return [...closedNote(before, text, botId), ...openAsksNote(before, text, botId)];
 }
@@ -125,7 +124,7 @@ export function closedAskNotes(messages: readonly Message[], text: string, close
 function closedNote(messages: readonly Message[], text: string, botId?: string): string[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
-    if (sentByPerson(message)) return [];
+    if (isSentByPerson(message)) return [];
     if (!isAskUserCard(message)) continue;
     const card = message.card!;
     // a tapped choice can arrive before its answered patch
@@ -152,7 +151,7 @@ export function memberClosedAskNotes(messages: readonly Message[], botId: string
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
     if (message.from?.botId === botId) return [];
-    if (sentByPerson(message)) return closedAskNotes(messages, message.text ?? "", message.id, botId);
+    if (isSentByPerson(message)) return closedAskNotes(messages, message.text ?? "", message.id, botId);
   }
   return [];
 }
@@ -175,7 +174,7 @@ export function watchSkippedQuestions(
       const path = store.activePath(change.threadId);
       const card = skippedQuestion(path.at(-1)?.id === change.message.id ? path.slice(0, -1) : path, change.message)?.card;
       if (card) update(change.threadId, (book) => addQuestionAsk(book, card.subtitle, card.options, now()));
-    } else if (change.type === "message" && !change.imported && sentByPerson(change.message)) {
+    } else if (change.type === "message" && !change.imported && isSentByPerson(change.message)) {
       // a typed answer leaves no patch; only a thread with a filed question pays for the walk
       update(change.threadId, (book) => {
         const asks = book?.asks;

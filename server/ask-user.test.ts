@@ -204,6 +204,15 @@ describe("closed ask_user card note", () => {
     expect(memberClosedAskNotes([card, said("u1", "hm"), { id: "r1", at: 3, role: "bot", kind: "text", text: "ok", from: ada }], "bot-a")).toEqual([]);
     expect(memberClosedAskNotes([card], "bot-a")).toEqual([]);
   });
+
+  it("never takes a team room teammate's line as the host's answer", () => {
+    const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
+    const teammate = said("u1", "hm", { author: { kind: "person", id: "p1", name: "Grace" } });
+    const open = [askCard("c1", "Ship it?", { from: ada }, { staysOpen: true }), askCard("c2", "Which region?", { from: ada }, { staysOpen: true })];
+    expect(memberClosedAskNotes([...open, teammate], "bot-a")).toEqual([]);
+    expect(memberClosedAskNotes([askCard("c1", "Ship it?", { from: ada }), teammate], "bot-a")).toEqual([]);
+    expect(closedAskNotes([askCard("c1", "Ship it?"), teammate], "hm", "u1")).toEqual([]);
+  });
 });
 
 describe("skipped ask_user questions", () => {
