@@ -169,18 +169,18 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 max-[379px]:gap-2">
         <span className={LABEL}>{t("callMenu.style")}</span>
         <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
           {CALL_STYLES.map((style) => (
             <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
-              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8", PILL,
+              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8 max-[379px]:px-1.5", PILL,
                 style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
               {t(`callMenu.style.${style}`)}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 max-[379px]:gap-1.5">
           <span className={LABEL}>{t("callMenu.captions")}</span>
           <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
         </div>
