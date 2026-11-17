@@ -20,7 +20,7 @@ const INTRO =
   "The user's picks in their own words, oldest first. Auto Notes writes this file from the chat; bots read it and never edit it. A newer pick on the same question replaces the old one, which stays here struck out with a pointer to the newer pick. A tweak adds to the pick it changes. Only current picks load into the bot's prompt.";
 const LEGACY = "## Older picks, before the timeline (no words kept)";
 const HEADER = `Current picks, newest first: the user's own, each beating older notes unless they changed it since. Build from a pick's picture plus its tweaks, never a new option. History: memory/${PICKS_FILE} (Auto Notes writes it; never edit).`;
-const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?(?: \(\d+\))?`;
+const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
 const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files): ?(.*?)\s*$/;
@@ -95,7 +95,8 @@ export function sameOption(a: string, b: string): boolean {
 
 export function pickStamp(ms: number): string {
   const date = new Date(ms);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const seconds = date.getSeconds() || date.getMilliseconds() ? `:${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}` : "";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}${seconds}`;
 }
 
 /** Entries and the text above them; lines it does not know stay with their entry. */
@@ -176,7 +177,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const said = clip(change.said, SAID_MAX);
     const stamp = pickStamp(change.at);
     // a replayed batch from before the current pick never lands on it
-    if (current && stamp < current.id.slice(0, 16)) continue;
+    if (current && stamp < current.id.replace(/ \(\d+\)$/, "")) continue;
     if (change.kind === "tweak") {
       const last = current?.tweaks.at(-1);
       // a retried batch or an ask said twice in a row adds nothing; asking again after a reversal does
@@ -215,6 +216,43 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
 
 export function currentPicks(text: string | null | undefined): PickEntry[] {
   return text ? parseTimeline(text).entries.filter((entry) => !entry.replacedBy) : [];
+}
+
+/** Concurrent PCs can reuse a minute id; content breaks ties and gives each pick a stable slot. */
+export function mergeTimelines(a: string, b: string): string | null {
+  const timelines = [a, b].sort().map(parseTimeline);
+  if (timelines.some(({ entries }) => !entries.length)) return null;
+  const merged = new Map<string, PickEntry>();
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  const union = <T>(x: T[], y: T[]) => [...new Map([...x, ...y].map((item) => [JSON.stringify(item), item])).values()].sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
+  for (const { entries } of timelines) {
+    for (const entry of entries) {
+      const key = JSON.stringify([pickKey(entry.key), entry.id.replace(/ \(\d+\)$/, ""), entry.picked, entry.said]);
+      const before = merged.get(key);
+      merged.set(key, before ? {
+        ...before,
+        picture: before.picture ?? entry.picture,
+        over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
+        files: union(before.files, entry.files), tweaks: union(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
+      } : { ...entry, replacedBy: undefined });
+    }
+  }
+  const entries = [...merged.entries()].sort(([a, x], [b, y]) => compare(x.id.replace(/ \(\d+\)$/, ""), y.id.replace(/ \(\d+\)$/, "")) || compare(a, b)).map(([, entry]) => entry);
+  const ids = new Set<string>();
+  const current = new Map<string, PickEntry>();
+  for (const entry of entries) {
+    const base = entry.id.replace(/ \(\d+\)$/, "");
+    let id = base;
+    for (let n = 2; ids.has(id); n += 1) id = `${base} (${n})`;
+    ids.add(id);
+    entry.id = id;
+    entry.replacedBy = undefined;
+    const before = current.get(pickKey(entry.key));
+    if (before) before.replacedBy = id;
+    current.set(pickKey(entry.key), entry);
+  }
+  const head = [...new Set(timelines.flatMap(({ head }) => head.split("\n")))].join("\n");
+  return renderTimeline({ head, entries });
 }
 
 /** Current picks for the note-taker, newest last, the newest with what they beat, so a change of mind reuses the key and can name an option it beat. */

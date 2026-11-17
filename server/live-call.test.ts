@@ -24,7 +24,7 @@ const KEY = "AIzaTEST-not-a-real-key-0123456789";
 const dirs: string[] = [];
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"]; roomTail?: (...args: any[]) => any } = {}) {
+function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"]; roomTail?: (...args: any[]) => any; settled?: (botId: string, threadId: string) => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "live-call-")); dirs.push(dir);
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({ name: "Juno" }, { seedMessages: false });
@@ -33,7 +33,7 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
   const answered = vi.fn();
-  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered, ...{ roomTail: opts.roomTail } });
+  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, answered, ...{ roomTail: opts.roomTail, settled: opts.settled } });
   let routes = open();
   const restart = () => { routes = open(); };
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id, relay = false) {
@@ -50,6 +50,15 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
 }
 
 describe("call token", () => {
+  it("settles saved user lines for Auto Notes, excluding voice-only batches", async () => {
+    const settled = vi.fn();
+    const h = harness({ settled });
+    const { data } = await h.post("token");
+    expect((await h.post("lines", { callId: data.callId, lines: [{ who: "user", text: "I choose C" }, { who: "voice", text: "C it is" }] })).status).toBe(200);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId);
+    await h.post("lines", { callId: data.callId, lines: [{ who: "voice", text: "Anything else?" }, { who: "user", text: " " }] });
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
   it("uses one room snapshot for validation and the brief", async () => {
     const roomTail = vi.fn().mockReturnValueOnce({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" });
     const h = harness({ roomTail });

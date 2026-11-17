@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
+import { acceptFacts, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import { currentPicks } from "./picks.ts";
-import type { Message, StoreChange } from "./store.ts";
+import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
@@ -18,6 +18,7 @@ const BOT = "bot-t1";
 
 function fakeStore() {
   const threads = new Map<string, Message[]>();
+  const groups = new Map<string, GroupRecord>();
   const listeners = new Set<(change: StoreChange) => void>();
   let seq = 0;
   return {
@@ -26,7 +27,9 @@ function fakeStore() {
       return () => listeners.delete(listener);
     },
     messagesFor: (threadId: string) => threads.get(threadId) ?? [],
-    groupByThread: () => undefined,
+    groups,
+    groupByThread: (threadId: string) => groups.get(threadId),
+    bot: (id: string) => ({ id, threadId: id.slice(4) }) as never,
     // SAFETY: the pass only reads the bot id.
     botByThread: (threadId: string) => ({ id: `bot-${threadId}` }) as never,
     appendMessage(threadId: string, message: Omit<Message, "id" | "at">) {
@@ -68,6 +71,104 @@ describe("decision timeline", () => {
     }
     return mock;
   };
+
+  it("saves the owner's room switch for each member and ignores a teammate's pick", async () => {
+    bot("For the forum: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say("I choose A");
+    reply({ kind: "decision", key: "forum", fact: "A - plain list", quote: "I choose A", over: ["C - Reddit cards"] });
+    await settle();
+    store.groups.set("room1", { id: "g", memberIds: [BOT, "bot-t2"] } as GroupRecord);
+    store.appendMessage("room1", { role: "bot", kind: "text", text: "For the forum: A - plain list, B - tiles, C - Reddit cards. Which one?" });
+    store.appendMessage("room1", { role: "user", kind: "text", text: "I choose C" });
+    generate.mockResolvedValue(JSON.stringify([{ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "I choose C" }]));
+    pass.onSettled(BOT, "room1");
+    pass.onSettled("bot-t2", "room1");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+    expect(currentPicks(readMemoryTopic("bot-t2", "decisions.md"))[0]?.picked).toBe("C - Reddit cards");
+    const calls = generate.mock.calls.length;
+    store.appendMessage("room1", { role: "user", kind: "text", text: "I choose B", author: { kind: "person", id: "peer", name: "Peer" } });
+    pass.onSettled(BOT, "room1");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(calls);
+    expect(memorySystemPrompt(BOT)).toContain("C - Reddit cards");
+  });
+
+  it("keeps an introductory letter pick and its tweak", async () => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const quote = "Actually, C, and make the header smaller with a dark border";
+    say(quote);
+    reply(
+      { kind: "decision", key: "forum", fact: "C - Reddit cards", quote },
+      { kind: "tweak", key: "forum", fact: "make the header smaller with a dark border", quote },
+    );
+    await settle();
+    expect(currentPicks(timeline())[0]).toMatchObject({ picked: "C - Reddit cards", tweaks: [{ said: quote }] });
+  });
+
+  it("rejects a repeated option whose last mention is negated", () => {
+    expect(acceptFacts([{ kind: "decision", key: "forum", fact: "plain list", quote: "plain list" }],
+      "We used plain list before, but not plain list anymore", "")).toEqual([]);
+  });
+
+  it.each(["# Memory\n- forum: A - plain list\n", "# Memory\n## Notes\n- forum: A - plain list (noted 2026-11-15)\n"])("removes a matched legacy pick anywhere in %s", async (notes) => {
+    writeMemoryFile(BOT, `${notes}- I discussed forum with a friend.\n`);
+    bot("For the forum: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say("I choose c");
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "I choose c" });
+    await settle();
+    expect(memoryFileRaw(BOT)).not.toContain("A - plain list");
+    expect(memoryFileRaw(BOT)).toContain("I discussed forum with a friend.");
+    expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+  });
+
+  it.each([["Dark", true], ["Light", false]])("maps the first one to Dark, checking %s", (fact, accepted) => {
+    const kept = acceptFacts([{ kind: "decision", key: "theme", fact, quote: "the first one" }],
+      [{ text: "the first one", context: "Should the theme be 1) Dark or 2) Light?" }], "");
+    expect(kept.length > 0).toBe(accepted);
+  });
+
+  it("keeps question context for a reply longer than 200 characters", async () => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const quote = "I choose C for the forum layout";
+    say(`${quote}, and while you're in there please make sure ${"the header stays small and the border stays dark. ".repeat(4)}`);
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote });
+    await settle();
+    expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+    expect(generate.mock.calls[0]![0]).toContain("<context>");
+  });
+
+  it("records only real attachments with decoded paths", async () => {
+    const spoof = '<attached-image path="/spoofed/inside-paste.png"/>';
+    say(`I choose Reddit cards\n\n<pasted-text>${spoof}</pasted-text>\n\n\`\`\`\n${spoof}\n\`\`\`\n\n> ${spoof}\n\n<attached-image path="/real/a&amp;b.png"/>`);
+    reply({ kind: "decision", key: "forum", fact: "Reddit cards", quote: "I choose Reddit cards" });
+    await settle();
+    expect(currentPicks(timeline())[0]?.files).toEqual(["/real/a&b.png"]);
+  });
+
+  it("grounds a late card tap in the card it answers", async () => {
+    const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Forum", subtitle: "Which forum look?", options: ["A - plain list", "B - tiles", "C - Reddit cards"], askUser: true } });
+    say("I choose A");
+    bot("A it is. Should the theme be 1) Dark or 2) Light?");
+    store.appendMessage("t1", { role: "user", kind: "text", text: "C", answersCard: card.id });
+    reply(
+      { kind: "decision", key: "forum", fact: "A - plain list", quote: "I choose A" },
+      { kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "C" },
+    );
+    await settle();
+    expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+  });
+
+  it.each(["c, and keep it under 300 tokens", "go with b and pin it to the top", "actually go with c, it uses fewer tokens", "c, with a secret menu"])("keeps a non-secret decision: %s", async (quote) => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say(quote);
+    const picked = quote.includes("with b") ? "B - tiles" : "C - Reddit cards";
+    reply({ kind: "decision", key: "forum", fact: picked, quote });
+    await settle();
+    expect(currentPicks(timeline())[0]?.picked).toBe(picked);
+  });
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW });

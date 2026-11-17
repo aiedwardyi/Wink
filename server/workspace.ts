@@ -274,7 +274,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
   // sync keeps one copy as the file; the set-aside one can hold the newest notes, and only the bot can merge them
   const parked = listMemoryTopics(botId)
     .map((topic) => `memory/${topic.name}`)
-    .filter((name) => PARKED_COPY.test(name));
+    .filter((name) => PARKED_COPY.test(name) && !/^memory\/decisions\.conflict-/.test(name));
   const memoryFile = join(workspaceDir(botId), "MEMORY.md");
   const topicDir = join(workspaceDir(botId), "memory");
   const current = picksPrompt(botId);

@@ -685,11 +685,11 @@ describe("memory pass", () => {
     expect(generate.mock.calls[2]![0]).toContain("<context>Please choose an option below. Serif Sans</context>\nthe second one");
   });
 
-  it("gives no context to a long user line", async () => {
+  it("keeps context for a long user line", async () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Dark or light?" });
     say("t1", `dark please, ${"and some more words ".repeat(12)}`);
     await settle("t1", 3 * MINUTE);
-    expect(generate.mock.calls[0]![0]).not.toContain("<context>");
+    expect(generate.mock.calls[0]![0]).toContain("<context>Dark or light?</context>");
   });
 
   it("never takes a decision from the bot's text alone", async () => {
@@ -1051,7 +1051,7 @@ describe("memory pass wiring", () => {
 
   it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
-    expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);/);
+    expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
   });
 
@@ -1076,7 +1076,7 @@ describe("memory pass wiring", () => {
 
   it("loads only the pending rows, never a Map of the whole thread", () => {
     const source = readFileSync(join(here, "memory-pass.ts"), "utf8");
-    expect(source.replace(/\r\n/g, "\n")).toContain("const messages = deps.store.messagesFor(threadId);\n    const rows = pendingRows(messages, ids);");
+    expect(source.replace(/\r\n/g, "\n")).toContain("const messages = deps.store.messagesFor(sourceThread(threadId));\n    const rows = pendingRows(messages, ids);");
     expect(source).not.toMatch(/new Map\(deps\.store\.messagesFor/);
   });
 });

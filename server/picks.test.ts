@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPicks, currentOnly, currentPicks, parseTimeline, pickKeysList, picksBlock, promptTokens, renderTimeline, type PickChange } from "./picks.ts";
+import { applyPicks, currentOnly, currentPicks, mergeTimelines, parseTimeline, pickKeysList, picksBlock, promptTokens, renderTimeline, type PickChange } from "./picks.ts";
 
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 10, day, hour, minute).getTime();
 const pick = (key: string, picked: string, said: string, when: number, extra: Partial<Extract<PickChange, { kind: "pick" }>> = {}): PickChange =>
@@ -8,6 +8,23 @@ const pick = (key: string, picked: string, said: string, when: number, extra: Pa
 const tweak = (key: string, said: string, when: number): PickChange => ({ kind: "tweak", at: when, key, said });
 
 describe("applyPicks", () => {
+  it("keeps the later choice when two PCs pick within the same minute", () => {
+    const early = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10) + 5_000)])!.text;
+    const late = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10) + 10_000)])!.text;
+    expect(currentPicks(mergeTimelines(early, late))[0]?.picked).toBe("A - plain list");
+  });
+  it("merges colliding ids deterministically without duplicating picks on replay", () => {
+    const a = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10)), tweak("forum", "smaller header", at(17, 10, 1))])!.text;
+    const b = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10)), pick("theme", "Dark", "dark", at(17, 10))])!.text;
+    const merged = mergeTimelines(a, b)!;
+    expect(mergeTimelines(b, a)).toBe(merged);
+    expect(mergeTimelines(merged, a)).toBe(merged);
+    expect(mergeTimelines(merged, b)).toBe(merged);
+    expect(parseTimeline(merged).entries).toHaveLength(3);
+    expect(new Set(parseTimeline(merged).entries.map(({ id }) => id)).size).toBe(3);
+    expect(currentPicks(merged)).toHaveLength(2);
+    expect(parseTimeline(merged).entries.find(({ picked }) => picked === "A - plain list")?.tweaks).toHaveLength(1);
+  });
   it("replaces the current pick on the same question in one write, the old one struck with a pointer", () => {
     const first = applyPicks("", [pick("Forum look", "A - plain list", "a looks cleanest", at(17, 10))])!;
     const next = applyPicks(first.text, [pick("forum  LOOK!", "C - Reddit cards", "actually c", at(17, 10, 40))])!;

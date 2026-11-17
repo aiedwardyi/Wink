@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { mergeTimelines, PICKS_FILE } from "./picks.ts";
 import { syncRoots, syncWriteRoot } from "./sync-roots.ts";
 import { isMemoryTopicName, MEMORY_SEED } from "./workspace.ts";
 
@@ -388,6 +389,14 @@ export function syncBotMemory(
         continue;
       }
       // changed on two PCs at once, or the same versions with different text from a copied ledger
+      const merged: string | null = file === `memory/${PICKS_FILE}` && typeof text === "string" && entry.text !== null ? mergeTimelines(text, entry.text) : null;
+      if (merged !== null) {
+        writeText(path, merged);
+        text = merged;
+        state = bot.files[file] = { vv: { ...joined(state.vv, entry.vv), [me]: tick(ledger) }, hash: hash(merged), at: Math.max(state.at, entry.at) };
+        result = "pulled";
+        continue;
+      }
       const keep = wins({ ...(state.by ?? mine), at: state.at }, { ...(by ?? mine), at: entry.at });
       const vv = joined(state.vv, entry.vv);
       const lost = keep ? entry.text : text;
@@ -407,6 +416,17 @@ export function syncBotMemory(
       console.warn(
         `memory sync: ${botSyncId}/${file} changed on two PCs; kept ${keep ? "this" : "the other"} PC's copy${parked ? `, set the other aside as ${parked.name}` : ""}`,
       );
+    }
+    if (file === `memory/${PICKS_FILE}` && typeof text === "string") {
+      for (const copy of files.filter((name) => /^memory\/decisions\.conflict-[0-9a-f]{8}\.md$/.test(name))) {
+        const body = texts.get(copy) ?? readText(join(workspace, copy), copy);
+        const merged: string | null = body ? mergeTimelines(text, body.replace(/^<!-- memory sync:[^\n]*\n/, "")) : null;
+        if (merged === null || merged === text) continue;
+        writeText(path, merged);
+        text = merged;
+        state = bot.files[file] = { vv: { ...state?.vv, [me]: tick(ledger) }, hash: hash(merged), at: now };
+        result = "pulled";
+      }
     }
     results[file] = result;
     texts.set(file, text);

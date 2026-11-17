@@ -55,6 +55,7 @@ type LiveCallDeps = {
   catalog?: ModelCatalogLookup;
   /** A minted token is the pick-up: a refused one leaves a ringing bot call ringing. */
   answered?: (botId: string) => void;
+  settled?: (botId: string, threadId: string) => void;
   roomTail?: (room: CallRoom, host: string) => RoomVoiceTail | undefined;
 };
 
@@ -339,6 +340,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!parsed.success) return json(res, 400, { error: "callId and 1-50 lines required" });
     const { callId, lines: said } = parsed.data;
     const ids: string[] = [];
+    let user = false;
     for (const line of said) {
       const text = line.text.trim().slice(0, LINE_MAX_CHARS);
       if (!text) continue;
@@ -348,7 +350,9 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
         // Gemini Live speaks the call, whatever engine the bot chats on.
         : { role: "bot", kind: "text", text, engine: "geminiAgent", call: { id: callId, voice: true, ...(line.who === "notice" ? { notice: true as const } : {}) }, ...(at ? { at } : {}) });
       ids.push(row.id);
+      if (line.who === "user") user = true;
     }
+    if (user) deps.settled?.(bot.id, bot.threadId);
     return json(res, 200, { ids });
   };
 

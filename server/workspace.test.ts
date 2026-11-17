@@ -30,6 +30,11 @@ import {
 const BOT = "bot-workspace-test";
 
 describe("workspace", () => {
+  it("never instructs bots to hand-merge timeline conflict copies", () => {
+    const dir = ensureWorkspace(BOT);
+    writeFileSync(join(dir, "memory", "decisions.conflict-e059d14f.md"), "# Decision timeline\n");
+    expect(memorySystemPrompt(BOT)).not.toContain("decisions.conflict-e059d14f.md");
+  });
   beforeEach(() => {
     rmSync(WORKSPACES_DIR, { recursive: true, force: true });
   });
