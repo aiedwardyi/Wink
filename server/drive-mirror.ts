@@ -81,7 +81,7 @@ export function decodeDrivePath(name: string): string | null {
 }
 
 // Bump when a sync path kind or payload family becomes readable.
-export const DRIVE_READER_REVISION = 4;
+export const DRIVE_READER_REVISION = 5;
 
 export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
   if (!validPath(path)) return "unknown";
