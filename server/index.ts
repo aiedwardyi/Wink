@@ -3014,7 +3014,11 @@ const unlandedWork = createUnlandedWork({
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
-startupTiming.afterPaint("unlanded", async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); });
+startupTiming.afterPaint("unlanded", async () => {
+  // the worker read each chat's reports; a chat loaded since then has them in memory
+  const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
+  for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+});
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -9540,6 +9544,7 @@ phoneAccess.start(handleRequest).catch((error) => {
 startupTiming.afterPaint("bootReads", () => startBootReads({
   dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
   notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
+  reportThreads: store.bots.map((bot) => bot.threadId),
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));

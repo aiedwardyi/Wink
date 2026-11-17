@@ -321,8 +321,13 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
 
 /** A thread's note rows newest first, parsed only as far as the caller reads. */
 export function notesBack(threadId: string): Iterable<Message> {
+  return notesBackOn(db(), threadId);
+}
+
+/** notesBack on another handle: boot-reads.ts reads the same rows on its worker's own connection. */
+export function notesBackOn(handle: DatabaseSync, threadId: string): Iterable<Message> {
   // SAFETY: This projection selects the stored message JSON.
-  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'note' ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
+  const rows = handle.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'note' ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
   return (function* () {
     for (const row of rows) yield rowToMessage(row);
   })();

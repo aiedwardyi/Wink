@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 
 import { MAILBOX_RECEIPT_LIMIT, MAILBOX_RECEIPT_WINDOW_MS, type ReceiptRow } from "./mailbox-receipts.ts";
+import { notesBackOn } from "./message-db.ts";
+import type { Message } from "./store.ts";
+import { reportNotes } from "./unlanded.ts";
 
 export interface BootReadInput {
   dataDir: string;
@@ -15,6 +18,8 @@ export interface BootReadInput {
   cutoverAt: number | null;
   /** The tool names of a v1 notice and of any conflict notice. */
   notices: { migration: string; conflict: string[] };
+  /** Chats whose orbit-msg reports the unlanded header reads after paint. */
+  reportThreads: string[];
 }
 
 export interface BootRows {
@@ -26,9 +31,11 @@ export interface BootRows {
   asks: Array<{ threadId: string; id: string; at: number }>;
   peerCards: Array<{ threadId: string; id: string }>;
   handed: Array<{ threadId: string; id: string }>;
+  /** Each report thread's note rows newest first, as far as unlanded.ts reads them. */
+  reports: Array<{ threadId: string; notes: Message[] }>;
 }
 
-const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [] };
+const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [] };
 
 /** Runs in boot-reads-worker.ts on its own read-only handle; never call it on the thread that serves the app. */
 export function findBootRows(input: BootReadInput): BootRows {
@@ -77,7 +84,8 @@ export function findBootRows(input: BootReadInput): BootRows {
     const peerCards = db.prepare(`SELECT thread_id AS threadId, id FROM messages WHERE kind = 'options'
       AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')`).all() as BootRows["peerCards"];
     const handed = db.prepare("SELECT thread_id AS threadId, id FROM messages WHERE json_extract(json, '$.comm.read.state') = 'handed'").all() as BootRows["handed"];
-    return { receipts, migration, conflicts, asks, peerCards, handed };
+    const reports = input.reportThreads.map((threadId) => ({ threadId, notes: [...reportNotes(notesBackOn(db, threadId))] }));
+    return { receipts, migration, conflicts, asks, peerCards, handed, reports };
   } finally {
     db.close();
   }

@@ -135,7 +135,7 @@ writeFileSync(
   [
     'import { Worker } from "node:worker_threads";',
     'const worker = new Worker(new URL("./boot-reads-worker.js", import.meta.url), {',
-    `  workerData: { dataDir: ${JSON.stringify(home)}, now: Date.now(), askThreads: [], cutoverAt: null, notices: { migration: "", conflict: [] } },`,
+    `  workerData: { dataDir: ${JSON.stringify(home)}, now: Date.now(), askThreads: [], reportThreads: [], cutoverAt: null, notices: { migration: "", conflict: [] } },`,
     "});",
     'worker.once("message", (reply) => { console.log(JSON.stringify(reply)); process.exit(0); });',
     'worker.once("error", (error) => { console.log(JSON.stringify({ error: String(error) })); process.exit(0); });',
