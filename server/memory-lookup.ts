@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
 import { userTyping } from "./memory-pass.ts";
+import { currentOnly, PICKS_FILE } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { appendRotatingLog } from "./rotating-log.ts";
 import { parseJson } from "./schema.ts";
@@ -313,7 +314,8 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
       continue;
     }
     const text = await readFile(path, "utf8").catch(() => null);
-    if (text !== null) files.push({ source, tier, text, mtime });
+    // a replaced pick is history, never a recall hit
+    if (text !== null) files.push({ source, tier, text: source === `memory/${PICKS_FILE}` ? currentOnly(text) : text, mtime });
   }
   return files;
 }

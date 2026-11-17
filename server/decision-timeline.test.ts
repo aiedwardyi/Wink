@@ -1,0 +1,247 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
+import type { Message, StoreChange } from "./store.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+import { memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
+
+const MINUTE = 60_000;
+const NOW = new Date(2026, 10, 17, 10).getTime();
+const BOT = "bot-t1";
+
+function fakeStore() {
+  const threads = new Map<string, Message[]>();
+  const listeners = new Set<(change: StoreChange) => void>();
+  let seq = 0;
+  return {
+    onChange(listener: (change: StoreChange) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    messagesFor: (threadId: string) => threads.get(threadId) ?? [],
+    groupByThread: () => undefined,
+    // SAFETY: the pass only reads the bot id.
+    botByThread: (threadId: string) => ({ id: `bot-${threadId}` }) as never,
+    appendMessage(threadId: string, message: Omit<Message, "id" | "at">) {
+      const full: Message = { id: `m${++seq}`, at: Date.now(), ...message };
+      threads.set(threadId, [...(threads.get(threadId) ?? []), full]);
+      for (const listener of listeners) listener({ type: "message", threadId, message: full });
+      return full;
+    },
+  };
+}
+
+describe("decision timeline", () => {
+  let store: ReturnType<typeof fakeStore>;
+  let dataDir: string;
+  let generate: ReturnType<typeof vi.fn<NoteGenerator>>;
+  let pass: MemoryPass;
+
+  const start = () => createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false });
+  const restart = () => {
+    pass.dispose();
+    pass = start();
+  };
+  const bot = (text: string) => store.appendMessage("t1", { role: "bot", kind: "text", text });
+  const say = (text: string) => store.appendMessage("t1", { role: "user", kind: "text", text });
+  const settle = async () => {
+    pass.onSettled(BOT, "t1");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+  };
+  const reply = (...items: object[]) => generate.mockResolvedValueOnce(JSON.stringify(items));
+  const timeline = () => readMemoryTopic(BOT, "decisions.md") ?? "";
+  const showMocks = () => {
+    const mock = (name: string) => join(dataDir, "mocks", `${name}.png`);
+    mkdirSync(join(dataDir, "mocks"), { recursive: true });
+    for (const [name, caption] of [["A", "A - plain list"], ["B", "B - tiles"], ["C", "C - Reddit cards"]] as const) {
+      writeFileSync(mock(name), "");
+      const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "mcp__agents__show_image", ok: true, summary: mock(name) } });
+      store.appendMessage("t1", { role: "bot", kind: "screen", parentId: shown.id, image: `${name}.png`, text: caption });
+    }
+    return mock;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW });
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    store = fakeStore();
+    dataDir = temps.make(join(tmpdir(), "decision-timeline-"));
+    generate = vi.fn<NoteGenerator>(async () => "[]");
+    writeMemoryFile(BOT, "");
+    rmSync(join(workspaceDir(BOT), "memory"), { recursive: true, force: true });
+    pass = start();
+  });
+
+  afterEach(() => {
+    pass.dispose();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("leaves only the new pick current after a change of mind, the old one marked replaced", async () => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say("a looks cleanest");
+    reply({ kind: "decision", key: "forum look", fact: "A - plain list", quote: "a looks cleanest", over: ["B - tiles", "C - Reddit cards"] });
+    await settle();
+    bot("A it is: the plain list.");
+    say("actually c");
+    bot("C it is.");
+    say("make the header smaller");
+    reply(
+      { kind: "tweak", key: "forum look", fact: "smaller header", quote: "make the header smaller" },
+      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "actually c", over: ["A - plain list", "B - tiles"] },
+    );
+    await settle();
+    expect(generate.mock.calls[1]![0]).toContain("<picks>\n- forum look: A - plain list\n  over: B - tiles; C - Reddit cards\n</picks>");
+    expect(timeline()).toContain("## 2026-11-17 10:00 | forum look | replaced by 2026-11-17 10:03\n- Picked: ~~A - plain list~~\n");
+    expect(timeline()).toContain('## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "actually c"\n- Tweak 2026-11-17 10:03: "make the header smaller"\n');
+    expect(timeline().match(/\| current$/gm)).toHaveLength(1);
+    const prompt = memorySystemPrompt(BOT);
+    expect(prompt).toContain('- forum look (11-17): C - Reddit cards + tweaks: "make the header smaller" (11-17)');
+    expect(prompt).not.toContain("plain list");
+    expect(memoryFileRaw(BOT)).not.toContain("plain list");
+  });
+
+  it("never saves a bot suggestion as a pick", async () => {
+    bot("I'll add a 30-voice grid to Settings so you can hear every voice.");
+    say("ok thanks");
+    reply({ kind: "decision", key: "voice settings", fact: "30-voice grid in Settings", quote: "ok thanks" });
+    await settle();
+    expect(memoryFileRaw(BOT)).not.toContain("30-voice");
+    expect(timeline()).not.toContain("30-voice");
+    expect(memorySystemPrompt(BOT)).not.toContain("30-voice");
+    bot("Want the 30-voice grid in Settings, or a short list?");
+    say("yes the grid");
+    reply({ kind: "decision", key: "voice settings", fact: "30-voice grid in Settings", quote: "yes the grid" });
+    await settle();
+    expect(timeline()).toContain('- Picked: 30-voice grid in Settings\n- Said: "yes the grid"\n');
+  });
+
+  it("holds the current picks to the cap with 40 picks, the rest on file", () => {
+    const entries = Array.from({ length: 40 }, (_, i) => [
+      `## 2026-11-${String(1 + Math.floor(i / 4)).padStart(2, "0")} 0${i % 4}:00 | question ${i + 1} | current`,
+      `- Picked: answer ${i + 1} with a few more words to read`,
+      `- Picture: C:\\Users\\me\\Desktop\\cards\\mock-${i + 1}\\C.png`,
+      `- Said: "pick ${i + 1}"`,
+    ].join("\n"));
+    mkdirSync(join(workspaceDir(BOT), "memory"), { recursive: true });
+    writeFileSync(join(workspaceDir(BOT), "memory", "decisions.md"), `# Decision timeline\n\n${entries.join("\n\n")}\n`);
+    const prompt = memorySystemPrompt(BOT);
+    expect(prompt).toContain("Current picks");
+    const block = prompt.slice(prompt.indexOf("Current picks"));
+    expect(block.length).toBeLessThanOrEqual(780);
+    expect(block).toContain("- question 40 (11-10): answer 40");
+    expect(block).not.toContain("- question 1 (");
+    expect(block).toMatch(/\d+ older current picks are only in memory\/decisions\.md\.$/);
+  });
+
+  it("keeps a pick across restarts, even one made just before the server stopped", async () => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say("c please");
+    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "c please" });
+    pass.onSettled(BOT, "t1");
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    restart();
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    restart();
+    expect(memorySystemPrompt(BOT)).toContain("- forum look (11-17): C - Reddit cards");
+  });
+
+  it("builds from the picked picture plus both tweaks after a restart, never a new option", async () => {
+    const mock = showMocks();
+    bot("Here are three forum looks. Which one?");
+    say("c");
+    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "c", picture: mock("C"), over: ["A - plain list", "B - tiles"], over_pictures: [mock("A"), mock("B")] });
+    await settle();
+    expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${mock("A")} (A - plain list)\n${mock("B")} (B - tiles)\n${mock("C")} (C - Reddit cards)\n</pictures>\nc\n`);
+    bot("Building C - Reddit cards.");
+    say("make the header smaller");
+    reply({ kind: "tweak", key: "forum look", fact: "smaller header", quote: "make the header smaller" });
+    await settle();
+    bot("Header is smaller now.");
+    say("and use a blue accent instead of orange");
+    reply({ kind: "tweak", key: "forum look", fact: "blue accent instead of orange", quote: "use a blue accent instead of orange" });
+    await settle();
+    restart();
+    expect(memorySystemPrompt(BOT)).toContain(
+      `- forum look (11-17): C - Reddit cards (${mock("C")}) + tweaks: "make the header smaller" (11-17), "use a blue accent instead of orange" (11-17)`,
+    );
+    expect(timeline().match(/\| current$/gm)).toHaveLength(1);
+    expect(timeline()).toContain(
+      `- Picture: ${mock("C")} (C - Reddit cards)\n- Over: A - plain list; B - tiles\n- Over pictures: ${mock("A")} (A - plain list); ${mock("B")} (B - tiles)\n- Said: "c"\n- Tweak 2026-11-17 10:03: "make the header smaller"\n- Tweak 2026-11-17 10:06: "use a blue accent instead of orange"\n`,
+    );
+  });
+
+  it("switches a picture pick to one it beat and carries that picture", async () => {
+    const mock = showMocks();
+    bot("Which one?");
+    say("a looks cleanest");
+    reply({ kind: "decision", key: "forum look", fact: "A - plain list", quote: "a looks cleanest", picture: mock("A"), over: ["B - tiles", "C - Reddit cards"], over_pictures: [mock("B"), mock("C")] });
+    await settle();
+    bot("A it is.");
+    say("actually c");
+    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "actually c", over: ["A - plain list", "B - tiles"] });
+    await settle();
+    expect(generate.mock.calls[1]![0]).toContain(
+      `- forum look: A - plain list\n  picture: ${mock("A")} (A - plain list)\n  over: B - tiles; C - Reddit cards\n  over pictures: ${mock("B")} (B - tiles); ${mock("C")} (C - Reddit cards)\n`,
+    );
+    expect(memorySystemPrompt(BOT)).toContain(`- forum look (11-17): C - Reddit cards (${mock("C")})`);
+    expect(timeline()).toContain(
+      `- Picked: C - Reddit cards\n- Picture: ${mock("C")} (C - Reddit cards)\n- Over: A - plain list; B - tiles\n- Over pictures: ${mock("A")} (A - plain list); ${mock("B")} (B - tiles)\n- Said: "actually c"\n`,
+    );
+  });
+
+  it("keeps the shown copy of a picture whose path was cut short or deleted", async () => {
+    const shownAs = { A: join(dataDir, "gone", "A.png"), C: `C:\\Users\\me\\${"mocks\\".repeat(20)}`.slice(0, 119) + "…" };
+    for (const [name, caption] of [["A", "A - plain list"], ["C", "C - Reddit cards"]] as const) {
+      const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "mcp__agents__show_image", ok: true, summary: shownAs[name] } });
+      store.appendMessage("t1", { role: "bot", kind: "screen", parentId: shown.id, image: `${name}.png`, text: caption });
+    }
+    const copy = (name: string) => join(dataDir, "attachments", `${name}.png`);
+    bot("A or C?");
+    say("c");
+    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "c", picture: copy("C"), over: ["A - plain list"], over_pictures: [copy("A")] });
+    await settle();
+    expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copy("A")} (A - plain list)\n${copy("C")} (C - Reddit cards)\n</pictures>`);
+    expect(timeline()).toContain(`- Picture: ${copy("C")} (C - Reddit cards)\n- Over: A - plain list\n- Over pictures: ${copy("A")} (A - plain list)\n`);
+  });
+
+  it("keeps a change of mind quoted from the bot's confirmation, never a bot pick", async () => {
+    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say("a looks cleanest");
+    reply({ kind: "decision", key: "forum look", fact: "A - plain list", quote: "a looks cleanest", over: ["B - tiles", "C - Reddit cards"] });
+    await settle();
+    bot("A it is: the plain list.");
+    say("actually c");
+    bot("C it is - Reddit cards replace the plain list.");
+    say("make the header smaller");
+    reply(
+      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "C it is - Reddit cards replace the plain list.", over: ["A - plain list", "B - tiles"] },
+      { kind: "tweak", key: "forum look", fact: "smaller header", quote: "make the header smaller" },
+    );
+    await settle();
+    expect(timeline()).toContain('## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "actually c"\n- Tweak 2026-11-17 10:03: "make the header smaller"\n');
+    const switched = timeline();
+    for (const [asked, suggestion, fact] of [
+      ["c or b", "I'd stay with C, but B - tiles is close.", "B - tiles"],
+      ["what about b?", "B - tiles works too.", "B - tiles"],
+      ["is a plain list too bare", "A plain list can feel bare, yes.", "A - plain list"],
+    ] as const) {
+      bot("Anything else?");
+      say(asked);
+      bot(suggestion);
+      say("ok");
+      reply({ kind: "decision", key: "forum look", fact, quote: suggestion });
+      await settle();
+    }
+    expect(timeline()).toBe(switched);
+  });
+});

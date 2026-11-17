@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { applyPicks, currentPicks, PICKS_FILE, pickKey, pickKeysList, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
@@ -29,17 +30,24 @@ const QUOTE_MAX = 120;
 const FACT_MAX = 200;
 const DECISION_MAX = 100;
 const DECISIONS_PER_PASS = 3;
-const DECISIONS_KEPT = 12;
 const CONTEXT_MAX = 400;
 const CONTEXT_LINE_MAX = 200;
 const CONTEXT_SCAN = 50;
+const PICTURE_SCAN = 200;
+const PICTURES_MAX = 8;
+const CAPTION_MAX = 80;
+const OPTIONS_MAX = 6;
+const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
 const STATE_FILE = "memory-pass.json";
-const DECISIONS_FILE = "decisions.md";
-const DECISIONS_HEADING = "## Decisions (settled, do not ask again)";
-export const DECISIONS_POINTER = `- Older decisions: memory/${DECISIONS_FILE} - read it before asking the user to pick something they may have picked before.`;
 
-const factsSchema = z.array(z.object({ kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish() })).max(20);
+const listSchema = z.union([z.array(z.string()), z.string()]).nullish();
+const factsSchema = z
+  .array(z.object({
+    kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish(),
+    key: z.string().nullish(), over: listSchema, picture: z.string().nullish(), over_pictures: listSchema,
+  }))
+  .max(20);
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
@@ -48,9 +56,9 @@ const stateSchema = z.object({
 
 export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
 export type Fact = z.infer<typeof factsSchema>[number];
-export type Note = { line: string; replaces?: string; kind?: "decision" };
-/** A user line, with the end of the bot's reply before it when the line is short. */
-export type UserLine = { text: string; context?: string };
+export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
+/** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
+export type UserLine = { text: string; context?: string; pictures?: Picture[]; files?: string[]; at?: number };
 export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
@@ -111,7 +119,7 @@ export function userTyping(text: string, dropSensitive = true): string {
   return redactSecretsInText(kept.join("\n\n"));
 }
 
-const CONTEXT_TAGS = /<\/?(?:context|user_lines|notes)\b[^>]*>/gi;
+const CONTEXT_TAGS = /<\/?(?:context|user_lines|notes|picks|pictures)\b[^>]*>/gi;
 
 /** The end of the bot's reply, as plain text that cannot close or open a prompt block. */
 export function replyContext(text: string): string {
@@ -149,32 +157,94 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
   return found;
 }
 
-export function notePrompt(notes: string, lines: UserLine[]): string {
+const SHOW_IMAGE = /(?:^|[_.])show_image$/;
+const IMAGE_PATH = /(?:[a-z]:[\\/]|\\\\|~[\\/])?(?:[\w.-]+[\\/])*[\w.-]+\.(?:png|jpe?g|gif|webp|svg)\b/gi;
+const ATTACHED = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
+
+const shownImage = (message: Message) =>
+  message.kind === "activity" && message.tool?.ok !== false && SHOW_IMAGE.test(message.tool?.name ?? "") && Boolean(message.tool?.summary);
+const plainLine = (text: string) => text.replace(CONTEXT_TAGS, " ").replace(/\s+/g, " ").trim();
+
+/** The images the user attached to a row. */
+export function attachedImages(text: string): string[] {
+  return [...new Set([...text.matchAll(ATTACHED)].map((match) => match[1]!).filter(Boolean))];
+}
+
+/** For each id, the pictures the bot showed or named since the user's line before it: show_image sources that still exist, else the shown copy, and image paths in its text. */
+export function replyPictures(messages: readonly Message[], ids: string[], attachments: string): Map<string, Picture[]> {
+  const wanted = new Set(ids);
+  const found = new Map<string, Picture[]>();
+  for (let i = messages.length - 1, seen = 0; i >= 0 && seen < wanted.size; i -= 1) {
+    if (!wanted.has(messages[i]!.id)) continue;
+    seen += 1;
+    const turn: Message[] = [];
+    for (let j = i - 1; j >= Math.max(0, i - PICTURE_SCAN); j -= 1) {
+      const message = messages[j]!;
+      if (sentByPerson(message)) break;
+      if (message.role === "bot" && !message.comm) turn.unshift(message);
+    }
+    const captions = new Map(turn.flatMap((message) => (message.kind === "screen" && message.parentId && message.text?.trim() ? [[message.parentId, message.text] as const] : [])));
+    const copies = new Map(turn.flatMap((message) => (message.kind === "screen" && message.parentId && message.image ? [[message.parentId, join(attachments, message.image)] as const] : [])));
+    const tools = new Set(turn.filter(shownImage).map((message) => message.id));
+    const pictures: Picture[] = [];
+    const add = (path: string, caption?: string) => {
+      const clean = plainLine(path);
+      if (!clean || pictures.some((picture) => picture.path.toLowerCase() === clean.toLowerCase())) return;
+      const label = caption ? plainLine(caption).slice(0, CAPTION_MAX) : "";
+      pictures.push(label ? { path: clean, caption: label } : { path: clean });
+    };
+    for (const message of turn) {
+      // a show_image summary is a display line cut at 120 characters, and a bot may delete the copy it showed
+      if (shownImage(message)) add(existsSync(message.tool!.summary!) ? message.tool!.summary! : (copies.get(message.id) ?? ""), captions.get(message.id));
+      else if (message.kind === "screen" && message.image && !(message.parentId && tools.has(message.parentId))) add(join(attachments, message.image), message.text);
+      else if (message.kind === "text" && message.text) for (const path of message.text.match(IMAGE_PATH) ?? []) add(path);
+    }
+    if (pictures.length) found.set(messages[i]!.id, pictures.slice(-PICTURES_MAX));
+  }
+  return found;
+}
+
+const promptLine = ({ text, context, pictures }: UserLine) =>
+  [
+    ...(context ? [`<context>${context}</context>`] : []),
+    ...(pictures?.length ? [`<pictures>\n${pictures.map(({ path, caption }) => (caption ? `${path} (${caption})` : path)).join("\n")}\n</pictures>`] : []),
+    text,
+  ].join("\n");
+
+export function notePrompt(notes: string, lines: UserLine[], picks = ""): string {
   return [
     "You pick durable facts and decisions out of the user's own chat messages, for their notes file.",
     "",
     "Rules:",
     "- Use only USER LINES. Never guess, infer or add anything they did not say.",
     "- Keep facts that stay true: who they are, their age, languages, tools they use, likes and dislikes, how they want things done.",
-    "- Skip one-off requests, questions, task details, and anything CURRENT NOTES already says.",
+    "- Skip one-off requests that are not tweaks, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
-    "- CONTEXT is the end of the bot's message just before a user line. Use it only to see what a short answer like \"the second one\" or \"yes\" picked. The pick must still be in the user's own line; quote that line.",
-    `- kind: "decision" or "fact". A decision names one thing and its pick, ${DECISION_MAX} characters max, for example "Picker look follows the theme". At most ${DECISIONS_PER_PASS} decisions, one per thing.`,
+    "- CONTEXT is the end of the bot's message before a user line, PICTURES the pictures it showed: use them only to see what a short answer like \"c\" picked. The pick must be in the user's own line; quote it. A bot idea the user did not take is not a decision.",
+    `- kind: "decision", "tweak" or "fact". At most ${DECISIONS_PER_PASS} decisions, one per thing.`,
+    `- decision: key is the thing in 2-6 words, like "picker look", copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with the bot's letter or number, like "C - Reddit cards"; over: the options it beat, the same way; picture, over_pictures: their paths copied exactly from PICTURES or CURRENT PICKS.`,
+    "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
+    "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
     "- Never record passwords, PINs, codes, keys, tokens, account numbers or one-time codes.",
     "- fact: one short plain line about the user, for example \"38 years old\" or \"Can't read Korean\".",
-    `- quote: the user's exact words that state the fact, copied verbatim, ${QUOTE_MAX} characters max.`,
+    `- quote: the user's exact words that state the fact, copied verbatim from a user line, never from CONTEXT, ${QUOTE_MAX} characters max.`,
     "- replaces: only when the fact makes a CURRENT NOTES line untrue or outdated, that whole line copied exactly. Otherwise leave it out.",
     "",
-    "Reply with JSON only: [{\"kind\": \"fact\", \"fact\": \"...\", \"quote\": \"...\", \"replaces\": \"...\"}], or [] when nothing qualifies.",
+    "Reply with JSON only: [{\"kind\": \"fact\", \"fact\": \"...\", \"quote\": \"...\", \"replaces\": \"...\"}, {\"kind\": \"decision\", \"key\": \"...\", \"fact\": \"...\", \"quote\": \"...\", \"over\": [\"...\"]}], or [] when nothing qualifies.",
     "",
     "CURRENT NOTES:",
     "<notes>",
     notes.trim() || "(empty)",
     "</notes>",
     "",
+    "CURRENT PICKS:",
+    "<picks>",
+    picks.trim() || "(none)",
+    "</picks>",
+    "",
     "USER LINES:",
     "<user_lines>",
-    lines.map(({ text, context }) => (context ? `<context>${context}</context>\n${text}` : text)).join("\n\n"),
+    lines.map(promptLine).join("\n\n"),
     "</user_lines>",
   ].join("\n");
 }
@@ -229,8 +299,7 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 }
 
 const HEADING = /^#{1,6}\s/;
-const LIST_LINE = /^\s*[-*+]\s/;
-const STAMPED = /^\s*[-*+]\s.*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
+const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
 
 /** The `## Decisions` section as [heading index, end index), or null. */
 function decisionSpan(lines: string[]): [number, number] | null {
@@ -258,16 +327,73 @@ function grounded(line: string, said: string, sources: UserLine[]): boolean {
   const typed = squash(sources.map(({ text }) => text).join("\n"));
   if (LITERALS.some((pattern) => (line.match(pattern) ?? []).some((literal) => !typed.includes(squash(literal))))) return false;
   // the user may name the options in one line and pick in the next; bot text grounds only the line it precedes
-  const known = contentWords([...sources.map(({ text }) => text), ...own.map(({ context }) => context ?? "")].join("\n"));
+  const known = contentWords([...sources.map(({ text }) => text), ...own.flatMap(({ context, pictures }) => [context ?? "", ...(pictures ?? []).map(({ caption }) => caption ?? "")])].join("\n"));
   const needed = contentWords(line);
   const hits = needed.filter((word) => known.some((source) => sameStem(word, source))).length;
   return hits > 0 && hits * 2 >= needed.length;
 }
 
-/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, 3 at most; a fact on a decision's quote yields to it. */
+const ASKED = /\?|(?:^|\s)(?:[1-9]|[a-h])[.):]\s|\boption\s+[a-h1-9]\b/i;
+const LABEL = /^(?:option\s+)?([a-z]|\d{1,2})\b/i;
+const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
+
+/** The quote is in the text, a short one as whole words, so "c" never matches inside "cards". */
+function quotes(text: string, said: string): boolean {
+  const target = squash(said);
+  if (target.length >= 4) return squash(text).includes(target);
+  const spoken = words(target).join(" ");
+  return Boolean(spoken) && ` ${words(text).join(" ")} `.includes(` ${spoken} `);
+}
+
+/** The user's words name the pick or its label, or briefly answer a question the bot asked; "ok thanks" after a bot idea never picks it. */
+function userChose(picked: string, said: string, own: UserLine[]): boolean {
+  const typed = contentWords(said);
+  if (contentWords(picked).some((word) => typed.some((source) => sameStem(word, source)))) return true;
+  const short = words(said).length <= SHORT_ANSWER;
+  const label = LABEL.exec(picked.trim())?.[1]?.toLowerCase();
+  if (short && label && words(said).includes(label)) return true;
+  return short && own.some(({ context }) => Boolean(context && ASKED.test(context)));
+}
+
+/** An option the pick beat, grounded like a decision; a bare label like "B" only from the text around the pick. */
+function optionNamed(option: string, said: string, sources: UserLine[], own: UserLine[]): boolean {
+  if (contentWords(option).length) return grounded(option, said, sources);
+  const label = words(option).join(" ");
+  return Boolean(label) && own.some(({ text, context }) => ` ${words(`${context ?? ""} ${text}`).join(" ")} `.includes(` ${label} `));
+}
+
+const listOf = (value: string | string[] | null | undefined) =>
+  (Array.isArray(value) ? value : value ? [value] : []).map((item) => item.replace(/\s+/g, " ").trim()).filter(Boolean);
+
+/** Two names of one option: the same letter or number, else the same words. */
+function sameOption(a: string, b: string): boolean {
+  const [x, y] = [LABELED.exec(a.trim())?.[1]?.toLowerCase(), LABELED.exec(b.trim())?.[1]?.toLowerCase()];
+  return x && y ? x === y : pickKey(a.trim().replace(LABELED, "")) === pickKey(b.trim().replace(LABELED, ""));
+}
+
+/** The user's short answer a bot line restates, like "actually c" before "C it is": it ends on the letter of the option it switches to, and names no other. */
+function confirmed(sources: UserLine[], said: string, picked: string, before: PickEntry): string | undefined {
+  const at = sources.findIndex(({ context }) => context !== undefined && quotes(context, said));
+  const answer = at > 0 ? sources[at - 1]!.text.trim() : "";
+  const typed = words(answer);
+  const label = (option: string) => LABELED.exec(option.trim())?.[1]?.toLowerCase();
+  const labels = new Set([before.picked, ...before.over].map(label));
+  const option = before.over.find((other) => label(other) === typed.at(-1));
+  if (!option || answer.endsWith("?") || typed.length > SHORT_ANSWER || typed.filter((word) => labels.has(word)).length !== 1) return undefined;
+  return sameOption(option, picked) ? answer : undefined;
+}
+
+/** A picture the bot showed before the pick, as the model copied it, with or without its caption. */
+function shownPicture(value: string | null | undefined, shown: Picture[]): Picture | undefined {
+  const asked = value?.trim().toLowerCase();
+  if (!asked) return undefined;
+  return shown.find(({ path, caption }) => asked === path.toLowerCase() || (caption !== undefined && asked === `${path} (${caption})`.toLowerCase()));
+}
+
+/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, 3 at most, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
-  const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretLike(paragraph)).map(squash);
+  const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretLike(paragraph));
   const lines = notes.split("\n");
   const span = decisionSpan(lines);
   const inSection = (target: string) => {
@@ -276,36 +402,87 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   };
   const claims = new Map<string, number>();
   for (const { replaces } of facts) if (replaces) claims.set(replaces, (claims.get(replaces) ?? 0) + 1);
+  const current = new Map(currentPicks(archived).map((entry) => [pickKey(entry.key), entry] as const));
+  const live = new Set(current.keys());
   const seen = new Set<string>();
   const decided = new Set<string>();
   let decisions = 0;
-  const accept = ({ kind, fact, quote, replaces }: Fact): Note | null => {
+  const accept = (fact: Fact): Note | null => {
+    const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
-    const line = fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
-    const said = quote.trim();
-    if (!line || line.length > (decision ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
-    if (!paragraphs.some((paragraph) => paragraph.includes(squash(said)))) return null;
+    const tweak = kind === "tweak";
+    const line = fact.fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
+    const key = fact.key?.replace(/\s+/g, " ").trim() ?? "";
+    // switching to an option the current pick beat is grounded in that pick's record
+    const before = decision ? current.get(pickKey(key || line)) : undefined;
+    let said = quote.trim();
+    // the note-taker may quote the bot's "C it is" for the user's "actually c"
+    if (before && !paragraphs.some((paragraph) => quotes(paragraph, said))) said = confirmed(sources, said, line, before) ?? said;
+    if (!line || line.length > (decision || tweak ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
+    if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
     if (secretLike(line) || secretLike(said)) return null;
-    if (decision ? decisions >= DECISIONS_PER_PASS || !grounded(line, said, sources) : decided.has(squash(said))) return null;
-    const target = replaceable(replaces, lines, claims) && inSection(replaces) === decision ? replaces : undefined;
-    const noted = (target ? lines.filter((note) => !sameLine(note, target)) : [...lines, ...archived.split("\n")]).map(words);
-    const quoted = quoteWords(said);
-    // a short pick like "yes" says nothing on its own
-    if (!decision && quoted.length && noted.some((note) => quoted.every((word) => note.includes(word)))) return null;
-    const key = words(line).join(" ") || squash(line);
-    if (seen.has(key) || noted.some((note) => ` ${note.join(" ")} `.includes(` ${key} `))) return null;
-    seen.add(key);
+    const own = sources.filter(({ text }) => quotes(text, said));
+    const at = own.at(-1)?.at ?? 0;
+    if (tweak) {
+      const id = `tweak ${pickKey(key)} ${squash(said)}`;
+      // the change is in the user's own words, on a pick that is still current
+      if (!pickKey(key) || !live.has(pickKey(key)) || seen.has(id) || !grounded(line, said, [{ text: said }])) return null;
+      seen.add(id);
+      return { line: `${key}: ${line}`, kind: "tweak", pick: { kind: "tweak", at, key, said } };
+    }
     if (decision) {
+      const thing = key || line;
+      const named = pickKey(thing) === pickKey(line) ? line : `${thing}: ${line}`;
+      const recorded = before ? [before.picture, ...before.overPictures].filter((picture): picture is Picture => Boolean(picture)) : [];
+      const known = before ? [...sources, { text: [before.key, before.picked, ...before.over, ...recorded.map(({ caption }) => caption ?? "")].join("\n") }] : sources;
+      if (decisions >= DECISIONS_PER_PASS || seen.has(`pick ${pickKey(thing)}`) || !grounded(named, said, known) || !userChose(line, said, own)) return null;
+      const target = replaceable(replaces, lines, claims) && inSection(replaces) ? replaces : undefined;
+      const shown = [...own.flatMap(({ pictures }) => pictures ?? []), ...recorded];
+      let picture = shownPicture(fact.picture, shown);
+      // a switch to an option the pick beat keeps that option's picture, copied or not
+      if (!picture) picture = recorded.find(({ caption }) => caption !== undefined && sameOption(caption, line));
+      const over = listOf(fact.over)
+        .filter((option) => option.length <= DECISION_MAX && !secretLike(option) && pickKey(option) !== pickKey(line) && optionNamed(option, said, known, own))
+        .slice(0, OPTIONS_MAX);
+      const overPictures: Picture[] = [];
+      for (const path of listOf(fact.over_pictures)) {
+        const found = shownPicture(path, shown);
+        if (found && found.path !== picture?.path && !overPictures.some((other) => other.path === found.path)) overPictures.push(found);
+      }
+      if (picture && !overPictures.length && recorded.includes(picture)) overPictures.push(...recorded.filter((other) => other.path !== picture.path));
+      const files = [...new Set(own.flatMap(({ files }) => files ?? []))];
+      const old = target ? NOTED.exec(target) : null;
+      seen.add(`pick ${pickKey(thing)}`);
+      live.add(pickKey(thing));
       decided.add(squash(said));
       decisions += 1;
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at, key: thing, picked: line, said };
+      if (over.length) pick.over = over;
+      if (picture) pick.picture = picture;
+      if (overPictures.length) pick.overPictures = overPictures;
+      if (files.length) pick.files = files;
+      if (old) pick.legacy = { day: old[2]!, line: old[1]! };
+      const note: Note = { line: named, kind: "decision", pick };
+      if (target) note.replaces = target;
+      return note;
     }
+    if (decided.has(squash(said))) return null;
+    const target = replaceable(replaces, lines, claims) && !inSection(replaces) ? replaces : undefined;
+    const noted = (target ? lines.filter((note) => !sameLine(note, target)) : [...lines, ...archived.split("\n")]).map(words);
+    const quoted = quoteWords(said);
+    if (quoted.length && noted.some((note) => quoted.every((word) => note.includes(word)))) return null;
+    const known = words(line).join(" ") || squash(line);
+    if (seen.has(known) || noted.some((note) => ` ${note.join(" ")} `.includes(` ${known} `))) return null;
+    seen.add(known);
     const note: Note = { line };
     if (target) note.replaces = target;
-    if (decision) note.kind = "decision";
     return note;
   };
-  const picks = new Map(facts.flatMap((fact, index) => (fact.kind === "decision" ? [[index, accept(fact)] as const] : [])));
-  return facts.flatMap((fact, index) => (picks.has(index) ? picks.get(index) : accept(fact)) ?? []);
+  // decisions first, then tweaks, so a tweak can land on a pick made in the same lines
+  const rank = (fact: Fact) => (fact.kind === "decision" ? 0 : fact.kind === "tweak" ? 1 : 2);
+  const order = facts.map((fact, index) => ({ fact, index })).sort((a, b) => rank(a.fact) - rank(b.fact));
+  const kept = new Map(order.map(({ fact, index }) => [index, accept(fact)] as const));
+  return facts.flatMap((_, index) => kept.get(index) ?? []);
 }
 
 function day(ms: number): string {
@@ -313,81 +490,26 @@ function day(ms: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-/** Adds decisions at the end of `## Decisions` (made under the title and its intro), then rolls the oldest stamped lines past the cap out. */
-function fileDecisions(lines: string[], decided: string[]): string[] {
-  let span = decisionSpan(lines);
-  if (!span) {
-    const title = lines.findIndex((line) => /^#\s/.test(line));
-    let at = title + 1;
-    if (title >= 0) while (at < lines.length && !HEADING.test(lines[at]!) && !LIST_LINE.test(lines[at]!)) at += 1;
-    while (at > title + 1 && !lines[at - 1]!.trim()) at -= 1;
-    const next = lines.slice(at).find((line) => line.trim());
-    // notes right below would otherwise read as decisions
-    const loose = next !== undefined && !HEADING.test(next);
-    const block = [...(at > 0 && lines[at - 1]!.trim() ? [""] : []), DECISIONS_HEADING, ...(loose ? ["", "## Notes"] : [])];
-    if (!loose && lines[at]?.trim()) block.push("");
-    lines.splice(at, 0, ...block);
-    span = decisionSpan(lines)!;
-  }
-  let last = span[0];
-  for (let index = span[0] + 1; index < span[1]; index += 1) if (LIST_LINE.test(lines[index]!)) last = index;
-  lines.splice(last + 1, 0, ...decided);
-  const moved: string[] = [];
-  for (;;) {
-    const [start, end] = decisionSpan(lines)!;
-    const stamped = lines.slice(start + 1, end).flatMap((line, index) => {
-      const match = STAMPED.exec(line);
-      return match ? [{ at: start + 1 + index, day: match[1]! }] : [];
-    });
-    if (stamped.length <= DECISIONS_KEPT) break;
-    const oldest = stamped.reduce((a, b) => (b.day < a.day ? b : a));
-    moved.push(lines[oldest.at]!.replace(/\r$/, ""));
-    lines.splice(oldest.at, 1);
-  }
-  const [start, end] = decisionSpan(lines)!;
-  if (moved.length && !lines.slice(start + 1, end).some((line) => sameLine(line, DECISIONS_POINTER))) lines.splice(start + 1, 0, DECISIONS_POINTER);
-  return moved;
-}
-
-/** MEMORY.md with replaced lines swapped in place, decisions filed under their section and the rest appended, plus the decision lines rolled out; null past the load budget. */
-export function placeNotes(raw: string, notes: Note[], now: number): { text: string; moved: string[] } | null {
+/** MEMORY.md with replaced lines swapped in place, a replaced decision line taken out (the timeline keeps it) and the rest appended; null past the load budget. */
+export function appendNotes(raw: string, notes: Note[], now: number): string | null {
   const base = raw.trim() ? raw : MEMORY_SEED;
   const stamp = day(now);
   const lines = base.split("\n");
   const added: string[] = [];
-  const decided: string[] = [];
   for (const { line, replaces, kind } of notes) {
     const at = replaces === undefined ? [] : lines.flatMap((current, index) => (sameLine(current, replaces) ? [index] : []));
+    if (kind) {
+      if (kind === "decision" && at.length === 1) lines.splice(at[0]!, 1);
+      continue;
+    }
     if (at.length === 1) lines[at[0]!] = `- ${line} (noted ${stamp})${lines[at[0]!]!.endsWith("\r") ? "\r" : ""}`;
-    else (kind === "decision" ? decided : added).push(`- ${line} (noted ${stamp})`);
+    else added.push(`- ${line} (noted ${stamp})`);
   }
-  const moved = decided.length ? fileDecisions(lines, decided) : [];
   const swapped = lines.join("\n");
   const head = added.length && decisionSpan(lines)?.[1] === lines.length ? "\n## Notes\n" : "";
   const text = `${swapped.endsWith("\n") ? swapped : `${swapped}\n`}${head}${added.map((line) => `${line}\n`).join("")}`;
   if (text.split("\n").length > MEMORY_MAX_LINES || Buffer.byteLength(text, "utf8") > MEMORY_MAX_BYTES) return null;
-  return { text, moved };
-}
-
-export function appendNotes(raw: string, notes: Note[], now: number): string | null {
-  return placeNotes(raw, notes, now)?.text ?? null;
-}
-
-/** Rolled lines appended to memory/decisions.md, skipping any already there, so a retried save never doubles one. */
-function fileOlderDecisions(botId: string, moved: string[]): void {
-  const file = join(ensureWorkspace(botId), "memory", DECISIONS_FILE);
-  let current = "";
-  try {
-    current = readFileSync(file, "utf8");
-  } catch (error) {
-    // only a missing file starts empty; any other failure would overwrite the older decisions
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-  }
-  const have = new Set(current.split("\n").map((line) => line.replace(/\r$/, "")));
-  const fresh = moved.filter((line) => !have.has(line));
-  if (!fresh.length) return;
-  const head = current.trim() ? (current.endsWith("\n") ? current : `${current}\n`) : "# Older decisions\n\n";
-  writeFileAtomic(file, `${head}${fresh.map((line) => `${line}\n`).join("")}`, { mode: 0o600 });
+  return text;
 }
 
 export function noteSummary(facts: string[]): string {
@@ -415,7 +537,7 @@ interface PassLog {
   facts?: number;
   decisions?: number;
   replaced?: number;
-  rolled?: number;
+  tweaks?: number;
   ms: number;
   result: "saved" | "none" | "busy" | "too-large" | "conflict" | "error";
 }
@@ -504,55 +626,69 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const land = (botId: string, threadId: string, batch: Batch, memory: { text: string; revision: string }, raw: string, ms: number) => {
-    const facts = acceptFacts(batch.facts, batch.source, memory.text, readMemoryTopic(botId, DECISIONS_FILE) ?? "");
-    if (!facts.length) {
+    const timeline = readMemoryTopic(botId, PICKS_FILE) ?? "";
+    const accepted = acceptFacts(batch.facts, batch.source, memory.text, timeline);
+    if (!accepted.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
     }
     // a turn may be writing MEMORY.md and its own save chip; retry after it
     if (deps.busy(botId, threadId)) {
       held.set(threadId, batch);
-      log({ botId, threadId, facts: facts.length, ms, result: "busy" });
+      log({ botId, threadId, facts: accepted.length, ms, result: "busy" });
       return arm(botId, threadId);
     }
-    const placed = placeNotes(raw, facts, now());
-    if (!placed) {
-      log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
+    const facts = accepted.filter((note) => !note.kind);
+    const moved = accepted.filter((note) => note.kind === "decision" && note.replaces);
+    const text = facts.length || moved.length ? appendNotes(raw, [...facts, ...moved], now()) : null;
+    const full = text === null && (facts.length > 0 || moved.length > 0);
+    // a full MEMORY.md turns facts away; a pick still lands in the timeline, its old line left in place
+    const changes = accepted.flatMap(({ pick }) => {
+      if (!pick) return [];
+      const change = { ...pick, at: pick.at || now() };
+      if (full && change.kind === "pick") delete change.legacy;
+      return [change];
+    });
+    if (full && facts.length) {
       const last = dropped.get(botId);
       dropped.set(botId, { dropped: (last?.dropped ?? 0) + facts.length, since: last?.since ?? now() });
+    }
+    if (full && !changes.length) {
+      log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
       return done(threadId, batch.ids);
     }
-    // lines rolled from a stale MEMORY.md would outlive the user's edit, so a changed file retries first
-    if (placed.moved.length && readMemoryFile(botId).revision !== memory.revision) {
+    if (text !== null && saveMemoryFile(botId, text, memory.revision).conflict) {
       held.set(threadId, batch);
-      log({ botId, threadId, facts: facts.length, ms, result: "conflict" });
+      log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);
     }
-    if (placed.moved.length) {
+    // after MEMORY.md, so a retry finds its facts noted and lands each pick once
+    const landed = changes.length ? applyPicks(timeline, changes) : null;
+    if (landed) {
       try {
-        fileOlderDecisions(botId, placed.moved);
+        writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), landed.text, { mode: 0o600 });
       } catch (error) {
         held.set(threadId, batch);
-        log({ botId, threadId, facts: facts.length, ms, result: "error" });
-        console.warn(`[memory-pass] decisions.md write failed (${error instanceof Error ? error.name : "error"})`);
+        log({ botId, threadId, facts: accepted.length, ms, result: "error" });
+        console.warn(`[memory-pass] ${PICKS_FILE} write failed (${error instanceof Error ? error.name : "error"})`);
         return arm(botId, threadId);
       }
     }
-    if (saveMemoryFile(botId, placed.text, memory.revision).conflict) {
-      held.set(threadId, batch);
-      log({ botId, threadId, facts: facts.length, ms, result: "conflict" });
-      return arm(botId, threadId);
+    const kept = accepted.filter((note) => (note.pick ? Boolean(landed) : !note.kind && text !== null));
+    if (!kept.length) {
+      log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
+      return done(threadId, batch.ids);
     }
     deps.store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(facts.map((note) => note.line)) },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)) },
     });
     log({
-      botId, threadId, lines: batch.source.length, facts: facts.length, decisions: facts.filter((note) => note.kind).length,
-      replaced: facts.filter((note) => note.replaces).length, rolled: placed.moved.length, ms, result: "saved",
+      botId, threadId, lines: batch.source.length, facts: text === null ? 0 : facts.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
+      replaced: (landed?.replaced ?? 0) + (text === null ? 0 : facts.filter((note) => note.replaces).length), ms, result: full ? "too-large" : "saved",
     });
-    dropped.delete(botId);
+    if (!full) dropped.delete(botId);
     done(threadId, batch.ids);
   };
 
@@ -572,10 +708,19 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const typed = ids.flatMap((id) => {
       const row = rows.get(id);
       const text = eligibleRow(row) ? userTyping(row.text) : "";
-      return text ? [{ id, text }] : [];
+      return text ? [{ id, text, at: row!.at, files: attachedImages(row!.text ?? "") }] : [];
     });
     const contexts = replyContexts(messages, typed.filter(({ text }) => text.length <= CONTEXT_LINE_MAX).map(({ id }) => id));
-    const lines: UserLine[] = typed.map(({ id, text }) => (contexts.has(id) ? { text, context: contexts.get(id)! } : { text }));
+    const shown = replyPictures(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
+    const lines = typed.map(({ id, text, at, files }) => {
+      const line: UserLine = { text, at };
+      const context = contexts.get(id);
+      const pictures = shown.get(id);
+      if (context) line.context = context;
+      if (pictures) line.pictures = pictures;
+      if (files.length) line.files = files;
+      return line;
+    });
     if (!lines.length) return done(threadId, ids);
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
@@ -586,7 +731,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     let outcome = "helper-failed";
     let output: string;
     try {
-      output = await generate(notePrompt(memory.text, lines), signal, trace ? (usage, id) => {
+      output = await generate(notePrompt(memory.text, lines, pickKeysList(readMemoryTopic(botId, PICKS_FILE))), signal, trace ? (usage, id) => {
         request++;
         trace.request(id ?? `helper:${request}`, usage);
       } : undefined);
