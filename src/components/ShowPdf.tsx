@@ -15,8 +15,7 @@ export default function ShowPdf({ src, onReady, onFail }: { src: string; onReady
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const pages = doc?.numPages ?? 0;
-  usePageSwipe(canvas, (step) => setPage((at) => Math.min(pages, Math.max(1, at + step))));
+  usePageSwipe(canvas, (step) => { if (doc) setPage((at) => Math.min(doc.numPages, Math.max(1, at + step))); });
   const done = useRef({ onReady, onFail });
   done.current = { onReady, onFail };
 

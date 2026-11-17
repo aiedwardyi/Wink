@@ -10,18 +10,18 @@ import { closeShow, showItem, useCheckThread, useShowItem, type ShowItem } from 
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPane } from "./ShowPane";
 
-const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown }));
+const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: {},
   getDocument: (params: unknown) => (pdf.params = params, {
-    promise: Promise.resolve({
+    promise: pdf.gate.then(() => ({
       numPages: 8,
       getPage: async (n: number) => {
         pdf.pages.push(n);
         return { getViewport: ({ scale }: { scale: number }) => ({ width: 960 * scale, height: 540 * scale }), render: () => ({ promise: Promise.resolve(), cancel() {} }) };
       },
       destroy() {},
-    }),
+    })),
     destroy() {},
   }),
 }));
@@ -37,6 +37,7 @@ let host: HTMLElement;
 
 beforeEach(() => {
   pdf.pages = [];
+  pdf.gate = Promise.resolve();
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     const response = new Response(null, { status: url.includes("linked-file") ? 206 : 404 });
     Object.defineProperty(response, "url", { value: url });
@@ -125,6 +126,18 @@ it("turns the PDF page with a horizontal swipe, and stops at either end", async 
   for (let n = 0; n < 9; n++) await swipe([300, 300], [100, 300]);
   await until(() => counter()?.includes("8 / 8"));
   expect(counter()).toContain("8 / 8");
+});
+
+it("ignores a swipe while the PDF is still loading", async () => {
+  let open = () => {};
+  pdf.gate = new Promise<void>((resolve) => { open = resolve; });
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  await swipe([300, 300], [100, 300]);
+  await swipe([100, 300], [300, 300]);
+  await act(async () => open());
+  await until(() => counter()?.includes("1 / 8"));
+  expect(counter()).toContain("1 / 8");
+  expect(pdf.pages).toEqual([1]);
 });
 
 it("leaves a vertical drag and a two finger pinch to the browser", async () => {
