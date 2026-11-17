@@ -625,7 +625,7 @@ const TOOLS = [
   {
     name: "wake_me",
     description:
-      "Wake yourself once in this chat later, with a note to yourself: use it for a one-off later step (check a deploy at 03:45, resume after a cooldown) instead of a countdown terminal pane. No confirmation card; the user sees a small chip and can cancel it. At that time you get an automated [Wake] turn with your note. Recurring work still needs propose_routine. list_routines shows your pending wakes (named Wake); pass cancel with an id to cancel one. Max 10 pending.",
+      "Wake yourself once in this chat later, with a note to yourself: use it for a one-off later step (check a deploy at 03:45, resume after a cooldown) instead of a countdown terminal pane. No confirmation card; the user can ask you to cancel it. At that time you get an automated [Wake] turn with your note. Recurring work still needs propose_routine. list_routines shows your pending wakes (named Wake); pass cancel with an id to cancel one. Max 10 pending.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
