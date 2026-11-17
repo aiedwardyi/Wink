@@ -2,7 +2,7 @@ import type { Action, AppState, AppSettingsSection } from "../state/store-types"
 import { takeVia, trackFeature, trackScreen, trackSend, trackSetting, trackSwitch } from "./usage-stats";
 
 const SECTIONS = {
-  account: "settings-account", general: "settings-general", connections: "settings-connections", themes: "settings-themes",
+  account: "settings-account", "about-you": "settings-about-you", general: "settings-general", connections: "settings-connections", themes: "settings-themes",
   shortcuts: "settings-shortcuts", companion: "settings-devices", usage: "settings-usage", team: "settings-team",
   "models-index": "settings-model-index", sync: "settings-sync",
 } as const satisfies Record<AppSettingsSection, string>;

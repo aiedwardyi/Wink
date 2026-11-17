@@ -17,7 +17,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
 import { I18nProvider } from "@/lib/i18n";
 import { endCall, startCall } from "@/lib/call";
 import { CallButton } from "./CallView";
-import { CallVoicePicker } from "./CallVoicePicker";
+import { CallSettings } from "./CallSettings";
 import { GroupCallOverlay } from "./GroupCallView";
 
 const bot = { id: "bot-1", name: "Ada", color: "#7c3aed", messages: [] } as unknown as Bot;
@@ -57,7 +57,7 @@ it("gives the call help popover the app menu surface", async () => {
 });
 
 it("leaves voice picker focus to the global ring and snaps its hovers", async () => {
-  const host = await render(createElement(CallVoicePicker));
+  const host = await render(createElement(CallSettings, { bot }));
   const voices = [...host.querySelectorAll('[role="radiogroup"]')].find((group) => group.querySelector("button[aria-pressed]"))!;
   const buttons = [...voices.querySelectorAll("button")];
   expect(buttons.length).toBeGreaterThan(0);
