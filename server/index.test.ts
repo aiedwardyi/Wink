@@ -20,6 +20,7 @@ import { defaultComputerForNewBot } from "./local-routing.ts";
 import { readDecisions } from "./decision-log.ts";
 import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "./testing/harness-auth.ts";
 import { agentsHeaders } from "./testing/agents-caller.ts";
+import { roomResponders } from "./store.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -962,10 +963,11 @@ describe("harness HTTP API", () => {
       // a room the user asked for is usable the moment it exists — no setup
       // wizard stands between them and the bots they just asked to assemble
       expect(room.setupCompletedAt).toBeTruthy();
-      // but the bot does not crown itself the room's lead: the peer it was
-      // asked to open the room with answers by default
-      expect(room.defaultResponder).toEqual({ kind: "member", botId: peer.id });
+      expect(room.defaultResponder).toEqual({ kind: "everyone" });
       expect(room.bulletin).toBe("Peer talk lives here.");
+      expect((await api("PATCH", `/api/groups/${room.id}`, {
+        defaultResponder: { kind: "member", botId: peer.id },
+      })).status).toBe(200);
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "hello room" })).status).toBe(202);
       expect((await api("POST", `/api/groups/${room.id}/interrupt`)).status).toBe(200);
 
@@ -1096,6 +1098,59 @@ describe("harness HTTP API", () => {
     const blocked = await api("POST", "/api/groups/test-stranded-room/tasks", {});
     expect(blocked.status).toBe(409);
     expect(blocked.body.error).toMatch(/waiting on you/i);
+  });
+
+  it("opens a bot-made room that answers with everyone unless the bot picks otherwise", async () => {
+    const opener = (await api("POST", "/api/bots")).body.bot;
+    const peers = await Promise.all([api("POST", "/api/bots"), api("POST", "/api/bots")]).then((created) =>
+      created.map((response) => response.body.bot),
+    );
+    const createdChannelIds: string[] = [];
+    try {
+      expect((await api("PATCH", `/api/bots/${opener.id}`, {
+        name: "Opener", section: "Answers test", chiefOfStaff: true,
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      })).status).toBe(200);
+      for (const [index, peer] of peers.entries()) {
+        expect((await api("PATCH", `/api/bots/${peer.id}`, { name: `Panel ${index}`, section: "Answers test" })).status).toBe(200);
+      }
+      const headers = await agentsHeaders(api, fakeClaudeDump, opener.id, opener.threadId);
+      const open = async (answers?: unknown) => {
+        const response = await fetch(`${BASE}/api/internal/create-channel`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            fromBotId: opener.id, fromThreadId: opener.threadId, name: "Panel", memberIds: peers.map((peer) => peer.id),
+            ...(answers === undefined ? {} : { answers }),
+          }),
+        });
+        const body = z.object({ id: z.string().optional(), error: z.string().optional() }).passthrough().parse(await response.json());
+        if (response.status === 201 && body.id) createdChannelIds.push(body.id);
+        return { status: response.status, body };
+      };
+      const roomOf = async (id: string | undefined) =>
+        (await api("GET", "/api/bots?messages=0")).body.groups.find((group: { id: string }) => group.id === id);
+
+      const plain = await open();
+      expect(plain.status).toBe(201);
+      const room = await roomOf(plain.body.id);
+      expect(room.defaultResponder).toEqual({ kind: "everyone" });
+      const members = room.memberIds.map((id: string) => ({ id, name: id }));
+      expect(roomResponders("go", members, room.defaultResponder).map((member: { id: string }) => member.id)).toEqual(room.memberIds);
+
+      const mentions = await open("mentions");
+      expect((await roomOf(mentions.body.id)).defaultResponder).toEqual({ kind: "mentions" });
+
+      const one = await open(peers[1].id);
+      expect((await roomOf(one.body.id)).defaultResponder).toEqual({ kind: "member", botId: peers[1].id });
+
+      const bad = await open("nobody-here");
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toMatch(/everyone.*mentions.*member bot id/);
+    } finally {
+      for (const id of createdChannelIds) await api("DELETE", `/api/groups/${id}`);
+      for (const bot of [opener, ...peers]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
   });
 
   it("keeps direct-message channels folderless at the API boundary", async () => {

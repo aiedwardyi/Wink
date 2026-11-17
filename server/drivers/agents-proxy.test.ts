@@ -944,6 +944,14 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.isError).toBeFalsy();
   });
 
+  it("forwards who answers in a channel", async () => {
+    lastCreateChannelBody = null;
+    await callTool("create_channel", { name: "Panel", member_ids: ["bot-designer"], answers: "mentions" });
+    expect(lastCreateChannelBody).toMatchObject({ answers: "mentions" });
+    await callTool("create_channel", { name: "Panel", member_ids: ["bot-designer"] });
+    expect(lastCreateChannelBody).not.toHaveProperty("answers");
+  });
+
   it("rejects create_channel without a name or members before calling the harness", async () => {
     lastCreateChannelBody = null;
     const missingName = await callTool("create_channel", { member_ids: ["bot-designer"] });

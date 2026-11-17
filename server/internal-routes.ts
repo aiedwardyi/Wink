@@ -35,7 +35,7 @@ import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
 import { cancelWake, dropNewAskWakes, setWake, syncAskWakes } from "./self-wake.ts";
-import { agentRoster, sectionKey, type BotRecord, type GroupRecord, type Store } from "./store.ts";
+import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
@@ -53,6 +53,7 @@ type InternalRouteDeps = {
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
   createdBotSelection: (chief: ModelSelection, model: unknown, effort: unknown) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
@@ -98,6 +99,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     computerControl,
     askBotAndWait,
     checkedMemberIds,
+    checkedGroupResponder,
     createdBotSelection,
     store,
     keepGoing,
@@ -773,15 +775,20 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           return json(res, 400, { error: "setup.bulletin must be at most 12000 characters" });
         }
       }
+      const answers = body.answers ?? "everyone";
+      const defaultResponder = checkedGroupResponder(
+        answers === "everyone" || answers === "mentions" ? { kind: answers } : { kind: "member", botId: answers },
+        memberIds,
+      );
+      if (!defaultResponder) {
+        return json(res, 400, { error: 'answers must be "everyone", "mentions", or a member bot id' });
+      }
       // A room the user asked for is usable the moment it exists - the
       // setup step would only stand between them and the bots they just
-      // asked to assemble. The lead is the one decision worth taking off
-      // the sender: memberIds[0] is always the sender, so picking it made
-      // every bot-opened room answer to the bot that opened it.
-      const lead = memberIds.find((id) => id !== sender.id) ?? sender.id;
+      // asked to assemble.
       const group = store.createGroup(name, memberIds, false, section, {
         bulletin,
-        defaultResponder: { kind: "member", botId: lead },
+        defaultResponder,
         completed: true,
       });
       return json(res, 201, {
