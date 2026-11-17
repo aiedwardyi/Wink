@@ -26,6 +26,7 @@ import {
   type PersistedRoomHold,
 } from "@/lib/drafts";
 import { BotAvatar, RoomBotAvatar } from "./Avatar";
+import { BotModelLine } from "./BotModelLine";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -1129,7 +1130,10 @@ export function Composer({
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                  {peer.bot && <BotModelLine bot={peer.bot} />}
+                </span>
                 <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
