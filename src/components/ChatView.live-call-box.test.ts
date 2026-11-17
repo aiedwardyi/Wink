@@ -266,7 +266,12 @@ describe("live call in the message box", () => {
       const small = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
       expect(small.querySelector('input[aria-label="Speed"]')).not.toBeNull();
       expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
-      await act(async () => gear.click());
+      await act(async () => small.click());
+      expect(document.querySelector("[data-call-settings-menu]:not([data-closing])")).not.toBeNull();
+      await act(async () => {
+        gear.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        gear.click();
+      });
       await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(frame(host), "End")!.dispatchEvent(right));
