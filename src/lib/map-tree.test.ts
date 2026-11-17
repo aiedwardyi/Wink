@@ -172,3 +172,20 @@ it("keeps every row inside the tree and its boxes and file squares apart when no
     }
   }
 });
+
+it("keeps a stack wide enough for its hidden-files label when the row narrows", () => {
+  const paths = ["a/x/file.ts", "b/x/file.ts", "a/file.ts", "b/file.ts", ...["a", "b"].flatMap(top => Array.from({ length: 9999 }, (_, i) => `${top}/other-${i}.ts`))];
+  const changed = new Set(paths.slice(0, 4));
+  const measure = (text: string) => text.length * 7;
+  for (const width of [342, 300, 260]) {
+    const { items } = treeLayout(treeIndex("repo", paths), { width, phone: false, changed, measure, folders: n => `+${n} folders`, files: n => `+${fmt(n)} files` });
+    const stacks = items.filter(it => it.hidden);
+    expect(stacks.length).toBeGreaterThan(0);
+    for (const it of stacks) expect(14 + measure(`+${fmt(it.hidden!)} files`), `${width} ${it.id} label`).toBeLessThanOrEqual(it.w);
+    for (const y of new Set(items.map(it => it.y))) {
+      const row = items.filter(it => it.y === y).toSorted((a, b) => a.x - b.x);
+      for (let i = 1; i < row.length; i++) expect(row[i].x, `${width} ${row[i - 1].id} / ${row[i].id}`).toBeGreaterThanOrEqual(row[i - 1].x + row[i - 1].w);
+      expect(row.at(-1)!.x + row.at(-1)!.w, `${width} right edge`).toBeLessThanOrEqual(width);
+    }
+  }
+});

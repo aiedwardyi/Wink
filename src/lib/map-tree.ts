@@ -65,6 +65,7 @@ export const TREE = { BOX: 26, VGAP: 22, LINE: 17, TOUCH: 44, SGAP: 7, GAP: 10, 
 const { BOX, VGAP, LINE, SGAP, GAP, SMALL, SQ, ELBOW } = TREE;
 // The narrowest a file stack goes: four squares across.
 const STACK_MIN = 58;
+const MAX_EXTRA_FOLDS = 12;
 const byPath = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const dirOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 export const fmt = (n: number) => n.toLocaleString("en-US");
@@ -174,15 +175,18 @@ function measureStack(it: TreeItem, o: TreeOptions, maxStack: number): [number, 
   const line = it.line = o.line ?? LINE;
   let w = 0;
   for (const file of it.files!) w = Math.max(w, o.measure(file.slice(file.lastIndexOf("/") + 1), "file") + (o.team?.marks.has(file) ? 26 : 0));
-  if (it.hidden) w = Math.max(w, o.measure(o.files(it.hidden), "hidden"));
+  const label = it.hidden ? o.measure(o.files(it.hidden), "hidden") : 0;
+  // The "+N files" label is not clipped, so narrowing may not cut the stack below it: 14px left of it and 4px right.
+  const fit = (sw: number) => Math.max(sw, Math.ceil(label + 18));
+  if (it.hidden) w = Math.max(w, label);
   if (it.squares) {
     w = Math.max(w, Math.min(it.squares.length, 10) * SQ - 2);
-    const sw = Math.min(maxStack, Math.ceil(w + 36));
+    const sw = fit(Math.min(maxStack, Math.ceil(w + 36)));
     it.per = Math.max(Math.min(4, it.squares.length), Math.min(it.squares.length, Math.floor((sw - 22) / SQ)));
     it.squaresHeight = Math.ceil(it.squares.length / it.per) * SQ + 2;
     return [sw, it.squaresHeight + it.files!.length * line + 4];
   }
-  return [Math.min(maxStack, Math.ceil(w + 36)), it.files!.length * line + (it.hidden ? LINE - 2 : 0) + 4];
+  return [fit(Math.min(maxStack, Math.ceil(w + 36))), it.files!.length * line + (it.hidden ? LINE - 2 : 0) + 4];
 }
 
 export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false, extra: number[] = []): { items: TreeItem[]; height: number; lit: Set<string> } {
@@ -255,6 +259,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false, ex
     if ((o.phone || !o.current) && span() > W) { bare = true; for (const it of row) measure(it, o, narrow, bare); }
     while ((o.phone || !o.current) && span() > W && narrow > STACK_MIN) { narrow = Math.max(STACK_MIN, narrow - 12); for (const it of row) measure(it, o, narrow, bare); }
     if (spare > 0) spent = false;
+    // Rows 0 and 1 have no row above to fold; they fall back to phone or crowded mode.
     if (span() > W) { tight = true; if (!stuck && r > 1) stuck = r; }
     let end = -GAP * 2;
     for (const group of groups) {
@@ -284,7 +289,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false, ex
   // A small project too wide to open every folder lays out like a big one: changed branches only.
   if (overlap && small) return treeLayout(index, o, true);
   // A last row that cannot narrow any further folds one more branch in the row above, the way an over-wide row does.
-  if (stuck && spent && (o.phone || !o.current) && extra.reduce((sum, n) => sum + (n ?? 0), 0) < 12) { const more = Array.from({ length: stuck }, (_, i) => (extra[i] ?? 0) + (i === stuck - 1 ? 1 : 0)); return treeLayout(index, o, crowded, more); }
+  if (stuck && spent && (o.phone || !o.current) && extra.reduce((sum, n) => sum + (n ?? 0), 0) < MAX_EXTRA_FOLDS) { const more = Array.from({ length: stuck }, (_, i) => (extra[i] ?? 0) + (i === stuck - 1 ? 1 : 0)); return treeLayout(index, o, crowded, more); }
   return { items, height: y - VGAP + 2, lit };
 }
 
