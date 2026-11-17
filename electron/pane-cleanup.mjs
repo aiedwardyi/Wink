@@ -16,10 +16,11 @@ const RECHECK = new Set(["dirty", "unpushed"]);
 const SETTLE_MS = 50;
 // Past this many waiting changes of its own a busy folder is walked again instead of remembered change by change.
 const FLOOD = 1_000;
-// `walk` caps the ignored-file walk per worktree; past it the worktree is kept, never deleted on a partial look.
-export const SWEEP_BUDGET = { dirs: 500_000, ms: 10 * 60_000, walk: 100_000 };
 // Only Windows watches recursively without a startup walk or delivery lag.
 const WATCH = process.platform === "win32";
+// `walk` caps the ignored-file walk per worktree; past it the worktree is kept, never deleted on a partial look.
+// Small slices need the watched link index; elsewhere every slice walks the roots again.
+export const SWEEP_BUDGET = { dirs: 500_000, ms: WATCH ? 60_000 : 10 * 60_000, walk: 100_000 };
 const normalize = (file) => {
   const resolved = path.resolve(file);
   if (process.platform !== "win32") return resolved;
@@ -313,10 +314,12 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   const record = async (kind, target, fields) => {
     await fsp.appendFile(log, JSON.stringify({ at: new Date(now()).toISOString(), kind, path: target, ...fields }) + "\n", { mode: 0o600 });
   };
-  const kept = async (entry, target, reason) => {
-    if (entry.kept === reason) return;
-    entry.kept = reason;
-    await record("kept", target, { reason });
+  const kept = async (entry, target, reason, detail = {}, kind = "kept") => {
+    const said = JSON.stringify([kind, reason, detail]);
+    if (entry.said === said) return;
+    if (kind === "kept") entry.kept = reason;
+    entry.said = said;
+    await record(kind, target, { ...detail, reason });
   };
   const scratchFor = async (entry, norm) => {
     const name = nick(entry.label);
@@ -366,11 +369,11 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       }
       if (!await directory(target)) return;
       const linked = await linkedInto(target, context);
-      if (linked) return kept(entry, target, linked);
+      if (linked) return kept(entry, target, linked.reason, linked);
       if (!await unlinkLinks(target, new Set(), current)) return;
       if (!await directory(target) || !await current()) return;
       const late = await linkedInto(target, context, true);
-      if (late) return kept(entry, target, late);
+      if (late) return kept(entry, target, late.reason, late);
       if (!await current()) return;
       await fsp.rm(target, { recursive: true });
       await finishScratch(target, entry, context.norm);
@@ -426,7 +429,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     stats.dirs++;
     if (section && WATCH) {
       index.sections.get(name)?.close();
-      try { index.sections.set(name, watch(index, section, file)); } catch { index.doubt = true; }
+      try { index.sections.set(name, watch(index, section, file)); } catch { index.doubt ||= "watch"; }
     }
     let saved = cache.get(name);
     if (!saved || ["dev", "ino", "mtimeMs", "ctimeMs"].some((key) => saved[key] !== stat[key])) {
@@ -466,10 +469,10 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (!index.changes.has(file)) index.waiting.set(base, (index.waiting.get(base) ?? 0) + 1);
       index.changes.set(file, { root, rel, deep: deep || !!index.changes.get(file)?.deep });
     };
-    const lost = () => { if (base) note(base, true); else index.doubt = true; };
+    const lost = () => { if (base) note(base, true); else index.doubt ||= "lost"; };
     // A root is watched one level deep with a watcher per top folder, so deleting one floods no other.
     const watcher = fs.watch(dir, { recursive: !!base }, (type, rel) => {
-      if (!["rename", "change"].includes(type)) index.doubt = true;
+      if (!["rename", "change"].includes(type)) index.doubt ||= "event";
       else if (rel == null) lost();
       // A deleted folder's watcher names its own path without end.
       else if (path.isAbsolute(rel)) { watcher.close(); lost(); }
@@ -505,7 +508,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const begun = performance.now();
     for (const root of roots) index.roots.push({ ...root, normalized: await normalizeAsync(root.file, index.parents), id: await rootId(root.file) });
     if (WATCH) {
-      try { for (const root of index.roots) index.watchers.push(watch(index, root)); } catch { index.doubt = true; }
+      try { for (const root of index.roots) index.watchers.push(watch(index, root)); } catch { index.doubt ||= "watch"; }
     }
     for (const root of index.roots) await inspect(context, root.file, root.normalized, root);
     // A watched index is walked once and kept, so that walk is outside the sweep's budget.
@@ -542,7 +545,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         // Windows may name a change by its 8.3 alias.
         const name = rel.includes("~") ? await normalizeAsync(file, index.parents) : canonical(path.join(root.normalized, rel));
         const relative = path.relative(root.normalized, name);
-        if (!relative) { index.doubt = true; return; }
+        if (!relative) { index.doubt ||= "root"; return; }
         if (!contains(root.normalized, name) || relative.split(path.sep).some((part) => BACKUP_RE.test(part)) || (root.temp && !relative.startsWith("wink-"))) continue;
         let parent = name;
         while (parent.length > root.normalized.length && !walked.has(parent)) parent = path.dirname(parent);
@@ -554,7 +557,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (links && index.relinked) for (const [name, link] of index.links) await inspect(context, link.file, name, null, false);
       if (!index.touched) return;
     }
-    index.doubt = true;
+    index.doubt ||= "unsettled";
   };
   const resolveLinks = async ({ index, stats }) => {
     // Only a link through another link or out of the watched folders can be re-pointed unseen.
@@ -578,10 +581,10 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     try {
       const normalized = await normalizeAsync(target);
       const roots = await linkRoots();
-      if (!roots) return "linked";
+      if (!roots) return { reason: "linked", link: worktreeRoot };
       const key = roots.map(({ file, temp }) => `${temp}:${file}`).join("\0");
       if (context.index?.key !== key) context.close();
-      if (context.index?.doubt) return "doubt";
+      if (context.index?.doubt) return { reason: "doubt", cause: context.index.doubt };
       // A link can resolve through a junction no watcher sees.
       if (final && context.index?.stale === false) await resolveLinks(context);
       if (context.index) await refresh(context, normalized, true);
@@ -591,8 +594,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         await refresh(context, normalized, false);
       }
       // A root renamed aside and recreated leaves its watcher on the old folder.
-      if (WATCH && !context.index.doubt && await moved(context.index)) context.index.doubt = true;
-      if (context.index.doubt) return "doubt";
+      if (WATCH && !context.index.doubt && await moved(context.index)) context.index.doubt = "moved";
+      if (context.index.doubt) return { reason: "doubt", cause: context.index.doubt };
       // A watch handle on the candidate would hold up its own delete.
       const own = context.index.sections.get(normalized);
       if (own) {
@@ -600,11 +603,11 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         context.index.sections.delete(normalized);
         context.index.skip = { file: target, name: normalized, seen: true };
       }
-      for (const [name, link] of context.index.links) if (!contains(normalized, name) && (contains(normalized, link.destination) || (link.real && contains(normalized, link.real)))) return "linked";
+      for (const [name, link] of context.index.links) if (!contains(normalized, name) && (contains(normalized, link.destination) || (link.real && contains(normalized, link.real)))) return { reason: "linked", link: link.file };
       return null;
     } catch (error) {
       // A walk cut short leaves an index that misses links.
-      if (context.index) context.index.doubt = true;
+      if (context.index) context.index.doubt ||= "error";
       throw error;
     } finally {
       context.stats.calls++;
@@ -647,18 +650,21 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       return;
     }
     let target;
-    try { target = await git(entry.cwd, ["rev-parse", "--show-toplevel"]); } catch (error) {
+    try { [target, entry.repo] = (await git(entry.cwd, ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"])).split(/\r?\n/); } catch (error) {
       if (error.code !== 128 || !error.message.includes("not a git repository")) throw error;
       entry.worktreeDone = true;
       return;
     }
     const base = await norm(target);
     if (!contains(root, base) || base === root || !await directory(target)) return;
-    const hold = (reason = "") => { retained.set(base, reason); };
-    const keep = (reason) => {
-      hold(reason);
+    const hold = (reason) => {
+      retained.set(base, "");
+      return kept(entry, target, reason, {}, "hold");
+    };
+    const keep = (reason, detail) => {
+      retained.set(base, reason);
       if (RECHECK.has(reason)) entry.checkedAt = now();
-      return kept(entry, target, reason);
+      return kept(entry, target, reason, detail);
     };
     const covers = (file) => contains(base, file) || contains(file, base);
     // Early gates may share one lookup per sweep; the checks right before a delete stay fresh.
@@ -689,7 +695,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       }
       return false;
     };
-    if (await recent(false)) return hold();
+    if (await recent(false)) return hold("recent");
     const busy = async (fresh = true) => {
       for (const pane of await panes()) if (contains(base, await norm(pane.cwd)) || contains(base, await resolved(pane.cwd, fresh))) return true;
       return false;
@@ -710,7 +716,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       return false;
     };
     const unpushed = async () => await git(target, ["rev-list", "HEAD", "--not", "--remotes"]) !== "" && !await landed();
-    if (await busy(false) || !await directory(worktreeRoot)) return hold();
+    if (await busy(false)) return hold("busy");
+    if (!await directory(worktreeRoot)) return hold("root");
     if (await git(target, ["status", "--porcelain"])) return keep("dirty");
     if (await unpushed()) return keep("unpushed");
     const registered = await git(target, ["worktree", "list", "--porcelain"]);
@@ -737,10 +744,11 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       }
       return false;
     };
-    if (await written() || await busy(false)) return walk.left < 0 ? keep("walk cap") : hold();
+    if (await written()) return walk.left < 0 ? keep("walk cap") : hold("written");
+    if (await busy(false)) return hold("busy");
     if (await isPinned(false)) return keep("pinned");
     const linked = await linkedInto(target, context);
-    if (linked) return keep(linked);
+    if (linked) return keep(linked.reason, linked);
     const tracked = new Set((await git(target, ["ls-files", "-z"])).split("\0").filter(Boolean).map((file) => canonical(path.join(base, file))));
     await unlinkLinks(target, tracked, async () => !await busy() && !await isPinned());
     if (await busy() || !await directory(target) || await isPinned() || await git(target, ["status", "--porcelain"])) return;
@@ -757,9 +765,9 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       const late = await linkedInto(target, context, true);
       if (late) return late;
       if (!await directory(target) || !await directory(worktreeRoot)) return "";
-      if (await dirty()) return "dirty";
-      if (await unpushed()) return "unpushed";
-      if (await isPinned()) return "pinned";
+      if (await dirty()) return { reason: "dirty" };
+      if (await unpushed()) return { reason: "unpushed" };
+      if (await isPinned()) return { reason: "pinned" };
       return await busy() || await recent() ? "" : null;
     };
     try {
@@ -770,7 +778,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (removed === false || !await absent(target)) {
         release();
         save();
-        if (held) await keep(held);
+        if (held) await keep(held.reason, held);
         return;
       }
     } catch (error) {
@@ -783,6 +791,35 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     save();
     await record("worktree", target);
   };
+  // A worktree no pane ever opened in has no row; the repos the ledger knows list them.
+  const discover = async ({ norm }) => {
+    const repos = new Set(entries.map((entry) => entry.repo).filter(Boolean));
+    if (!repos.size) return;
+    const root = await norm(worktreeRoot);
+    const covered = [];
+    for (const entry of entries) if (!entry.worktreeDone) covered.push(await norm(entry.cwd));
+    const uncovered = (name) => name !== root && contains(root, name) && !covered.some((cwd) => contains(name, cwd));
+    let names;
+    try { names = await fsp.readdir(worktreeRoot, { withFileTypes: true }); } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      return;
+    }
+    if (!names.some((dirent) => dirent.isDirectory() && !BACKUP_RE.test(dirent.name) && uncovered(canonical(path.join(root, dirent.name))))) return;
+    for (const repo of repos) {
+      let listed;
+      try { listed = await git(repo, ["worktree", "list", "--porcelain"]); } catch { continue; }
+      // The first block is the main checkout.
+      for (const block of listed.split(/\r?\n\r?\n/).slice(1)) {
+        const line = block.split(/\r?\n/).find((candidate) => candidate.startsWith("worktree "));
+        if (!line || /^prunable(?: |$)/m.test(block)) continue;
+        const cwd = path.resolve(line.slice(9));
+        const name = await norm(cwd);
+        if (!uncovered(name)) continue;
+        covered.push(name);
+        entries.push({ id: `worktree:${name}`, instance, cwd, tempRoot, scratch: null, repo, openedAt: now(), closedAt: now(), keep: false, reported: false, scratchDone: true });
+      }
+    }
+  };
   const sweep = () => enqueue(() => fresh(async (context) => {
     const cpu = process.threadCpuUsage();
     const begun = performance.now();
@@ -790,7 +827,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const start = Math.max(0, entries.indexOf(cursor));
     let processed = 0;
     cursor = null;
-    for (const entry of [...entries.slice(start), ...entries.slice(0, start)]) {
+    for (const entry of entries.slice(start)) {
       if (processed && (context.stats.dirs - context.built.dirs > budget.dirs || performance.now() - begun - context.built.ms > budget.ms)) {
         cursor = entry;
         break;
@@ -800,21 +837,24 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (now() - entry.closedAt >= (entry.keep ? 3 : 1) * DAY_MS) await removeScratch(entry, true, context);
       try { await removeWorktree(entry, context, retained); } catch (error) { if (error.code !== "ENOENT") warn(error); }
     }
+    if (!cursor) await discover(context).catch(warn);
     entries = entries.filter((entry) => !entry.closedAt || !entry.scratchDone || !entry.worktreeDone);
     save();
     const { stats } = context;
     if (stats.calls) await record("links", undefined, { ...stats, ms: Math.round(stats.ms) });
+    // Resting as long as the slice ran keeps the sweep at half duty however small its slices.
+    const rest = Math.min(FOLLOW_MS, Math.max(1_000, Math.round(performance.now() - begun)));
     if (cursor) {
       await record("budget", undefined, { dirs: stats.dirs, ms: Math.round(performance.now() - begun) });
       if (started && !stopped) {
         cancel(timer);
-        timer = schedule(tick, FOLLOW_MS);
+        timer = schedule(tick, rest);
         timer.unref?.();
       }
     }
     const { user, system } = process.threadCpuUsage(cpu);
     await record("sweep", undefined, { cpuMs: Math.round((user + system) / 1_000) });
-    fs.writeFileSync(stamp, JSON.stringify({ at: now(), done: !cursor }), { mode: 0o600 });
+    fs.writeFileSync(stamp, JSON.stringify({ at: now(), done: !cursor, rest }), { mode: 0o600 });
   }));
   const tick = () => {
     if (stopped) return;
@@ -859,8 +899,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       save();
       let due = 1_000;
       try {
-        const { at, done } = JSON.parse(fs.readFileSync(stamp, "utf8"));
-        if (Number.isFinite(at)) due = Math.min(SWEEP_MS, Math.max(1_000, at + (done ? SWEEP_MS : FOLLOW_MS) - now()));
+        const { at, done, rest = FOLLOW_MS } = JSON.parse(fs.readFileSync(stamp, "utf8"));
+        if (Number.isFinite(at)) due = Math.min(SWEEP_MS, Math.max(1_000, at + (done ? SWEEP_MS : Math.min(FOLLOW_MS, rest)) - now()));
       } catch {}
       timer = schedule(tick, due);
       timer.unref?.();

@@ -254,16 +254,22 @@ test("a folder flooded with changes is walked again and no other folder is", { s
   assert.deepEqual(f.warnings, []);
 });
 
-test("a sweep stops at its budget and resumes on the next tick", async (t) => {
-  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, budget: { ...SWEEP_BUDGET, ms: 0 } });
-  const left = () => f.rows.filter((row) => fs.existsSync(row)).length;
+test("a sweep stopped by its budget goes on from its cursor in short slices until the ledger is done", async (t) => {
+  const f = await tree(t, { bystanders: 2, worktrees: 2, scratch: 3, budget: { ...SWEEP_BUDGET, ms: 0 } });
+  for (const target of f.targets) fs.writeFileSync(path.join(target, "dirty"), "");
+  const done = () => JSON.parse(fs.readFileSync(path.join(f.home, ".orbit", "cleanup-sweep.json"), "utf8")).done;
   await f.cleanup.sweep();
-  assert.equal(left(), 2);
-  assert.equal(f.events().filter((line) => line.kind === "budget").length, 1);
-  assert.equal(f.jobs.at(-1).ms, 10 * 60_000);
-  await f.cleanup.sweep();
-  assert.equal(left(), 1);
-  await f.cleanup.sweep();
-  assert.equal(left(), 0);
+  let slices = 1;
+  while (!done() && slices < 20) {
+    const next = f.jobs.at(-1);
+    assert.ok(next.ms < 10 * 60_000, `next slice in ${next.ms} ms`);
+    next.run();
+    await f.cleanup.flush();
+    slices++;
+  }
+  assert.equal(slices, 5);
+  assert.deepEqual(f.rows.filter((row) => fs.existsSync(row)), []);
+  assert.deepEqual(f.targets.filter((target) => fs.existsSync(target)), f.targets);
+  assert.equal(f.jobs.at(-1).ms, 6 * 60 * 60_000);
   assert.deepEqual(f.warnings, []);
 });
