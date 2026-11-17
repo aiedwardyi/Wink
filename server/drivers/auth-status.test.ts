@@ -53,4 +53,21 @@ describe("local sign-in cache", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("keeps the last answer while the file is half-written and never reads unknown as signed out", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-auth-torn-"));
+    const path = join(home, "auth.json");
+    const fresh = join(home, "fresh.json");
+    const classify = (text: string) => JSON.parse(text).signedIn === true;
+    try {
+      writeFileSync(path, '{"signedIn":true}');
+      expect(storedSignIn(path, classify)).toBe(true);
+      writeFileSync(path, '{"signedIn":tr');
+      expect(storedSignIn(path, classify)).toBe(true);
+      writeFileSync(fresh, '{"signedIn":tr');
+      expect(storedSignIn(fresh, classify)).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

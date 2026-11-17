@@ -161,7 +161,7 @@ export function museIsAuthenticated(
   env: Record<string, string | undefined>,
   _config?: unknown,
   overrides?: { platform?: NodeJS.Platform; probeWslAuth?: (probeEnv: NodeJS.ProcessEnv) => boolean },
-): boolean {
+): boolean | undefined {
   if (nonBlank(env.META_API_KEY)) return true;
   const signedIn = () => storedSignIn(museAuthPath(env), (text) => {
     const parsed = museAuthSchema.safeParse(JSON.parse(text));
@@ -174,7 +174,8 @@ export function museIsAuthenticated(
   // fallback for older installs and explicit WSL configurations.
   if ((overrides?.platform ?? process.platform) === "win32") {
     try {
-      if (signedIn()) return true;
+      const native = signedIn();
+      if (native !== false) return native;
     } catch {
       // Try the WSL-side login below.
     }

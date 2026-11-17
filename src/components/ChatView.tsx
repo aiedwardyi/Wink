@@ -991,6 +991,8 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
   const engine = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
   const shownEngine = usageAccount(state.instances, shownModelSelection(bot).instanceId);
+  // Turns run on the routed Main account, so the base row's sign-in says nothing about this bot.
+  const signInEngine = usageAccount(state.instances, bot.modelSelection.instanceId);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const callAvailable =
     capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
@@ -1948,8 +1950,8 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           ? <Suspense fallback={null}><LiveCallBar bot={bot} /></Suspense>
           : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
         {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-        {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
-          <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
+        {signInEngine && !bot.busy && needsSignIn(signInEngine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
+          <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}
         <TaskRecoveryCard
           key={`${bot.id}:${activeTask?.threadId ?? bot.threadId}`}
