@@ -222,15 +222,20 @@ test("a pane that finished while the app was closed is told to its bot once, and
   assert.deepEqual(record(before.root).map((run) => [run.label, run.state, run.kept]), [["KEEP-0", "running", true], ["KEEP-1", "reported", true], ["KEEP-2", "running", true]]);
   const second = app(before.root, runtimeRoot);
   // Adoption reads the host's list, so it starts once the host has seen every command end.
+  const waited = Date.now();
   await until(async () => await second.client.prewarm() && (await second.client.panes()).every((pane) => pane.exit !== null || pane.mark?.kind === "D"));
-  await second.adopt();
+  const trace = [`listed after ${Date.now() - waited} ms: ${(await second.client.panes()).map((pane) => `${pane.id.slice(0, 8)} exit=${pane.exit} mark=${pane.mark?.kind} seq=${pane.seq}`).join(", ")}`];
+  const warned = [];
+  const adopting = Date.now();
+  await second.adopt({ warn: (line) => warned.push(String(line)) });
+  trace.push(`adopted in ${Date.now() - adopting} ms`);
+  t.diagnostic(trace.join(" | "));
   const [quiet, told, gone] = before.panes;
-  assert.deepEqual(sorted(second.notes.map((note) => `${note.bot}: ${note.text}`)), [
+  assert.deepEqual([sorted(second.notes.map((note) => `${note.bot}: ${note.text}`)), warned, second.events.filter(([channel, value]) => value.id === gone.sessionId && /opened|exit|error/.test(channel)).map(([channel, value]) => [channel, value.exitCode ?? value.message])], [[
     `bot-0: FINISHED WHILE WINK WAS DOWN: KEEP-0 [pane ${quiet.sessionId.slice(0, 8)}] command ended, no report: read it, then close it; KEEP-2 [pane ${gone.sessionId.slice(0, 8)}] exit 3, no report: read it, then close it.`,
     `bot-1: FINISHED WHILE WINK WAS DOWN: KEEP-1 [pane ${told.sessionId.slice(0, 8)}] reported (report above).`,
-  ]);
+  ], [], [["terminal:opened", undefined], ["terminal:exit", 3]]]);
   assert.match(second.host.watchBot("bot-0", quiet.sessionId, { send: () => 0, drop() {}, end() {} }).snapshot.output, /WORK=42/);
-  assert.deepEqual(second.events.filter(([channel, value]) => value.id === gone.sessionId && /opened|exit/.test(channel)).map(([channel, value]) => [channel, value.exitCode]), [["terminal:opened", undefined], ["terminal:exit", 3]]);
   await until(async () => (await second.client.panes()).length === 2, 30_000);
   assert.deepEqual(second.of("terminal:closed").map((pane) => pane.id), [told.sessionId]);
   await second.adopt();
