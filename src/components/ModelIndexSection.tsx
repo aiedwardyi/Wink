@@ -1036,7 +1036,7 @@ export function ModelIndexSection() {
                   <Scatter
                     index={index}
                     marks={MARKS}
-                    points={points}
+                    points={lab ? points.filter((point) => chartProvider(point.provider) === lab) : points}
                     width={full ? chartWidth : width}
                     fitHeight={full ? chartHeight || height : undefined}
                     full={full}

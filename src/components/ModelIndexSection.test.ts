@@ -631,7 +631,7 @@ describe("full screen chart", () => {
     if (phone) pick(t("modelIndex.viewLabel"), t("modelIndex.view.chart"));
   };
   const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  const svg = () => host.querySelector<SVGSVGElement>("svg[role=img]")!;
+  const svg = () => host.querySelector<SVGSVGElement>("svg[role=img], [data-mi-phone-chart] svg[role=group]")!;
   afterEach(() => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: innerWidth });
     vi.useRealTimers();
@@ -1032,6 +1032,26 @@ describe("phone model index", () => {
     const meta = host.querySelector("[data-mi-row]")!.closest(".model-index")!.textContent!;
     expect(meta).toContain("Price per 1M, in / out");
     expect(meta).not.toContain("Blended");
+  });
+
+  it("rounds the phone chart's score ticks on a one-model lab", async () => {
+    await rebuild();
+    pick("Benchmark", "Design");
+    pick("Chart", "Chart");
+    act(() => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((el) => el.textContent === "xAI")!.click());
+    const chart = host.querySelector("[data-mi-phone-chart] svg[aria-label]")!;
+    expect(chart.getAttribute("role")).toBe("group");
+    expect([...chart.querySelectorAll("text")].map((el) => el.textContent).filter((text) => /\d\.\d{3,}/.test(text ?? ""))).toEqual([]);
+  });
+
+  it("keeps the lab filter in the full screen chart", async () => {
+    await rebuild();
+    act(() => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((el) => el.textContent === "Anthropic")!.click());
+    pick("Chart", "Chart");
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Full Screen"]')!.click());
+    const labels = [...host.querySelectorAll('[data-mi-full] svg [aria-label][tabindex="0"]')].map((el) => el.getAttribute("aria-label")!);
+    expect(labels.some((label) => label.startsWith("Claude"))).toBe(true);
+    expect(labels.filter((label) => /GPT|Gemini|Grok|Muse/.test(label))).toEqual([]);
   });
 
   it("keeps a gap between two chart names so they never read as one", () => {

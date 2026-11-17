@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
-import { chartProvider, effortRank, fitLogTicks, formatCost, logTicks, type ChartProvider, type ModelIndexPoint } from "@/lib/model-index";
+import { chartProvider, effortRank, fitLogTicks, formatCost, linearTicks, logTicks, type ChartProvider, type ModelIndexPoint } from "@/lib/model-index";
 import { botAvatarAssetPath, type BotAvatarId } from "../../shared/bot-avatar";
 import { edgeFade } from "./Segmented";
 
@@ -325,13 +325,12 @@ export function PhoneChart({
 
   const lo = scores.length ? Math.min(...scores) : 0;
   const hi = scores.length ? Math.max(...scores) : 100;
-  const span = hi - lo || 1;
-  const mag = 10 ** Math.floor(Math.log10(span / 6));
-  const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= span / 6)!;
-  const y0 = Math.max(0, Math.floor((lo - span * 0.04) / step) * step);
-  const y1 = Math.min(percent ? 100 : Infinity, Math.ceil((hi + span * 0.04) / step) * step);
+  const pad = (hi - lo || 1) * 0.04;
+  const {
+    domain: [y0, y1],
+    ticks: grid,
+  } = linearTicks(Math.max(0, lo - pad), Math.min(percent ? 100 : Infinity, hi + pad), 6);
   const y = (score: number) => bottom - ((score - y0) / (y1 - y0 || 1)) * (bottom - top);
-  const grid = Array.from({ length: Math.round((y1 - y0) / step) + 1 }, (_, i) => y0 + i * step);
 
   const named = charted.slice(0, NAMED);
   const spot = (row: (typeof charted)[number]) => ({ x: x(row.dot.cost!), y: y(row.dot.score) });
@@ -377,7 +376,7 @@ export function PhoneChart({
         >
           <Maximize2 size={16} />
         </button>
-        <svg ref={svgRef} width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block overflow-visible" role="img" aria-label={title}>
+        <svg ref={svgRef} width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block overflow-visible" role="group" aria-label={title}>
           <text x={left} y={10} className="fill-ink-secondary text-[11px]">
             ↑ {title}
           </text>
