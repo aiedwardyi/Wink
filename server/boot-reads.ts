@@ -83,23 +83,27 @@ export function findBootRows(input: BootReadInput): BootRows {
   }
 }
 
-let begin!: (input: BootReadInput) => Promise<void>;
+let settle!: (found: BootRows) => void;
 let started: Promise<void> | undefined;
-const rows = new Promise<BootRows>((resolve) => {
-  begin = (input) => runWorker(input).then(resolve, (error: unknown) => {
-    resolve(EMPTY);
-    throw error;
-  });
-});
+const rows = new Promise<BootRows>((resolve) => { settle = resolve; });
 
-/** What the boot finders found; it settles only after startBootReads, and to empty rows when the worker failed. */
+/** What the boot finders found; it settles after startBootReads or skipBootReads, and to empty rows when the worker failed. */
 export function bootReads(): Promise<BootRows> {
   return rows;
 }
 
 /** Spawns the worker once; call it from startupTiming.afterPaint so the read never competes with the first page. */
 export function startBootReads(input: BootReadInput): Promise<void> {
-  return started ??= begin(input);
+  // inside then(): a Worker that throws while starting settles the rows too
+  return started ??= Promise.resolve().then(() => runWorker(input)).then(settle, (error: unknown) => {
+    console.warn("boot reads failed; this run recovers no boot rows", error);
+    settle(EMPTY);
+  });
+}
+
+/** A shutdown before paint never starts the worker; the rows' waiters get empty rows instead of hanging. */
+export function skipBootReads(): void {
+  settle(EMPTY);
 }
 
 function runWorker(input: BootReadInput): Promise<BootRows> {

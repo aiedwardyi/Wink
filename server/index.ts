@@ -314,7 +314,7 @@ import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { recoverHandedMail } from "./mail-index.ts";
-import { bootReads, startBootReads } from "./boot-reads.ts";
+import { bootReads, skipBootReads, startBootReads } from "./boot-reads.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
@@ -6698,7 +6698,7 @@ const approvalBus: ApprovalBus = { store, broadcast };
 void bootReads().then((rows) => {
   const stale = dismissStalePeerCards(approvalBus, rows.peerCards);
   if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
-});
+}).catch((error: unknown) => console.warn("peer approvals: boot dismissal failed", error));
 
 // Handoffs a previous process queued but never ran. The source turn died
 // with that process, and an interrupted turn already drops its queue rather
@@ -6709,7 +6709,8 @@ _loadPending();
   const dropped = discardOrphanedDelegations(commsBus);
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
-void bootReads().then((rows) => recoverHandedMail(store, rows.handed, performance.timeOrigin));
+void bootReads().then((rows) => recoverHandedMail(store, rows.handed, performance.timeOrigin))
+  .catch((error: unknown) => console.warn("mail: boot handoff recovery failed", error));
 
 configureRoomAsks({
   store,
@@ -9477,7 +9478,8 @@ googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
 // the boot drain has already run by the time the worker replies
-void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).then(drainQueuedSends, (error: unknown) => console.warn("[quick] recovery failed", error));
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error))
+  .then(drainQueuedSends).catch((error: unknown) => console.warn("[quick] drain after recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
@@ -9552,6 +9554,7 @@ hostShutdown = () => {
   if (hostShutdownStarted) return;
   hostShutdownStarted = true;
   startupTiming.close();
+  skipBootReads();
   usageStats.stop();
   askHold.flush();
   const routineThreadByBotId: Record<string, string> = {};

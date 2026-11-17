@@ -294,14 +294,22 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
     if (task.eligible) consume(task, 1);
   }
+  // per task: one chat's bad row must not leave the rest uncleaned
+  const isolated = (threadId: string, work: () => void) => {
+    try {
+      work();
+    } catch (error) {
+      console.warn("chat sync v2: boot notice cleanup failed", threadId, error);
+    }
+  };
   const cleaned = host.bootReads().then((rows) => {
     for (const { threadId, ids } of rows.migration) {
       const task = cleaning.get(threadId);
-      if (task) removeMigrationNotices(task, ids);
+      if (task) isolated(threadId, () => removeMigrationNotices(task, ids));
     }
     for (const { threadId, notices } of rows.conflicts) {
       const task = cleaning.get(threadId);
-      if (task?.eligible) notifyConflict(task, notices);
+      if (task?.eligible) isolated(threadId, () => notifyConflict(task, notices));
     }
   }).catch((error: unknown) => console.warn("chat sync v2: boot notice cleanup failed", error)).finally(() => cleaning.clear());
   // the cleanup is awaited outside serial(): a task in it flushes when it lands, not on a retry timer, and other tasks don't queue behind it

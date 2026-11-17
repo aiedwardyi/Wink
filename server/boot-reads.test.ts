@@ -208,3 +208,11 @@ describe("boot reads of messages.db", () => {
     }
   }, WINDOW_MS + 10_000);
 });
+
+describe("boot rows", () => {
+  it("settle to empty rows when a shutdown before paint skips the read", async () => {
+    const { bootReads, skipBootReads } = await import("./boot-reads.ts");
+    skipBootReads();
+    expect(await bootReads()).toEqual({ receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [] });
+  });
+});
