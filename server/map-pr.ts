@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { MapCheck, MapFlow, MapPr, MapReview } from "../shared/map-flow.ts";
@@ -111,17 +111,20 @@ async function gitFlow(root: string, base: string) {
   };
 }
 
-// A checkout's last rows belong to its folder, its .git (a repo made again there is another), the worker's base commit and the branch in HEAD, read with no git spawn.
+// A checkout's last rows belong to its folder, its .git and first reflog line (a repo made again there is another, even where ext4 reuses the inode and has no birthtime), the worker's base and HEAD, read with no git spawn.
 async function lastKey(root: string, base: string) {
   const dot = join(root, ".git");
   const own = await stat(dot);
   const dir = own.isDirectory() ? dot : resolve(root, /^gitdir:\s*(.+)$/m.exec(await readFile(dot, "utf8"))?.[1].trim() ?? "");
-  return `${resolve(root)}\0${own.ino}:${own.birthtimeMs}\0${base}\0${(await readFile(join(dir, "HEAD"), "utf8")).trim()}`;
+  const log = await open(join(dir, "logs", "HEAD")).catch(() => null);
+  const first = log ? await log.read(Buffer.alloc(256), 0, 256, 0).then(({ buffer, bytesRead }) => buffer.toString("utf8", 0, bytesRead).split("\n")[0]).finally(() => log.close()) : "";
+  return `${resolve(root)}\0${own.ino}:${own.birthtimeMs}\0${first}\0${base}\0${(await readFile(join(dir, "HEAD"), "utf8")).trim()}`;
 }
 
 export function createMapFlow(gh: MapGh = ghRun, file?: string) {
   const known = new Map<string, { key: string; at: number; pr: Promise<MapPr | null> }>();
   let saved: Promise<Map<string, { at: number; flow: MapFlow }>> | undefined;
+  let folder = false;
   // SAFETY: the file holds only flows this module wrote, and the schema checks every field the rows read.
   const load = () => saved ??= (file ? readFile(file, "utf8").then(text => new Map(Object.entries(lastSchema.parse(JSON.parse(text)) as Record<string, { at: number; flow: MapFlow }>))) : Promise.reject(new Error("no file"))).catch(() => new Map());
 
@@ -165,7 +168,7 @@ export function createMapFlow(gh: MapGh = ghRun, file?: string) {
     flows.delete(key);
     flows.set(key, { at: Date.now(), flow: result });
     for (const old of [...flows.keys()].slice(0, Math.max(0, flows.size - KEEP))) flows.delete(old);
-    if (file) try { mkdirSync(dirname(file), { recursive: true }); writeFileAtomic(file, JSON.stringify(Object.fromEntries(flows))); } catch { /* the rows still show; only the next open waits */ }
+    if (file) try { if (!folder) { mkdirSync(dirname(file), { recursive: true }); folder = true; } writeFileAtomic(file, JSON.stringify(Object.fromEntries(flows))); } catch { /* the rows still show; only the next open waits */ }
     return result;
   }
 
