@@ -18,7 +18,7 @@ vi.mock("@/lib/live-call/volume", async (importOriginal) => {
 import { applyLocale } from "@/lib/i18n";
 import { setCallVolume } from "@/lib/live-call/volume";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
-import { CallSettings, CallSettingsHold, VoiceChatSettings } from "./CallSettings";
+import { CallSettings, CallSettingsHold } from "./CallSettings";
 import { MENU_CLASS } from "./MessageMenu";
 
 const ada = { id: "bot-1", name: "Ada", color: "iris", messages: [] } as unknown as Bot;
@@ -327,19 +327,4 @@ it("labels the panel in Korean", async () => {
   expect(button(host, "언어")!.textContent).toBe("자동 감지");
   expect(button(host, "Jenn 들어보기")).not.toBeNull();
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
-});
-
-it("shows the voice and speed in the Bot details row and opens the panel there", async () => {
-  store.bots = [tuned];
-  const host = await render(createElement(VoiceChatSettings, { bot: tuned }));
-  expect(host.querySelector("h3")!.textContent).toBe("Voice chat");
-  const row = host.querySelector<HTMLButtonElement>("[data-call-voice-row]")!;
-  expect(row.textContent).toBe("Puck 1.2x");
-  expect(button(host, "Language")!.textContent).toBe("Auto-detect");
-  expect(host.querySelector("[data-call-settings]")).toBeNull();
-  await act(async () => row.click());
-  expect(row.getAttribute("aria-expanded")).toBe("true");
-  const panel = host.querySelector("[data-call-settings]")!;
-  expect(panel.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-  expect(panel.querySelectorAll('button[aria-label="Language"]')).toHaveLength(0);
 });

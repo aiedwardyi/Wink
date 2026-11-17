@@ -202,16 +202,14 @@ describe("call button in the message box", () => {
     }
   });
 
-  it("opens call settings on a right-click on Call and still calls on a left-click", async () => {
+  it("opens nothing on a right-click on Call and still calls on a left-click", async () => {
     const { host, unmount } = await mount();
     try {
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      expect(document.querySelector("[data-call-settings-menu] [data-call-settings]")).not.toBeNull();
+      expect(right.defaultPrevented).toBe(false);
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       expect(tokens()).toBe(0);
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       await connect(host);
       expect(tokens()).toBe(1);
     } finally {
