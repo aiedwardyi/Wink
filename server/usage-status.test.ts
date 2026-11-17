@@ -40,7 +40,7 @@ describe("usage_status text", () => {
       "Codex:",
       "- Codex 1 (Main): no usage report yet",
       "- API key: API credit, no plan limits",
-      "Of the accounts with usage left, spend first the one whose window resets first.",
+      "Use Main, then the Settings order; switch only when one is out or the user asks.",
     ]);
   });
 

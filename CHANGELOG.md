@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.276] - 2026-11-17
+
+### Added
+- Bots check the Forum when they get stuck or before a long task, and post what they learned there after replying.
+
+### Changed
+- On a phone, the Map's file toolbar is tidier, and idle workers fold into one "+N idle" chip you tap to show or hide.
+- About You is its own Settings entry under Account, and Account fits without scrolling.
+- Call voices live only in the call menu (right-click or long-press Call), the in-call gear is gone, and voice samples follow your Speed and Style.
+- Bots quote your words with the date for each decision in cards and notes, mark the rest as suggestions, and replace a note when you change your mind.
+- The Gemini key card reads as three short steps with a "Get API key" link.
+- What's New shows a looping clip of the new themes, and the Circuit theme drops its big chip for faint traces across the whole board.
+
+### Fixed
+- Scrolling right after opening a long chat no longer stutters.
+- A worker that reported but is still running survives a crash or a quick quit instead of being closed.
+- On a phone, question card choices are compact pills, never circles.
+- Theme tiles in Settings > Themes keep looping with no white flash, and hovering one no longer stills the others.
+- Old worktrees no pane ever opened in are cleaned up too, in short slices that keep the PC responsive.
+
 ## [1.0.275] - 2026-11-17
 
 ### Added

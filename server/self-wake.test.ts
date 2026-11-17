@@ -9,7 +9,8 @@ import { CommsCallers } from "./comms-caller.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 
 import { RoutineManager, type RoutineManagerOptions } from "./routines.ts";
-import { cancelWake, setWake, WAKE_MAX_PENDING } from "./self-wake.ts";
+import { cancelWake, setWake, syncAskWakes, WAKE_MAX_PENDING } from "./self-wake.ts";
+import type { TaskAsk } from "./task-asks.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -163,6 +164,136 @@ describe("self-wake", () => {
     h.setNow(START + 6 * 60_000);
     await h.manager.tick();
     expect(h.fired).toEqual([]);
+  });
+
+  it("wakes the bot once when an open ask's due time passes and never for a closed one", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const asks: TaskAsk[] = [
+      { id: "A1", ask: "phone Model Index designs", status: "open", due, at: START, changedAt: START },
+      { id: "A2", ask: "ship the fix", status: "open", due, at: START, changedAt: START },
+    ];
+    expect(syncAskWakes(h.manager, chat, [], asks, START)).toEqual([]);
+    expect(h.manager.listRoutines()).toHaveLength(2);
+    const closed = asks.map((item) => item.id === "A2" ? { ...item, status: "done" as const } : { ...item });
+    syncAskWakes(h.manager, chat, asks, closed, START + 60_000);
+    expect(h.manager.listRoutines()).toHaveLength(1);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired).toHaveLength(1);
+    expect(h.fired[0]).toMatchObject(chat);
+    expect(h.fired[0]!.line).toContain("A1");
+    expect(h.fired[0]!.line).toContain("phone Model Index designs");
+    expect(h.fired[0]!.line).not.toContain("ship the fix");
+    syncAskWakes(h.manager, chat, closed, closed.map((item) => ({ ...item })), due + 10_000);
+    h.setNow(due + 60 * 60_000);
+    await h.manager.tick();
+    expect(h.fired).toHaveLength(1);
+    expect(h.manager.listRoutines()).toEqual([]);
+  });
+
+  it("moves an ask's wake with its due time and drops it once the time is cleared", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const first: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due: START + 10 * 60_000, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], first, START);
+    const moved = [{ ...first[0]!, due: START + 30 * 60_000 }];
+    syncAskWakes(h.manager, chat, first, moved, START);
+    expect(h.manager.listRoutines().map((routine) => routine.nextRunAt)).toEqual([START + 30 * 60_000]);
+    const { due: _, ...cleared } = moved[0]!;
+    syncAskWakes(h.manager, chat, moved, [cleared], START);
+    expect(h.manager.listRoutines()).toEqual([]);
+    expect(syncAskWakes(h.manager, chat, [], [{ ...first[0]!, due: START + 8 * 24 * 60 * 60_000 }], START)).toEqual([
+      expect.stringMatching(/^No wake for A1: at must be between 1 minute and 7 days/),
+    ]);
+  });
+
+  it("cancels the wake of an ask that fell off, sets one again when a closed ask reopens before its time, and says when the time already passed", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const open: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], open, START);
+    syncAskWakes(h.manager, chat, open, [], START);
+    expect(h.manager.listRoutines()).toEqual([]);
+    const reopen: TaskAsk[] = [{ id: "A2", ask: "ship it", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], reopen, START);
+    const closed = [{ ...reopen[0]!, status: "done" as const }];
+    syncAskWakes(h.manager, chat, reopen, closed, START);
+    expect(h.manager.listRoutines()).toEqual([]);
+    syncAskWakes(h.manager, chat, closed, [{ ...closed[0]!, status: "open" }], START);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired.map((fire) => fire.line)).toEqual([expect.stringContaining("Ask A2 is due")]);
+    expect(syncAskWakes(h.manager, chat, [], [{ id: "A3", ask: "late one", status: "open", due: START - 60_000, at: START, changedAt: START }], START)).toEqual([
+      "No wake for A3: its due time already passed.",
+    ]);
+  });
+
+  it("a room member who moves or closes another member's ask cancels that member's wake", () => {
+    const h = harness();
+    const due = START + 10 * 60_000;
+    const first: TaskAsk[] = [
+      { id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START },
+      { id: "A2", ask: "ship it", status: "open", due, at: START, changedAt: START },
+    ];
+    syncAskWakes(h.manager, { botId: "bot-a", threadId: "room-1" }, [], first, START);
+    const next = [{ ...first[0]!, due: START + 30 * 60_000 }, { ...first[1]!, status: "done" as const }];
+    syncAskWakes(h.manager, { botId: "bot-b", threadId: "room-1" }, first, next, START);
+    expect(h.manager.listRoutines().map((routine) => [routine.botId, routine.nextRunAt])).toEqual([["bot-b", START + 30 * 60_000]]);
+  });
+
+  it("an ask started before its due time is not told to start again", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const open: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], open, START);
+    syncAskWakes(h.manager, chat, open, open.map((ask) => ({ ...ask, status: "building" as const })), START + 60_000);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired).toHaveLength(1);
+    expect(h.fired[0]!.line).toContain("If it isn't started, start it now; otherwise update its due time.");
+  });
+
+  it("an ask's wake outlives a restart and rings once", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const asks: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], asks, START);
+    const id = asks[0]!.wake;
+    h.restart();
+    syncAskWakes(h.manager, chat, asks, asks.map((ask) => ({ ...ask })), START + 60_000);
+    expect(h.manager.listRoutines().map((routine) => routine.id)).toEqual([id]);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired.map((fire) => fire.line)).toEqual([expect.stringContaining("Ask A1 is due")]);
+  });
+
+  it("drops the ask wakes it set when the task record is not saved, so a retry sets one", async () => {
+    const h = harness();
+    const packet = { v: 1, threadId: "chat-a", botId: "bot-a", goal: "", plan: [], completed: [], evidence: [], artifacts: [], blockers: [], nextAction: "", updatedAt: 1 };
+    const routes = createInternalRoutes({
+      store: { bot: (id: string) => ({ id }), conversationForBot: () => ({}), taskByThread: () => undefined },
+      routines: h.manager,
+      taskPacketForWrite: () => packet,
+      persistTaskPacket: () => null,
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const due = new Date(Date.now() + 30 * 60_000).toISOString();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const req = new EventEmitter() as IncomingMessage;
+      req.headers = {};
+      let status = 0;
+      const res = { writeHead(code: number) { status = code; }, getHeader() {}, setHeader() {}, end() {} } as unknown as ServerResponse;
+      const pending = routes.taskState(req, res);
+      req.emit("data", JSON.stringify({ fromBotId: "bot-a", fromThreadId: "chat-a", asks: [{ ask: "phone designs", status: "open", due }] }));
+      req.emit("end");
+      await pending;
+      expect(status).toBe(409);
+    }
+    expect(h.manager.listRoutines()).toEqual([]);
   });
 
   it("never lets a wake ride a calendar routine id", () => {

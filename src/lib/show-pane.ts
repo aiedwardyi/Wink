@@ -6,7 +6,7 @@ import { linkedFileSrc, localLinks, showKind, type ShowKind } from "./chat-media
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
-export type PaneKind = ShowKind | "text";
+export type PaneKind = ShowKind | "text" | "folder";
 
 /** What a click shows in the pane: the kinds that open on their own, and plain text. */
 export const paneKind = (path: string): PaneKind | null => showKind(path) ?? (/[^\\/]\.txt$/i.test(path) ? "text" : null);
@@ -29,6 +29,48 @@ export function saveFile(src: string, name: string, path?: string) {
   link.click();
 }
 
+const folderSchema = z.object({
+  files: z.array(z.object({ name: z.string().min(1), path: z.string().min(1), size: z.number(), modified: z.number() })),
+  more: z.number(),
+});
+
+export type FolderListing = z.infer<typeof folderSchema>;
+
+const listed = new Map<string, FolderListing>();
+const folderViews = new Map<string, (listing: FolderListing) => void>();
+
+/** A linked folder's files from this PC's server, or null when it won't list them. */
+export async function linkedFolder(threadId: string, path: string): Promise<FolderListing | null> {
+  const res = await fetch(`/api/threads/${encodeURIComponent(threadId)}/linked-folder?path=${encodeURIComponent(path)}`).catch(() => null);
+  const body = res?.ok ? folderSchema.safeParse(await res.json().catch(() => null)) : null;
+  return body?.success ? body.data : null;
+}
+
+/** Shows a folder its link just listed, so the pane draws that listing without asking again. */
+export function showFolder(threadId: string, path: string, listing: FolderListing) {
+  const key = `${threadId}\n${path}`;
+  const view = folderViews.get(key);
+  if (view) view(listing);
+  else listed.set(key, listing);
+  showItem({ threadId, path, kind: "folder" });
+}
+
+/** An open folder takes each listing its link hands over, since showItem keeps the same item as it is. */
+export function watchFolder(threadId: string, path: string, take: (listing: FolderListing) => void): () => void {
+  const key = `${threadId}\n${path}`;
+  folderViews.set(key, take);
+  return () => {
+    if (folderViews.get(key) === take) folderViews.delete(key);
+  };
+}
+
+export function takeFolder(threadId: string, path: string): FolderListing | null {
+  const key = `${threadId}\n${path}`;
+  const listing = listed.get(key) ?? null;
+  listed.delete(key);
+  return listing;
+}
+
 let showing: ShowItem | null = null;
 let media: string | null = null;
 let checking: string | null = null;
@@ -39,7 +81,7 @@ const emit = () => { for (const listener of listeners) listener(); };
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
 export const PANE_TAB_KEY = "omb-pane-tab";
-const paneTab = z.union([z.enum(["media", "map"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text"]), src: z.string().optional() })]);
+const paneTab = z.union([z.enum(["media", "map"]), z.object({ threadId: z.string(), path: z.string(), kind: z.enum(["image", "pdf", "page", "text", "folder"]), src: z.string().optional() })]);
 type PaneTab = z.infer<typeof paneTab>;
 const picked = new Map<string, PaneTab>();
 
