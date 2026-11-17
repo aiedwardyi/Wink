@@ -7,7 +7,7 @@ import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
 import { applyPendingModel, switchHeld } from "./pending-model.ts";
-import { routesQuick } from "./quick-ask.ts";
+import { routesAck, routesQuick } from "./quick-ask.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -191,7 +191,7 @@ describe("a line typed while the bot works", () => {
   const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread")) => {
     const startQuick = vi.fn();
     const h = harness(steer, true, {
-      routesQuick, startQuick, quick: { accountReady: () => true },
+      routesQuick, routesAck, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
     });
     Object.assign(h.store, { groupByThread: () => undefined });
