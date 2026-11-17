@@ -238,7 +238,8 @@ describe("pinned ask_user question", () => {
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
-    await mount({ bot: bot([question]) });
+    // its own thread, so the typed draft stays out of the next test's box
+    await mount({ bot: { ...bot([question]), threadId: "typed-thread" } });
     await type("S");
     expect(row()).not.toBeNull();
     await type("");
@@ -434,14 +435,15 @@ describe("pinned ask_user question", () => {
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
-    await mount({ bot: bot([ask({ options: [] })]) });
+    // its own thread, so the unsent answer restored to the box stays out of the next test's
+    await mount({ bot: { ...bot([ask({ options: [] })]), threadId: "answer-thread" } });
     const input = textarea()!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Staging");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "asker-thread" })]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "answer-thread" })]);
   });
 
   it("dismisses with the open card's x", async () => {
@@ -519,5 +521,31 @@ describe("pinned ask_user question", () => {
     expect(sent("POST", "/api/groups/room/messages").map((call) => call.body)).toEqual([
       expect.objectContaining({ text: "Staging", threadId: "room-thread", sendId: expect.any(String) }),
     ]);
+  });
+});
+
+describe("one tray over the message box", () => {
+  const replied: Message = { id: "said-1", role: "bot", kind: "text", text: "Staging is ready", at: 1 };
+
+  it("arrives as the row while the box holds a reply, and a tap still opens it", async () => {
+    await mount({ bot: { ...bot([question]), threadId: "reply-thread" }, replyTo: replied });
+    expect(card()).toBeNull();
+    expect(row()).not.toBeNull();
+    await expand();
+    expect(card()?.getAttribute("aria-label")).toBe("Ada asks");
+  });
+
+  it("puts the reply quote and the pictures on one row inside the capped tray", async () => {
+    const shot = { kind: "image", path: "/tmp/shot.png", size: 3, mime: "image/png" };
+    localStorage.setItem("omb-draft-attachments", JSON.stringify({
+      "bot:asker:tray-thread": [{ ...shot, id: "one", name: "one.png" }, { ...shot, id: "two", name: "two.png" }],
+    }));
+    await mount({ bot: { ...bot([]), threadId: "tray-thread" }, replyTo: replied });
+    const tray = host!.querySelector("[data-composer-tray]");
+    expect(tray?.className).toContain("max-h-[35dvh]");
+    expect(tray?.className).toContain("overflow-y-auto");
+    const together = tray?.querySelector('[data-attachment-tray="row"]');
+    expect(together?.textContent).toContain("Replying to Ada");
+    expect(together?.querySelectorAll('[aria-label="Remove image"]')).toHaveLength(2);
   });
 });
