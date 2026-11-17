@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { newerRelease } from "../../shared/release-order";
-import { unseenRelease, WHATS_NEW, type WhatsNewEntry } from "./whats-new";
+import { tilesOnly, unseenRelease, WHATS_NEW, type WhatsNewEntry } from "./whats-new";
 
 describe("unseen release notes", () => {
   it("shows the notes a skipped release carried", () => {
@@ -107,6 +107,13 @@ describe("what's new tiles", () => {
   it("leaves tiles up to 1.0.278 as they shipped", () => {
     expect(stale({ "1.0.246": WHATS_NEW["1.0.246"], "1.0.277": WHATS_NEW["1.0.277"], "1.0.278": entry({ clip: still, show: "memory" })["1.0.279"] })).toEqual([]);
     expect(stale({ "1.0.246": WHATS_NEW["1.0.246"], ...entry({ clip: still, show: "memory" }) })).toHaveLength(1);
+  });
+
+  it("keeps a no-tile record out of the cards", () => {
+    const quiet = { tile: "none", reason: "Quiet release." } as const;
+    const kept = tilesOnly({ "1.0.278": WHATS_NEW["1.0.278"], "1.0.279": quiet });
+    expect(Object.keys(kept)).toEqual(["1.0.278"]);
+    expect(unseenRelease("1.0.279", "1.0.277", Object.keys(kept))).toBe("1.0.278");
   });
 
   it("passes a release that adds no tile", () => {

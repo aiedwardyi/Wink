@@ -22,6 +22,9 @@ export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; tit
 
 export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile] | [WhatsNewTile, WhatsNewTile]; more: Copy };
 
+/** A release that chose to ship no tile; the release gate (scripts/check-whats-new.mjs) accepts it in place of tiles. */
+export type WhatsNewNone = { tile: "none"; reason: string };
+
 const themesTile: WhatsNewTile = {
   clip: themesClip,
   title: { en: "Four new themes that move", ko: "움직이는 새 테마 4개" },
@@ -30,7 +33,7 @@ const themesTile: WhatsNewTile = {
 };
 
 // One entry per release that has notes; a release with no entry shows the newest earlier one still unseen.
-export const WHATS_NEW: Record<string, WhatsNewEntry> = {
+export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   "1.0.246": {
     title: { en: "New in Wink 1.0.246", ko: "Wink 1.0.246 새 기능" },
     tiles: [
@@ -110,6 +113,12 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
 };
+
+/** The releases with tiles; a no-tile record has nothing to show. */
+export const tilesOnly = (list: Record<string, WhatsNewEntry | WhatsNewNone>) =>
+  Object.fromEntries(Object.entries(list).filter((pair): pair is [string, WhatsNewEntry] => "tiles" in pair[1]));
+
+export const WHATS_NEW = tilesOnly(RELEASE_NOTES);
 
 /** The newest notes after `seen` that the running release has. */
 export function unseenRelease(release: string, seen: string | null, releases = Object.keys(WHATS_NEW)): string | null {
