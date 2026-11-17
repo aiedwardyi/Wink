@@ -8,7 +8,14 @@ describe("consentOf", () => {
     expect(bareYes(said)).toBe(true);
   });
 
-  it.each(["Thank you.", "Thanks, but wait.", "Thank you. Do not do that.", "Thanks. Do that?", "Thank you. Please make it blue."])("does not confirm with %s", (said) => {
+  it.each(["Thanks, um, yes", "Thank you, uh, okay."])("confirms past a filler after the thanks: %s", (said) => {
+    expect(consentOf(said)).toBe("yes");
+    expect(bareYes(said)).toBe(true);
+  });
+
+  it("confirms a thanked yes in another language", () => expect(bareYes("Thanks, Sí.")).toBe(true));
+
+  it.each(["Thank you.", "Thanks, but wait.", "Thanks, yes, 잠깐만.", "yes, 잠깐만", "Thank you. Do not do that.", "Thanks. Do that?", "Thank you. Please make it blue."])("does not confirm with %s", (said) => {
     expect(consentOf(said)).not.toBe("yes");
   });
 

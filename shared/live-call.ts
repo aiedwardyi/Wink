@@ -52,7 +52,7 @@ const OPEN_MARKERS = ["no speech", "pause", "silence", "noise", "instruction"];
 
 /** Model markers are never speech, including a marker left open at the end of a chunk. */
 export function spokenText(text: string): string {
-  const clean = text.replace(/<[^>]*>|\{[^}]*\}?/g, " ").replace(/<([^\s<>][^<>]*)$/g, (whole, tail: string) => {
+  const clean = text.replace(/<(?![\s\d])[^<>]*>|\{[^}]*\}?/g, " ").replace(/<([^\s<>][^<>]*)$/g, (whole, tail: string) => {
     const marker = tail.toLowerCase().trim();
     return marker.length >= 2 && OPEN_MARKERS.some((name) => name.startsWith(marker) || marker.startsWith(`${name}:`)) ? " " : whole;
   }).replace(/\s+/g, " ").trim();

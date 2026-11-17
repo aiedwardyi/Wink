@@ -108,8 +108,14 @@ beforeEach(() => { vi.stubGlobal("crypto", { randomUUID: () => "send-1" }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("spokenText", () => {
-  it.each(["Set the threshold to < 5", "Keep it <5", "Use <threshold"])("preserves comparisons and unfinished text: %s", (text) => {
+  it.each(["Set the threshold to < 5", "Keep it <5", "Use <threshold", "Keep x <5 and y >10"])("preserves comparisons and unfinished text: %s", (text) => {
     expect(spokenText(text)).toBe(text);
+  });
+
+  it("stays linear on many unclosed markers", () => {
+    const start = performance.now();
+    expect(spokenText("<a".repeat(100_000))).toHaveLength(200_000);
+    expect(performance.now() - start).toBeLessThan(1_000);
   });
 
   it("drops transcript markers", () => {
@@ -153,6 +159,44 @@ describe("CALL-YES", () => {
     expect(play).toHaveBeenCalledOnce();
     expect(linesOf(posts)).toContain("I'll open the Orbit folder, okay?");
     expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("keeps a pending confirmation question streamed after a complete sentence", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Open the Orbit folder.", ["open"]);
+    engine().events.answering();
+    engine().events.said("Okay. I'll open the Orbit folder");
+    engine().events.audio(new Int16Array([500]));
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said(", okay?");
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("Okay. I'll open the Orbit folder, okay?");
+    expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("speaks a relayed reply's screen instruction after an accepted send", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Sign in to Drive." } }]);
+    await call.answer(true);
+    const text = "Click the button on your screen to sign in.";
+    call.observe({ busy: false, messages: [orderRow("o", "Sign in to Drive."), botRow("r", text)] });
+    await flush();
+    expect(engine().texts.at(-1)).toBe(`[Wink] Nova replied: ${text}`);
+    engine().events.answering();
+    engine().events.said(text);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain(text);
     call.end();
     await flush();
   });

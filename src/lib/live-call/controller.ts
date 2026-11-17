@@ -1107,15 +1107,17 @@ export class LiveCall {
     }
   }
 
-  private rejectWork(said: string, ended = false): boolean {
-    if (this.req.read || !said || (!ended && !/[.!?](?:\s|$)/.test(said))) return false;
+  private rejectWork(text: string, ended = false): boolean {
+    // Mid-stream only finished sentences count: "Okay. I'll open it" may still end ", okay?".
+    const said = ended ? text : /^.*[.!?](?=\s|$)/s.exec(text)?.[0] ?? "";
+    if (this.req.read || !said) return false;
     const claim = claimOf(said);
     const pending = this.pending;
     if (pending && (SCREEN_CONFIRM.test(said) || claim?.claim === "promise")) {
       this.drop(waitForYes(pending.order), () => this.pending === pending);
       return true;
     }
-    if ((this.sends.size && claim?.claim === "promise") || ((this.sends.size || this.req.accepted) && SCREEN_CONFIRM.test(said))) {
+    if (!this.guarded && ((this.sends.size && claim?.claim === "promise") || ((this.sends.size || this.req.accepted) && SCREEN_CONFIRM.test(said)))) {
       this.discard();
       return true;
     }
