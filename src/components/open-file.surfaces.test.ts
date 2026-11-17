@@ -84,6 +84,7 @@ function outcome(path: string): string {
 }
 
 const DESKTOP: Record<Kind, string> = { picture: "viewer picture", video: "viewer clip", audio: "plays", pdf: "pane pdf", text: "pane text", download: "opens in its app" };
+// A chat clip on the phone plays where it is; a Media clip opens the viewer on both.
 const PHONE: Record<Kind, string> = { picture: "viewer picture", video: "plays clip", audio: "plays", pdf: "pane pdf", text: "pane text", download: "downloads" };
 // a card shows for the files a card names, so its text file is a CSV
 const card = (kind: Kind) => (kind === "text" ? "C:\\w\\data.csv" : KINDS[kind]);
@@ -113,7 +114,7 @@ describe.each([["desktop", DESKTOP], ["phone", PHONE]] as const)("on the %s", (w
     const file = mediaFile(thread, { kind: "l", name: path.split("\\").pop()!, ref: path }, Date.now());
     await render(createElement(MediaFiles, { files: [file], pickFor: thread }));
     await tap(host.querySelector("[data-media-key]"));
-    expect(outcome(path)).toBe(where === "phone" && kind === "video" ? "viewer clip" : expected[kind]);
+    expect(outcome(path)).toBe(kind === "video" ? "viewer clip" : expected[kind]);
   });
 });
 
@@ -124,7 +125,7 @@ describe("files only the PC holds, on the phone", () => {
     const file = mediaFile(thread, { kind: "f", name: path.split("\\").pop()!, ref: path }, Date.now());
     await render(createElement(MediaFiles, { files: [file], pickFor: thread }));
     await tap(host.querySelector("[data-media-key]"));
-    expect(outcome(path)).toBe(PHONE[kind] === "plays clip" ? "viewer clip" : PHONE[kind]);
+    expect(outcome(path)).toBe(kind === "video" ? "viewer clip" : PHONE[kind]);
   });
 
   it.each([

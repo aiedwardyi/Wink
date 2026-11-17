@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { fileOpen, openFile, paneKind } from "./open-file";
+import { fileOpen, openFile, paneKind, saveFile } from "./open-file";
 import { closeShow, lastShown, linkedFileSrc } from "./show-pane";
 
 const W = "C:\\w\\";
@@ -78,4 +78,9 @@ it("shows a room's PDF and text from the room's own URL, and downloads its page 
 it("downloads what the pane would show when no chat holds it", () => {
   openFile({ path: "plan.pdf", src: "/api/joined/rooms/r9/files/1" });
   expect(saved.map((link) => link.getAttribute("href"))).toEqual(["/api/joined/rooms/r9/files/1"]);
+});
+
+it("downloads nothing, not this page, when a save has no link", () => {
+  saveFile("", "notes.md", `${W}notes.md`);
+  expect(saved).toEqual([]);
 });

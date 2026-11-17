@@ -64,6 +64,8 @@ export function openFile(file: FileTap, hands: FileHands = {}): void {
 export function saveFile(src: string, name: string, path?: string) {
   const save = path ? window.ogb?.saveFile : undefined;
   if (save) return void save(path!).catch(() => {});
+  // An empty link would download this page instead.
+  if (!src) return;
   const link = document.createElement("a");
   link.href = src;
   link.download = name;
