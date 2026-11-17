@@ -34,7 +34,7 @@ import { buildNotification, type Notification } from "./notify.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
-import { cancelWake, setWake, syncAskWakes } from "./self-wake.ts";
+import { cancelWake, dropNewAskWakes, setWake, syncAskWakes } from "./self-wake.ts";
 import { agentRoster, sectionKey, type BotRecord, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks } from "./task-asks.ts";
@@ -60,6 +60,9 @@ type InternalRouteDeps = {
   broadcast: (payload: Record<string, unknown>) => void;
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
+  readOnlyTurn: (botId: string, threadId: string) => boolean;
+  /** The user line a running room turn was dispatched to answer. */
+  answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold">;
@@ -149,6 +152,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!bot) return json(res, 403, { error: "unknown sender" });
       const conversation = store.conversationForBot(bot.id, body.fromThreadId);
       if (!conversation) return json(res, 403, { error: "source conversation does not belong to sender" });
+      if (deps.readOnlyTurn(bot.id, body.fromThreadId)) {
+        return json(res, 403, { error: 'update_task_state is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
+      }
       const task = store.taskByThread(bot.id, body.fromThreadId);
       const groupTask = conversation.group
         ? store.groupTaskByThread(conversation.group.id, body.fromThreadId)
@@ -202,6 +208,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
+      if (!saved && asks) dropNewAskWakes(routines, bot.id, current.asks, asks.asks);
       if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
@@ -409,7 +416,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
-      const target = store.activePath(fromThreadId).findLast((m) => m.role === "user" && m.kind === "text");
+      const lines = store.activePath(fromThreadId).filter((m) => m.role === "user" && m.kind === "text");
+      const answered = deps.answeredLine(fromThreadId);
+      const target = lines.find((m) => m.id === answered) ?? lines.at(-1);
       if (!target) return json(res, 200, { error: "no user message to react to yet" });
       if (!(EXTENDED_REACTIONS as readonly string[]).includes(emoji) && !target.reactions?.some((reaction) => reaction.emoji === emoji && reaction.by === fromBotId)) {
         return json(res, 400, { error: "unsupported emoji" });

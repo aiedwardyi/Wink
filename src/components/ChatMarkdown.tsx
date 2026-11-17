@@ -851,6 +851,7 @@ function ChatMarkdownComponent({
       return (
         <a
           href={href}
+          title={href}
           target="_blank"
           rel="noreferrer"
           className="break-words text-accent underline decoration-accent/40 hover:decoration-accent"

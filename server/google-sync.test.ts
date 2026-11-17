@@ -393,6 +393,38 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(laptop.sync.status().state).toBe("up-to-date");
   });
 
+  it("keeps syncing when another PC rewrites a file mid-download, and takes the new copy next pass", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    work.sync.stop();
+    const path = `devices/${home.deviceId}.json`;
+    writeDeviceRecord(home.folder!, { deviceId: home.deviceId, name: "Home", host: "home.example.ts.net", chatSync: 2 }, 1_800_000_000_000);
+    await settle(home);
+    const id = [...driveA().records.values()].find(({ file }) => decodeDrivePath(file.name) === path)!.file.id;
+    let rewritten = false;
+    work.sync = boot(work, {
+      fetch: (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (!rewritten && url.pathname.endsWith(`/files/${id}`) && url.searchParams.get("alt") === "media") {
+          rewritten = true;
+          writeDeviceRecord(home.folder!, { deviceId: home.deviceId, name: "Home renamed", host: "home.example.ts.net", chatSync: 2 }, 1_800_000_060_000);
+          driveA().edit(id, readFileSync(join(home.folder!, path)));
+        }
+        return driveA().fetch(input, init);
+      },
+    });
+    work.sync.resume();
+    await work.sync.idle();
+    expect(rewritten).toBe(true);
+    expect(work.sync.status().state).toBe("syncing");
+    expect(work.logs.filter((line) => line.startsWith("[google-sync] pass stopped"))).toEqual([]);
+    await settle(work);
+    expect(JSON.parse(readFileSync(join(work.folder!, path), "utf8")).name).toBe("Home renamed");
+    expect(work.sync.status().state).toBe("up-to-date");
+  });
+
   it("says only the chat still pulling what a day away missed is catching up", async () => {
     const home = makePC("home", { bots: [bot("Counsel", { chats: ["thread-open", "thread-other"] })] });
     const laptop = makePC("laptop");
@@ -583,6 +615,68 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     await startOn(home);
     expect(home.sync.held("local-Starter")).toBe(false);
     expect(drivePaths(driveA()).filter((path) => path.startsWith("changes/"))).toHaveLength(1);
+  });
+
+  it("signals peers once after a pass that uploaded, and a poked peer pulls the reply in one coalesced pass", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const signals = { home: 0, work: 0 };
+    let workPasses = 0;
+    home.sync.stop();
+    work.sync.stop();
+    home.sync = boot(home, { uploaded: () => { signals.home++; for (let poke = 0; poke < 5; poke++) work.sync.poked(); } });
+    work.sync = boot(work, { uploaded: () => { signals.work++; home.sync.poked(); }, prepare: () => { workPasses++; ensureMemorySyncDevice(work.ledger); } });
+    await settle(home);
+    await settle(work);
+    signals.home = signals.work = workPasses = 0;
+
+    const head = `threads-v2/${home.bots[0].syncId}/thread-Counsel/${home.writerId}/head.json`;
+    const reply = JSON.stringify({ thread: "thread-Counsel", cut: 2 });
+    write(home.folder!, head, reply);
+    await settle(home);
+    await work.sync.idle();
+    expect(readFileSync(join(work.folder!, ...head.split("/")), "utf8")).toBe(reply);
+    expect(signals).toEqual({ home: 1, work: 0 });
+    // One pass downloads for all five pokes, one more follows any pass that moved files.
+    expect(workPasses).toBe(2);
+  });
+
+  it("leaves a rate-limit wait standing when poked", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return url.pathname === `/drive/v3/files/${drive.root().id}` ? Promise.resolve(new Response(null, { status: 429 })) : fetch(input, init);
+    });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await settle(home);
+      const sent = requests.mock.calls.length;
+      const timers = schedule.mock.calls.length;
+      home.sync.poked();
+      await home.sync.idle();
+      expect(requests.mock.calls.length).toBe(sent);
+      expect(schedule.mock.calls.length).toBe(timers);
+    } finally {
+      requests.mockRestore();
+      schedule.mockRestore();
+    }
+  });
+
+  it("a poke on a PC signed in to another account reads nothing from either Drive", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    home.account.setSession(B);
+    const calls = driveA().calls.length;
+    home.sync.poked();
+    await home.sync.idle();
+    expect(drives.get(B.sub)!.calls).toEqual([]);
+    expect(driveA().calls.length).toBe(calls);
   });
 
   it("journey 3: two PCs with weeks of data end with both sets, no duplicates, nothing overwritten", async () => {

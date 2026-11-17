@@ -50,12 +50,14 @@
 }
 
 @media (max-width: 767px), (hover: none) and (pointer: coarse) {
-  [data-viewer-previous],
-  [data-viewer-next] {
+  /* a video keeps its touches for its own controls, so it can't be swiped past */
+  [data-media-viewer]:not([data-video]) [data-viewer-previous],
+  [data-media-viewer]:not([data-video]) [data-viewer-next] {
     display: none;
   }
 
-  [data-controls="hidden"] header[data-viewer-controls]:not(:focus-within) {
+  [data-controls="hidden"] header[data-viewer-controls]:not(:focus-within),
+  [data-controls="hidden"][data-video] [data-viewer-controls]:not(:focus-within) {
     opacity: 1;
     pointer-events: auto;
   }
@@ -689,7 +691,7 @@ html:lang(ko) {
   --color-accent-text: #ff8fa6;
   --color-focus: #4fe3ff;
   --color-accent-ink: #1a0208;
-  --color-bubble-user: #0f4f66;
+  --color-bubble-user: #2a2d5e;
   --color-success: #5ef0b8;
   --color-danger: #ff8a9a;
   --color-danger-ink: #0a0b1a;

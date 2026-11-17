@@ -13,6 +13,7 @@ export function LinkedFolderLink({ folderPath, threadId, children }: { folderPat
     if (busy.current) return;
     busy.current = true;
     setLoading(true);
+    setRefused(false);
     const listing = await linkedFolder(threadId, folderPath);
     busy.current = false;
     setLoading(false);

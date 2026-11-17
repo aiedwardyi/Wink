@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -117,4 +117,73 @@ it("stops asking gh about a merged PR and falls back quietly when gh fails", asy
     await quiet.flow(root, base);
     expect(signedOut).toHaveBeenCalledTimes(2);
   } finally { vi.useRealTimers(); }
+});
+
+it("carries the latest submitted review's Conversation anchor and keeps each reviewer's standing", async () => {
+  const { root, git, commit, base } = repo();
+  git("remote", "add", "origin", "https://github.com/o/r.git");
+  git("update-ref", "refs/remotes/origin/feat/x", commit("feat: one"));
+  const url = "https://github.com/o/r/pull/1529";
+  const page = (nodes: object[], endCursor?: string) => ({ pageInfo: { hasNextPage: !!endCursor, endCursor }, nodes });
+  const graph = (nodes: object[], endCursor?: string) => JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] }, reviews: page(nodes, endCursor) } } } });
+  const reviews = [review("aiedwardyi", "CHANGES_REQUESTED", "2026-11-12T18:00:00Z"), review("aiedwardyi", "COMMENTED", "2026-11-12T19:30:00Z"), review("coderabbitai", "COMMENTED", "2026-11-12T19:00:00Z")];
+  const answer = (nodes: object[]) => vi.fn(async (_cwd: string, args: string[]) => args[0] === "api" ? graph(nodes) : JSON.stringify(view({ reviews })));
+  const pr = (await createMapFlow(answer([
+    { url: `${url}#pullrequestreview-11`, submittedAt: "2026-11-12T19:30:00Z" },
+    { url: `${url}#pullrequestreview-12`, submittedAt: "2026-11-12T19:00:00Z" },
+    { url: "https://github.com/o/other/pull/9#pullrequestreview-13", submittedAt: "2026-11-12T20:00:00Z" },
+  ])).flow(root, base)).pr;
+  expect(pr?.reviewUrl).toBe(`${url}#pullrequestreview-11`);
+  expect(pr?.reviews).toEqual([{ login: "aiedwardyi", state: "changes" }, { login: "coderabbitai", state: "commented" }]);
+  expect([stage(flow(pr), "pr")?.url, stage(flow(pr), "review")?.url]).toEqual([url, `${url}#pullrequestreview-11`]);
+  const later = vi.fn(async (_cwd: string, args: string[]) => args[0] !== "api" ? JSON.stringify(view({ reviews })) : args.includes("after=c1")
+    ? JSON.stringify({ data: { repository: { pullRequest: { reviews: page([{ url: `${url}#pullrequestreview-21`, submittedAt: "2026-11-12T19:45:00Z" }]) } } } })
+    : graph([{ url: `${url}#pullrequestreview-11`, submittedAt: "2026-11-12T19:30:00Z" }], "c1"));
+  expect((await createMapFlow(later).flow(root, base)).pr?.reviewUrl).toBe(`${url}#pullrequestreview-21`);
+  expect(later).toHaveBeenCalledTimes(3);
+  const lost = vi.fn(async (_cwd: string, args: string[]) => args[0] !== "api" ? JSON.stringify(view({ reviews })) : args.includes("after=c1") ? "{}"
+    : graph([{ url: `${url}#pullrequestreview-11`, submittedAt: "2026-11-12T19:30:00Z" }], "c1"));
+  expect((await createMapFlow(lost).flow(root, base)).pr?.reviewUrl).toBeUndefined();
+  const empty = vi.fn(async (_cwd: string, args: string[]) => args[0] !== "api" ? JSON.stringify(view({ reviews })) : JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: false }] }, reviews: null } } } }));
+  expect((await createMapFlow(empty).flow(root, base)).pr).toMatchObject({ threads: 1 });
+  const none = (await createMapFlow(answer([])).flow(root, base)).pr;
+  expect(none?.reviewUrl).toBeUndefined();
+  expect(stage(flow(none), "review")?.url).toBe(url);
+});
+
+const lastFile = () => { const dir = mkdtempSync(join(tmpdir(), "wink-map-last-")); roots.push(dir); return join(dir, "map-flows.json"); };
+const pushed = (checkout: ReturnType<typeof repo>) => { checkout.git("remote", "add", "origin", "https://github.com/o/r.git"); checkout.git("update-ref", "refs/remotes/origin/feat/x", checkout.commit("feat: one")); return checkout; };
+const answer = (state = "OPEN") => vi.fn(async (_cwd: string, args: string[]) => args[0] === "api" ? "{}" : JSON.stringify(view({ state })));
+
+it("keeps a checkout's last rows across a restart and swaps a merged PR in on the next read", async () => {
+  const { root, base } = pushed(repo());
+  const file = lastFile();
+  const first = await createMapFlow(answer(), file).flow(root, base);
+  const restarted = createMapFlow(answer("MERGED"), file);
+  expect(await restarted.last(root, base)).toEqual(first);
+  expect((await restarted.flow(root, base)).pr?.state).toBe("merged");
+  expect((await createMapFlow(answer(), file).last(root, base))?.pr?.state).toBe("merged");
+});
+
+it("never hands a checkout's last rows to another repo, folder or branch", async () => {
+  const a = pushed(repo());
+  const b = pushed(repo());
+  const file = lastFile();
+  await createMapFlow(answer(), file).flow(a.root, a.base);
+  const flows = createMapFlow(answer(), file);
+  expect(await flows.last(a.root, a.base)).toMatchObject({ branch: "feat/x", pr: { number: 1529 } });
+  expect(await flows.last(b.root, b.base)).toBeNull();
+  const tree = join(lastFile(), "..", "tree");
+  a.git("worktree", "add", "-q", "-b", "feat/w", tree);
+  expect(await flows.last(tree, a.base)).toBeNull();
+  await flows.flow(tree, a.base);
+  expect(await flows.last(tree, a.base)).toMatchObject({ branch: "feat/w" });
+  a.git("checkout", "-qb", "feat/y");
+  expect(await flows.last(a.root, a.base)).toBeNull();
+  a.git("checkout", "-q", "feat/x");
+  a.git("worktree", "remove", "--force", tree);
+  rmSync(join(a.root, ".git"), { recursive: true, force: true });
+  a.git("init", "-q", "-b", "feat/x");
+  expect(await flows.last(a.root, a.commit("another repo"))).toBeNull();
+  expect(await flows.last(a.root, a.base)).toBeNull();
 });

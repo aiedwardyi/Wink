@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 12, 9, 0).getTime();
@@ -55,6 +55,24 @@ describe("task asks", () => {
     const { asks } = saved(mergeTaskAsks({ asks: [ask(1, { status: "waiting-for-user", changedAt: 0 })] }, [{ id: "A1", status: "waiting-for-user" }], NOW));
     expect(asks).toEqual([ask(1, { status: "waiting-for-user", changedAt: NOW })]);
     expect(asksNudge(asks, NOW, "thanks")).toBe("");
+  });
+
+  it("tells every bot to file a yes to its own proposal as an ask not started yet", () => {
+    expect(TASK_ASKS_PROMPT).toContain("Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet.");
+  });
+
+  it("keeps a decided ask not started under newer ones and reopens a declined one by id", () => {
+    const decided = saved(mergeTaskAsks(undefined, [{ ask: "Fold decided work into asks", status: "open" }, { ask: "Old idea", status: "declined" }], NOW - 2 * HOUR));
+    let asks: TaskAsk[] = decided.asks;
+    for (let index = 0; index < 45; index += 1) asks = saved(mergeTaskAsks({ asks, lastAskId: index + 2 }, [{ ask: `newer ${index}`, status: "open" }], NOW)).asks;
+    expect(asks[0]).toEqual({ id: "A1", ask: "Fold decided work into asks", status: "open", at: NOW - 2 * HOUR, changedAt: NOW - 2 * HOUR });
+    expect(asks.map((item) => item.id)).not.toContain("A2");
+    expect(asksBlock(asks, NOW)).toMatch(/\+41 more open$/);
+    expect(asksBlock(asks, NOW, true)).toContain("- A1 open 11-12: Fold decided work into asks");
+    const declined = [ask(1), ask(2, { status: "declined" })];
+    const reopened = saved(mergeTaskAsks({ asks: declined }, [{ id: "A2", status: "open" }], NOW)).asks;
+    expect(reopened[1]).toEqual(ask(2, { changedAt: NOW }));
+    expect(saved(mergeTaskAsks({ asks: declined }, [{ ask: "ask number 2", status: "open" }], NOW)).asks.map((item) => [item.id, item.status])).toEqual([["A1", "open"], ["A2", "declined"], ["A3", "open"]]);
   });
 
   it("refuses an unknown id and a new ask with no words", () => {

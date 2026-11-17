@@ -61,8 +61,8 @@ export interface TreeOptions {
 
 export interface Point { x: number; y: number }
 
-export const TREE = { BOX: 26, VGAP: 22, LINE: 17, TOUCH: 44, SGAP: 7, GAP: 10, SMALL: 40, SQ: 9 };
-const { BOX, VGAP, LINE, SGAP, GAP, SMALL, SQ } = TREE;
+export const TREE = { BOX: 26, VGAP: 22, LINE: 17, TOUCH: 44, SGAP: 7, GAP: 10, SMALL: 40, SQ: 9, ELBOW: 4 };
+const { BOX, VGAP, LINE, SGAP, GAP, SMALL, SQ, ELBOW } = TREE;
 const byPath = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const dirOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 export const fmt = (n: number) => n.toLocaleString("en-US");
@@ -277,6 +277,21 @@ export const rowY = (it: TreeItem, at: Point, index: number) => stackTop(it, at)
 const topOf = (it: TreeItem, at: Point) => it.kind === "stack" ? { x: at.x + 7, y: at.y } : { x: centerX(it, at), y: at.y };
 export const treeFoot = (it: TreeItem, at: Point) => ({ x: at.x + (it.foot ?? it.bw / 2), y: at.y + BOX });
 const half = (n: number) => Math.round(n) + 0.5;
+const two = (n: number) => Math.round(n * 100) / 100;
+
+// Each bend rounds by up to ELBOW, never past half of either leg.
+export function treePath(points: readonly Point[]) {
+  const p = points.filter((point, i) => !i || point.x !== points[i - 1].x || point.y !== points[i - 1].y);
+  if (!p.length) return "";
+  let d = `M${p[0].x} ${p[0].y}`;
+  for (let i = 1; i < p.length - 1; i++) {
+    const [a, b, c] = [p[i - 1], p[i], p[i + 1]];
+    const into = Math.hypot(b.x - a.x, b.y - a.y), out = Math.hypot(c.x - b.x, c.y - b.y);
+    const k1 = Math.min(ELBOW, into / 2) / into, k2 = Math.min(ELBOW, out / 2) / out;
+    d += `L${two(b.x - (b.x - a.x) * k1)} ${two(b.y - (b.y - a.y) * k1)}Q${b.x} ${b.y} ${two(b.x + (c.x - b.x) * k2)} ${two(b.y + (c.y - b.y) * k2)}`;
+  }
+  return p.length > 1 ? d + `L${p.at(-1)!.x} ${p.at(-1)!.y}` : d;
+}
 
 export function treeEdges(items: readonly TreeItem[], at: (it: TreeItem) => Point) {
   let d = "";
@@ -285,9 +300,11 @@ export function treeEdges(items: readonly TreeItem[], at: (it: TreeItem) => Poin
     const p = at(parent);
     const bus = half(at(parent.kids[0]).y - VGAP / 2);
     const px = half(treeFoot(parent, p).x);
-    const xs = parent.kids.map(kid => half(topOf(kid, at(kid)).x));
-    d += `M${px} ${p.y + BOX}V${bus}M${Math.min(px, ...xs)} ${bus}H${Math.max(px, ...xs)}`;
-    for (const kid of parent.kids) { const t = topOf(kid, at(kid)); d += `M${half(t.x)} ${bus}V${t.y}`; }
+    for (const kid of parent.kids) {
+      const t = topOf(kid, at(kid));
+      const kx = half(t.x);
+      d += kx === px ? `M${px} ${p.y + BOX}V${t.y}` : treePath([{ x: px, y: p.y + BOX }, { x: px, y: bus }, { x: kx, y: bus }, { x: kx, y: t.y }]);
+    }
   }
   for (const it of items) {
     if (it.kind !== "col" && it.kind !== "stack") continue;
@@ -296,8 +313,9 @@ export function treeEdges(items: readonly TreeItem[], at: (it: TreeItem) => Poin
     const mids = it.files!.map((_, i) => rowY(it, g, i));
     if (it.squares) mids.unshift(stackTop(it, g) + 5.5);
     if (!mids.length) continue;
-    d += `M${sx} ${it.kind === "col" ? g.y + BOX : g.y}V${half(mids.at(-1)!)}`;
-    for (const y of mids) d += `M${sx} ${half(y)}H${sx + 6}`;
+    const last = half(mids.at(-1)!);
+    for (const y of mids.slice(0, -1)) d += `M${sx} ${half(y)}H${sx + 6}`;
+    d += treePath([{ x: sx, y: it.kind === "col" ? g.y + BOX : g.y }, { x: sx, y: last }, { x: sx + 6, y: last }]);
   }
   return d;
 }

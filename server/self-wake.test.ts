@@ -231,6 +231,98 @@ describe("self-wake", () => {
     ]);
   });
 
+  it("a room member who moves or closes another member's ask cancels that member's wake", () => {
+    const h = harness();
+    const due = START + 10 * 60_000;
+    const first: TaskAsk[] = [
+      { id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START },
+      { id: "A2", ask: "ship it", status: "open", due, at: START, changedAt: START },
+    ];
+    syncAskWakes(h.manager, { botId: "bot-a", threadId: "room-1" }, [], first, START);
+    const next = [{ ...first[0]!, due: START + 30 * 60_000 }, { ...first[1]!, status: "done" as const }];
+    syncAskWakes(h.manager, { botId: "bot-b", threadId: "room-1" }, first, next, START);
+    expect(h.manager.listRoutines().map((routine) => [routine.botId, routine.nextRunAt])).toEqual([["bot-b", START + 30 * 60_000]]);
+  });
+
+  it("an ask started before its due time is not told to start again", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const open: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], open, START);
+    syncAskWakes(h.manager, chat, open, open.map((ask) => ({ ...ask, status: "building" as const })), START + 60_000);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired).toHaveLength(1);
+    expect(h.fired[0]!.line).toContain("If it isn't started, start it now; otherwise update its due time.");
+  });
+
+  it("an ask's wake outlives a restart and rings once", async () => {
+    const h = harness();
+    const chat = { botId: "bot-1", threadId: "chat-7" };
+    const due = START + 10 * 60_000;
+    const asks: TaskAsk[] = [{ id: "A1", ask: "phone designs", status: "open", due, at: START, changedAt: START }];
+    syncAskWakes(h.manager, chat, [], asks, START);
+    const id = asks[0]!.wake;
+    h.restart();
+    syncAskWakes(h.manager, chat, asks, asks.map((ask) => ({ ...ask })), START + 60_000);
+    expect(h.manager.listRoutines().map((routine) => routine.id)).toEqual([id]);
+    h.setNow(due + 5_000);
+    await h.manager.tick();
+    expect(h.fired.map((fire) => fire.line)).toEqual([expect.stringContaining("Ask A1 is due")]);
+  });
+
+  it("drops the ask wakes it set when the task record is not saved, so a retry sets one", async () => {
+    const h = harness();
+    const packet = { v: 1, threadId: "chat-a", botId: "bot-a", goal: "", plan: [], completed: [], evidence: [], artifacts: [], blockers: [], nextAction: "", updatedAt: 1 };
+    const routes = createInternalRoutes({
+      store: { bot: (id: string) => ({ id }), conversationForBot: () => ({}), taskByThread: () => undefined },
+      routines: h.manager,
+      taskPacketForWrite: () => packet,
+      persistTaskPacket: () => null,
+      readOnlyTurn: () => false,
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const due = new Date(Date.now() + 30 * 60_000).toISOString();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const req = new EventEmitter() as IncomingMessage;
+      req.headers = {};
+      let status = 0;
+      const res = { writeHead(code: number) { status = code; }, getHeader() {}, setHeader() {}, end() {} } as unknown as ServerResponse;
+      const pending = routes.taskState(req, res);
+      req.emit("data", JSON.stringify({ fromBotId: "bot-a", fromThreadId: "chat-a", asks: [{ ask: "phone designs", status: "open", due }] }));
+      req.emit("end");
+      await pending;
+      expect(status).toBe(409);
+    }
+    expect(h.manager.listRoutines()).toEqual([]);
+  });
+
+  it("a read-only turn's update_task_state neither saves the task record nor pauses automatic wakes", async () => {
+    const h = harness();
+    const packet = { v: 1, threadId: "room-a", botId: "bot-a", goal: "", plan: [], completed: [], evidence: [], artifacts: [], blockers: [], nextAction: "", updatedAt: 1 };
+    const persisted: unknown[] = [];
+    const patched: unknown[] = [];
+    const paused: unknown[] = [];
+    const routes = createInternalRoutes({
+      store: { bot: (id: string) => ({ id }), conversationForBot: () => ({}), taskByThread: () => undefined, patchBot: (...args: unknown[]) => patched.push(args) },
+      keepGoing: { pause: (...args: unknown[]) => paused.push(args) },
+      routines: h.manager,
+      taskPacketForWrite: () => packet,
+      persistTaskPacket: (next: unknown) => (persisted.push(next), next),
+      readOnlyTurn: (botId: string, threadId: string) => botId === "bot-a" && threadId === "room-a",
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = {};
+    let status = 0;
+    const res = { writeHead(code: number) { status = code; }, getHeader() {}, setHeader() {}, end() {} } as unknown as ServerResponse;
+    const pending = routes.taskState(req, res);
+    req.emit("data", JSON.stringify({ fromBotId: "bot-a", fromThreadId: "room-a", goal: "ship it", pause_automatic_wakes: true }));
+    req.emit("end");
+    await pending;
+    expect(status).toBe(403);
+    expect({ persisted, patched, paused }).toEqual({ persisted: [], patched: [], paused: [] });
+  });
+
   it("never lets a wake ride a calendar routine id", () => {
     const h = harness();
     const routine = h.manager.create({ name: "Brief", prompt: "x", botId: "bot-1", schedule: { type: "once", at: START + 60 * 60_000 } });
