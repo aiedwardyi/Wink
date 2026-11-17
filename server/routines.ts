@@ -790,17 +790,31 @@ export class RoutineManager {
   }
 
   /** A chat run is matched by its chat and bot: a room thread hosts several members' turns. */
-  handleRuntimeEvent(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | null {
-    const run = this.runs.find(
+  private liveRunFor(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | undefined {
+    return this.runs.find(
       (r) =>
         ["running", "waiting"].includes(r.status) &&
         (r.threadId ? r.threadId === event.threadId : r.sourceThreadId === event.threadId && r.botId === ownerBotId),
     );
+  }
+
+  /** Called once a request really waits on the user. Auto mode answers most
+   * requests moments after they open, so opening alone must not flip the run. */
+  requestWaiting(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | null {
+    if (event.type !== "request.opened") return null;
+    const run = this.liveRunFor(event, ownerBotId);
     if (!run) return null;
-    if (event.type === "request.opened") {
-      run.status = "waiting";
-      run.attention = redactSecretsInText(event.summary).trim().slice(0, 500) || undefined;
-    } else if (event.type === "request.resolved") {
+    run.status = "waiting";
+    run.attention = redactSecretsInText(event.summary).trim().slice(0, 500) || undefined;
+    this.save();
+    this.emitRun(run);
+    return { ...run };
+  }
+
+  handleRuntimeEvent(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | null {
+    const run = this.liveRunFor(event, ownerBotId);
+    if (!run) return null;
+    if (event.type === "request.resolved") {
       run.status = "running";
       run.attention = undefined;
     } else if (event.type === "item.completed" && event.itemType === "assistant_text" && !event.summarized) {

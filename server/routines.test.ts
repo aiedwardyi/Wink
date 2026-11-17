@@ -546,7 +546,7 @@ describe("RoutineManager", () => {
       createdAt: new Date(h.manager.listRuns()[0]!.startedAt!).toISOString(),
     };
     const secret = `sk-ant-api03-${"abcdefghijklmnopqrstuvwxyz0123456789"}`;
-    h.manager.handleRuntimeEvent({
+    h.manager.requestWaiting({
       ...base,
       type: "request.opened",
       requestType: "question",

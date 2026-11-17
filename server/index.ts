@@ -3758,10 +3758,8 @@ bus.subscribe((event: RuntimeEvent) => {
       usageBoard.recordReport(event.providerInstanceId, report);
     }
   }
-  const routineRun = routines?.handleRuntimeEvent(
-    event,
-    store.botByThread(event.threadId)?.id ?? groupSpeakers.get(event.threadId)?.botId,
-  ) ?? null;
+  const routineOwnerId = store.botByThread(event.threadId)?.id ?? groupSpeakers.get(event.threadId)?.botId;
+  let routineRun = routines?.handleRuntimeEvent(event, routineOwnerId) ?? null;
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
   if (!bot && !group) return;
@@ -4038,6 +4036,7 @@ bus.subscribe((event: RuntimeEvent) => {
               },
             });
             askMessageByRequest.set(`${event.threadId}:${requestId}`, card.id);
+            routines?.requestWaiting(event, routineOwnerId);
             const packet = turnOwnerId ? taskPacketForWrite(event.threadId) : null;
             if (packet && turnOwnsTaskPacket(event.threadId, packet)) {
               persistTaskPacket(recordTaskBlocker(packet, {
@@ -4169,9 +4168,10 @@ bus.subscribe((event: RuntimeEvent) => {
       // this is the branch where a card actually reached a human. Anything
       // auto mode answered took the early return above and never buzzes.
       const notifyHuman = () => {
-        if (!asker) return;
         const card = store.messagesFor(event.threadId).find((candidate) => candidate.id === message.id)?.card;
         if (!card || card.answered) return;
+        routineRun = routines?.requestWaiting(event, routineOwnerId) ?? routineRun;
+        if (!asker) return;
         // the bot is not working now — it is waiting on a person
         if (asker.busy && roomLanes.thread(asker.id) !== event.threadId) store.setActivity(asker.id, "waiting-on-you");
         notify(buildNotification(
