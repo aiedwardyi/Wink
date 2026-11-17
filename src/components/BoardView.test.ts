@@ -86,6 +86,42 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pnew", "pold"]);
   });
 
+  const openPost = async () => {
+    posts = [post("pesc", { title: "Esc post", body: "Esc post", created_at: 1 })];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pesc"] button')!.click());
+    expect(host.querySelector("article")).not.toBeNull();
+  };
+  const esc = (target: EventTarget = document.body) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+
+  it("Esc inside an open post returns to the list, and Esc on the list leaves it alone", async () => {
+    await esc();
+    await openPost();
+    await esc();
+    expect(host.querySelector("article")).toBeNull();
+    expect(rows()).toEqual(["pesc"]);
+    await esc();
+    expect(rows()).toEqual(["pesc"]);
+    expect(host.querySelector("[data-board-view]")).not.toBeNull();
+  });
+
+  it("Esc keeps the post open while a reply is being typed", async () => {
+    await openPost();
+    const input = host.querySelector<HTMLInputElement>('[data-board-reply-box="pesc"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "half a thought");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await esc(input);
+    expect(host.querySelector("article")).not.toBeNull();
+  });
+
+  it("the back button sits clear of the phone menu badge: no negative margin below md", async () => {
+    await openPost();
+    const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back to Forum"]')!;
+    expect([...back.classList]).not.toContain("-ml-2");
+  });
+
   it("names the bot and the model it ran from the post, even for a bot this PC does not have", async () => {
     posts = [post("premote", { author_bot_id: "pokkey-sync-id", author: { name: "Pokkey", model: "GPT-6 Astra", color: "peach", mascot_style: "" } })];
     await render(BoardView);
