@@ -125,7 +125,7 @@ describe("Picker style strip", () => {
     expect(strip()?.hasAttribute("data-closing")).toBe(false);
   });
 
-  it.each([["dial", ".dial-keys"], ["list", ".model-cross-footer"], ["chart", ".chart-keys"], ["machine", ".vm-fine"]])("%s key row names Alt+T Style and no rotation", async (view, row) => {
+  it.each([["dial", ".dial-keys"], ["list", ".model-cross-footer"], ["chart", ".chart-keys"]])("%s key row names Alt+T Style and no rotation", async (view, row) => {
     await mount(view);
     for (let i = 0; i < 50 && !document.querySelector(row); i++) await wait(5);
     const text = document.querySelector(row)!.textContent!.replace(/[\s+]/g, "");
@@ -133,20 +133,20 @@ describe("Picker style strip", () => {
     expect(text).not.toMatch(/AltS|Shift|Next/);
   });
 
-  it("puts Theme first and on, and keeps a picked look until Theme is picked again", async () => {
+  it("puts Auto first and on, and keeps a picked look until Auto is picked again", async () => {
     await mount();
     await altT();
-    expect(looks()).toEqual(["Theme*", "Dark", "Light", "Atelier"]);
+    expect(looks()).toEqual(["Auto*", "Dark", "Light", "Atelier"]);
     expect(backdrop().hasAttribute("data-light")).toBe(false);
     await tap('[data-picker-look="light"]');
-    expect(looks()).toEqual(["Theme", "Dark", "Light*", "Atelier"]);
+    expect(looks()).toEqual(["Auto", "Dark", "Light*", "Atelier"]);
     expect([backdrop().hasAttribute("data-light"), localStorage.getItem("omb-model-picker-look")]).toEqual([true, "light"]);
     await act(async () => root.unmount());
     await mount();
     expect(backdrop().hasAttribute("data-light")).toBe(true);
     await altT();
     await tap('[data-picker-look="theme"]');
-    expect(looks()).toEqual(["Theme*", "Dark", "Light", "Atelier"]);
+    expect(looks()).toEqual(["Auto*", "Dark", "Light", "Atelier"]);
     expect([backdrop().hasAttribute("data-light"), localStorage.getItem("omb-model-picker-look")]).toEqual([false, null]);
   });
 
@@ -171,30 +171,18 @@ describe("Picker style strip", () => {
     await closesWithFade();
   });
 
-  it("saves the Machine as a style, reopens on it, and closes the picker from its X", async () => {
-    await mount();
+  it("offers no Machine style, and a saved Machine opens on the dial", async () => {
+    await mount("machine");
+    expect([shown(), document.querySelector(".model-dial") !== null, document.querySelector(".model-machine")]).toEqual(["dial", true, null]);
     await altT();
-    await tap('[data-picker-style="machine"]');
-    for (let i = 0; i < 50 && !document.querySelector(".model-machine"); i++) await wait(5);
-    expect([shown(), localStorage.getItem("omb-model-picker-view")]).toEqual(["machine", "machine"]);
-    await closesWithFade();
-    expect(document.activeElement?.classList.contains("model-machine")).toBe(true);
-    const enter = await press("Enter", {}, document.querySelector(".model-machine [data-picker-style-button]"));
-    expect([enter.defaultPrevented, dispatch.mock.calls.length, picker() !== null]).toEqual([false, 0, true]);
-    await act(async () => root.unmount());
-    await mount(localStorage.getItem("omb-model-picker-view")!);
-    for (let i = 0; i < 50 && !document.querySelector(".model-machine"); i++) await wait(5);
-    expect(document.querySelector(".model-machine [data-picker-style-button]")).not.toBeNull();
-    await tap("[data-machine-close]");
-    expect(picker()).toBeNull();
+    expect([...document.querySelectorAll("[data-picker-style]")].map((tile) => tile.getAttribute("data-picker-style"))).toEqual(["dial", "list", "chart"]);
   });
 
-  it("opens the strip with Alt+T without the dial, keeping the saved Machine unapplied", async () => {
+  it("opens a saved Machine on the list where the dial does not fit", async () => {
     await mount("machine", false);
     expect((await altT()).defaultPrevented).toBe(true);
     expect([document.querySelector(".model-machine"), document.querySelector("[data-picker-style-button]")]).toEqual([null, null]);
-    expect(strip()).not.toBeNull();
-    expect(localStorage.getItem("omb-model-picker-view")).toBe("machine");
+    expect([...document.querySelectorAll("[data-picker-style]")].map((tile) => tile.getAttribute("data-picker-style"))).toEqual(["list"]);
     await altT();
     await closesWithFade();
   });
