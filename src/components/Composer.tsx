@@ -64,7 +64,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -1291,7 +1291,6 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
-          {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
             disabled={locked}
