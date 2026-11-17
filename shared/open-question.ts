@@ -134,10 +134,10 @@ export function lineSettles(messages: readonly Row[], card: Row, text: string): 
 /** The card from before cards stayed open that the person's `text` types past, closing it unanswered; a room passes the member that asked. */
 export function typedPastCard<T extends Row>(messages: readonly T[], text: string, askerId?: string): T | null {
   const line = { role: "user", kind: "text", text } as T;
-  for (const [card, state] of askStates([...messages, line])) {
+  for (const [message, state] of askStates([...messages, line])) {
     // a tapped choice can arrive before its answered patch
-    if (state.state !== "answered" || state.by !== line || card.card!.staysOpen || card.card!.options?.includes(text.trim())) continue;
-    if (!askerId || card.from?.botId === askerId) return card;
+    if (state.state !== "answered" || state.by !== line || message.card!.staysOpen || message.card!.options?.includes(text.trim())) continue;
+    if (!askerId || message.from?.botId === askerId) return message;
   }
   return null;
 }
