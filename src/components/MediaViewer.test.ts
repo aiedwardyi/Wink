@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -161,6 +164,23 @@ describe("media reader regressions", () => {
     expect(onNavigate).toHaveBeenCalledWith(1);
     await act(async () => { pointer("pointerdown", 190, 200); pointer("pointermove", 190, 360); pointer("pointerup", 190, 360); });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the arrows on a phone for a video, which can't be swiped past, but not for a picture", async () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "styles.css"), "utf8");
+    const phone = css.slice(css.indexOf("{", css.indexOf("@media (max-width: 767px)")) + 1).split(/\n\}/)[0].replace(/\/\*[^]*?\*\//g, "");
+    const selector = (declaration: string) => phone.match(new RegExp(`([^{}]+)\\{[^}]*${declaration}`))![1].trim();
+    const [hidden, shown] = [selector("display: none"), selector("opacity: 1")];
+    const arrows = () => [...document.querySelectorAll("[data-viewer-previous], [data-viewer-next]")];
+    const onNavigate = vi.fn();
+    const { root } = await render(createElement(MediaViewer, { image: { src: "/api/attachments/walk.mp4", name: "walk.mp4", video: true }, onClose: vi.fn(), onNavigate, previous: true, next: true }));
+    document.querySelector<HTMLElement>("[data-media-viewer]")!.dataset.controls = "hidden";
+    expect(arrows()).toHaveLength(2);
+    for (const arrow of arrows()) expect([arrow.matches(hidden), arrow.matches(shown)]).toEqual([false, true]);
+    await act(async () => document.querySelector<HTMLElement>("[data-viewer-next]")!.click());
+    expect(onNavigate).toHaveBeenCalledWith(1);
+    await act(async () => root.render(createElement(MediaViewer, { image, onClose: vi.fn(), onNavigate, previous: true, next: true })));
+    for (const arrow of arrows()) expect(arrow.matches(hidden)).toBe(true);
   });
 
   it("pans with the finger left after a pinch without dismissing or navigating", async () => {

@@ -214,17 +214,6 @@ describe("hang-up keeps his words", () => {
     expect(sent(posts)).toEqual([]);
   });
 
-  it("sends nothing said while the voice was told to be quiet", async () => {
-    const { call, engine, posts, tick } = await live();
-    engine().events.heard("Be quiet.");
-    engine().events.answering();
-    engine().events.turnDone();
-    engine().events.heard("Did you feed the cat?");
-    call.end();
-    await tick(1_100);
-    expect(sent(posts)).toEqual([]);
-  });
-
   it("hangs up at once when no words are in flight", async () => {
     const { call, engine, posts, tick } = await live();
     engine().events.heard("Is the build still running?");

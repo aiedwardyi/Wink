@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { Message } from "./store.ts";
 import type { SyncHead, SyncVersion, ThreadSyncV2 } from "./thread-sync-v2.ts";
+import { testBootReads } from "./testing/boot-rows.ts";
 
 let root: string;
 let close = async () => {};
@@ -47,7 +48,7 @@ async function boot(google = false) {
   if (fresh) store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
   let enabled = true;
   const sync = createThreadSyncV2Store({
-    store, dataDir, deviceId: "local", folder: () => enabled ? folder : null, enabled: () => enabled,
+    store, dataDir, deviceId: "local", bootReads: testBootReads(dataDir), folder: () => enabled ? folder : null, enabled: () => enabled,
     target: (threadId) => threadId === "thread" ? { botId: bot.id, botSyncId: "bot" } : null,
     bots: () => [{ botId: bot.id, botSyncId: "bot" }], running: () => Boolean(store.bot(bot.id)?.busy),
     project: (message) => message, imported: () => {}, maintenance: () => {},

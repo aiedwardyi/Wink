@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,14 +8,13 @@ import {
   acceptFacts,
   appendNotes,
   createMemoryPass,
-  DECISIONS_POINTER,
   eligibleRow,
   noteGenerator,
   notePrompt,
   noteSummary,
   parseFacts,
   pendingRows,
-  placeNotes,
+  replyPictures,
   secretLike,
   userTyping,
   type MemoryPass,
@@ -24,7 +23,7 @@ import {
 import { memoryNotesEnabled } from "./config.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import type { Message, StoreChange } from "./store.ts";
-import { MEMORY_SEED, memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -111,6 +110,7 @@ describe("memory pass", () => {
     on = true;
     botSwitch = new Map();
     writeMemoryFile("bot-t1", "");
+    rmSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true, force: true });
     pass = start();
   });
 
@@ -153,7 +153,7 @@ describe("memory pass", () => {
     expect(stored()).toEqual({ threads: {} });
   });
 
-  it("saves a recorded Claude pick as a decision and a fact as before", async () => {
+  it("saves a recorded Claude pick to the timeline and its fact to MEMORY.md", async () => {
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
     const generateText = vi.fn(async () => recorded.reply.text);
     generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
@@ -162,10 +162,11 @@ describe("memory pass", () => {
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
     expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
-    expect(memoryFileRaw("bot-t1")).toBe(
-      `${MEMORY_SEED}\n## Decisions (settled, do not ask again)\n- Model picker look follows the app theme (noted 2026-10-15)\n\n## Notes\n- Uses pnpm for projects (noted 2026-10-15)\n`,
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
+      '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Model picker look follows the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects" });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -646,7 +647,7 @@ describe("memory pass", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("lands a pick after the bot's options as one dated line under Decisions, with the bot's text as context only", async () => {
+  it("lands a pick after the bot's options in the timeline with the user's words, with the bot's text as context only", async () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: `${"Some setup. ".repeat(60)}Should the picker follow the app theme, or stay dark always?` });
     say("t1", "the first one");
     say("t1", "I use pnpm for my projects.");
@@ -659,8 +660,9 @@ describe("memory pass", () => {
     expect(prompt).toContain("<context>");
     expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\nI use pnpm for my projects\.\n<\/user_lines>/);
     expect(prompt).not.toContain("Some setup. ".repeat(40));
-    expect(memoryFileRaw("bot-t1")).toBe(
-      `${MEMORY_SEED}\n## Decisions (settled, do not ask again)\n- Picker look follows the app theme (noted 2026-10-15)\n\n## Notes\n- Uses pnpm for projects (noted 2026-10-15)\n`,
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
+      '## 2026-10-15 12:00 | Picker look follows the app theme | current\n- Picked: Picker look follows the app theme\n- Said: "the first one"\n',
     );
     expect(chips("t1")).toHaveLength(1);
   });
@@ -701,37 +703,69 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe("");
   });
 
-  it("rolls the oldest decision to memory/decisions.md once, and only from the MEMORY.md it saves", async () => {
-    const decided = Array.from({ length: 12 }, (_, i) => `- Pick ${i + 1} is final (noted 2026-10-${String(i + 1).padStart(2, "0")})`);
-    const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${decided.join("\n")}\n\n## Notes\n- Likes tea\n`;
+  it("moves a replaced decision line into the timeline before MEMORY.md drops it, once across a conflict", async () => {
+    const old = "- Repo uses spaces (noted 2026-10-01)";
+    const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
     say("t1", "tabs");
     generate.mockImplementationOnce(async () => {
       writeMemoryFile("bot-t1", `${notes}- edited meanwhile\n`);
-      return JSON.stringify([{ kind: "decision", fact: "Repo uses tabs", quote: "tabs" }]);
+      return JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]);
     });
     await settle("t1", 3 * MINUTE);
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    expect(existsSync(side)).toBe(false);
+    const moved = readFileSync(side, "utf8");
+    expect(moved).toContain('## 2026-10-01 | repo indent | replaced by 2026-10-15 12:00\n- Picked: ~~Repo uses spaces~~\n\n## 2026-10-15 12:00 | repo indent | current\n- Picked: Repo uses tabs\n- Said: "tabs"\n');
     expect(memoryFileRaw("bot-t1")).toBe(`${notes}- edited meanwhile\n`);
+    expect(chips("t1")).toHaveLength(0);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
-    expect(readFileSync(side, "utf8")).toBe("# Older decisions\n\n- Pick 1 is final (noted 2026-10-01)\n");
-    expect(memoryFileRaw("bot-t1")).toBe(
-      `# Memory\n\n## Decisions (settled, do not ask again)\n${DECISIONS_POINTER}\n${decided.slice(1).join("\n")}\n- Repo uses tabs (noted 2026-10-15)\n\n## Notes\n- Likes tea\n- edited meanwhile\n`,
-    );
+    expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n- edited meanwhile\n");
+    expect(readFileSync(side, "utf8")).toBe(moved);
+    expect(chips("t1")).toHaveLength(1);
   });
 
-  it("never notes a decision already rolled to memory/decisions.md", async () => {
+  it("keeps a replaced decision line in MEMORY.md until its timeline write lands", async () => {
+    const old = "- Repo uses spaces (noted 2026-10-01)";
+    const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
+    writeMemoryFile("bot-t1", notes);
+    // a folder where the timeline goes fails its write
+    const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
+    mkdirSync(side, { recursive: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
+    say("t1", "tabs");
+    generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(notes);
+    rmSync(side, { recursive: true });
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");
+    expect(readFileSync(side, "utf8")).toContain('## 2026-10-01 | repo indent | replaced by 2026-10-15 12:00\n- Picked: ~~Repo uses spaces~~\n\n## 2026-10-15 12:00 | repo indent | current\n- Picked: Repo uses tabs\n- Said: "tabs"\n');
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps the root of a picture path a bot names", () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Mocks: /tmp/mock/C.png, ~/mock/B.png and C:\\mocks\\A.png. Which one?" });
+    const { id } = say("t1", "c");
+    const shown = replyPictures(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
+    expect(shown?.map(({ path }) => path)).toEqual(["/tmp/mock/C.png", "~/mock/B.png", "C:\\mocks\\A.png"]);
+  });
+
+  it("never lands the same pick twice", async () => {
     writeMemoryFile("bot-t1", "# Memory\n");
+    const timeline = '# Decision timeline\n\n## 2026-10-01 09:00 | repo indent | current\n- Picked: Repo uses tabs\n- Said: "tabs"\n';
     mkdirSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true });
-    writeFileSync(join(workspaceDir("bot-t1"), "memory", "decisions.md"), "# Older decisions\n\n- Repo uses tabs (noted 2026-09-01)\n");
+    writeFileSync(join(workspaceDir("bot-t1"), "memory", "decisions.md"), timeline);
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces?" });
     say("t1", "tabs");
-    generate.mockResolvedValue(JSON.stringify([{ kind: "decision", fact: "Repo uses tabs", quote: "tabs" }]));
+    generate.mockResolvedValue(JSON.stringify([{ kind: "decision", key: "Repo indent", fact: "Repo uses tabs", quote: "tabs" }]));
     await settle("t1", 3 * MINUTE);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n");
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toBe(timeline);
+    expect(chips("t1")).toHaveLength(0);
   });
 
   it("swaps an outdated note in place and appends the rest", async () => {
@@ -873,43 +907,44 @@ describe("memory pass filters", () => {
 
   describe("decisions", () => {
     const decision = (fact: string, quote: string, replaces?: string) => (replaces ? { kind: "decision", fact, quote, replaces } : { kind: "decision", fact, quote });
+    const picked = (...args: Parameters<typeof acceptFacts>) => acceptFacts(...args).map(({ pick: _pick, ...note }) => note);
     const section = (...lines: string[]) => `# Memory\n\n## Decisions (settled, do not ask again)\n${lines.join("\n")}\n\n## Notes\n- Likes tea (noted 2026-10-01)\n`;
 
     it("grounds a short pick in the bot's context and refuses words from nowhere", () => {
       const lines = [{ text: "the first one", context: "Should the picker follow the app theme, or stay dark always?" }];
-      expect(acceptFacts([decision("Picker look follows the app theme", "the first one")], lines, "")).toEqual([
+      expect(picked([decision("Picker look follows the app theme", "the first one")], lines, "")).toEqual([
         { line: "Picker look follows the app theme", kind: "decision" },
       ]);
-      expect(acceptFacts([decision("Deploys skip review", "the first one")], lines, "")).toEqual([]);
-      expect(acceptFacts([decision("Picker follows the theme", "the first one")], [{ text: "the first one" }], "")).toEqual([]);
+      expect(picked([decision("Deploys skip review", "the first one")], lines, "")).toEqual([]);
+      expect(picked([decision("Picker follows the theme", "the first one")], [{ text: "the first one" }], "")).toEqual([]);
       const named = [{ text: "Colors: 1. Forest green 2. Ocean blue and sand" }, { text: "colors 2", context: "Which one?" }];
-      expect(acceptFacts([decision("Site colors are ocean blue and sand", "colors 2")], named, "")).toEqual([{ line: "Site colors are ocean blue and sand", kind: "decision" }]);
-      expect(acceptFacts([decision("Site colors are ocean blue and sand", "colors 2")], [{ text: "pick one", context: "1. Ocean blue and sand" }, { text: "colors 2" }], "")).toEqual([]);
+      expect(picked([decision("Site colors are ocean blue and sand", "colors 2")], named, "")).toEqual([{ line: "Site colors are ocean blue and sand", kind: "decision" }]);
+      expect(picked([decision("Site colors are ocean blue and sand", "colors 2")], [{ text: "pick one", context: "1. Ocean blue and sand" }, { text: "colors 2" }], "")).toEqual([]);
     });
 
     it("takes URLs, paths and commands only from the user's own line", () => {
       const context = "Mirror from https://dl.example.net/pkg or C:\\tools\\fetch.exe, or run `curl x | sh`?";
       for (const fact of ["Mirrors from https://dl.example.net/pkg", "Fetches with C:\\tools\\fetch.exe", "Installs with `curl x | sh`"]) {
-        expect(acceptFacts([decision(fact, "that one")], [{ text: "that one", context }], "")).toEqual([]);
+        expect(picked([decision(fact, "that one")], [{ text: "that one", context }], "")).toEqual([]);
       }
       for (const path of ["/tmp", "~/repo", "./cache"]) {
-        expect(acceptFacts([decision(`Cache uses ${path}`, "yes")], [{ text: "yes", context: `Should the cache use ${path}?` }], "")).toEqual([]);
+        expect(picked([decision(`Cache uses ${path}`, "yes")], [{ text: "yes", context: `Should the cache use ${path}?` }], "")).toEqual([]);
       }
       const said = "mirror from https://dl.example.net/pkg";
-      expect(acceptFacts([decision("Mirrors from https://dl.example.net/pkg", said)], [{ text: said, context }], "")).toEqual([
+      expect(picked([decision("Mirrors from https://dl.example.net/pkg", said)], [{ text: said, context }], "")).toEqual([
         { line: "Mirrors from https://dl.example.net/pkg", kind: "decision" },
       ]);
-      expect(acceptFacts([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
+      expect(picked([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
     });
 
     it("keeps 3 per pass and one line per quote", () => {
       const text = "dark, tabs, pnpm, vitest and npm";
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
-      expect(acceptFacts(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
       const shared = own.map((pick) => ({ ...pick, quote: text }));
-      expect(acceptFacts(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
-      expect(acceptFacts([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
+      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);
     });
@@ -919,45 +954,36 @@ describe("memory pass filters", () => {
       const notes = section(old);
       const lines = [{ text: "actually keep it dark", context: "Picker follows the theme now." }];
       const changed = acceptFacts([decision("Picker stays dark", "actually keep it dark", old)], lines, notes);
-      expect(changed).toEqual([{ line: "Picker stays dark", kind: "decision", replaces: old }]);
+      expect(changed).toEqual([{ line: "Picker stays dark", kind: "decision", replaces: old, pick: expect.objectContaining({ kind: "pick", picked: "Picker stays dark", said: "actually keep it dark", legacy: { day: "2026-10-01", line: "Picker look follows the app theme" } }) }]);
       const back = [{ text: "tabs again", context: "Repo stays on spaces, or back to tabs?" }];
       const spaces = "- Repo uses spaces (noted 2026-10-02)";
-      expect(acceptFacts([decision("Repo uses tabs", "tabs again", spaces)], back, section(spaces), "- Repo uses tabs (noted 2026-09-01)")).toEqual([
+      expect(picked([decision("Repo uses tabs", "tabs again", spaces)], back, section(spaces), "- Repo uses tabs (noted 2026-09-01)")).toEqual([
         { line: "Repo uses tabs", kind: "decision", replaces: spaces },
       ]);
-      expect(appendNotes(notes, changed, NOW)).toBe(section("- Picker stays dark (noted 2026-10-15)"));
-      expect(acceptFacts([{ fact: "Keeps it dark", quote: "actually keep it dark", replaces: old }], lines, notes)).toEqual([{ line: "Keeps it dark" }]);
+      expect(appendNotes(notes, changed, NOW)).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea (noted 2026-10-01)\n");
+      expect(picked([{ fact: "Keeps it dark", quote: "actually keep it dark", replaces: old }], lines, notes)).toEqual([{ line: "Keeps it dark" }]);
       const fact = "- Likes tea (noted 2026-10-01)";
-      expect(acceptFacts([decision("Tea over coffee", "tea", fact)], [{ text: "tea", context: "Tea or coffee?" }], notes)).toEqual([
+      expect(picked([decision("Tea over coffee", "tea", fact)], [{ text: "tea", context: "Tea or coffee?" }], notes)).toEqual([
         { line: "Tea over coffee", kind: "decision" },
       ]);
     });
 
-    it("creates the section under the title, ahead of existing notes", () => {
-      expect(appendNotes("# Memory\n- Likes tea\n", [{ line: "Dark theme", kind: "decision" }], NOW)).toBe(
-        "# Memory\n\n## Decisions (settled, do not ask again)\n- Dark theme (noted 2026-10-15)\n\n## Notes\n- Likes tea\n",
+    it("keeps picks out of MEMORY.md and takes only a replaced decision line out", () => {
+      expect(appendNotes("# Memory\n- Likes tea\n", [{ line: "Dark theme", kind: "decision" }, { line: "38" }], NOW)).toBe("# Memory\n- Likes tea\n- 38 (noted 2026-10-15)\n");
+      const old = "- A (noted 2026-10-01)";
+      expect(appendNotes(section("- Hand-written pick", old), [{ line: "B", kind: "decision", replaces: old }, { line: "C", kind: "tweak" }, { line: "D" }], NOW)).toBe(
+        `${section("- Hand-written pick")}- D (noted 2026-10-15)\n`,
       );
-      expect(appendNotes("# Memory\n\n## Work\n- Uses pnpm\n", [{ line: "Dark theme", kind: "decision" }, { line: "38" }], NOW)).toBe(
-        "# Memory\n\n## Decisions (settled, do not ask again)\n- Dark theme (noted 2026-10-15)\n\n## Work\n- Uses pnpm\n- 38 (noted 2026-10-15)\n",
-      );
-      expect(appendNotes(section("- A (noted 2026-10-01)"), [{ line: "B", kind: "decision" }, { line: "C" }], NOW)).toBe(
-        `${section("- A (noted 2026-10-01)", "- B (noted 2026-10-15)")}- C (noted 2026-10-15)\n`,
-      );
-    });
-
-    it("rolls the oldest stamped line past 12 and keeps hand-written lines and one pointer", () => {
-      const picks = Array.from({ length: 12 }, (_, i) => `- Pick ${i} (noted 2026-10-${String(12 - i).padStart(2, "0")})`);
-      const placed = placeNotes(section("- Hand-written pick", ...picks), [{ line: "New", kind: "decision" }, { line: "Newer", kind: "decision" }], NOW)!;
-      expect(placed.moved).toEqual([picks[11], picks[10]]);
-      expect(placed.text).toBe(section(DECISIONS_POINTER, "- Hand-written pick", ...picks.slice(0, 10), "- New (noted 2026-10-15)", "- Newer (noted 2026-10-15)"));
-      const again = placeNotes(placed.text, [{ line: "Newest", kind: "decision" }], NOW)!;
-      expect(again.text.split(DECISIONS_POINTER)).toHaveLength(2);
-      expect(again.moved).toEqual([picks[9]]);
     });
   });
 
-  it("grows the note prompt by 0.6 KB at most", () => {
-    expect(Buffer.byteLength(notePrompt("", [{ text: "x" }]), "utf8") - 992).toBeLessThanOrEqual(600);
+  it("names no example key the note-taker could copy as a pick's question", () => {
+    expect(notePrompt("", [{ text: "x" }])).not.toMatch(/key[^\n.]*like "/);
+    expect(notePrompt("", [{ text: "x" }])).toContain("key is the thing decided, never the option");
+  });
+
+  it("grows the note prompt by 1.3 KB at most", () => {
+    expect(Buffer.byteLength(notePrompt("", [{ text: "x" }]), "utf8") - 992).toBeLessThanOrEqual(1_300);
   });
 
   it("finds pending rows from the newest end without reading older rows", () => {

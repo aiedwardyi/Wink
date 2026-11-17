@@ -20,13 +20,19 @@ export const CALL_STYLES = ["calm", "normal", "lively"] as const;
 export type CallStyle = (typeof CALL_STYLES)[number];
 export const CALL_SPEED = { min: 0.7, max: 1.3, step: 0.1 } as const;
 export type CallPrefs = { voice?: LiveVoice; speed?: number; style?: CallStyle; language?: "en" | "ko" };
-// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps.
+// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps. Every style plays at this one level.
 export const OUTPUT_GAIN = 0.7;
-// Calm plays 4.4 dB under normal; lively 1 dB over, still under -3 dBTP.
-export const STYLE_GAIN: Record<CallStyle, number> = { calm: 0.6, normal: 1, lively: 1.12 };
-export const STYLE_LINES: Partial<Record<CallStyle, string>> = {
-  calm: "VOICE: Speak softly and gently, low-key and unhurried, like a quiet late-night talk. Never loud or excited.",
-  lively: "VOICE: Speak with bright, upbeat energy.",
+// Live has no rate, pitch or energy field, so a style is how the voice is told to speak, at its own pitch-kept pace; volume is the device's own slider.
+// Told "slowly" or "quickly", Live keeps its pace (day-1117 clips: 256 vs 237 wpm), so the pace is played, not asked for.
+export const STYLE_PACE: Record<CallStyle, number> = { calm: 0.88, normal: 1, lively: 1.1 };
+export function callPace(prefs: Pick<CallPrefs, "speed" | "style">): number {
+  const pace = (prefs.speed ?? 1) * STYLE_PACE[prefs.style ?? "normal"];
+  return Math.round(Math.min(CALL_SPEED.max, Math.max(CALL_SPEED.min, pace)) * 100) / 100;
+}
+export const STYLE_LINES: Record<CallStyle, string> = {
+  calm: "VOICE: Calm. Speak slowly and evenly, low in your range, with relaxed pauses between thoughts, at a normal speaking volume, never a whisper. Fewest words: one short sentence. Never excited.",
+  normal: "VOICE: Natural. Speak at an everyday pace and pitch, friendly and clear.",
+  lively: "VOICE: Lively. Speak quickly with bright, upbeat energy, a lifted pitch and lots of expression, at a normal speaking volume, never shouting. Two quick sentences are fine, and an exclamation now and then.",
 };
 // Live has no accent field, so the accent rides the system instruction.
 export const LIVE_ACCENTS: Partial<Record<LiveVoice, string>> = { Erinome: "When you speak English, use a natural British accent." };
@@ -73,10 +79,6 @@ export const LIVE_TOOLS = [
       properties: { question: { type: "STRING", description: "The question in the person's words and language, e.g. \"When do the eval loops finish?\"" } },
       required: ["question"],
     },
-  },
-  {
-    name: "hush",
-    description: "They asked you to be quiet or said they are talking to someone else, in any words. Call it and say nothing: you stay silent until they say your name.",
   },
 ];
 

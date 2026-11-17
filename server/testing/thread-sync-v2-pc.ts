@@ -12,6 +12,7 @@ import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "../thread-sync-v2-gate.ts";
 import { createSyncEngine } from "../thread-sync-v2-engine.ts";
 import type { ContextCompactionV1 } from "../../shared/context-compaction.ts";
+import { testBootReads } from "./boot-rows.ts";
 
 export interface TestArgs {
   threadId?: string;
@@ -63,6 +64,7 @@ const host = () => ({
   store,
   dataDir: input.dataDir,
   deviceId: input.deviceId,
+  bootReads: testBootReads(input.dataDir),
   folder: () => input.folder,
   enabled: () => true,
   openThread: () => openThread,

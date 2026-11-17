@@ -142,7 +142,7 @@ const takenNames = (group: HostedGroup) => [
 ];
 
 function sharedState(group: HostedGroup) {
-  const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
+  const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name, works: person.works }));
   const bots = group.memberIds.flatMap((id) => {
     const bot = door!.deps.store.bot(id);
     return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color, ...(bot.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) }] : [];

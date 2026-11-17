@@ -393,6 +393,38 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(laptop.sync.status().state).toBe("up-to-date");
   });
 
+  it("keeps syncing when another PC rewrites a file mid-download, and takes the new copy next pass", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    work.sync.stop();
+    const path = `devices/${home.deviceId}.json`;
+    writeDeviceRecord(home.folder!, { deviceId: home.deviceId, name: "Home", host: "home.example.ts.net", chatSync: 2 }, 1_800_000_000_000);
+    await settle(home);
+    const id = [...driveA().records.values()].find(({ file }) => decodeDrivePath(file.name) === path)!.file.id;
+    let rewritten = false;
+    work.sync = boot(work, {
+      fetch: (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (!rewritten && url.pathname.endsWith(`/files/${id}`) && url.searchParams.get("alt") === "media") {
+          rewritten = true;
+          writeDeviceRecord(home.folder!, { deviceId: home.deviceId, name: "Home renamed", host: "home.example.ts.net", chatSync: 2 }, 1_800_000_060_000);
+          driveA().edit(id, readFileSync(join(home.folder!, path)));
+        }
+        return driveA().fetch(input, init);
+      },
+    });
+    work.sync.resume();
+    await work.sync.idle();
+    expect(rewritten).toBe(true);
+    expect(work.sync.status().state).toBe("syncing");
+    expect(work.logs.filter((line) => line.startsWith("[google-sync] pass stopped"))).toEqual([]);
+    await settle(work);
+    expect(JSON.parse(readFileSync(join(work.folder!, path), "utf8")).name).toBe("Home renamed");
+    expect(work.sync.status().state).toBe("up-to-date");
+  });
+
   it("says only the chat still pulling what a day away missed is catching up", async () => {
     const home = makePC("home", { bots: [bot("Counsel", { chats: ["thread-open", "thread-other"] })] });
     const laptop = makePC("laptop");
