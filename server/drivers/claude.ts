@@ -1147,7 +1147,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
       if (turn.leanStartup === true) args.push("--setting-sources", "project");
-      else if (input.account && baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
+      else if (baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless
