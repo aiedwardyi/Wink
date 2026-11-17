@@ -384,14 +384,15 @@ export function HiddenQuestionDot({ id, count }: { id: string; count: number }) 
 
 export function AskChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
   if (!options.length) return null;
+  // 34px pills on phone too, their 44px touch targets splitting the gap between rows
   return (
-    <div data-term-choices className="mt-2.5 flex shrink-0 flex-wrap gap-2">
+    <div data-term-choices data-ask-choices className="mt-2.5 flex shrink-0 flex-wrap gap-2 pointer-coarse:gap-y-2.5">
       {options.map((choice) => (
         <button
           key={choice}
           type="button"
           onClick={() => onPick(choice)}
-          className={cn(CHIP, "max-w-full break-words px-3.5 py-1.5 text-left pointer-coarse:min-h-11")}
+          className={cn(CHIP, "relative min-w-12 max-w-full break-words px-3.5 py-1.5 text-center leading-5 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-[5px]")}
         >
           {choice}
         </button>
