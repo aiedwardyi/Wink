@@ -55,6 +55,7 @@ const gap = () => vi.advanceTimersByTimeAsync(GAP_MS);
 
 function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string, room?: { id: string; kind: "host" | "joined" }) {
   const engines: FakeEngine[] = [];
+  const keyCards: string[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
     botId: "b1",
@@ -64,6 +65,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
     audio,
     now,
     opener,
+    onKeyCard: (id) => keyCards.push(id),
     ...{ room },
     post: async (path, body) => {
       posts.push({ path, body });
@@ -73,7 +75,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
       return { status: 200, data: {} };
     },
   });
-  return { call, engines, posts, engine: () => engines.at(-1)! };
+  return { call, engines, posts, keyCards, engine: () => engines.at(-1)! };
 }
 
 /** A call past its greeting: nothing else plays until the greeting's turn ends. */
@@ -324,6 +326,7 @@ describe("LiveCall", () => {
     const needs = setup({ "/call/token": { status: 409, data: { error: "Add a Gemini key to call.", cardId: "k1" } } });
     await needs.call.start();
     expect(needs.call.state().status).toBe("needsKey");
+    expect(needs.keyCards).toEqual(["k1"]);
     expect(needs.engines).toHaveLength(0);
 
     const { call, engine } = await started();
