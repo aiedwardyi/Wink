@@ -371,7 +371,7 @@ export function AskChoices({ options, onPick }: { options: string[]; onPick: (ch
           key={choice}
           type="button"
           onClick={() => onPick(choice)}
-          className={cn(CHIP, "relative min-w-12 max-w-full break-words px-3.5 py-1.5 text-center leading-5 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-[5px]")}
+          className={cn(CHIP, "relative min-w-12 max-w-full break-words px-3.5 py-1.5 text-center leading-5 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-[6px]")}
         >
           {choice}
         </button>

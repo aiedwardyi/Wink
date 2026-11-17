@@ -61,6 +61,8 @@ type InternalRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
   readOnlyTurn: (botId: string, threadId: string) => boolean;
+  /** The user line a running room turn was dispatched to answer. */
+  answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold">;
@@ -414,7 +416,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
-      const target = store.activePath(fromThreadId).findLast((m) => m.role === "user" && m.kind === "text");
+      const lines = store.activePath(fromThreadId).filter((m) => m.role === "user" && m.kind === "text");
+      const answered = deps.answeredLine(fromThreadId);
+      const target = lines.find((m) => m.id === answered) ?? lines.at(-1);
       if (!target) return json(res, 200, { error: "no user message to react to yet" });
       if (!(EXTENDED_REACTIONS as readonly string[]).includes(emoji) && !target.reactions?.some((reaction) => reaction.emoji === emoji && reaction.by === fromBotId)) {
         return json(res, 400, { error: "unsupported emoji" });
@@ -551,12 +555,15 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     },
     callKeyApi: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const fromThreadId = String(body.fromThreadId ?? "");
-      const from = store.bot(String(body.fromBotId ?? ""));
-      if (!from) return json(res, 403, { error: "unknown sender" });
-      if (!fromThreadId) return json(res, 400, { error: "no active thread" });
+      const source = deps.resolveCommsCaller?.(req.headers.authorization);
+      const from = source ? store.bot(source.botId) : undefined;
+      if (!source || !from || body.fromBotId !== source.botId || body.fromThreadId !== source.threadId) return json(res, 403, { error: "unknown sender" });
+      const fromThreadId = source.threadId;
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) {
+        return json(res, 403, { error: 'call_api is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
+      }
       const parsed = callApiRequestSchema.safeParse(body);
       if (!parsed.success) return json(res, 400, { error: "needs credential_id, method, and url; headers must be strings" });
       try {

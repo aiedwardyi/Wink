@@ -703,7 +703,9 @@ export function createDriveMirror(options: Options) {
           uploads = false;
           return;
         }
-        if (!(error instanceof DriveClientError) || (error.status >= 200 && error.status < 300)) throw error;
+        // a peer rewrote the file after the listing; the next pass lists its new copy
+        const changed = error instanceof DriveMirrorError && error.problem === "content-changed";
+        if (!changed && (!(error instanceof DriveClientError) || (error.status >= 200 && error.status < 300))) throw error;
         summary.failed.push(path);
       }
     }

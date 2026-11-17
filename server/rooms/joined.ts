@@ -42,7 +42,8 @@ export interface JoinedState {
   instructions: string;
   host: string;
   me: { id: string; name: string };
-  people: Array<{ id: string; name: string }>;
+  /** `works` is the host's "Can make bots work" switch; absent from an older host. */
+  people: Array<{ id: string; name: string; works?: boolean }>;
   bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
   /** Only from a host that takes teammates' bots. */
   teamBots?: Array<{ id: string; name: string; color: string; owner: string; mascotStyle?: string }>;

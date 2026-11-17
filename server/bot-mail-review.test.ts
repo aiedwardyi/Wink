@@ -8,9 +8,11 @@ import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, repairModelContext, repairTarget } from "./context-compaction.ts";
 import { _resetPending, discardDelegations, discardOrphanedDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt, updateReceipt } from "./delegations.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { recoverHandedMail } from "./mail-index.ts";
 import { mailForTurn, markMailRead, markPaneMailRead, settleMail, toolMailResult, unreadMail } from "./mail.ts";
 import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
 import { Store, type BotRecord, type Message } from "./store.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
 
 let store: Store;
@@ -124,6 +126,7 @@ it("repairs handovers without loading transcripts that have no handed mail", () 
   store.createGroup("Room", [from.id, target.id]);
   const messagesFor = vi.spyOn(store, "messagesFor");
   discardOrphanedDelegations(bus());
+  recoverHandedMail(store, bootRowsNow().handed);
   expect(messagesFor).not.toHaveBeenCalled();
 });
 

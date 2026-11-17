@@ -167,6 +167,42 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
   return scope ? `${scope}:${key}` : key;
 }
 
+// The most of a desktop call the guard reads; a longer or deeper one is skipped, never cut.
+const GUARD_INPUT_MAX = 65_536;
+const GUARD_INPUT_DEPTH = 64;
+
+/** Every key and string a desktop call carries, whole, for the guard to judge. */
+export function guardInput(input: unknown): { action: string } | { actionRefused: "too-large" | "unreadable" } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return { actionRefused: "unreadable" };
+  let size: number;
+  try {
+    size = JSON.stringify(input).length;
+  } catch {
+    return { actionRefused: "unreadable" };
+  }
+  if (size > GUARD_INPUT_MAX) return { actionRefused: "too-large" };
+  const parts: string[] = [];
+  const walk = (value: unknown, depth: number): boolean => {
+    if (depth > GUARD_INPUT_DEPTH) return false;
+    if (typeof value === "string") parts.push(value);
+    else if (Array.isArray(value)) return value.every((inner) => walk(inner, depth + 1));
+    else if (value && typeof value === "object") {
+      for (const [key, inner] of Object.entries(value)) {
+        parts.push(key);
+        if (!walk(inner, depth + 1)) return false;
+      }
+    }
+    return true;
+  };
+  return walk(input, 0) ? { action: parts.join("\n") } : { actionRefused: "unreadable" };
+}
+
+/** The deny for an Auto bot's desktop ask the guard could not read whole. */
+export const UNCHECKED_DESKTOP_DENY_NOTE = {
+  "too-large": "Wink: this desktop action is too large for Auto mode to check, so it was skipped. Split it into smaller steps.",
+  unreadable: "Wink: this desktop action's input can't be read, so Auto mode skipped it.",
+} as const;
+
 /** The deny for an Auto bot's desktop ask in a turn nobody started. */
 export const AWAY_DESKTOP_DENY_NOTE =
   "Wink: desktop control needs the user present. Skip this step and continue with the rest.";
@@ -188,6 +224,7 @@ export type AutoVerdictSource =
   | "auto-mode"
   | "unattended-block"
   | "away-desktop-deny"
+  | "unchecked-desktop-deny"
   | "local-computer-block"
   | "destructive-guard"
   | "sensitive-guard"
@@ -218,6 +255,8 @@ export function autoVerdict(
     unattended?: boolean;
     /** the request controls the user's active desktop */
     scope?: "local-computer";
+    /** why a desktop call reached the guard without its whole input */
+    refused?: "too-large" | "unreadable";
   },
 ): AutoVerdict {
   // the guards outrank the grants, so an "always allow" can never widen
@@ -260,6 +299,7 @@ export function autoVerdict(
   if (context?.scope === "local-computer") {
     // Auto mode past the warning still stops for a destructive-looking
     // host-control action.
+    if (context.refused) return { approve: null, source: "unchecked-desktop-deny", rule: context.refused };
     if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
     if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
     return { approve: `auto-approved ${tool}`, source: "auto-mode" };

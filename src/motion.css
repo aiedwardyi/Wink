@@ -158,6 +158,18 @@
   }
 }
 
+/* One press and one hover fade for every control (docs/ui-kit.md#hover-and-press). In the base layer, so a part's own transition or scale class still wins. */
+@layer base {
+  :where(button, [role="button"], a[href], summary, [class*="hover:"]) {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, filter, scale;
+    transition-duration: var(--motion-fast);
+    transition-timing-function: var(--ease-standard);
+  }
+  :where(button, [role="button"]):not(:disabled):active {
+    scale: 0.97;
+  }
+}
+
 /* Reduced motion: every duration token is 0s, so everything above is instant.
    Carbon keeps motion behind prefers-reduced-motion: no-preference. */
 @media (prefers-reduced-motion: reduce) {

@@ -11,6 +11,7 @@ import { installOrbitMsg, orbitBinFiles } from "../electron/terminal-mailbox.mjs
 import { deliverMailboxOutbox } from "../electron/mailbox-outbox.mjs";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { mailboxGrant } from "./mailbox.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store } from "./store.ts";
@@ -32,7 +33,7 @@ async function fixture(auto: (scope: { pane: string; bot: string; teacher: strin
   const bot = store.createBot();
   const pane = randomUUID();
   const secret = "a".repeat(64);
-  let receipts = createMailboxReceipts();
+  let receipts = createMailboxReceipts(Promise.resolve(bootRowsNow().receipts));
   let pings = 0;
   let attention = 0;
   let arrived = 0;
@@ -70,7 +71,7 @@ async function fixture(auto: (scope: { pane: string; bot: string; teacher: strin
     counts: () => ({ pings, attention, arrived }),
     requests: () => requests,
     loseNextReply() { loseReply = true; },
-    rebuild() { closeMessageDb(); receipts = createMailboxReceipts(); },
+    rebuild() { closeMessageDb(); receipts = createMailboxReceipts(Promise.resolve(bootRowsNow().receipts)); },
     post: (payload: TestReport) => fetch(`${url}/api/mailbox`, { method: "POST", headers, body: JSON.stringify(payload) }),
   };
 }

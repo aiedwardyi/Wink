@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, relative, resolve } from "node:path";
 import { z } from "zod";
@@ -12,6 +13,8 @@ export const PROFILE_SYNC_VERSION = 1 as const;
 export const PROFILE_SYNC_CHANGES_DIR = "changes";
 export const PROFILE_SYNC_WORKSPACE_FILE = "workspace.json";
 const PROFILE_SYNC_MAX_FILES = 100_000;
+// a change log can hold PROFILE_SYNC_MAX_FILES, far past the open-file limit of a Mac or Linux process
+const PROFILE_SYNC_OPEN_READS = 32;
 
 const ID = z.string().trim().min(1).max(96).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const COLOR = z.enum([
@@ -442,6 +445,44 @@ export function readSyncOperations(folder: string): { operations: ProfileSyncOpe
   return { operations, invalidFiles, truncated };
 }
 
+/** readSyncOperations off the event loop, for the poll that runs while the first page loads. */
+export async function readSyncOperationsAsync(folder: string): Promise<ReturnType<typeof readSyncOperations>> {
+  const directory = join(folder, PROFILE_SYNC_CHANGES_DIR);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return { operations: [], invalidFiles: [], truncated: false };
+  }
+  const jsonNames = names.filter(isSyncOperationFile).sort();
+  const truncated = jsonNames.length > PROFILE_SYNC_MAX_FILES;
+  const files = jsonNames.slice(0, PROFILE_SYNC_MAX_FILES);
+  const read: Array<{ name: string; operation: ProfileSyncOperation | null }> = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(PROFILE_SYNC_OPEN_READS, files.length) }, async () => {
+    while (next < files.length) {
+      const index = next++;
+      const name = files[index]!;
+      try {
+        read[index] = { name, operation: parseSyncOperationText(await readFile(join(directory, basename(name)), "utf8")) };
+      } catch {
+        read[index] = { name, operation: null };
+      }
+    }
+  }));
+  const operations = read.flatMap((item) => item.operation ? [item.operation] : []);
+  const invalidFiles = read.flatMap((item) => item.operation ? [] : [item.name]);
+  if (truncated) invalidFiles.push("[profile sync change log exceeds the supported file limit]");
+  return { operations, invalidFiles, truncated };
+}
+
+/** Null when target() moved during the read: a folder or workspace swap resets the maps these operations would be applied with. */
+export async function readSyncOperationsFor(folder: string, target: () => string): Promise<ReturnType<typeof readSyncOperations> | null> {
+  const before = target();
+  const read = await readSyncOperationsAsync(folder);
+  return target() === before ? read : null;
+}
+
 export function loadOrCreateSyncWorkspace(folder: string, fallbackWorkspaceId: string): string {
   const path = join(folder, PROFILE_SYNC_WORKSPACE_FILE);
   try {
@@ -580,6 +621,8 @@ export function syncAvatarMatches(folder: string, avatarAsset: unknown, bytes: B
   return digest(asset.bytes) === digest(bytes);
 }
 
+const namesSignature = (names: string[]) => createHash("sha256").update(names.filter(isSyncOperationFile).sort().join("\n")).digest("hex");
+
 // Change files are never rewritten in place, so their names alone say whether the log moved.
 export function syncOperationsSignature(folder: string): string {
   let names: string[];
@@ -588,21 +631,26 @@ export function syncOperationsSignature(folder: string): string {
   } catch {
     return "";
   }
-  return createHash("sha256").update(names.filter(isSyncOperationFile).sort().join("\n")).digest("hex");
+  return namesSignature(names);
 }
 
-const statusReads = new Map<string, { key: string; operations: number }>();
+type SyncStatus = { operations: number; invalidFiles: string[] };
+const statusReads = new Map<string, { key: string; read: Promise<SyncStatus> }>();
 
+// Off the event loop and shared while in flight: the first page asks for it while a change log of thousands of files is cold.
 // Keeps only clean reads: import rereads while any file is invalid, so status does too.
-export function syncOperationsStatus(folder: string): { operations: number; invalidFiles: string[] } {
-  let key = syncOperationsSignature(folder);
-  try { key += `\n${statSync(join(folder, PROFILE_SYNC_CHANGES_DIR)).mtimeMs}`; } catch {}
+export async function syncOperationsStatus(folder: string): Promise<SyncStatus> {
+  const directory = join(folder, PROFILE_SYNC_CHANGES_DIR);
+  const [names, changed] = await Promise.all([readdir(directory).catch(() => null), stat(directory).catch(() => null)]);
+  const key = `${names ? namesSignature(names) : ""}${changed ? `\n${changed.mtimeMs}` : ""}`;
   const kept = statusReads.get(folder);
-  if (kept?.key === key) return { operations: kept.operations, invalidFiles: [] };
-  const read = readSyncOperations(folder);
-  if (read.invalidFiles.length) statusReads.delete(folder);
-  else statusReads.set(folder, { key, operations: read.operations.length });
-  return { operations: read.operations.length, invalidFiles: read.invalidFiles };
+  if (kept?.key === key) return kept.read;
+  const read = readSyncOperationsAsync(folder).then((found) => {
+    if (found.invalidFiles.length && statusReads.get(folder)?.read === read) statusReads.delete(folder);
+    return { operations: found.operations.length, invalidFiles: found.invalidFiles };
+  });
+  statusReads.set(folder, { key, read });
+  return read;
 }
 
 export interface SyncEntityValues {
