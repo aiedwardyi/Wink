@@ -314,16 +314,19 @@ const emitSources = () => { for (const listener of sourceListeners) listener(); 
 
 /** The pane renders in App, away from the chat that owns the runs and terminal callbacks, so the chat shares them by thread. */
 export function useShareWorkers(threadId: string, source: WorkerSource | undefined) {
+  const on = source !== undefined;
+  const { name = "", runs = [], livePanes, paneLabels, waitForLive, onOpenTerminalPane, onOpenTerminal } = source ?? {};
   useEffect(() => {
-    if (!source) return;
-    sources.set(threadId, source);
+    if (!on) return;
+    const shared = { name, runs, livePanes, paneLabels, waitForLive, onOpenTerminalPane, onOpenTerminal };
+    sources.set(threadId, shared);
     emitSources();
     return () => {
-      if (sources.get(threadId) !== source) return;
+      if (sources.get(threadId) !== shared) return;
       sources.delete(threadId);
       emitSources();
     };
-  }, [threadId, source]);
+  }, [threadId, on, name, runs, livePanes, paneLabels, waitForLive, onOpenTerminalPane, onOpenTerminal]);
 }
 
 export function useSharedWorkers(threadId: string | undefined): WorkerSource | undefined {
