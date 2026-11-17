@@ -735,6 +735,22 @@ describe("MSP turns (fake host)", () => {
     expect(decide.params).toMatchObject({ choiceId: "allow-once" });
   });
 
+  it("runs a read-only turn on a host of its own that can't write or run shell, denies its asks even on full auto, and keeps no host", async () => {
+    const dump = join(scratch, "muse-read-only.json");
+    process.env.FAKE_MSP_DUMP = dump;
+    await create("approval", true);
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "hi", approval: "auto", readOnly: true });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(recorder.events.map((e) => e.type)).not.toContain("request.opened");
+    const [decide] = JSON.parse(readFileSync(`${dump}.decide.json`, "utf8"));
+    expect(decide.params).toMatchObject({ choiceId: "deny" });
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv.slice(-2)).toEqual(["--disable-write", "--disable-shell"]);
+    recorder.events.length = 0;
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "hi again" });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).not.toContain("--disable-write");
+  });
+
   it("answers a userInput question", async () => {
     const dump = join(scratch, "muse-ui.json");
     process.env.FAKE_MSP_DUMP = dump;

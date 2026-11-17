@@ -218,6 +218,8 @@ const appServerAlive = (server: AppServer) =>
 // Only a Wink setting overrides; otherwise the user's own codex config decides.
 // untrusted asks before any edit or command that is not read-only.
 function codexPolicy(fullAuto: boolean, turn: AccessTurn) {
+  // the sandbox stops writes; untrusted sends every escalation to Wink, which denies it on a read-only turn
+  if (turn.readOnly) return { approvalPolicy: "untrusted", sandbox: "read-only" } as const;
   return {
     approvalPolicy: fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : undefined,
     sandbox: fullAuto ? "danger-full-access" : undefined,
@@ -1152,6 +1154,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         images: true,
         effortLevels: ["low", "medium", "high", "xhigh", "max"],
         rateLimits: true,
+        readOnlyTurns: true,
         askApproval: !config.fullAuto,
         // turn.system rides once, as thread/start developerInstructions; a resumed thread keeps that copy.
         pinnedSystem: true,

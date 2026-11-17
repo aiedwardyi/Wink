@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR } from "../config.ts";
+import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
 import { ASK_DENY_NOTE, askById, askRiders, asksWork, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
@@ -379,6 +380,31 @@ describe("a teammate's request under the host's setting for the bot", () => {
     expect(turnAccess(ask.id, { autoApprove: true }, false, turnWorks(ask.id))).toEqual({ approval: "auto" });
     const runs = openRequest(read);
     await vi.waitFor(() => expect(runs.respondToRequest).toHaveBeenCalledWith(group.threadId, "r1", { behavior: "allow" }));
+  });
+
+  it("answers a teammate without the switch on every engine, read-only, never with the can't-work line", async () => {
+    const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    let gate: ts.IfStatement | undefined;
+    const walk = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && node.thenStatement.getText(index).includes("cantWorkLine(")) gate ??= node;
+      ts.forEachChild(node, walk);
+    };
+    walk(runner);
+    expect(gate).toBeDefined();
+    const { ask } = hostedSend(group, said(sora), "@Wink hi.");
+    expect(startAsk(ask!.id)).toBe(true);
+    const works = turnWorks(ask!.id);
+    expect(works).toBe(false);
+    for (const driver of BUILT_IN_DRIVERS.filter((candidate) => candidate.driverKind !== "boxAgent")) {
+      const instance = await driver.create({ instanceId: `read-only-${driver.driverKind}`, displayName: undefined, environment: {}, enabled: false, config: driver.defaultConfig() });
+      const endAsk = vi.fn();
+      const refused = new Function("works", "instance", "authority", "endAsk", "cantWorkLine", "bot", "userName", js(`${gate!.getText(index)}\nreturn false;`))(
+        works, instance, ask!.id, endAsk, (bot: string, host: string) => `${bot} can't take requests from you yet. ${host} has to turn on "Can make bots work" for you.`, { name: "Wink" }, "Edward",
+      );
+      await instance.dispose();
+      expect({ engine: driver.driverKind, refused, said: endAsk.mock.calls }).toEqual({ engine: driver.driverKind, refused: false, said: [] });
+    }
+    expect(turnAccess(ask!.id, { autoApprove: true }, false, works)).toEqual({ approval: "ask", readOnly: true });
   });
 
   it("lets a read-only turn @ no other bot, since the next one would run without the asker's limits", () => {
