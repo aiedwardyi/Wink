@@ -1,4 +1,4 @@
-// The release refuses a version whose What's New is older: without an entry, an update shows the last notes again under their old version.
+// The release refuses a version without its own What's New entry: unseenRelease skips newer entries, so the update would show the last notes again.
 // Plain node, no install: release.yml runs it in the prepare job.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,10 +11,13 @@ const older = (a, b) => {
   return false;
 };
 
+export const whatsNewVersions = (source) => [...source.matchAll(/^ {2}"(\d+\.\d+\.\d+)": \{/gm)].map((match) => match[1]);
+
 export function whatsNewGap(source, version) {
-  const entries = [...source.matchAll(/^ {2}"(\d+\.\d+\.\d+)": \{/gm)].map((match) => match[1]);
-  const newest = entries.reduce((a, b) => (older(a, b) ? b : a), "0.0.0");
-  return older(newest, version) ? `What's New is ${newest}, older than ${version}: add a "${version}" entry to WHATS_NEW in src/lib/whats-new.ts` : null;
+  const entries = whatsNewVersions(source);
+  if (entries.includes(version)) return null;
+  const shown = entries.filter((entry) => older(entry, version)).sort((a, b) => (older(a, b) ? 1 : -1))[0] ?? "no notes";
+  return `What's New has no ${version} entry, so ${version} would show ${shown}: add a "${version}" entry to WHATS_NEW in src/lib/whats-new.ts`;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
