@@ -5,10 +5,10 @@ import type { Bot } from "@/state/store-types";
 import type { CallRoom } from "../../../shared/live-call";
 import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
-import { callAudio } from "./warm-audio";
+import { callAudio, type CallSound } from "./warm-audio";
 
 /** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about; `room` the team room it was placed from. */
-export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext; opener?: string; room?: CallRoom & { name: string } };
+export type ActiveCall = { id: number; botId: string; bot: Bot; sound: CallSound; opener?: string; room?: CallRoom & { name: string } };
 
 let calls = 0;
 let call: ActiveCall | null = null;
@@ -32,8 +32,8 @@ export function callsSupported(): boolean {
   return typeof AudioContext !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
-export function placeCall(bot: Bot, ctx: AudioContext, opener?: string, room?: ActiveCall["room"]): ActiveCall {
-  call = { id: ++calls, botId: bot.id, bot, ctx, opener, room };
+export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: ActiveCall["room"]): ActiveCall {
+  call = { id: ++calls, botId: bot.id, bot, sound, opener, room };
   releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;
@@ -44,10 +44,14 @@ export function placeCall(bot: Bot, ctx: AudioContext, opener?: string, room?: A
 /** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */
 export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
   if (!bot || !opener || call || !callsSupported()) return null;
-  const ctx = callAudio();
-  if (ctx.state === "suspended") addEventListener("pointerdown", () => void ctx.resume(), { once: true });
-  void ctx.resume();
-  return placeCall(bot, ctx, opener);
+  const sound = callAudio();
+  if (sound.ctx.state === "suspended") {
+    addEventListener("pointerdown", () => {
+      void sound.ctx.resume();
+      sound.voice.play().catch(() => {});
+    }, { once: true });
+  }
+  return placeCall(bot, sound, opener);
 }
 
 type Rung = { botId: string; threadId: string; opener: string | null };

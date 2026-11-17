@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
 import { applyLocale } from "@/lib/i18n";
-import { answerCall } from "@/lib/live-call/active";
 import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
@@ -14,7 +13,7 @@ import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, played: undefined as boolean | undefined, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -34,7 +33,8 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
+    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; return fakes.played; }
+    async heal() { return true; }
     stopMic() {}
     play() {}
     endTurn() {}
@@ -130,6 +130,7 @@ afterEach(() => {
   fakes.token = undefined;
   fakes.messages = undefined;
   fakes.key = false;
+  fakes.played = undefined;
   fakes.sse = undefined;
   Reflect.deleteProperty(window, "ogb");
   Reflect.deleteProperty(navigator, "mediaDevices");
@@ -203,16 +204,14 @@ describe("call button in the message box", () => {
     }
   });
 
-  it("opens call settings on a right-click on Call and still calls on a left-click", async () => {
+  it("opens nothing on a right-click on Call and still calls on a left-click", async () => {
     const { host, unmount } = await mount();
     try {
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      expect(document.querySelector("[data-call-settings-menu] [data-call-settings]")).not.toBeNull();
+      expect(right.defaultPrevented).toBe(false);
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       expect(tokens()).toBe(0);
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       await connect(host);
       expect(tokens()).toBe(1);
     } finally {
@@ -541,24 +540,24 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("an answered bot call with no key opens the chat with no call and no token request", async () => {
+  it.each([["en", "Tap to hear Atlas"], ["ko", "Atlas 목소리 듣기"]])("puts one %s sound pill in the call row when the phone won't play, gone after the tap", async (locale, label) => {
+    applyLocale(locale as "en" | "ko");
+    fakes.played = false;
     const { host, unmount } = await mount();
     try {
-      expect(answerCall(atlas, "Sign in to Claude on Home.")).not.toBeNull();
-      await act(() => new Promise((done) => setTimeout(done, 300)));
-      expect(tokens()).toBe(0);
-      expect(host.querySelector("[data-live-call]")).toBeNull();
+      await act(async () => corner(host).click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      await act(async () => fakes.engines[0]!.events.ready());
+      const pills = () => [...document.querySelectorAll<HTMLButtonElement>("[data-live-call-sound]")];
+      await vi.waitFor(() => expect(pills()).toHaveLength(1));
+      expect(frame(host).contains(pills()[0]!)).toBe(true);
+      expect(pills()[0]!.textContent).toBe(label);
+      expect(document.querySelector("[data-live-call-resume]")).toBeNull();
+      await act(async () => pills()[0]!.click());
+      await vi.waitFor(() => expect(pills()).toHaveLength(0));
+      expect(document.querySelector("[data-live-call-resume]")).toBeNull();
     } finally {
-      await unmount();
-    }
-  });
-
-  it("an answered bot call with a key still opens the call", async () => {
-    const { unmount } = await mount(true);
-    try {
-      await act(async () => void answerCall(atlas, "Sign in to Claude on Home."));
-      await vi.waitFor(() => expect(intro()).not.toBeNull());
-    } finally {
+      applyLocale("en");
       await unmount();
     }
   });

@@ -144,6 +144,8 @@ export type RuntimeEvent = RuntimeEventBase &
         actionRefused?: "too-large" | "unreadable";
         /** asked by background work after its turn settled; nobody is there to see a card */
         background?: boolean;
+        /** asked by an Auto turn nobody started, or by work such a turn left running */
+        unattended?: boolean;
       }
     | {
         type: "request.resolved";

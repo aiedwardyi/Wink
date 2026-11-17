@@ -62,7 +62,6 @@
   "src/components/AttachmentPreview.test.ts": 1,
   "src/components/Avatar.idle.test.ts": 1,
   "src/components/ChatFindBar.close.test.ts": 1,
-  "src/components/ChatView.live-call-box.test.ts": 1,
   "src/components/ChatView.live-chip.test.ts": 3,
   "src/components/ChatView.live-panes.test.ts": 4,
   "src/components/ChatView.memory-rows.test.ts": 1,

@@ -107,7 +107,7 @@ const remoteTerminal = (botId: string, live: { ids: string[] }): typeof fetch =>
   };
 };
 
-const chipLabel = (host: HTMLElement) => host.querySelector("[data-worker-strip]")?.getAttribute("aria-label") ?? null;
+const chipLabel = (host: HTMLElement) => host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label") ?? null;
 
 describe("worker chip liveness", () => {
   it("lists nothing on a first desktop visit until readBot answers", async () => {
@@ -116,7 +116,7 @@ describe("worker chip liveness", () => {
     const { host, unmount } = await mountChat(fresh);
     try {
       await vi.waitFor(() => expect(resolvers.has("chip-fresh")).toBe(true));
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(chipLabel(host)).toBe("Show and media");
       await answer(resolvers, "chip-fresh", ["f1ffffff-1"]);
       await vi.waitFor(() => expect(chipLabel(host)).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers"));
     } finally {

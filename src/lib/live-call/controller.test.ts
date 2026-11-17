@@ -55,7 +55,6 @@ const gap = () => vi.advanceTimersByTimeAsync(GAP_MS);
 
 function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string, room?: { id: string; kind: "host" | "joined" }) {
   const engines: FakeEngine[] = [];
-  const keyCards: string[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
     botId: "b1",
@@ -65,7 +64,6 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
     audio,
     now,
     opener,
-    onKeyCard: (id) => keyCards.push(id),
     ...{ room },
     post: async (path, body) => {
       posts.push({ path, body });
@@ -75,7 +73,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
       return { status: 200, data: {} };
     },
   });
-  return { call, engines, posts, keyCards, engine: () => engines.at(-1)! };
+  return { call, engines, posts, engine: () => engines.at(-1)! };
 }
 
 /** A call past its greeting: nothing else plays until the greeting's turn ends. */
@@ -326,7 +324,6 @@ describe("LiveCall", () => {
     const needs = setup({ "/call/token": { status: 409, data: { error: "Add a Gemini key to call.", cardId: "k1" } } });
     await needs.call.start();
     expect(needs.call.state().status).toBe("needsKey");
-    expect(needs.keyCards).toEqual(["k1"]);
     expect(needs.engines).toHaveLength(0);
 
     const { call, engine } = await started();
@@ -745,6 +742,52 @@ describe("LiveCall", () => {
     engine().events.interrupted();
     const voice = posts.filter((p) => p.path.endsWith("/call/lines")).at(-1)?.body.lines[0];
     expect(voice.text).toBe("This is a l…");
+  });
+
+  it("asks for a tap for sound when the phone will not play the voice, and a tap clears it", async () => {
+    const audio = { ...fakeAudio(), async capture() { return false; }, heal: vi.fn(async () => true) };
+    const { call, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    expect(call.state()).toMatchObject({ status: "paused", noSound: true });
+    expect(engine().texts).toEqual([]);
+    call.resume();
+    await flush();
+    expect(call.state().noSound).toBeUndefined();
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("flags voice lines the phone never sounded as not heard", async () => {
+    const audio = { ...fakeAudio(), async capture() { return false; } };
+    const { call, engine, posts } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    engine().events.heard("Hello?");
+    engine().events.answering();
+    engine().events.said("Hey, I'm here.");
+    engine().events.audio(new Int16Array(240));
+    engine().events.turnDone();
+    const voice = posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines as CallLine[]).filter((line) => line.who === "voice");
+    expect(voice).toEqual([expect.objectContaining({ text: "Hey, I'm here.", unheard: true })]);
+  });
+
+  it("greets once a call: a drop mid-greeting never says hello again", async () => {
+    const audio = fakeAudio();
+    const { call, engines, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    expect(engine().texts[0]).toMatch(/^\[Wink\] The call just started/);
+    engine().events.resumable("h1");
+    engine().events.answering();
+    engine().events.said("Hey, I'm");
+    engine().events.audio(new Int16Array(240));
+    audio.onStart();
+    engine().events.closed(1006, "");
+    await flush();
+    expect(engines).toHaveLength(2);
+    engine().events.ready();
+    await flush();
+    expect(engine().texts.filter((text) => text.includes("The call just started"))).toEqual([]);
   });
 
   it("reconnects with a fresh token and the handle after GoAway", async () => {

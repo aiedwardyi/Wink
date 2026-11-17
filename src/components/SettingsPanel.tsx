@@ -45,7 +45,6 @@ import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
-import { VoiceChatSettings } from "./CallSettings";
 import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
@@ -826,9 +825,15 @@ export function SettingsPanel({
                 )}
               </div>
 
-              <BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />
+              <BotAlarms
+                routines={state.routines.filter((each) => each.botId === bot.id)}
+                onDelete={(routineId) =>
+                  api(`/api/routines/${routineId}`, { method: "DELETE" })
+                    .then(() => dispatch({ type: "routineDeleted", routineId }))
+                    .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }))
+                }
+              />
 
-              <VoiceChatSettings bot={bot} />
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
             </>
           )}

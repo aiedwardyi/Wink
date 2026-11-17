@@ -7,6 +7,7 @@ import mapClip from "@/assets/whats-new/1.0.263-map.webp";
 import mapLightClip from "@/assets/whats-new/1.0.263-map-light.webp";
 import themesClip from "@/assets/whats-new/1.0.276-themes.webp";
 import dialClip from "@/assets/whats-new/1.0.277-dial.webp";
+import workersClip from "@/assets/whats-new/1.0.278-workers.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -91,6 +92,22 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
         title: { en: "The model dial is on for everyone", ko: "이제 모두가 모델 다이얼을 써요" },
         line: { en: "Pick a model and its effort on one dial.", ko: "다이얼 하나로 모델과 추론 강도를 골라요." },
         show: "models",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.278": {
+    title: { en: "New in Wink 1.0.278", ko: "Wink 1.0.278 새 기능" },
+    tiles: [
+      {
+        clip: workersClip,
+        still: true,
+        title: { en: "Workers live in the side pane", ko: "작업자는 이제 사이드 패널에" },
+        line: { en: "The pane button shows how many are running.", ko: "패널 버튼에 실행 중인 수가 보여요." },
+        how: {
+          en: "Tap the side pane button next to the model picker to see them.",
+          ko: "모델 선택기 옆 사이드 패널 버튼을 누르면 보여요.",
+        },
       },
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },

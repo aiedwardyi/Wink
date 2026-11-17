@@ -13,6 +13,9 @@ import type { Message } from "./store.ts";
 
 const PREAMBLE =
   "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines under 400 characters (a longer answer is dropped), stating only what this conversation or your lookups show, naming only the files the question needs, never what a file you have not seen does or does not contain, with no extra tips, guesses, or commands and code you composed yourself. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. A file being written now: don't state what it says, answer the rest. For anything a file says now, read it; the chat may be behind.]";
+// The message already reached the main task as the person's own words; the helper only shows it landed.
+const ACK_PREAMBLE =
+  "[Quick helper. The person sent the message below while you are busy on the main task. It already reached your main task as their own words, and that task will handle it. You are a read-only copy of yourself replying beside that work so they know it landed. Reply in one short line under 200 characters, in your own voice: acknowledge what they said and name what you take from it, or answer a question in it that this conversation already settles. Never say anything is done, fixed or decided, never promise a time, never ask them anything, and never mention a helper, a copy or a main task. Do not look anything up and never reply HANDOFF.]";
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
 const CAP_MS = 12_000;
 // a fork still reading or writing gets a fresh CAP_MS, up to this
@@ -202,9 +205,9 @@ async function viaText(bot: QuickBot, threadId: string, ask: string, started: nu
 }
 
 /** One ask: the engine's fork when it has one, else a chat-only one-shot. */
-export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; notes?: string }): Promise<QuickResult> {
+export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; notes?: string; ack?: boolean }): Promise<QuickResult> {
   const started = Date.now();
-  const text = [PREAMBLE, ask.notes?.trim(), ask.text].filter(Boolean).join("\n\n");
+  const text = [ask.ack ? ACK_PREAMBLE : PREAMBLE, ask.notes?.trim(), ask.text].filter(Boolean).join("\n\n");
   const live = liveBlock(threadId);
   let handle: SideHandle | null = null;
   try {

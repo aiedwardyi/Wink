@@ -69,7 +69,7 @@ import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { ShowPaneButton } from "./ShowPaneButton";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
-import { WorkerRow, WorkerChip, useWorkerRows, type ShownRun } from "./WorkerRows";
+import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
@@ -1616,7 +1616,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             </button>
           )}
           <VerifyWatchIcon messages={messages} threadId={bot.threadId} />
-          <WorkerChip name={bot.name} className="rounded-md hover:bg-control" runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button
             onClick={() => find.toggleFind()}
@@ -1631,9 +1630,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} />
-
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
+
+          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
           </ChatPeekPart>
         </div>
       </div>

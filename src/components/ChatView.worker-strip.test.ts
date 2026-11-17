@@ -38,8 +38,6 @@ async function mount(workers: number, phone: boolean) {
   return { header, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
-const glyphs = (el: Element | null | undefined) => el?.querySelectorAll(".lucide-bot.text-ink-secondary").length ?? 0;
-
 afterEach(() => {
   applyLocale("en");
   clearLivePaneCache();
@@ -48,53 +46,56 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("chat header worker strip", () => {
-  it.each([false, true])("labels one worker and hides its compact count with phone=%s", async (phone) => {
+describe("chat header worker badge", () => {
+  it.each([false, true])("marks one waiting worker with a dot and no count with phone=%s", async (phone) => {
     const { header, unmount } = await mount(1, phone);
     try {
-      const strip = header.querySelector("[data-worker-strip]")!;
-      expect(header.firstElementChild?.contains(strip)).toBe(false);
-      expect(glyphs(strip.querySelector("[data-worker-chip-desktop]"))).toBe(1);
-      expect(glyphs(strip.querySelector("[data-worker-chip-phone]"))).toBe(1);
-      expect(strip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("1 worker");
-      expect(strip.querySelector("[data-worker-chip-phone]")?.textContent).toBe("");
-      expect(strip.querySelectorAll(".bg-warning")).toHaveLength(2);
-      expect(strip.getAttribute("title")).toBe("Workers (Alt+W)");
-      expect(strip.getAttribute("aria-label")).toBe("0 working, 1 waiting, 0 failed, 0 done. Show workers");
+      expect(header.querySelector("[data-worker-strip]")).toBeNull();
+      const button = header.querySelector("[data-show-pane-button]")!;
+      const badge = button.querySelector("[data-worker-badge]")!;
+      expect(badge.textContent).toBe("");
+      expect(badge.getAttribute("data-worker-state")).toBe("waiting");
+      expect(badge.classList.contains("bg-warning")).toBe(true);
+      expect(button.getAttribute("title")).toBe("Show and media");
+      expect(button.getAttribute("aria-label")).toBe("0 working, 1 waiting, 0 failed, 0 done. Show workers");
       expect(header.querySelector("[data-worker-status]")).toBeNull();
     } finally { await unmount(); }
   });
 
-  it.each([false, true])("labels seven workers and shows the compact count with phone=%s", async (phone) => {
+  it.each([false, true])("counts six working on the badge in the waiting color with phone=%s", async (phone) => {
     const { header, unmount } = await mount(7, phone);
     try {
-      const strip = header.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
-      expect(glyphs(strip.querySelector("[data-worker-chip-desktop]"))).toBe(1);
-      expect(strip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("7 workers");
-      expect(glyphs(strip.querySelector("[data-worker-chip-phone]"))).toBe(1);
-      expect(strip.querySelector("[data-worker-chip-phone]")?.textContent).toBe("7");
-      expect(strip.getAttribute("aria-label")).toBe("6 working, 1 waiting, 0 failed, 0 done. Show workers");
-      expect(header.querySelector("[data-worker-status]")).toBeNull();
-      await act(async () => strip.click());
-      expect(document.body.querySelectorAll("[data-worker-list] li")).toHaveLength(7);
+      expect(header.querySelector("[data-worker-strip]")).toBeNull();
+      const button = header.querySelector("[data-show-pane-button]")!;
+      expect(button.querySelector("[data-worker-badge]")?.textContent).toBe("6");
+      expect(button.querySelector("[data-worker-badge]")?.classList.contains("bg-warning")).toBe(true);
+      expect(button.getAttribute("aria-label")).toBe("6 working, 1 waiting, 0 failed, 0 done. Show workers");
     } finally { await unmount(); }
   });
 
-  it("has no strip and no worker line without workers", async () => {
+  it.each([false, true])("puts the side pane toggle after the model picker with phone=%s", async (phone) => {
+    const { header, unmount } = await mount(7, phone);
+    try {
+      const picker = header.querySelector("[data-model-label]")!;
+      const button = header.querySelector("[data-show-pane-button]")!;
+      expect(picker.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally { await unmount(); }
+  });
+
+  it("has no badge and no worker line without workers", async () => {
     const { header, unmount } = await mount(0, false);
     try {
-      expect(header.querySelector("[data-worker-strip]")).toBeNull();
+      expect(header.querySelector("[data-worker-badge]")).toBeNull();
+      expect(header.querySelector("[data-show-pane-button]")?.getAttribute("aria-label")).toBe("Show and media");
       expect(header.querySelector("[data-worker-status]")).toBeNull();
     } finally { await unmount(); }
   });
 
-  it("labels the strip in Korean", async () => {
+  it("labels the badge in Korean", async () => {
     applyLocale("ko");
     const { header, unmount } = await mount(7, false);
     try {
-      expect(header.querySelector("[data-worker-strip]")?.getAttribute("aria-label")).toBe("작업 중 6개, 대기 중 1개, 실패 0개, 완료 0개. 작업자 보기");
-      expect(header.querySelector("[data-worker-strip]")?.getAttribute("title")).toBe("작업자 (Alt+W)");
-      expect(header.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("작업자 7개");
+      expect(header.querySelector("[data-show-pane-button]")?.getAttribute("aria-label")).toBe("작업 중 6개, 대기 중 1개, 실패 0개, 완료 0개. 작업자 보기");
     } finally { await unmount(); }
   });
 });
