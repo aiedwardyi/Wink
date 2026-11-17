@@ -316,7 +316,7 @@ describe("call token", () => {
     const card = h.store.activePath(h.bot.threadId).find((row) => row.kind === "secret")!;
     // Old copy: 11-word description + 8-word lock line.
     expect(card.secret!.description).toBe("Open Get API key, sign in, click Create API key (top right), paste it here.");
-    expect(card.secret!.description.split(/\s+/).length).toBeLessThanOrEqual(19);
+    expect(card.secret!.description.split(/\s+/).length).toBeLessThanOrEqual(15);
 
     const bridge = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ saved: true }));
     const save = await credentialSaveResponse({ url: "http://127.0.0.1:1", token: "t" }, { target: "geminiApiKey", value: KEY }, bridge as unknown as typeof fetch);
@@ -334,7 +334,7 @@ describe("call token", () => {
     expect(h.store.messagesFor(h.bot.threadId).find((row) => row.id === card.id)?.secret?.provided).toBe(true);
 
     await h.post("token");
-    const notes = join(workspaceDir(h.bot.id));
+    const notes = workspaceDir(h.bot.id);
     const files = [h.dir, notes].flatMap((dir) => existsSync(dir) ? readdirSync(dir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).map((f) => readFileSync(join(f.parentPath, f.name), "utf8")) : []);
     const chat = JSON.stringify(h.store.messagesFor(h.bot.threadId));
     for (const where of [chat, ...files, h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text]) expect(where).not.toContain(KEY);
