@@ -41,7 +41,7 @@ describe("ComposerAttachments remove button", () => {
 });
 
 describe("ComposerAttachments upload chip", () => {
-  it("shows name, size and percent, and the x cancels the upload", async () => {
+  it("shows name and percent, no size, and the x cancels the upload", async () => {
     const onCancelUpload = vi.fn();
     const host = document.createElement("div");
     document.body.append(host);
@@ -61,7 +61,8 @@ describe("ComposerAttachments upload chip", () => {
       ),
     );
     expect(host.textContent).toContain("meeting.mp4");
-    expect(host.textContent).toContain("1.6 GB · 37%");
+    expect(host.textContent).toContain("37%");
+    expect(host.textContent).not.toContain("GB");
     host.querySelector<HTMLButtonElement>('button[aria-label="Cancel upload"]')!.click();
     expect(onCancelUpload).toHaveBeenCalledWith("u1");
     await act(async () => root.unmount());
@@ -103,11 +104,23 @@ describe("ComposerAttachments media previews", () => {
       root.render(createElement(ComposerAttachments, { items: attachments, onAdd: () => {}, onRemove: () => {}, onDisplayInChatBox: () => {}, notice: null, onNotice: () => {} })),
     );
     expect(host.querySelector('img[alt="shot.png"]')?.getAttribute("src")).toMatch(/^blob:/);
-    expect(host.textContent).toContain("IMAGE");
-    expect(host.querySelectorAll(".relative.h-\\[76px\\]")).toHaveLength(2);
+    expect(host.querySelectorAll(".size-\\[76px\\]")).toHaveLength(2);
     forgetTrayMedia(attachments[0]!.id);
     expect(trayMedia(attachments[0]!.id)).toBeUndefined();
     await act(async () => root.unmount());
     host.remove();
+  });
+
+  it("shows a pending picture as a bare thumb and a file as icon and name, with no size or kind tag", async () => {
+    const shot = new File([new Uint8Array(44_646)], "shot.png", { type: "image/png" });
+    const notes = new File(["x".repeat(2048)], "notes.pdf", { type: "application/pdf" });
+    const { attachments } = await intakeFiles([shot, notes], { allowImages: false, getPath: (file) => `C:/w/${file.name}`, t: (key) => key });
+    const markup = renderToStaticMarkup(
+      createElement(ComposerAttachments, { items: attachments, onAdd: () => {}, onRemove: () => {}, onDisplayInChatBox: () => {}, notice: null, onNotice: () => {} }),
+    );
+    expect(markup).toContain("notes.pdf");
+    expect(markup).not.toMatch(/\d KB|IMAGE|>FILE</);
+    expect(markup).toContain("w-[76px]");
+    expect(markup).not.toContain("w-[172px] px-2.5 py-2");
   });
 });

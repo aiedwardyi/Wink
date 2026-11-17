@@ -10,7 +10,6 @@ import { useFileDrop } from "@/lib/use-file-drop";
 import {
   attachmentImageUrl,
   intakeFiles,
-  formatSize,
   pasteSummary,
   type Attachment,
   type PasteAttachment,
@@ -113,10 +112,10 @@ export function ComposerAttachments({
             const local = a.kind === "upload" ? localFile?.(a.id) : undefined;
             const media = local ? undefined : trayMedia(a.id);
             return a.kind === "upload" && local?.picture ? (
-              <LocalPictureChip key={a.id} name={a.name} size={a.size} blob={local.file} onRemove={() => onRemove(a.id)} onPreview={setPreview} small={row} />
+              <LocalPictureChip key={a.id} name={a.name} blob={local.file} onRemove={() => onRemove(a.id)} onPreview={setPreview} small={row} />
             ) : a.kind === "upload" && local ? (
-              <Chip key={a.id} kind="FILE" title={a.name} onRemove={() => onRemove(a.id)} small={row}>
-                <FileBody name={a.name} size={a.size} small={row} />
+              <Chip key={a.id} kind="FILE" title={a.name} onRemove={() => onRemove(a.id)} small={row} compact="file">
+                <FileBody name={a.name} small={row} />
               </Chip>
             ) : a.kind === "paste" ? (
               <Chip
@@ -144,21 +143,15 @@ export function ComposerAttachments({
                 </button>
               </Chip>
             ) : a.kind === "image" ? (
-              <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)} small={row}>
+              <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)} small={row} compact="thumb">
                 <button
                   type="button"
                   onClick={() => { trackScreen("attachment-preview"); setPreview(previewImage(a.path)); }}
-                  className={cn(PICTURE, "relative", row ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}
+                  className={thumbBox(row)}
                   aria-label={`Preview ${a.name}`}
                 >
-                  {media && !attachmentImageUrl(a.path) ? <MediaThumb blob={media} name={a.name} small={row} /> : <img
-                    src={attachmentImageUrl(a.path) ?? undefined}
-                    alt={a.name}
-                    loading="lazy"
-                    className={row ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"}
-                  />}
+                  {media && !attachmentImageUrl(a.path) ? <MediaThumb blob={media} name={a.name} /> : <img src={attachmentImageUrl(a.path) ?? undefined} alt={a.name} loading="lazy" className="size-full object-cover" />}
                 </button>
-                {!row && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>}
               </Chip>
             ) : a.kind === "upload" ? (
               <Chip
@@ -167,19 +160,19 @@ export function ComposerAttachments({
                 title={a.name}
                 onRemove={() => onCancelUpload(a.id)}
                 removeLabel={t("composer.uploadCancel")}
+                compact={media ? "thumb" : "file"}
               >
                 <UploadBody upload={a} media={media} onRetry={() => onRetryUpload?.(a.id)} onRepick={() => onRepickUpload?.(a.id)} />
               </Chip>
             ) : media ? (
-              <Chip key={a.id} kind={media.type.startsWith("image/") ? "IMAGE" : "FILE"} title={a.path} onRemove={() => onRemove(a.id)} small={row}>
-                <div className={cn(PICTURE, "relative", row ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}>
+              <Chip key={a.id} kind={media.type.startsWith("image/") ? "IMAGE" : "FILE"} title={a.path} onRemove={() => onRemove(a.id)} small={row} compact="thumb">
+                <div className={thumbBox(row)}>
                   <MediaThumb blob={media} name={a.name} small={row} />
                 </div>
-                {!row && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>}
               </Chip>
             ) : (
-              <Chip key={a.id} kind="FILE" title={a.path} onRemove={() => onRemove(a.id)} small={row}>
-                <FileBody name={a.name} size={a.size} small={row} />
+              <Chip key={a.id} kind="FILE" title={a.path} onRemove={() => onRemove(a.id)} small={row} compact="file">
+                <FileBody name={a.name} small={row} />
               </Chip>
             );
           })}
@@ -196,33 +189,26 @@ export function ComposerAttachments({
 const PICTURE = "flex items-center justify-center overflow-hidden bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50";
 const SMALL_PICTURE = "size-full rounded-[inherit]";
 
-function FileBody({ name, size, small = false }: { name: string; size: number; small?: boolean }) {
+function FileBody({ name, small = false }: { name: string; small?: boolean }) {
   if (small) return <div className="flex size-full items-center justify-center"><FileIcon size={16} className="text-ink-secondary" /></div>;
   return (
-    <div className="flex h-[76px] items-center gap-2">
+    <div className="flex h-full items-center gap-2">
       <FileIcon size={16} className="shrink-0 text-ink-secondary" />
-      <div className="min-w-0">
-        <div className="truncate text-[12px] text-ink">{name}</div>
-        <div className="text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>
-      </div>
+      <div className="min-w-0 truncate text-[12px] text-ink">{name}</div>
     </div>
   );
 }
 
-function LocalPictureChip({ name, size, blob, onRemove, onPreview, small = false }: { name: string; size: number; blob: File; onRemove: () => void; onPreview: (image: PreviewImage) => void; small?: boolean }) {
+const thumbBox = (small: boolean) => cn(PICTURE, "relative overflow-hidden", small ? SMALL_PICTURE : "size-[76px] rounded-xl");
+
+function LocalPictureChip({ name, blob, onRemove, onPreview, small = false }: { name: string; blob: File; onRemove: () => void; onPreview: (image: PreviewImage) => void; small?: boolean }) {
   const url = useMemo(() => URL.createObjectURL(blob), [blob]);
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
   return (
-    <Chip kind="IMAGE" title={name} onRemove={onRemove} small={small}>
-      <button
-        type="button"
-        onClick={() => onPreview({ src: url, name })}
-        className={cn(PICTURE, small ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}
-        aria-label={`Preview ${name}`}
-      >
-        <img src={url} alt={name} className={small ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"} />
+    <Chip kind="IMAGE" title={name} onRemove={onRemove} small={small} compact="thumb">
+      <button type="button" onClick={() => onPreview({ src: url, name })} className={thumbBox(small)} aria-label={`Preview ${name}`}>
+        <img src={url} alt={name} className="size-full object-cover" />
       </button>
-      {!small && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>}
     </Chip>
   );
 }
@@ -258,7 +244,7 @@ function MediaThumb({ blob, name, small = false }: { blob: Blob; name: string; s
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
   const video = blob.type.startsWith("video/");
   const length = useClipLength(video ? url : undefined);
-  if (!video) return <img src={url} alt={name} className={small ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"} />;
+  if (!video) return <img src={url} alt={name} className="size-full object-cover" />;
   return (
     <>
       <MediaClip src={url} name={name}>
@@ -276,37 +262,43 @@ function UploadBody({ upload, media, onRetry, onRepick }: { upload: UploadAttach
   const { t } = useI18n();
   const percent = upload.size ? Math.min(100, Math.floor((upload.sent / upload.size) * 100)) : 0;
   const action = "mt-0.5 block break-keep text-left text-[10.5px] leading-snug text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60";
+  const status = upload.state === "uploading" ? `${percent}%` : upload.state === "resuming" ? t("composer.uploadResuming") : "";
+  const lines = (
+    <>
+      {status && <div className="truncate text-[10.5px] text-ink-secondary/70">{status}</div>}
+      {upload.state === "failed" && (
+        <button type="button" onClick={onRetry} className={action}>
+          {t("composer.uploadRetry")}
+        </button>
+      )}
+      {upload.state === "repick" && (
+        <button type="button" onClick={onRepick} className={action}>
+          {t("composer.uploadRepick")}
+        </button>
+      )}
+    </>
+  );
   return (
     <>
-      {media && (
-        <div className={cn(PICTURE, "relative h-[76px] w-full rounded-lg")}>
-          <MediaThumb blob={media} name={upload.name} />
+      {media ? (
+        <>
+          <div className={thumbBox(false)}>
+            <MediaThumb blob={media} name={upload.name} />
+          </div>
+          {(status || upload.state === "failed" || upload.state === "repick") && <div className="px-1.5 pb-1">{lines}</div>}
+        </>
+      ) : (
+        <div className="flex h-full items-center gap-2">
+          <FileIcon size={16} className="shrink-0 text-ink-secondary" />
+          <div className="min-w-0">
+            {/* an action line lifts the name under the always-on touch x */}
+            <div className={cn("truncate text-[12px] text-ink", (upload.state === "failed" || upload.state === "repick") && "pointer-coarse:pr-5")}>
+              {upload.name}
+            </div>
+            {lines}
+          </div>
         </div>
       )}
-      <div className={cn("flex items-center gap-2", media ? "mt-1" : "h-[76px]")}>
-        {!media && <FileIcon size={16} className="shrink-0 text-ink-secondary" />}
-        <div className="min-w-0">
-          {/* an action line lifts the name under the always-on touch x */}
-          {!media && <div className={cn("truncate text-[12px] text-ink", (upload.state === "failed" || upload.state === "repick") && "pointer-coarse:pr-5")}>
-            {upload.name}
-          </div>}
-          <div className="truncate text-[10.5px] text-ink-secondary/70">
-            {formatSize(upload.size)}
-            {upload.state === "uploading" && ` · ${percent}%`}
-            {upload.state === "resuming" && ` · ${t("composer.uploadResuming")}`}
-          </div>
-          {upload.state === "failed" && (
-            <button type="button" onClick={onRetry} className={action}>
-              {t("composer.uploadRetry")}
-            </button>
-          )}
-          {upload.state === "repick" && (
-            <button type="button" onClick={onRepick} className={action}>
-              {t("composer.uploadRepick")}
-            </button>
-          )}
-        </div>
-      </div>
       {upload.state !== "repick" && (
         <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]">
           <div className="absolute bottom-0 left-0 h-[2px] bg-accent" style={{ width: `${percent}%` }} />
@@ -323,6 +315,7 @@ function Chip({
   onRemove,
   removeLabel,
   small = false,
+  compact,
 }: {
   children: React.ReactNode;
   kind: "PASTED" | "FILE" | "IMAGE";
@@ -331,6 +324,8 @@ function Chip({
   removeLabel?: string;
   /** a 40px thumb with no kind line, for the row beside a reply quote */
   small?: boolean;
+  /** a pending picture, clip or file as a chat app's composer shows it: a 76px thumb, or an icon and name; no size or kind line */
+  compact?: "thumb" | "file";
 }) {
   const { t } = useI18n();
   const Icon = kind === "PASTED" ? ClipboardPaste : kind === "IMAGE" ? ImageIcon : FileIcon;
@@ -340,12 +335,12 @@ function Chip({
       title={title}
       className={cn(
         "group relative shrink-0 rounded-xl border border-hairline/40 bg-raised",
-        small ? "size-10 rounded-lg" : "w-[172px] px-2.5 py-2",
+        small ? "size-10 rounded-lg" : compact === "thumb" ? "w-[76px]" : compact === "file" ? "h-[76px] w-[172px] px-2.5" : "w-[172px] px-2.5 py-2",
         "hover:border-hairline",
       )}
     >
       {children}
-      {!small && <div className="mt-1 flex items-center gap-1">
+      {!small && !compact && <div className="mt-1 flex items-center gap-1">
         <Icon size={11} className="text-ink-secondary/70" />
         <span className="rounded border border-hairline/60 px-1 py-px text-[9.5px] font-medium tracking-wide text-ink-secondary">
           {label}
@@ -360,7 +355,7 @@ function Chip({
         className={cn(
           "absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border border-hairline/60 bg-panel text-ink-secondary opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
           // a small thumb keeps its x on the corner, so the picture under it stays tappable
-          small ? "z-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-2" : "pointer-coarse:right-1 pointer-coarse:top-1 pointer-coarse:size-6",
+          small || compact === "thumb" ? "z-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-2" : "pointer-coarse:right-1 pointer-coarse:top-1 pointer-coarse:size-6",
         )}
       >
         <X size={11} />

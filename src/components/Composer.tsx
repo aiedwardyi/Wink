@@ -1274,7 +1274,8 @@ export function Composer({
           allowImages={engineSupportsImages}
           notice={attachmentNotice}
           onNotice={showNotice}
-          localFile={room ? roomPicture : undefined}          onDropFiles={room ? (files) => void pickFiles(files) : undefined}
+          localFile={room ? roomPicture : undefined}
+          onDropFiles={room ? (files) => void pickFiles(files) : undefined}
           dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
           roomCopy={group?.hosted ? roomCopyPath : undefined}
           quote={replyTo && <ReplyQuote message={replyTo} fallbackName={room ? replyTo.author?.name : bot?.name} onClear={onClearReply} />}
