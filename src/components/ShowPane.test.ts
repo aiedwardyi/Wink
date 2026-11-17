@@ -475,6 +475,15 @@ it("lists the bot's picks on the Timeline tab, newest day first, with a replaced
   expect(rows().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Forum look"]);
 });
 
+it("pairs a crossed picture by its caption, and an uncaptioned one only with the option left over", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Over: A - no title; B - small title\n- Over pictures: C:\\Users\\me\\.orbit\\attachments\\b.png (B - small title); C:\\Users\\me\\.orbit\\attachments\\a.png\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline();
+  await until(() => rows().length > 0);
+  await act(async () => rows()[0]!.querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
+  expect([...rows()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
+});
+
 it("says so in one line when the bot has no picks yet", async () => {
   picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
   await openTimeline();

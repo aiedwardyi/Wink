@@ -36,10 +36,14 @@ const when = (stamp: string, now: Date) => (stamp.startsWith(`${now.getFullYear(
 const pictureSrc = (threadId: string, path: string) => (/[\\/]attachments[\\/][^\\/]+$/.test(path) && attachmentImageUrl(path)) || linkedFileSrc(threadId, path);
 const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-// Captions name their option; without them a picture pairs by place only when every option has one.
+// Captions name their option; uncaptioned pictures pair in order with the options left over, only when the counts match.
 function crossedOf({ over, overPictures }: Entry): { label: string; picture?: Picture }[] {
   if (!over.length) return overPictures.map((each) => ({ label: each.caption ?? "", picture: each }));
-  return over.map((label, i) => ({ label, picture: overPictures.find((each) => same(each.caption, label)) ?? (overPictures.length === over.length ? overPictures[i] : undefined) }));
+  const named = over.map((label) => overPictures.find((each) => same(each.caption, label)));
+  const loose = overPictures.filter((each) => !each.caption);
+  const paired = loose.length === named.filter((each) => !each).length;
+  let next = 0;
+  return over.map((label, i) => ({ label, picture: named[i] ?? (paired ? loose[next++] : undefined) }));
 }
 
 function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[] {
