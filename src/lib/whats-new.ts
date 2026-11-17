@@ -16,8 +16,8 @@ type Copy = Record<LocaleId, string>;
 /** What Show me opens in this chat. */
 export type WhatsNewTarget = "memory" | "map" | "models" | { skins: SkinId[] };
 
-/** `how`: a line in place of Show me's target, only for a feature that starts on its own. */
-export type WhatsNewTile = { clip: string; lightClip?: string; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
+/** `how`: a line in place of Show me's target, only for a feature that starts on its own. `still`: the clip is one frame because no moving one exists yet. */
+export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
 
 export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile] | [WhatsNewTile, WhatsNewTile]; more: Copy };
 
@@ -87,6 +87,7 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
     tiles: [
       {
         clip: dialClip,
+        still: true,
         title: { en: "The model dial is on for everyone", ko: "이제 모두가 모델 다이얼을 써요" },
         line: { en: "Pick a model and its effort on one dial.", ko: "다이얼 하나로 모델과 추론 강도를 골라요." },
         show: "models",
