@@ -345,7 +345,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     // One voice per call: the setup names it once per socket, so the row shows what every turn used.
     const voice = briefs.get(parsed.data.callId)?.voice;
     briefs.delete(parsed.data.callId);
-    if (savedPicks()[parsed.data.callId]) savePicks((kept) => { delete kept[parsed.data.callId]; });
+    savePicks((kept) => { delete kept[parsed.data.callId]; });
     const path = join(dataDir, LIVE_CALL_FILE);
     mkdirSync(join(dataDir, "diag"), { recursive: true });
     let kept: string[] = [];

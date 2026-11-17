@@ -2884,6 +2884,7 @@ describe("one voice per call", () => {
     send(text: string) { this.frames.push(JSON.parse(text)); }
     close() {}
   }
+  afterEach(() => { vi.unstubAllGlobals(); });
   const voiceOf = (socket: Socket) => socket.frames[0].setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
   const serve = async (socket: Socket, ...frames: object[]) => {
     for (const frame of frames) socket.onmessage!({ data: JSON.stringify(frame) });
