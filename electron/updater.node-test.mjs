@@ -266,12 +266,18 @@ test("back to stable from a dev build stages the latest stable, asks, and instal
 
   await h.api.switchUpdateChannel("stable");
   assert.deepEqual(h.updater.downloads, ["1.0.193-dev.47", "1.0.192"]);
-  assert.deepEqual(h.dialogs, [{ message: "Wink 1.0.192 is ready.", detail: "Restarting closes every pane.", buttons: ["Restart now", "Later"] }]);
+  assert.deepEqual(h.dialogs, [{ message: "Wink 1.0.192 is ready.", detail: "Workers keep running.", buttons: ["Restart now", "Later"] }]);
   assert.deepEqual(h.quits, ["quit"]);
   assert.equal(h.api.consumePendingUpdateInstall(), true);
   assert.equal(updateChannel.readUpdateChannel(h.userData), "stable");
   // The task stays while the dev build runs, so Later or a failed install can try again.
   assert.deepEqual(h.tasks.at(-1), [TASK]);
+});
+
+test("the restart prompt never says panes or workers close, since workers outlive an update", () => {
+  for (const [locale, closes] of [["en", /pane|clos|stop/i], ["ko", /창|닫|중지/]]) {
+    assert.doesNotMatch(translate(locale, "update.restartDetail"), closes);
+  }
 });
 
 test("back to stable while the stable feed is unreachable never offers the dev build seen before", async (t) => {
