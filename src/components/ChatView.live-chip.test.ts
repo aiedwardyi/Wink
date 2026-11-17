@@ -190,7 +190,6 @@ describe("worker chip liveness", () => {
       try {
         await act(async () => seedBadge({ "chip-wide": many.map((id) => `L-${id}`) }));
         await vi.waitFor(() => expect(chipLabel(host)).toBe("24 working, 0 waiting, 0 failed, 0 done. Show workers"));
-        await act(async () => { await sleep(10); });
         expect(badgeOf("chip-wide")).toHaveLength(24);
       } finally {
         await unmount();
