@@ -853,6 +853,7 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
+          at: Date.now(),
           answersCard: action.cardId,
           settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
