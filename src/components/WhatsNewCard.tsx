@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, useSkin, type SkinId } from "@/lib/skins";
 import { reducedMotion } from "@/lib/phone-swipe";
-import { showMap } from "@/lib/show-pane";
+import { showMap, showWorkers } from "@/lib/show-pane";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTarget, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
 import { SCENE_NAME, sceneOf, type SceneId } from "./ChatScene";
@@ -151,6 +151,8 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
                     if (target === "memory") dispatch({ type: "toggleSettings", open: true, memory: { line: "" } });
                     else if (target === "map") {
                       if (thread) showMap(thread);
+                    } else if (target === "workers") {
+                      if (thread) showWorkers(thread);
                     } else if (target === "models") window.dispatchEvent(new Event("orbit:open-model-picker"));
                     else dispatch({ type: "toggleAppSettings", open: true, section: "themes", skins: target.skins });
                   }}

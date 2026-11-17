@@ -15,12 +15,15 @@ import type { SkinId } from "./skins";
 type Copy = Record<LocaleId, string>;
 
 /** What Show me opens in this chat. */
-export type WhatsNewTarget = "memory" | "map" | "models" | { skins: SkinId[] };
+export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | { skins: SkinId[] };
 
-/** `how`: a line in place of Show me's target, only for a feature that starts on its own. `still`: the clip is one frame because no moving one exists yet. */
+/** Every tile after 1.0.278 is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `how` and `still` only keep older tiles as they shipped. */
 export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
 
 export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile] | [WhatsNewTile, WhatsNewTile]; more: Copy };
+
+/** A release that chose to ship no tile; the release gate (scripts/check-whats-new.mjs) accepts it in place of tiles. */
+export type WhatsNewNone = { tile: "none"; reason: string };
 
 const themesTile: WhatsNewTile = {
   clip: themesClip,
@@ -30,7 +33,7 @@ const themesTile: WhatsNewTile = {
 };
 
 // One entry per release that has notes; a release with no entry shows the newest earlier one still unseen.
-export const WHATS_NEW: Record<string, WhatsNewEntry> = {
+export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   "1.0.246": {
     title: { en: "New in Wink 1.0.246", ko: "Wink 1.0.246 새 기능" },
     tiles: [
@@ -104,15 +107,18 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
         still: true,
         title: { en: "Workers live in the side pane", ko: "작업자는 이제 사이드 패널에" },
         line: { en: "The pane button shows how many are running.", ko: "패널 버튼에 실행 중인 수가 보여요." },
-        how: {
-          en: "Tap the side pane button next to the model picker to see them.",
-          ko: "모델 선택기 옆 사이드 패널 버튼을 누르면 보여요.",
-        },
+        show: "workers",
       },
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
 };
+
+/** The releases with tiles; a no-tile record has nothing to show. */
+export const tilesOnly = (list: Record<string, WhatsNewEntry | WhatsNewNone>) =>
+  Object.fromEntries(Object.entries(list).filter((pair): pair is [string, WhatsNewEntry] => "tiles" in pair[1]));
+
+export const WHATS_NEW = tilesOnly(RELEASE_NOTES);
 
 /** The newest notes after `seen` that the running release has. */
 export function unseenRelease(release: string, seen: string | null, releases = Object.keys(WHATS_NEW)): string | null {
