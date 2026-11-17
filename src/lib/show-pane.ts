@@ -59,19 +59,30 @@ function pick(threadId: string, tab: PaneTab) {
   }
 }
 
-function openItem(next: ShowItem) {
+let pulses = 0;
+
+/** False when this exact file was already on the Show tab, so nothing changed. */
+function openItem(next: ShowItem): boolean {
   last.set(next.threadId, next);
-  if (!media && !checking && !mapping && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
+  if (!media && !checking && !mapping && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return false;
   showing = next;
   media = null;
   checking = null;
   mapping = null;
   emit();
+  return true;
 }
 
+/** A click on the file already showing pulses the pane, so it reads as "this is it". */
 export function showItem(next: ShowItem) {
   pick(next.threadId, next);
-  openItem(next);
+  if (openItem(next)) return;
+  pulses++;
+  emit();
+}
+
+export function usePanePulse(): number {
+  return useSyncExternalStore(subscribe, () => pulses, () => 0);
 }
 
 function openMedia(threadId: string) {

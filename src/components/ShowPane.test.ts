@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, showItem, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPane } from "./ShowPane";
 
@@ -357,4 +357,24 @@ it("offers Open when the file can't be shown", async () => {
   } finally {
     Reflect.deleteProperty(window, "ogb");
   }
+});
+
+const settle = (name: string) => act(async () => { host.querySelector("aside")!.dispatchEvent(Object.assign(new Event("animationend", { bubbles: true }), { animationName: name })); });
+const lit = () => host.querySelector("aside")!.classList.contains("arrival-glow");
+
+it("pulses the pane once when its file is clicked again, and not when a click only switches to it", async () => {
+  const shown = item("C:\\w\\timeline-mock.html", "page");
+  await render({ item: shown, hidden: false });
+  await act(async () => showItem(shown));
+  expect(lit()).toBe(false);
+  await act(async () => showItem(shown));
+  expect(lit()).toBe(true);
+  expect(host.querySelectorAll("iframe")).toHaveLength(1);
+  await settle("panel-slide");
+  expect(lit()).toBe(true);
+  await settle("arrival-glow-once");
+  expect(lit()).toBe(false);
+  await act(async () => showMap("t1"));
+  await act(async () => showItem(shown));
+  expect(lit()).toBe(false);
 });
