@@ -11,7 +11,8 @@ export function createMailboxReceipts(database: () => DatabaseSync = messageData
   const seen = new Map<string, { result: Accepted; at: number }>();
   const pending = new Map<string, Promise<Accepted>>();
   // SAFETY: The query selects a text key and the message table's typed id and time.
-  const rows = database().prepare("SELECT json_extract(json, '$.mailbox.key') AS key, id, at FROM messages WHERE kind = 'note' AND at >= ? AND json_type(json, '$.mailbox.key') = 'text' ORDER BY at DESC LIMIT ?").all(now() - WEEK, MAILBOX_RECEIPT_LIMIT) as Array<{ key: string; id: string; at: number }>;
+  // Per thread through messages_thread_at: a scan of every row reads the whole transcript file on a cold boot.
+  const rows = database().prepare("SELECT json_extract(json, '$.mailbox.key') AS key, id, at FROM messages WHERE thread_id IN (SELECT DISTINCT thread_id FROM messages) AND at >= ? AND kind = 'note' AND json_type(json, '$.mailbox.key') = 'text' ORDER BY at DESC LIMIT ?").all(now() - WEEK, MAILBOX_RECEIPT_LIMIT) as Array<{ key: string; id: string; at: number }>;
   for (const row of rows.toReversed()) seen.set(row.key, { result: { ok: true, id: row.id }, at: row.at });
   const prune = () => {
     for (const [key, value] of seen) {

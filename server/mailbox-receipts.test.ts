@@ -1,10 +1,29 @@
+import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { DATA_DIR } from "./config.ts";
 import { createMailboxReceipts, MAILBOX_RECEIPT_LIMIT } from "./mailbox-receipts.ts";
+import { closeMessageDb, messageDatabase } from "./message-db.ts";
+
+it("rebuilds receipts at boot from an index, never a scan of every message", () => {
+  closeMessageDb();
+  mkdirSync(DATA_DIR, { recursive: true });
+  const prepare = DatabaseSync.prototype.prepare;
+  const prepared: string[] = [];
+  vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+    prepared.push(sql);
+    return prepare.call(this, sql);
+  });
+  createMailboxReceipts();
+  vi.restoreAllMocks();
+  const plans = prepared.flatMap((sql) => messageDatabase().prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0, 1).map((row) => String(row.detail)));
+  expect(plans.filter((detail) => detail.startsWith("SCAN messages") && !detail.includes("COVERING INDEX"))).toEqual([]);
+  closeMessageDb();
+});
 
 it("promotes a deferred identity once when the watcher delivers it", async () => {
   const database = new DatabaseSync(":memory:");
-  database.exec("CREATE TABLE messages (id TEXT, at INTEGER, kind TEXT, json TEXT)");
+  database.exec("CREATE TABLE messages (thread_id TEXT, id TEXT, at INTEGER, kind TEXT, json TEXT)");
   const receipts = createMailboxReceipts(() => database);
   const scope = { pane: "pane", bot: "bot", teacher: "bot" };
   await receipts.accept(scope, "deferred", async () => ({ ok: true, deferred: true }));
@@ -18,13 +37,13 @@ it("promotes a deferred identity once when the watcher delivers it", async () =>
 
 it("bounds the rebuilt set and expires receipts after seven days", async () => {
   const database = new DatabaseSync(":memory:");
-  database.exec("CREATE TABLE messages (id TEXT, at INTEGER, kind TEXT, json TEXT)");
+  database.exec("CREATE TABLE messages (thread_id TEXT, id TEXT, at INTEGER, kind TEXT, json TEXT)");
   const now = Date.now();
   const scope = { pane: "pane", bot: "bot", teacher: "bot" };
   const receipts = createMailboxReceipts(() => database, () => now);
   let firstKey = "";
   await receipts.accept(scope, "first", async key => { firstKey = key!; return { ok: true, id: "first-note" }; });
-  const insert = database.prepare("INSERT INTO messages VALUES (?, ?, 'note', ?)");
+  const insert = database.prepare("INSERT INTO messages VALUES ('teacher', ?, ?, 'note', ?)");
   insert.run("expired", now - 8 * 86_400_000, JSON.stringify({ mailbox: { key: firstKey } }));
   const rebuilt = createMailboxReceipts(() => database, () => now);
   let writes = 0;
@@ -47,7 +66,7 @@ it("bounds the rebuilt set and expires receipts after seven days", async () => {
 
 it("finishes a watcher delivery that arrives while the deferral acknowledgement is pending", async () => {
   const database = new DatabaseSync(":memory:");
-  database.exec("CREATE TABLE messages (id TEXT, at INTEGER, kind TEXT, json TEXT)");
+  database.exec("CREATE TABLE messages (thread_id TEXT, id TEXT, at INTEGER, kind TEXT, json TEXT)");
   const receipts = createMailboxReceipts(() => database);
   const scope = { pane: "pane", bot: "bot", teacher: "bot" };
   let release!: () => void;
@@ -62,7 +81,7 @@ it("finishes a watcher delivery that arrives while the deferral acknowledgement 
 
 it("does not claim a failed write and scopes identities to the authenticated pane", async () => {
   const database = new DatabaseSync(":memory:");
-  database.exec("CREATE TABLE messages (id TEXT, at INTEGER, kind TEXT, json TEXT)");
+  database.exec("CREATE TABLE messages (thread_id TEXT, id TEXT, at INTEGER, kind TEXT, json TEXT)");
   const receipts = createMailboxReceipts(() => database);
   const scope = { pane: "pane", bot: "bot", teacher: "bot" };
   await expect(receipts.accept(scope, "same-id", async () => { throw new Error("disk full"); })).rejects.toThrow("disk full");
