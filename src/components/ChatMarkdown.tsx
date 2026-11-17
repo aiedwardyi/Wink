@@ -505,7 +505,7 @@ function DesktopFileLink({ filePath, base, threadId, card, inline, pictured, chi
     setReason("");
     const res = await fetch(linkedFileSrc(thread, filePath), { headers: { Range: "bytes=0-0" } }).catch(() => null);
     if (!desktop && pcOffline(res)) return setReason("Your PC is offline");
-    if (res && !res.ok && res.status !== 416) return desktop ? open() : setReason("That file no longer exists");
+    if (!res || (!res.ok && res.status !== 416)) return desktop ? open() : setReason("That file no longer exists");
     openFile({ threadId: thread, path: filePath }, { ...hands, rest: desktop ? () => void open() : undefined });
   };
 
@@ -598,7 +598,7 @@ function PhoneFile({
     );
   }
   // No extension reads as a folder, which the folder sheet lists instead.
-  if ((phase === "offline" || phase === "missing") && !/\.\w+$/.test(showName(filePath))) {
+  if (phase === "missing" && !/\.\w+$/.test(showName(filePath))) {
     return <LinkedFolderLink folderPath={filePath} threadId={threadId}>{children}</LinkedFolderLink>;
   }
   if (phase === "remote" && remote) {

@@ -7,8 +7,10 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { linkedFileGrant, PC_HOLDER, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
+import { DATA_DIR } from "./config.ts";
+import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
 import { requestCredentials } from "./phone-auth.ts";
+import { closeJoinedDb, setMyRoomBotTurn } from "./rooms/joined.ts";
 import {
   loadThreadSyncLedger,
   markThreadDirty,
@@ -377,6 +379,19 @@ describe("linked files", () => {
       expect((await open(room, clip)).status).toBe(404);
     } finally {
       await Promise.all([own.close(), room.close()]);
+    }
+  });
+
+  it("keeps a joined room's limit after a restart, before its next turn", () => {
+    mkdirSync(DATA_DIR, { recursive: true });
+    try {
+      setMyRoomBotTurn("r1", "tb-AAAAAAAAAAAAAAAA", "room-task", 0);
+      expect(ownChat("room-task", false, new Set())).toBe(false);
+      expect(ownChat("own-chat", false, new Set())).toBe(true);
+      expect(ownChat("hosted-room", true, new Set())).toBe(false);
+      expect(ownChat("live-room", false, new Set(["live-room"]))).toBe(false);
+    } finally {
+      closeJoinedDb();
     }
   });
 

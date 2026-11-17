@@ -11,6 +11,7 @@ import { gfm } from "micromark-extension-gfm";
 import { cardFile } from "../shared/file-cards.ts";
 import { windowsPathLinks } from "../shared/windows-path-links.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
+import { roomTaskThreads } from "./rooms/joined.ts";
 
 const MEDIA = {
   png: "image/png",
@@ -66,6 +67,11 @@ export interface ServeLinkedFileOptions {
   rootsFor(message: LinkedMessage): readonly string[];
   /** The owner's own chat, where any file a bot links or its person attached opens; a room's turns can come from other people's text, so it keeps the folder limit. */
   own?: boolean;
+}
+
+/** A room turn, hosted or joined, keeps the folder limit; `live` loses joined rooms on a restart, so their saved threads count too. */
+export function ownChat(threadId: string, hosted: boolean, live: ReadonlySet<string>): boolean {
+  return !hosted && !live.has(threadId) && !roomTaskThreads().has(threadId);
 }
 
 interface LinkedFolderFile {

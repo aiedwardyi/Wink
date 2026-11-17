@@ -150,6 +150,27 @@ describe("files only the PC holds, on the phone", () => {
     await tap(host.querySelector("button"));
     expect(host.textContent).toContain("PC가 오프라인 상태입니다");
   });
+
+  it("says the PC is offline for a link with no extension, not that its folder can't be listed", async () => {
+    thread = "gone-folder";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 503 })));
+    await render(chat("See [the notes](C:\\w\\README) now."));
+    await tap(host.querySelector("button"));
+    expect(host.textContent).toContain("Your PC is offline");
+  });
+});
+
+describe("a link on the desktop", () => {
+  it("opens in its app when the PC's own server gives no answer", async () => {
+    thread = "desk-no-answer";
+    const openFile = vi.fn(async (_path: string) => {});
+    window.ogb = { openFile } as unknown as typeof window.ogb;
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("offline"))));
+    await render(chat("See [the deck](C:\\w\\deck.pdf) now."));
+    await tap(host.querySelector("[data-file-link], [data-show-card]"));
+    expect(openFile.mock.calls.map((call) => call[0])).toEqual(["C:\\w\\deck.pdf"]);
+    expect(lastShown(thread)?.path).toBeUndefined();
+  });
 });
 
 describe("a room's file rows", () => {
