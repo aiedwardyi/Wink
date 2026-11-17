@@ -87,6 +87,9 @@ export const PRESTART_LIMIT = 3;
 export const PRESTART_IDLE_MS = 10 * 60_000;
 // A stray Enter on an empty Claude prompt submits its suggestion as a real turn.
 const BOT_PANE_ENV = { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: "false" };
+// conpty.dll asks once at start and holds the shell about 3 s for the answer; a panel only replays it, so the host answers as xterm.js would.
+const CONPTY_DEVICE_QUERY = "\x1b[c";
+const DEVICE_ATTRIBUTES = "\x1b[?1;2c";
 // Same rule as pane-cleanup's nick, so the ledger finds the folder this makes.
 const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
 // Survivors of a closed pane get this long to exit on their own.
@@ -1070,6 +1073,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const attach = (session) => {
     const { pty } = session;
+    let handshake = platform === "win32";
     pty.onData((data) => {
       if (session.retired || session.pty !== pty) return;
       session.output += data;
@@ -1084,6 +1088,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       try {
         session.screen.consume(data);
       } catch {}
+      if (handshake && !session.adopting && data.includes(CONPTY_DEVICE_QUERY)) {
+        handshake = false;
+        try { void Promise.resolve(pty.write(DEVICE_ATTRIBUTES)).catch(() => {}); } catch {}
+      }
+      if (parsed.text.trim()) handshake = false;
       cancelClaudeStartup(session);
       if (session.worker && session.exitCode === null && session.botPane
         && (session.claudeOnboarding?.active || (session.claudeTrust && !session.claudeTrustAnswered))) {

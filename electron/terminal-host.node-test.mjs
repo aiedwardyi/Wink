@@ -4974,6 +4974,47 @@ test("the compact hook signals only a confirmed compact SessionStart",{ skip: pr
   }
 });
 
+describe("ConPTY start", () => {
+  function winFixture(t) {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-conpty-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const f = fixture({ platform: "win32", env: { ProgramFiles: programFiles } });
+    t.after(() => f.host.dispose());
+    return f;
+  }
+
+  test("answers the shell's startup device query before any panel is attached", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[1t");
+    f.children[0].data("\x1b[c\x1b[?1004h\x1b[?9001h");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("answers a pre-started shell with no panel at all", async (t) => {
+    const f = winFixture(t);
+    assert.equal(await f.host.prestart(f.event, f.input), true);
+    f.children[0].data("\x1b[c");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("leaves device queries after the prompt to the panel", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[c");
+    f.children[0].data("PS C:\\> ");
+    f.children[0].data("\x1b[c");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+    const late = winFixture(t);
+    await late.host.open(late.event, late.input);
+    late.children[0].data("PS C:\\> ");
+    late.children[0].data("\x1b[c");
+    assert.deepEqual(late.children[0].writes, []);
+  });
+});
+
 describe("remote panes", () => {
   const GB = 1024 ** 3;
   const HOSTS = { work: { ssh: "work", root: "D:/wink-remote", account: "me@example.com", enabled: true }, far: { ssh: "far", root: "D:/wink-remote", account: "me@example.com", enabled: true }, dad: { ssh: "dad", root: "D:/wink-remote", account: "me@example.com", enabled: false } };
@@ -5017,7 +5058,7 @@ describe("remote panes", () => {
     child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST_YES.replaceAll("\n", "\r\n"));
     t.mock.timers.tick(500);
     await Promise.resolve();
-    assert.deepEqual(child.writes.slice(1), ["\x1b[B", "\r"]);
+    assert.deepEqual(child.writes.slice(1), ["\x1b[?1;2c", "\x1b[B", "\r"]);
   });
 
   test("needs only a shell's memory at home", async (t) => {
