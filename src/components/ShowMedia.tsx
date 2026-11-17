@@ -15,6 +15,8 @@ import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved, type RoomFiles } from 
 
 const ROW = "flex w-full min-w-0 items-center gap-3 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 const BUBBLE_MS = 600;
+// the shortest thumb a fingertip can catch
+const GRAB = 44;
 const KINDS: MediaKind[] = ["photos", "files"];
 const ICONS: Array<[RegExp, LucideIcon]> = [
   [/\.(pdf|docx?|txt|md|rtf|odt)$/i, FileText],
@@ -150,7 +152,7 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
   const [label, setLabel] = useState("");
   const [shown, setShown] = useState(false);
   const content = layout.height + PAD * 2;
-  const size = viewport > 0 && content > viewport ? Math.max(32, viewport * viewport / content) : 0;
+  const size = viewport > 0 && content > viewport ? Math.max(GRAB, viewport * viewport / content) : 0;
   const track = viewport - size;
   const range = content - viewport;
 

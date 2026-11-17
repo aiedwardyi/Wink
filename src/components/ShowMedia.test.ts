@@ -353,6 +353,49 @@ it("dragging the scroll thumb shows the month beside it until 600 ms after relea
   expect(bubble()?.hasAttribute("data-shown")).toBe(false);
 });
 
+const GRAB = 44;
+const ruleOf = (css: string, selector: string) => css.match(new RegExp(`\\n\\s*${selector.replace(/[.:]/g, "\\$&")} \\{([^}]*)\\}`))?.[1] ?? "";
+const px = (rule: string, prop: string) => Number(new RegExp(`(?:^|[ ;])${prop}: (\\d+)px`).exec(rule)?.[1] ?? 0);
+
+it("keeps the scroll thumb a grabbable height on a long chat, and none on a short one", async () => {
+  media.t1 = shots(2_000);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  expect(parseFloat(host.querySelector<HTMLElement>("[data-media-thumb]")!.style.height)).toBeGreaterThanOrEqual(GRAB);
+  media.t1 = shots(4);
+  forgetMedia();
+  await act(async () => closeShow());
+  await act(async () => showMedia("t1"));
+  await settle();
+  expect(host.querySelector("[data-media-thumb]")).toBeNull();
+});
+
+it("drags the scroll thumb to both ends of a long chat", async () => {
+  media.t1 = shots(2_000);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  const thumb = host.querySelector("[data-media-thumb]")!;
+  await pointer(thumb, "pointerdown", 0);
+  await pointer(thumb, "pointermove", 100_000);
+  const bottom = scroller().scrollTop;
+  expect(bottom).toBeGreaterThan(40_000);
+  await pointer(thumb, "pointermove", -100_000);
+  expect(scroller().scrollTop).toBe(0);
+  await pointer(thumb, "pointerup", -100_000);
+});
+
+it("sizes the scroll thumb to grab: 44px to catch on a phone, a wider bar on a desktop", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  const bar = px(ruleOf(css, ".show-media-thumb::before"), "width");
+  const desktop = px(ruleOf(css, ".show-media-rail"), "width");
+  const phone = px(/max-width: 767px\) \{[\s\S]*?\.show-media-rail \{([^}]*)\}/.exec(css)?.[1] ?? "", "width");
+  expect(bar).toBeGreaterThanOrEqual(8);
+  expect(desktop).toBeGreaterThanOrEqual(bar);
+  expect(phone).toBeGreaterThanOrEqual(GRAB);
+});
+
 it("closing with X neither asks again nor touches the grid", async () => {
   media.t1 = shots(200);
   await act(async () => showMedia("t1"));
