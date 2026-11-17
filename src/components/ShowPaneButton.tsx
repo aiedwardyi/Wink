@@ -3,7 +3,7 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { showWorkers, togglePane, useMapThread, useMediaThread, useShowItem, useWorkersThread } from "@/lib/show-pane";
+import { showWorkers, togglePane, useMapThread, useMediaThread, useShowItem, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
 import { closePane, useVerifyWatch } from "@/lib/verify-watch";
 import { COUNT_BADGE } from "./SidebarConversations";
 import { listedFor, useShareWorkers, WORKER_STATUS, workerCounts, type WorkerSource } from "./WorkerRows";
@@ -14,6 +14,7 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
   const media = useMediaThread();
   const mapping = useMapThread();
   const crew = useWorkersThread();
+  const timeline = useTimelineThread();
   const watch = useVerifyWatch();
   const ref = useRef<HTMLButtonElement>(null);
   useShareWorkers(threadId, workers);
@@ -24,7 +25,7 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
   const badge = first && (counts.working > 0 || counts.waiting > 0 || counts.failed > 0);
   const checking = watch?.threadId === threadId;
   const onWorkers = crew === threadId;
-  const open = checking || shown?.threadId === threadId || media === threadId || mapping === threadId || onWorkers;
+  const open = checking || shown?.threadId === threadId || media === threadId || mapping === threadId || onWorkers || timeline === threadId;
   useEffect(() => {
     if (!hasWorkers) return;
     const onToggle = () => {

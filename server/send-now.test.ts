@@ -124,6 +124,14 @@ describe("queued send through the message POST", () => {
     expect(h.startTurn).not.toHaveBeenCalled();
   });
 
+  it("keeps the time the user queued a send when Send now promotes it", async () => {
+    const h = harness();
+    const sendId = "send-now-acted000000000";
+    const held = queue.queueSteeredMessage(h.bot.id, h.bot.threadId, "later", { sendId, after: true, actedAt: 1_000 });
+    const receipt = await h.post({ text: "later", sendId, queueId: held.id, threadId: h.bot.threadId, actedAt: 3_000 });
+    expect(receipt.body).toMatchObject({ steered: true, message: { sendId, actedAt: 1_000 } });
+  });
+
   it("keeps the original receipt and FIFO when the engine declines the steer", async () => {
     const h = harness(vi.fn(async () => false));
     const selected = h.hold("first");

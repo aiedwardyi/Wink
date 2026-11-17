@@ -1460,6 +1460,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "send": {
+          const actedAt = Date.now();
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
@@ -1480,6 +1481,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 sendId,
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
+                actedAt,
               }),
             });
           const settle = (body: any) => {
@@ -1636,7 +1638,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }).catch(showError);
           } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
             const asked = bot?.messages.find((m) => m.id === action.messageId);
-            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined });
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined, actedAt: Date.now() });
             void holdReload(persistCard(action.botId, action.messageId, answerPatch(card, action.answer))
               .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
@@ -1656,13 +1658,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerGroupCard": {
+          const actedAt = Date.now();
           const room = stateRef.current.groups.find((group) => group.id === action.groupId);
           const messages = room?.messages ?? [];
           if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
           const text = asked ? answerText(asked, action.answer) : action.answer;
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
-            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId }); }));
+            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId, actedAt }); }));
           break;
         }
         case "dismissGroupCard":
@@ -1812,7 +1815,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? Date.now() }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -2025,7 +2028,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const draftId = `group:${group.id}:${group.threadId}`;
       const hold = takeClosedRoomHold(draftId);
       if (!hold) continue;
-      const { text, requestText, sendId, threadId, revision, replyToId, attachments } = hold;
+      const { text, requestText, sendId, threadId, revision, replyToId, attachments, at } = hold;
       dispatch({
         type: "sendGroup",
         groupId: group.id,
@@ -2033,6 +2036,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         sendId,
         replyToId,
         threadId,
+        actedAt: at,
         onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
       });
     }

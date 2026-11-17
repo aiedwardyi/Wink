@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
-import { closeShow, useMapThread } from "@/lib/show-pane";
+import { closeShow, useMapThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
 import type { SceneModule } from "@/scenes/scene-host";
 
@@ -155,6 +155,18 @@ describe("whats new card", () => {
     closeShow();
     expect(mapped).toBe("t-atlas");
     expect(tile.textContent).toBe(text);
+  });
+
+  it("opens this chat's side pane on the workers list from its Show me", () => {
+    const { tile, text } = showMe("1.0.278", "Workers live in the side pane");
+    let listed: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((listed = useWorkersThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(listed).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("opens the model picker from the Gemini tile's Show me", () => {

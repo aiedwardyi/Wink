@@ -212,6 +212,8 @@ export interface Message {
   askedBy?: string;
   /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
   answersCard?: string;
+  /** When the person acted, before card persistence or a queue delayed delivery. */
+  actedAt?: number;
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;

@@ -3,9 +3,9 @@
 // waves through, what it refuses to wave through, and the fact that a
 // question is never answered by the machine.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { approvalKey, autoDecision, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
@@ -271,8 +271,17 @@ describe("unattended turns", () => {
   const bot = { autoApprove: true, alwaysAllow: ["Bash:git"] };
   const askBot = { alwaysAllow: ["Bash:git"] };
 
-  const workspace = "/work/project";
+  const workspace = mkdtempSync(join(process.env.ORBIT_SCRATCH ?? tmpdir(), "unattended-"));
   const away = { unattended: true, workspace };
+
+  beforeAll(() => {
+    for (const path of ["build/output.js", "tmp/out.log", "build/out.js", "my notes/old.md", "src/old.ts"]) {
+      const file = join(workspace, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "keep");
+    }
+  });
+  afterAll(() => rmSync(workspace, { recursive: true, force: true }));
 
   it("keeps auto mode for ordinary work when nobody started the turn", () => {
     expect(autoVerdict(bot, "Bash", "npm test", { unattended: true })).toEqual(autoVerdict(bot, "Bash", "npm test"));
@@ -313,12 +322,12 @@ describe("unattended turns", () => {
       ["Write", JSON.stringify({ file_path: "/work/project/src/a.ts", content: "x" })],
       ["Edit", JSON.stringify({ file_path: "src/a.ts", old_string: "a", new_string: "b" })],
       ["Bash", "rm build/output.js"],
-      ["Bash", "rm /work/project/tmp/out.log"],
+      ["Bash", `rm "${join(workspace, "tmp", "out.log")}"`],
       ["delete", "Delete src/old.ts"],
       ["Bash", "del /q build\\out.js"],
-      ["Bash", 'rm "/work/project/my notes/old.md"'],
+      ["Bash", `rm "${join(workspace, "my notes", "old.md")}"`],
       ["Bash", "cd src && rm old.ts"],
-      ["Bash", "cd /work/project/build; rm out.js"],
+      ["Bash", `cd "${join(workspace, "build")}"; rm out.js`],
       ["Write", JSON.stringify({ file_path: "/work/project/cleanup.sh", content: "rm -rf dist\ngit reset --hard\n" })],
       ["Edit", JSON.stringify({ file_path: "src/docs.md", old_string: "a", new_string: "run rm -rf node_modules" })],
       ["edit", "Edit src/a.ts"],
@@ -443,7 +452,7 @@ describe("unattended worktree cleanup", () => {
   const verdict = (command: string) => autoVerdict(bot, "PowerShell", command, away());
 
   beforeAll(() => {
-    base = realpathSync.native(mkdtempSync(join(tmpdir(), "omb-wt-clean-")));
+    base = realpathSync.native(mkdtempSync(join(process.env.ORBIT_SCRATCH ?? tmpdir(), "omb-wt-clean-")));
     home = join(base, "Desktop");
     main = join(home, "Orbit");
     elsewhere = join(base, "Documents");
@@ -453,6 +462,7 @@ describe("unattended worktree cleanup", () => {
     git(main, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
     stale = join(base, "orbit-wt", "index-2026-11-17");
     git(main, "worktree", "add", "-q", "--detach", stale);
+    mkdirSync(join(stale, "src"));
     leftover = join(base, "orbit-wt", "index-2026-11-10");
     process.env.ORBIT_WORKTREE_ROOT = join(base, "orbit-wt");
     mkdirSync(join(leftover, "src"), { recursive: true });

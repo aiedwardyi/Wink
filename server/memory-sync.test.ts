@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { markTalked, memorySyncDir, syncBotMemory, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
+import { applyPicks, currentPicks, parseTimeline } from "./picks.ts";
 
 const roots: string[] = [];
 
@@ -73,6 +74,38 @@ function seed(text: string, ...all: PC[]) {
 }
 
 describe("memory sync", () => {
+  it("recovers a timeline parked by an older build without asking the bot to edit it", () => {
+    const [a] = pcs();
+    const at = new Date(2026, 10, 17, 10).getTime();
+    const file = "memory/decisions.md";
+    edit(a, applyPicks("", [{ kind: "pick", at, key: "forum", picked: "A - plain list", said: "a" }])!.text, file);
+    edit(a, applyPicks("", [{ kind: "pick", at: at + 60_000, key: "forum", picked: "C - Reddit cards", said: "c" }])!.text, "memory/decisions.conflict-e059d14f.md");
+    sync(a);
+    expect(currentPicks(read(a, file))[0]?.picked).toBe("C - Reddit cards");
+    const merged = read(a, file);
+    sync(a);
+    expect(read(a, file)).toBe(merged);
+  });
+  it("merges concurrent timelines by key and pick time and converges", () => {
+    const [a, b] = pcs();
+    const file = "memory/decisions.md";
+    const at = new Date(2026, 10, 17, 10).getTime();
+    const initial = applyPicks("", [{ kind: "pick", at, key: "forum", picked: "A - plain list", said: "a" }])!.text;
+    edit(a, initial, file);
+    sync(a); receive(a, b); sync(b);
+    edit(a, applyPicks(initial, [{ kind: "pick", at: at + 120_000, key: "forum", picked: "C - Reddit cards", said: "actually c" }])!.text, file);
+    edit(b, applyPicks(initial, [
+      { kind: "pick", at: at + 60_000, key: "forum", picked: "B - tiles", said: "b" },
+      { kind: "pick", at: at + 60_000, key: "theme", picked: "Dark", said: "dark" },
+    ])!.text, file);
+    sync(a); sync(b); receive(a, b); receive(b, a); sync(a); sync(b);
+    expect(currentPicks(read(a, file)).map(({ picked }) => picked).sort()).toEqual(["C - Reddit cards", "Dark"]);
+    expect(parseTimeline(read(a, file)!).entries.some(({ picked, replacedBy }) => picked === "B - tiles" && replacedBy)).toBe(true);
+    expect(parked(a)).toEqual([]);
+    receive(a, b); sync(b); receive(b, a); sync(a);
+    expect(read(a, file)).toBe(read(b, file));
+    expect(sync(a)[file]).toBe("current");
+  });
   it("reads split roots and keeps the local snapshot in its existing folder", () => {
     const [a, b] = pcs();
     edit(a, "from a");

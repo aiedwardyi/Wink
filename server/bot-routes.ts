@@ -19,6 +19,7 @@ import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
 import { modelPickPatch } from "./pending-model.ts";
+import { parseTimeline, PICKS_FILE } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
@@ -524,7 +525,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
       const text = readMemoryTopic(m[1], name);
       if (text === null) return json(res, 404, { error: "no such topic file" });
-      return json(res, 200, { name, text });
+      return json(res, 200, name === PICKS_FILE ? { name, text, entries: parseTimeline(text).entries } : { name, text });
     },
   };
 }

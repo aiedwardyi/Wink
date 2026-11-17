@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { PICKS_FILE, picksBlock } from "./picks.ts";
+import { PICKS_FILE, picksBlock, timelineHolds } from "./picks.ts";
 import { currentTurnTrace } from "./turn-timing.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
@@ -274,7 +274,8 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
   // sync keeps one copy as the file; the set-aside one can hold the newest notes, and only the bot can merge them
   const parked = listMemoryTopics(botId)
     .map((topic) => `memory/${topic.name}`)
-    .filter((name) => PARKED_COPY.test(name));
+    // sync merges timeline copies itself; one it could not merge still needs the bot
+    .filter((name) => PARKED_COPY.test(name) && !(/^memory\/decisions\.conflict-/.test(name) && timelineHolds(readMemoryTopic(botId, PICKS_FILE), readMemoryTopic(botId, name.slice("memory/".length)) ?? "")));
   const memoryFile = join(workspaceDir(botId), "MEMORY.md");
   const topicDir = join(workspaceDir(botId), "memory");
   const current = picksPrompt(botId);
