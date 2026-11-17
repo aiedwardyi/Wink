@@ -9,6 +9,8 @@
 //                      | stream (partial-message text deltas before the
 //                        whole-message frame, plus subagent noise to drop)
 //                      | edit (a Write then a Bash, gated like the real CLI)
+//                      | wink-tool (FAKE_CLAUDE_TOOL, gated the same way; running
+//                        it writes ran-tool.txt)
 //                      | bench-quiet (text only, no tool_use — latency floor)
 //                      | late-wake (wakes after `result` and asks for a Bash)
 //                      | subagent-wake (a subagent's final lands after `result`,
@@ -401,11 +403,13 @@ const playNarrationScript = async () => {
 // The real CLI's order, checked against 2.1.x: a --settings ask rule beats
 // the user's allow list, which beats the permission mode; anything left
 // goes to the --permission-prompt-tool, which forwards to Orbit's broker.
+const allowedBy = (rules: string | null | undefined, tool: string): boolean =>
+  (rules ?? "").split(",").some((rule) => rule === tool || (rule.startsWith("mcp__") && tool.startsWith(`${rule}__`)));
 const needsPrompt = (tool: string): boolean => {
   const settings = argAfter("--settings");
   const askRules: unknown = settings ? JSON.parse(settings)?.permissions?.ask : undefined;
   if (Array.isArray(askRules) && askRules.includes(tool)) return true;
-  if ((process.env.FAKE_CLAUDE_USER_ALLOW ?? "").split(",").includes(tool)) return false;
+  if (allowedBy(process.env.FAKE_CLAUDE_USER_ALLOW, tool) || allowedBy(argAfter("--allowedTools"), tool)) return false;
   const permissionMode = argAfter("--permission-mode");
   if (permissionMode === "bypassPermissions") return false;
   return !(permissionMode === "acceptEdits" && tool === "Write");
@@ -481,7 +485,7 @@ const hookDecision = (tool: string, input: { [key: string]: JsonValue }): string
   return decision;
 };
 
-const playEdits = async () => {
+const playTools = async (tools: Array<[id: string, name: string, input: { [key: string]: JsonValue }, run: () => void]>) => {
   const mcpConfig = JSON.parse(readFileSync(argAfter("--mcp-config") ?? "", "utf8"));
   const socketPath = String(mcpConfig.mcpServers.ogb.args[1]);
   const denials: string[] = [];
@@ -492,10 +496,7 @@ const playEdits = async () => {
     if (behavior === "allow") run();
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: behavior !== "allow" }] } });
   };
-  await useTool("tu-write", "Write", { file_path: "made.txt", content: "hi" }, () => writeFileSync("made.txt", "hi"));
-  await useTool("tu-bash", "Bash", { command: "node -e \"require('fs').writeFileSync('ran.txt','ok')\"" }, () =>
-    writeFileSync("ran.txt", "ok"),
-  );
+  for (const [id, name, input, run] of tools) await useTool(id, name, input, run);
   out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, permission_denials: denials });
   turnRunning = false;
   finishIfDone();
@@ -835,7 +836,16 @@ const playTurn = (prompt: JsonValue, held = false) => {
   }
 
   if (mode === "edit") {
-    void playEdits();
+    void playTools([
+      ["tu-write", "Write", { file_path: "made.txt", content: "hi" }, () => writeFileSync("made.txt", "hi")],
+      ["tu-bash", "Bash", { command: "node -e \"require('fs').writeFileSync('ran.txt','ok')\"" }, () => writeFileSync("ran.txt", "ok")],
+    ]);
+    return;
+  }
+
+  if (mode === "wink-tool") {
+    const tool = process.env.FAKE_CLAUDE_TOOL ?? "mcp__agents__list_bots";
+    void playTools([["tu-tool", tool, {}, () => writeFileSync("ran-tool.txt", tool)]]);
     return;
   }
 

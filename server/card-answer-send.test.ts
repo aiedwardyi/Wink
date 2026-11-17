@@ -46,6 +46,27 @@ it("an idle tap starts the same turn and marks the line with its card", async ()
   expect(h.startTurn.mock.calls[1]![2]).not.toHaveProperty("answersCard", expect.anything());
 });
 
+it("keeps the click time through idle, steering and queued delivery", async () => {
+  const actedAt = Date.now() - 10_000;
+  const idle = harness();
+  await idle.send({ text: "Sure", cardId: idle.card.id, actedAt });
+  expect(idle.startTurn.mock.calls[0]![2]).toMatchObject({ actedAt });
+  const busy = harness();
+  busy.busy();
+  await busy.send({ text: "Sure", cardId: busy.card.id, actedAt });
+  expect(busy.last()).toMatchObject({ actedAt });
+  await busy.send({ text: "Sure", cardId: busy.card.id, deliver: "after", actedAt });
+  busy.store.setActivity(busy.bot.id, "idle");
+  drainSteeredMessages(busy.store, vi.fn());
+  expect(busy.last()).toMatchObject({ actedAt });
+});
+
+it.each([-1, "yesterday", null])("ignores an invalid client action time: %s", async (actedAt) => {
+  const h = harness();
+  await h.send({ text: "Sure", cardId: h.card.id, actedAt });
+  expect(h.startTurn.mock.calls[0]![2]).toMatchObject({ actedAt: undefined });
+});
+
 it("a tap marks only a card on the active path", async () => {
   const h = harness();
   h.store.branchMessage(h.bot.threadId, h.card.id, "start over");

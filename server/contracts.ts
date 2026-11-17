@@ -138,9 +138,9 @@ export type RuntimeEvent = RuntimeEventBase &
         inputDigest?: string;
         choices?: string[];
         approvalScope?: "local-computer";
-        /** the whole desktop call the guard judges; `summary` is cut for display */
+        /** the whole tool call the guard judges; `summary` is cut for display */
         action?: string;
-        /** why a desktop call carries no `action` */
+        /** why a tool call carries no `action` */
         actionRefused?: "too-large" | "unreadable";
         /** asked by background work after its turn settled; nobody is there to see a card */
         background?: boolean;

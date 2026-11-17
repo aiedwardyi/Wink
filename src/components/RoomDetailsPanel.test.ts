@@ -431,6 +431,19 @@ describe("People", () => {
     expect(calls).toContainEqual({ method: "DELETE", path: "/api/rooms/r1/bots/tb-A" });
   });
 
+  it("leaves a teammate's bot without a model line: the room never learns it", async () => {
+    mock.state.bots = [{ ...bot("b1", "Wink"), modelSelection: { instanceId: "codex-1", model: "codex-pro" } }];
+    mock.state.instances = [{
+      instanceId: "codex-1", driverKind: "codex", displayName: "Codex", snapshot: { state: "available", authenticated: true },
+      models: { default: "codex-default", options: [{ id: "codex-pro", label: "Codex Pro" }] },
+    }];
+    const room = { ...shared([{ id: "p1", name: "JJ" }]), room: { name: "Channel", people: [{ id: "p1", name: "JJ" }], joins: [], teamBots: [{ id: "tb-A", name: "Pokey", color: "teal", owner: "p1" }] } };
+    await open({ group: room });
+    expect(section("bots").querySelector('[data-room-bot="b1"] [data-bot-model-line]')!.textContent).toBe("Codex Pro");
+    expect(section("bots").querySelector('[data-room-team-bot="tb-A"]')!.textContent).not.toContain("Codex");
+    expect(section("bots").querySelector('[data-room-team-bot="tb-A"] [data-bot-model-line]')).toBeNull();
+  });
+
   it("scrolls 40 people and 15 bots in one panel", async () => {
     mock.state.bots = Array.from({ length: 15 }, (_, i) => bot(`b${i}`, `Bot ${i}`));
     const crowd = shared(Array.from({ length: 40 }, (_, i) => ({ id: `p${i}`, name: `Teammate ${i}` })), mock.state.bots.map((each) => each.id));
