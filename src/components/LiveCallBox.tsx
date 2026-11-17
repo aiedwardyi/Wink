@@ -102,7 +102,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
           </button>
         )}
         <CallSettingsHold bot={bot}>
-          <button type="button" aria-label={words.end} title={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
+          <button type="button" aria-label={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
             <PhoneOff size={16} />
           </button>
         </CallSettingsHold>

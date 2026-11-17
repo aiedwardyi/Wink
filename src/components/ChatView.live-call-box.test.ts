@@ -247,6 +247,7 @@ describe("live call in the message box", () => {
       expect(row.some((b) => b.className.includes("accent"))).toBe(false);
       expect(row.filter((b) => b.className.includes("bg-danger"))).toEqual([button(box, "End")]);
       expect(frame(host).querySelectorAll('[aria-label="End"]')).toHaveLength(1);
+      expect(button(box, "End")!.hasAttribute("title")).toBe(false);
       expect([...frame(host).querySelectorAll("*")].some((el) => el.children.length === 0 && el.textContent === "End")).toBe(false);
       expect(host.querySelector("[data-live-call]")?.querySelector("button")).toBeNull();
       expect(button(box, "End")!.className).toContain("bg-danger");
