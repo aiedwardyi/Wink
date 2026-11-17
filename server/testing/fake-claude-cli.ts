@@ -403,12 +403,13 @@ const playNarrationScript = async () => {
 // The real CLI's order, checked against 2.1.x: a --settings ask rule beats
 // the user's allow list, which beats the permission mode; anything left
 // goes to the --permission-prompt-tool, which forwards to Orbit's broker.
+const allowedBy = (rules: string | null | undefined, tool: string): boolean =>
+  (rules ?? "").split(",").some((rule) => rule === tool || (rule.startsWith("mcp__") && tool.startsWith(`${rule}__`)));
 const needsPrompt = (tool: string): boolean => {
   const settings = argAfter("--settings");
   const askRules: unknown = settings ? JSON.parse(settings)?.permissions?.ask : undefined;
   if (Array.isArray(askRules) && askRules.includes(tool)) return true;
-  if ((process.env.FAKE_CLAUDE_USER_ALLOW ?? "").split(",").includes(tool)) return false;
-  if ((argAfter("--allowedTools") ?? "").split(",").some((rule) => rule === tool || (rule.startsWith("mcp__") && tool.startsWith(`${rule}__`)))) return false;
+  if (allowedBy(process.env.FAKE_CLAUDE_USER_ALLOW, tool) || allowedBy(argAfter("--allowedTools"), tool)) return false;
   const permissionMode = argAfter("--permission-mode");
   if (permissionMode === "bypassPermissions") return false;
   return !(permissionMode === "acceptEdits" && tool === "Write");

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
-import { askPreallowedOps, builtinOps, isSideEffectOp, opEffect } from "./builtin-ops.ts";
+import { askPreallowedOps, builtinOps, claudeAskRules, isSideEffectOp, opEffect } from "./builtin-ops.ts";
 import { TOOLS as TERMINAL_TOOLS } from "./terminal-proxy.ts";
 import { CATALOG_TOOLS } from "./tool-catalog.ts";
 
@@ -58,5 +58,12 @@ describe("built-in operation table", () => {
     expect(askPreallowedOps("phone").sort()).toEqual(["list_apps", "read_screen", "screenshot", "status"]);
     expect(askPreallowedOps("terminal").sort()).toEqual(["terminal_playbook", "terminal_read"]);
     expect(askPreallowedOps("browser")).toEqual([]);
+  });
+
+  it("asks Claude for every side effect by name, or for the whole server when no op is known", () => {
+    expect(claudeAskRules("phone").sort()).toEqual(["mcp__phone__open_app", "mcp__phone__press", "mcp__phone__swipe", "mcp__phone__tap", "mcp__phone__tap_text", "mcp__phone__type_text"]);
+    expect(claudeAskRules("agents")).toEqual(expect.arrayContaining(["mcp__agents__generate_image", "mcp__agents__call_api", "mcp__agents__call_wink_tool"]));
+    expect(claudeAskRules("agents")).not.toContain("mcp__agents__list_bots");
+    expect(claudeAskRules("browser")).toEqual(["mcp__browser"]);
   });
 });

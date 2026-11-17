@@ -31,7 +31,7 @@ import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
-import { askPreallowedOps, type BuiltinServer } from "./builtin-ops.ts";
+import { askPreallowedOps, BUILTIN_SERVERS, claudeAskRules, type BuiltinServer } from "./builtin-ops.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 
 import type {
@@ -282,11 +282,11 @@ type AskBehavior = "allow" | "deny" | "answer";
 type AskResolutionSource = "user" | "timeout" | "system";
 
 // Ask rules outrank every allow list, the user's own settings.json included,
-// so Ask for approval reaches the broker even where Write or Bash is allowed.
+// so Ask for approval reaches the broker even where Write, Bash or a Wink tool is allowed.
 // Sandbox auto-allow is switched off too, or sandboxed Bash would skip them.
 const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
-const ASK_SETTINGS = JSON.stringify({
-  permissions: { ask: WRITE_TOOLS },
+const askSettings = (builtinAsks: string[]) => JSON.stringify({
+  permissions: { ask: [...WRITE_TOOLS, ...builtinAsks] },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
 
@@ -1136,7 +1136,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         "--include-partial-messages",
         ...(ownMode ? [] : ["--permission-mode", permissionMode]),
       ];
-      if (asks) args.push("--settings", ASK_SETTINGS);
+      // Ask preallows a built-in's read and chat ops by name; its side effects reach the Ask card
+      const builtinOps = asks && !turn.readOnly;
+      if (asks) args.push("--settings", askSettings(builtinOps ? BUILTIN_SERVERS.filter((server) => turn.integrations?.[server]).flatMap(claudeAskRules) : []));
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
       // `--tools ""` already removes it, so no deny entry there.
@@ -1159,9 +1161,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // acceptEdits run silently denies anything unlisted)
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
-      // Ask preallows a built-in's read and chat ops by name; its side effects reach the Ask card
       const builtinAllowed = (server: BuiltinServer) =>
-        asks && !turn.readOnly ? askPreallowedOps(server).map((op) => `mcp__${server}__${op}`) : [`mcp__${server}`];
+        builtinOps ? askPreallowedOps(server).map((op) => `mcp__${server}__${op}`) : [`mcp__${server}`];
       // Orbit's own servers skip ToolSearch deferral; a fresh CLI session
       // would otherwise re-fetch their schemas every time. A tool can still
       // opt out with _meta "anthropic/alwaysLoad": false (deferOptional).

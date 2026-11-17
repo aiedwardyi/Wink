@@ -1,5 +1,5 @@
 // Ask preallows only "read" and "chat" ops; the rest go through the Ask card native writes use.
-// "chat" stays in Wink's own chats or opens a card the user answers; a peer keeps its own approval.
+// "chat" stays inside this Wink (its chats, task record, Board) or opens a card the user answers; a peer keeps its own approval.
 export type OpEffect = "read" | "chat" | "mutation" | "billing" | "device" | "key";
 
 const OPS = {
@@ -60,6 +60,7 @@ const OPS = {
 } satisfies Record<string, Record<string, OpEffect>>;
 
 export type BuiltinServer = keyof typeof OPS;
+export const BUILTIN_SERVERS = ["agents", "phone", "browser", "terminal"] as const satisfies readonly BuiltinServer[];
 
 // Codex mounts the phone server under its older name.
 const MOUNTS = { agents: "agents", phone: "phone", openmausbot_phone: "phone", browser: "browser", terminal: "terminal" } as const satisfies Record<string, BuiltinServer>;
@@ -83,4 +84,10 @@ export function isSideEffectOp(server: string, tool: string | undefined): boolea
 /** The ops of one built-in server an Ask turn runs without a card. */
 export function askPreallowedOps(server: BuiltinServer): string[] {
   return Object.keys(OPS[server]).filter((tool) => !isSideEffectOp(server, tool));
+}
+
+/** Claude ask rules for a server's side effects; the whole server when none of its ops is known. */
+export function claudeAskRules(server: BuiltinServer): string[] {
+  const ops = Object.keys(OPS[server]);
+  return ops.length ? ops.filter((tool) => isSideEffectOp(server, tool)).map((tool) => `mcp__${server}__${tool}`) : [`mcp__${server}`];
 }

@@ -3453,6 +3453,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       },
     );
 
+    it.each(["mcp__agents__generate_image", "mcp__phone__tap"])("Ask holds %s for the card over the user's own allow rule", async (tool) => {
+      process.env.FAKE_CLAUDE_USER_ALLOW = "mcp__agents,mcp__phone";
+      const { threadId, first } = await play("ask", tool);
+      expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+      await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+    });
+
     it.each(["mcp__agents__list_bots", "mcp__agents__ask_user", "mcp__agents__update_task_state", "mcp__phone__read_screen"])(
       "Ask runs read-only %s with no card",
       async (tool) => {
