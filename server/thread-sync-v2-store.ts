@@ -315,8 +315,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
   }).catch((error: unknown) => console.warn("chat sync v2: boot notice cleanup failed", error)).finally(() => cleaning.clear());
   // the cleanup is awaited outside serial(): a task in it flushes when it lands, not on a retry timer, and other tasks don't queue behind it
+  let closed = false;
   const flushNow = async (threadId: string) => {
     if (cleaning.has(threadId)) await cleaned;
+    // close() drained the queue without this flush; running it now would reopen the worker
+    if (closed) return "skipped" as const;
     return serial(() => flush(threadId));
   };
 
@@ -788,6 +791,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       timers.clear();
     },
     async close(): Promise<void> {
+      closed = true;
       this.stop();
       host.store.setSyncWriter(undefined);
       await queue;

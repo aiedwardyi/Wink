@@ -493,6 +493,27 @@ describe("boot recovery", () => {
     expect(after.messagesFor(bot.threadId).find((row) => row.id === old.id)?.quick).toEqual({ state: "asked" });
   });
 
+  it("leaves an ask on a branch the chat moved off", async () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const start = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "never mind", parentId: start.id });
+    expect(bootRowsNow([bot.threadId]).asks).toEqual([]);
+    await recover(store);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it("leaves an ask whose answer lands after the boot read", async () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    const asks = bootRowsNow([bot.threadId]).asks;
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: ask.id } });
+    await recoverQuickAsks(store, Promise.resolve(asks));
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
   it("recovers an ask from a thread that is still a legacy file", async () => {
     const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = store.createBot({}, { seedMessages: false });

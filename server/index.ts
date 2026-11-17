@@ -1473,6 +1473,7 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 
 let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
+let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
 
 function syncSectionId(section: string | undefined): string | null {
@@ -1762,7 +1763,9 @@ async function importProfileChanges(): Promise<void> {
   ensureProfileSyncWorkspace(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
-  const remote = await readSyncOperationsFor(folder, () => `${profileSyncSettings.folder}\n${profileSyncSettings.workspaceId}\n${profileSyncSettings.syncChats}`);
+  profileImports++;
+  // a newer import's read is the newer log, so this one drops too
+  const remote = await readSyncOperationsFor(folder, () => `${profileImports}\n${profileSyncSettings.folder}\n${profileSyncSettings.workspaceId}\n${profileSyncSettings.syncChats}`);
   // profileSyncSeen is untouched, so the next poll reads the new target
   if (!remote) return;
   if (remote.invalidFiles.length && signature !== profileSyncSeen.signature) {

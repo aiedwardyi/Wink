@@ -228,10 +228,13 @@ export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByT
       const path: Message[] = [];
       // newest first by key, and only until every ask is seen: timestamps need not fall along the path
       let left = ids.size;
+      // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
+      const answered = new Set<string>();
       for (const row of store.activePathBack(threadId)) {
+        if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
         if (ids.has(row.id)) {
           left--;
-          if (row.quick?.state === "asked") path.push(row);
+          if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
         }
         if (!left) break;
       }

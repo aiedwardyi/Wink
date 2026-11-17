@@ -269,6 +269,34 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     }
   });
 
+  it("drops a flush still waiting on boot cleanup when the store closes", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
+    const folder = temp();
+    const options = {
+      store, dataDir: DATA_DIR, deviceId: "local", folder: () => folder, enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message: Message) => message, imported: () => {}, maintenance: () => {},
+    };
+    const first = createThreadSyncV2Store({ ...options, bootReads: testBootReads(DATA_DIR) })!;
+    store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
+    await vi.waitFor(async () => expect(await first.flush("thread")).toBe("written"));
+    await first.close();
+    let release!: () => void;
+    const rows = new Promise<void>((resolve) => { release = resolve; }).then(() => bootRowsNow([], DATA_DIR));
+    const sync = createThreadSyncV2Store({ ...options, bootReads: () => rows })!;
+    store.appendMessage("thread", { role: "user", kind: "text", text: "after restart" });
+    const flushed = sync.flush("thread");
+    const closed = sync.close();
+    release();
+    expect(await flushed).toBe("skipped");
+    await closed;
+  });
+
   it("does not note a pulled head after the folder switches while adoption awaits", async () => {
     const { DATA_DIR } = await import("./config.ts");
     const { Store } = await import("./store.ts");
