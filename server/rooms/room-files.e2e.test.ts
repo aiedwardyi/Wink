@@ -626,6 +626,31 @@ describe("a teammate on 1.0.256 and video or audio files", () => {
   const mp4 = (size: number) => Buffer.concat([Buffer.from("\0\0\0\x18ftypisom\0\0\x02\0isomiso2", "latin1"), randomBytes(size - 24)]);
   const mp3 = (size: number) => Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), randomBytes(size - 10)]);
 
+  it.each(["host", "guest"])("serves %s room video ranges", async (side) => {
+    const { roomId } = await joinedTeam();
+    const bytes = mp4(4096);
+    const file = await hostUpload(roomId, bytes, "clip.mp4");
+    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "clip", fileIds: [file.id] })))).status).toBe(200);
+    await until(() => filesOf(roomId, "clip").length === 1);
+    const path = side === "host" ? `/api/rooms/${roomId}/files/${file.id}` : `/api/joined/rooms/${roomId}/files/${file.id}`;
+    const range = await call("GET", path, undefined, { range: "bytes=100-199" });
+    expect([range.status, range.headers["content-range"], range.headers["accept-ranges"], range.headers["content-type"], range.body]).toEqual([206, "bytes 100-199/4096", "bytes", "video/mp4", bytes.subarray(100, 200)]);
+    const tail = await call("GET", path, undefined, { range: "bytes=-100" });
+    expect([tail.status, tail.headers["content-range"], tail.body]).toEqual([206, "bytes 3996-4095/4096", bytes.subarray(3996)]);
+    const bad = await call("GET", path, undefined, { range: "bytes=5000-6000" });
+    expect([bad.status, bad.headers["content-range"]]).toEqual([416, "bytes */4096"]);
+    const all = await call("GET", path);
+    expect([all.status, all.headers["content-type"], all.body]).toEqual([200, "video/mp4", bytes]);
+    const other = path.replace(roomId, "other-room");
+    expect((await call("GET", other, undefined, { range: "bytes=100-199" })).status).toBe(404);
+    if (side === "guest") {
+      const otherRoom = createPeopleOnlyRoom("Other").id;
+      store.createGroup("Other", [], false, undefined, undefined, { roomId: otherRoom });
+      const privateFile = await hostUpload(otherRoom, bytes, "private.mp4");
+      expect((await call("GET", `/api/joined/rooms/${otherRoom}/files/${privateFile.id}`, undefined, { range: "bytes=100-199" })).status).toBe(404);
+    }
+  });
+
   it("keeps the room live and loadable, with the media named in the line", async () => {
     const { roomId } = await joinedTeam();
     const stream = olderDoor(roomId, `stream?after=${recentRoomEntries(roomId, 1)[0]!.seq}&with=bots`);
