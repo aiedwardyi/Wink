@@ -11,6 +11,8 @@ const ANY = OPEN;
 
 let site: Server;
 let base = "";
+// 1.5 KB of brotli that decodes to 1 GB of zeros.
+const bomb = Buffer.from("y///P/gnAOKxQCD3/o///3/wTwDEYRGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/j//8f/BMAcVgAoHv/x///P/gnAOKwAED3/o///3/wTwDEYQGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/L/2QN/BMAcVgAoBusAQ==", "base64");
 const page = (body: string) => `<!doctype html><html><head><title>Example &amp; Co</title><style>p{color:red}</style><script>var secret=1</script></head><body>${body}</body></html>`;
 
 beforeAll(async () => {
@@ -20,6 +22,14 @@ beforeAll(async () => {
     if (req.url === "/json") return res.writeHead(200, { "content-type": "application/json" }).end('{"a":1}');
     if (req.url === "/img") return res.writeHead(200, { "content-type": "image/png" }).end(Buffer.from([1, 2, 3]));
     if (req.url === "/gone") return res.writeHead(404, { "content-type": "text/plain" }).end("nope");
+    if (req.url === "/bomb") return res.writeHead(200, { "content-type": "text/plain", "content-encoding": "br" }).end(bomb);
+    if (req.url === "/drip") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      const timer = setInterval(() => res.write("x"), 100);
+      setTimeout(() => { clearInterval(timer); res.end(); }, 6000);
+      res.on("close", () => clearInterval(timer));
+      return;
+    }
     if (req.url === "/hop") return res.writeHead(302, { location: "/page" }).end();
     if (req.url === "/loop") return res.writeHead(302, { location: "/loop" }).end();
     if (req.url === "/to-file") return res.writeHead(302, { location: "file:///etc/passwd" }).end();
@@ -103,6 +113,40 @@ describe("read_url", () => {
 
   it("htmlToText keeps block breaks and decodes entities", () => {
     expect(htmlToText("<title>T&#33;</title><body><p>a&nbsp;b</p><p>c</p></body>")).toEqual({ title: "T!", text: "a b\n\nc" });
+  });
+});
+
+describe("hostile pages", () => {
+  it("stops decoding at the cap instead of inflating a compressed bomb", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = process.memoryUsage().rss;
+    const out = await readUrl(`${base}/bomb`, OPEN);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(out.text).toContain("[truncated");
+    expect(process.memoryUsage().rss - before).toBeLessThan(100_000_000);
+  }, 30_000);
+
+  it("gives up on a server that drips bytes past the whole-call deadline", async () => {
+    const started = Date.now();
+    const out = await readUrl(`${base}/drip`, OPEN, 600);
+    expect(out).toMatchObject({ isError: true });
+    expect(out.text).toContain("took longer");
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("converts 2 MB of unclosed markup in about a second", () => {
+    for (const unit of ["<a ", "<script ", "<!--", "<title", "<p>x</p><i "]) {
+      const html = unit.repeat(Math.ceil(2_000_000 / unit.length));
+      const started = Date.now();
+      htmlToText(html);
+      expect(Date.now() - started, unit).toBeLessThan(1500);
+    }
+  });
+
+  it("marks the page as untrusted and keeps public IPv4 reachable under the guard", async () => {
+    expect((await readUrl(`${base}/page`, OPEN)).text).toContain("untrusted data");
+    for (const address of ["93.184.216.34", "8.8.8.8", "2606:4700:4700::1111"]) expect(PUBLIC_ONLY.blocks(address), address).toBe(false);
+    for (const address of ["::7f00:1", "::ffff:0:7f00:1", "64:ff9b:1::7f00:1", "2002:7f00:1::"]) expect(PUBLIC_ONLY.blocks(address), address).toBe(true);
   });
 });
 
