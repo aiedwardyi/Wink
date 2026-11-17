@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,8 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
+import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { credentialSaveResponse } from "./credential-save.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, VOICE_SAID } from "../shared/live-call.ts";
 import type { AppConfig } from "./config.ts";
 import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
@@ -306,6 +308,36 @@ describe("call token", () => {
     const bot = h.store.createBot({ name: "Orbit" }, { seedMessages: false });
     await h.post("token", {}, bot.id);
     expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("You are Orbit.");
+  });
+
+  it("the key card is three short steps, and a key saved through it never reaches chat, notes or the brief", async () => {
+    const h = harness({ key: undefined });
+    await h.post("token");
+    const card = h.store.activePath(h.bot.threadId).find((row) => row.kind === "secret")!;
+    // Old copy: 11-word description + 8-word lock line.
+    expect(card.secret!.description).toBe("Open Get API key, sign in, click Create API key (top right), paste it here.");
+    expect(card.secret!.description.split(/\s+/).length).toBeLessThanOrEqual(19);
+
+    const bridge = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ saved: true }));
+    const save = await credentialSaveResponse({ url: "http://127.0.0.1:1", token: "t" }, { target: "geminiApiKey", value: KEY }, bridge as unknown as typeof fetch);
+    expect(save).toEqual({ status: 200, body: { saved: true } });
+    expect(bridge).toHaveBeenCalledTimes(1);
+    h.cfg.gemini = { apiKey: KEY };
+    const reply = { writeHead: () => {}, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+    const routes = createBotChatRoutes({
+      cfg: h.cfg,
+      store: h.store,
+      secretMessage: (_botId: string, threadId: string, id: string) => h.store.messagesFor(threadId).find((row) => row.id === id) ?? null,
+      resumeSecretCard: (_botId: string, threadId: string, id: string) => h.store.patchMessage(threadId, id, { secret: { ...card.secret!, provided: true, resumed: true } }),
+    } as never);
+    await routes.secretCard(Readable.from([JSON.stringify({ threadId: h.bot.threadId })]) as IncomingMessage, reply, ["", h.bot.id, card.id, "provided"] as unknown as RegExpMatchArray);
+    expect(h.store.messagesFor(h.bot.threadId).find((row) => row.id === card.id)?.secret?.provided).toBe(true);
+
+    await h.post("token");
+    const notes = join(workspaceDir(h.bot.id));
+    const files = [h.dir, notes].flatMap((dir) => existsSync(dir) ? readdirSync(dir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).map((f) => readFileSync(join(f.parentPath, f.name), "utf8")) : []);
+    const chat = JSON.stringify(h.store.messagesFor(h.bot.threadId));
+    for (const where of [chat, ...files, h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text]) expect(where).not.toContain(KEY);
   });
 
   it("409s without a key and puts one Gemini key card in the chat", async () => {

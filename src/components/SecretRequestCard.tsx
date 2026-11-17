@@ -134,11 +134,6 @@ export function SecretRequestCard({
                 </div>
               </div>
             )}
-            {!provided && !declined && (
-              <p className="mt-1 flex items-center gap-1 text-[11.5px] text-ink-secondary/80">
-                <LockKeyhole size={11} /> {t("secret.storedLocally")}
-              </p>
-            )}
             {error && <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p>}
           </div>
           {!provided && !declined && (
