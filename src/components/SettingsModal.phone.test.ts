@@ -84,8 +84,8 @@ afterEach(async () => {
 
 describe("phone Settings navigation", () => {
   it.each([
-    ["en", ["Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index"]],
-    ["ko", ["계정", "일반", "연결", "사용량", "기기", "테마", "모델 지표"]],
+    ["en", ["Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index"]],
+    ["ko", ["계정", "나에 대해", "일반", "연결", "사용량", "기기", "테마", "모델 지표"]],
   ])("opens the labeled list in %s without mounting a page or Shortcuts", async (locale, labels) => {
     await open(locale);
     const rows = [...dialog()!.querySelectorAll("nav button")].filter((node) => node.querySelector(".lucide-chevron-right"));
@@ -101,7 +101,7 @@ describe("phone Settings navigation", () => {
     expect(pane.querySelector("#settings-profile-name")).not.toBeNull();
     expect(pane.querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
     // the Activity card holds its place while its numbers load
-    expect([...pane.children].map((child) => child.textContent?.startsWith("Activity"))).toEqual([false, false, true]);
+    expect([...pane.children].map((child) => child.textContent?.startsWith("Activity"))).toEqual([false, true]);
     expect(pane.textContent).not.toContain("Sync");
   });
 
@@ -262,7 +262,7 @@ describe("phone Settings navigation", () => {
     phone = false;
     await open();
     expect([...dialog()!.querySelectorAll("nav button")].map((node) => node.getAttribute("aria-label"))).toEqual([
-      "Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
+      "Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
     expect(button("General")?.getAttribute("aria-current")).toBe("page");
     expect(button("Back")).toBeNull();

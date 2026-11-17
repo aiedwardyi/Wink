@@ -8,7 +8,7 @@ import { I18nProvider, useI18n, type LocaleId } from "@/lib/i18n";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { CallHostSlot, CallWidgetSlot } from "./CallSlots";
-import { CallVoicePicker } from "./CallVoicePicker";
+import { CallSettings } from "./CallSettings";
 import { ChatView } from "./ChatView";
 import { failedText } from "./LiveCallBar";
 
@@ -87,7 +87,7 @@ const render = (chat: Bot | null) => act(async () => root.render(createElement(I
   createElement(Locale),
   chat ? createElement(ChatView, { bot: chat }) : null,
   createElement("aside", { "data-test-sidebar": true }, createElement(CallWidgetSlot as (props: object) => ReactNode, {})),
-  createElement("section", { "data-test-settings": true }, createElement(CallVoicePicker)),
+  createElement("section", { "data-test-settings": true }, createElement(CallSettings, { bot: juno })),
   createElement(CallHostSlot),
   createElement(Selected),
 ))));
@@ -174,9 +174,9 @@ describe("call follows you", () => {
     await mount(atlas);
     const engine = await call();
     await render(juno);
-    await act(async () => pills("Call voice")[1]!.click());
+    await act(async () => pills("Voice")[1]!.click());
     await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:3", ...CONFIG, liveCall: { voice: "Alnilam", language: "auto" } }), lastEventId: "qa:3" }));
-    expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(pills("Voice")[1]!.getAttribute("aria-checked")).toBe("true");
     expect(fakes.engines).toEqual([engine]);
     expect(engine.closed).toBe(false);
     expect(button(widget()!, "Mute")).not.toBeNull();
@@ -280,27 +280,14 @@ describe("call follows you", () => {
   });
 });
 
-describe("call voice in Settings", () => {
-  it("offers every voice in the call menu's grid, no call language, and saves each pick", async () => {
-    await mount(atlas);
-    expect(pills("Call voice")).toHaveLength(30);
-    expect(pills("Call voice").slice(0, 3).map((p) => [p.textContent!.replace(/^(Jenn|Eddie|Adele).*/, "$1"), p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"], ["Adele", "false"]]);
-    expect(settings().querySelector("[data-call-voices]")).not.toBeNull();
-    expect(settings().textContent).not.toContain("Call language");
-    await act(async () => pills("Call voice")[1]!.click());
-    expect(fakes.puts).toEqual([{ liveCall: { voice: "Alnilam" } }]);
-    await vi.waitFor(() => expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true"));
-    expect(fakes.engines).toHaveLength(0);
-  });
-
-  it("labels the card in Korean", async () => {
+describe("call voice menu", () => {
+  it("labels the voices in Korean", async () => {
     await mount(atlas);
     await act(async () => changeLocale("ko"));
     try {
       await render(atlas);
       const text = settings().textContent!;
-      for (const word of ["통화 목소리", "Jenn", "Eddie", "아델"]) expect(text).toContain(word);
-      expect(text).not.toContain("통화 언어");
+      for (const word of ["Jenn", "Eddie", "아델"]) expect(text).toContain(word);
       await act(async () => button(settings(), "Jenn 들어보기")!.click());
       expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
       await act(async () => button(settings(), "아델 들어보기")!.click());
@@ -332,7 +319,7 @@ describe("call voice in Settings", () => {
     expect(fakes.clips).toHaveLength(0);
     await act(async () => preview("Eddie")!.click());
     expect(fakes.puts).toEqual([]);
-    expect(pills("Call voice")[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(pills("Voice")[0]!.getAttribute("aria-checked")).toBe("true");
     expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Alnilam-en.mp3", false]]);
     expect(preview("Eddie")!.getAttribute("aria-label")).toBe("Stop Eddie");
     await act(async () => preview("Jenn")!.click());

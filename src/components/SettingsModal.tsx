@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
+import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Import, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
@@ -24,7 +24,6 @@ import { GeometryPicker } from "./GeometryPicker";
 import { TerminalAppearanceRow } from "./TerminalAppearanceRow";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { LanguagePicker } from "./LanguagePicker";
-import { CallVoicePicker } from "./CallVoicePicker";
 import { useI18n } from "@/lib/i18n";
 import { isTransientUpdateError } from "../../shared/update-error.mjs";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
@@ -55,6 +54,7 @@ const SECTIONS: Array<{
   shortcut?: string;
 }> = [
   { id: "account", icon: User },
+  { id: "about-you", icon: Import },
   { id: "general", icon: Settings },
   { id: "connections", icon: KeyRound },
   { id: "usage", icon: Coins, shortcut: "Alt+U" },
@@ -67,6 +67,7 @@ const SECTIONS: Array<{
 
 const SECTION_KEY = {
   account: "settings.section.account",
+  "about-you": "settings.section.aboutYou",
   general: "settings.section.general",
   connections: "settings.section.connections",
   themes: "settings.section.themes",
@@ -629,17 +630,17 @@ export function SettingsModal({
                     )}
                   </div>
                 </Card>
-                <AboutYouCard />
                 <ActivityCard waved={activityWaved} />
               </>
             )}
+
+            {section === "about-you" && <AboutYouCard />}
 
             {section === "companion" && <PhoneLinkSettings />}
 
             {section === "general" && (
               <>
                 <LanguagePicker />
-                <CallVoicePicker />
                 {!window.ogb && <Card><PhoneNotificationSettings /></Card>}
                 <VibrationRow />
                 <UpdatesRow />

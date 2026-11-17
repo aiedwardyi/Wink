@@ -254,27 +254,29 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("expands the box with call settings from the gear", async () => {
+  it("has no gear: a right-click on End opens the small call menu and a click still ends", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      const gear = button(frame(host), "Call settings")!;
-      expect(gear.getAttribute("aria-expanded")).toBe("false");
+      expect(button(frame(host), "Call settings")).toBeNull();
       expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
-      await act(async () => gear.click());
-      expect(gear.getAttribute("aria-expanded")).toBe("true");
-      const panel = frame(host).querySelector<HTMLElement>("[data-call-settings]")!;
-      expect(panel.className).toContain("row-start-4");
-      expect(panel.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
-      await act(async () => gear.click());
-      expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+      const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+      await act(async () => button(frame(host), "End")!.dispatchEvent(right));
+      expect(right.defaultPrevented).toBe(true);
+      const menu = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
+      expect(menu.querySelector('input[aria-label="Speed"]')).not.toBeNull();
+      expect(parseFloat(menu.style.width)).toBeLessThanOrEqual(400);
+      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await act(async () => button(frame(host), "End")!.click());
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
     } finally {
       await unmount();
     }
   });
 
-  it("Back closes the call settings first, and a short screen scrolls them", async () => {
+  it("Back closes the call menu first", async () => {
     const layers = new Map<string, () => void>();
     const layer = (event: Event) => {
       const { key, close } = (event as CustomEvent<{ key: string; close?: () => void }>).detail;
@@ -285,13 +287,12 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      await act(async () => button(frame(host), "Call settings")!.click());
-      const panel = frame(host).querySelector<HTMLElement>("[data-call-settings]")!;
-      expect(panel.className).toContain("overflow-y-auto");
-      expect(panel.className).toMatch(/max-h-\[min\(60dvh/);
+      await act(async () => button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
       expect(layers.size).toBe(1);
       await act(async () => [...layers.values()][0]!());
-      expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
     } finally {
       window.removeEventListener("orbit:back-layer", layer);
       await unmount();

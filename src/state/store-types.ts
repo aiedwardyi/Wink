@@ -485,6 +485,7 @@ export interface InstanceInfo {
 
 export type AppSettingsSection =
   | "account"
+  | "about-you"
   | "general"
   | "connections"
   | "themes"

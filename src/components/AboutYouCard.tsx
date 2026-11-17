@@ -12,7 +12,7 @@ type Added = { added: number; found: number; hidden: number; full: number };
 const STEP = "flex items-center justify-between gap-4";
 const STEP_TITLE = "text-[13px] font-medium text-ink";
 
-/** Settings > Account: what the user's other AI knew about them, read by every bot. */
+/** Settings > About You: what the user's other AI knew about them, read by every bot. */
 export function AboutYouCard() {
   const { t } = useI18n();
   const [sources, setSources] = useState<Source[] | null>(null);

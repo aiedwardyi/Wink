@@ -1,7 +1,8 @@
-// Every engine gets the code-fix rules, on the 1:1 and the room route, with
-// the line that lets the user's own instructions override them, plus the
-// plain-words rule for talking to people, the repeat-mistakes rule, the Forum rule and the model picks. Boots the
-// real server on each engine's fake CLI and reads what the CLI received.
+// Every engine gets the code-fix rules, even under a bot's own instructions,
+// on the 1:1 and the room route, with the line that lets the user's own
+// instructions override them, plus the plain-words rule for talking to people,
+// the repeat-mistakes rule, the decision-notes rule, the Forum rule and the model picks. Boots
+// the real server on each engine's fake CLI and reads what the CLI received.
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,12 @@ const RULES = [
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
 const FORUM = "When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
+const CUSTOM = "Keep build notes in the team wiki.";
+const DECISIONS = [
+  "In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date",
+  "Mark everything else 'suggestion, not agreed' and ask before building it.",
+  "When the user changes their mind, replace the old note; never keep two that disagree.",
+];
 const MODEL_PICKS = "Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.";
 
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok", "muse"] as const;
@@ -81,6 +88,7 @@ describe("code-fix rules on every engine", () => {
     expect(prompt).toContain(REPEAT_MISTAKES);
     expect(prompt).toContain(FORUM);
     expect(prompt).toContain(MODEL_PICKS);
+    for (const rule of DECISIONS) expect(prompt).toContain(rule);
   };
 
   beforeAll(async () => {
@@ -125,14 +133,17 @@ describe("code-fix rules on every engine", () => {
     await removeTempDir(home);
   });
 
-  it.each(ENGINE_NAMES)("reach %s in a 1:1 and a room", async (engine) => {
+  it.each(ENGINE_NAMES)("reach a custom bot on %s in a 1:1 and a room", async (engine) => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     let room: { id: string } | undefined;
     try {
       expect((await api("PATCH", `/api/bots/${bot.id}`, {
         modelSelection: { instanceId: engine, model: ENGINES[engine].model },
+        description: CUSTOM,
       })).status).toBe(200);
-      expectRules(await sendAndRead(engine, `/api/bots/${bot.id}/messages`, `find the flaky test on ${engine}`));
+      const prompt = await sendAndRead(engine, `/api/bots/${bot.id}/messages`, `find the flaky test on ${engine}`);
+      expect(prompt).toContain(CUSTOM);
+      expectRules(prompt);
       await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
 
       const group = (await api("POST", "/api/groups", {
@@ -141,7 +152,9 @@ describe("code-fix rules on every engine", () => {
         setup: { bulletin: "", defaultResponder: { kind: "member", botId: bot.id } },
       })).body.group;
       room = group;
-      expectRules(await sendAndRead(engine, `/api/groups/${group.id}/messages`, `fix the room bug on ${engine}`));
+      const roomPrompt = await sendAndRead(engine, `/api/groups/${group.id}/messages`, `fix the room bug on ${engine}`);
+      expect(roomPrompt).toContain(CUSTOM);
+      expectRules(roomPrompt);
     } finally {
       if (room) {
         await api("POST", `/api/groups/${room.id}/interrupt`, {}).catch(() => undefined);
