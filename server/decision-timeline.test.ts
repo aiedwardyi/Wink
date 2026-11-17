@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { acceptFacts, attachedImages, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
+import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { currentPicks } from "./picks.ts";
 import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
@@ -527,6 +528,20 @@ describe("decision timeline", () => {
     await settle();
     expect(memorySystemPrompt(BOT)).toContain('- forum look (11-17): C - Reddit cards + tweaks: "make the header smaller" (11-17)');
     expect(timeline().match(/\| current$/gm)).toHaveLength(1);
+  });
+
+  it("replaces a pick the user changes under the same letter", async () => {
+    bot("Header color? A - blue header, B - gray header.");
+    say("i choose a");
+    reply({ kind: "decision", key: "Header color", fact: "A - blue header", quote: "i choose a" });
+    await settle();
+    const quote = "For Header color, pick A - red header instead.";
+    say(quote);
+    reply({ kind: "decision", key: "Header color", fact: "A - red header", quote });
+    await settle();
+    expect(timeline()).toMatch(/\| Header color \| replaced by .+\n- Picked: ~~A - blue header~~\n[\s\S]*\| Header color \| current\n- Picked: A - red header\n/);
+    expect(currentPicks(timeline()).map(({ picked }) => picked)).toEqual(["A - red header"]);
+    expect(store.messagesFor("t1").filter(({ tool }) => tool?.name === MEMORY_SAVE_TOOL)).toHaveLength(2);
   });
 
   it("moves an older Auto Notes line on the same question out of MEMORY.md when the note-taker names no line", async () => {

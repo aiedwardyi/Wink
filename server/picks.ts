@@ -90,13 +90,14 @@ export const pickKey = (key: string) => key.toLowerCase().replace(/[^\p{L}\p{N}]
 
 const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
 
-/** Two names of one option: the same letter or number with no words that differ in full, else the same words. */
+/** Two names of one option: the same letter or number with one name's words all in the other, else the same words. */
 export function sameOption(a: string, b: string): boolean {
   const [x, y] = [LABELED.exec(a.trim())?.[1]?.toLowerCase(), LABELED.exec(b.trim())?.[1]?.toLowerCase()];
   const [p, q] = [a.trim().replace(LABELED, ""), b.trim().replace(LABELED, "")];
   if (!x || !y) return pickKey(p) === pickKey(q);
   const [s, t] = [stems(p), stems(q)];
-  return x === y && (!s.size || !t.size || [...s].some((stem) => t.has(stem)));
+  const within = (inner: Set<string>, outer: Set<string>) => [...inner].every((stem) => outer.has(stem));
+  return x === y && (within(s, t) || within(t, s));
 }
 
 export function pickStamp(ms: number): string {

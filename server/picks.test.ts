@@ -223,6 +223,15 @@ describe("applyPicks order", () => {
     expect(applyPicks(first.text, [pick("forum look", "C - Reddit-style cards", "yes, c with the reddit style cards", at(17, 12))])).toBeNull();
   });
 
+  it("replaces a pick when the same letter names a changed option", () => {
+    const blue = applyPicks("", [pick("Header color", "A - blue header", "a", at(17, 10))])!;
+    const red = applyPicks(blue.text, [pick("Header color", "A - red header", "For Header color, pick A - red header instead.", at(17, 10, 2))])!;
+    expect(red).toMatchObject({ picks: 1, replaced: 1 });
+    expect(red.text).toContain("- Picked: ~~A - blue header~~");
+    expect(currentPicks(red.text).map(({ picked }) => picked)).toEqual(["A - red header"]);
+    expect(applyPicks(red.text, [pick("Header color", "A - red header bar", "a, the red header bar", at(17, 10, 3))])).toBeNull();
+  });
+
   it("lands a tweak the user asks for again after reversing it", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
     const back = applyPicks(first.text, [tweak("forum look", "keep the header large", at(17, 12)), tweak("forum look", "make the header smaller", at(17, 13))])!;
