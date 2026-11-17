@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -149,4 +149,41 @@ it("carries the latest submitted review's Conversation anchor and keeps each rev
   const none = (await createMapFlow(answer([])).flow(root, base)).pr;
   expect(none?.reviewUrl).toBeUndefined();
   expect(stage(flow(none), "review")?.url).toBe(url);
+});
+
+const lastFile = () => { const dir = mkdtempSync(join(tmpdir(), "wink-map-last-")); roots.push(dir); return join(dir, "map-flows.json"); };
+const pushed = (checkout: ReturnType<typeof repo>) => { checkout.git("remote", "add", "origin", "https://github.com/o/r.git"); checkout.git("update-ref", "refs/remotes/origin/feat/x", checkout.commit("feat: one")); return checkout; };
+const answer = (state = "OPEN") => vi.fn(async (_cwd: string, args: string[]) => args[0] === "api" ? "{}" : JSON.stringify(view({ state })));
+
+it("keeps a checkout's last rows across a restart and swaps a merged PR in on the next read", async () => {
+  const { root, base } = pushed(repo());
+  const file = lastFile();
+  const first = await createMapFlow(answer(), file).flow(root, base);
+  const restarted = createMapFlow(answer("MERGED"), file);
+  expect(await restarted.last(root, base)).toEqual(first);
+  expect((await restarted.flow(root, base)).pr?.state).toBe("merged");
+  expect((await createMapFlow(answer(), file).last(root, base))?.pr?.state).toBe("merged");
+});
+
+it("never hands a checkout's last rows to another repo, folder or branch", async () => {
+  const a = pushed(repo());
+  const b = pushed(repo());
+  const file = lastFile();
+  await createMapFlow(answer(), file).flow(a.root, a.base);
+  const flows = createMapFlow(answer(), file);
+  expect(await flows.last(a.root, a.base)).toMatchObject({ branch: "feat/x", pr: { number: 1529 } });
+  expect(await flows.last(b.root, b.base)).toBeNull();
+  const tree = join(lastFile(), "..", "tree");
+  a.git("worktree", "add", "-q", "-b", "feat/w", tree);
+  expect(await flows.last(tree, a.base)).toBeNull();
+  await flows.flow(tree, a.base);
+  expect(await flows.last(tree, a.base)).toMatchObject({ branch: "feat/w" });
+  a.git("checkout", "-qb", "feat/y");
+  expect(await flows.last(a.root, a.base)).toBeNull();
+  a.git("checkout", "-q", "feat/x");
+  a.git("worktree", "remove", "--force", tree);
+  rmSync(join(a.root, ".git"), { recursive: true, force: true });
+  a.git("init", "-q", "-b", "feat/x");
+  expect(await flows.last(a.root, a.commit("another repo"))).toBeNull();
+  expect(await flows.last(a.root, a.base)).toBeNull();
 });

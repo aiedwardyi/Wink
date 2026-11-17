@@ -256,3 +256,29 @@ it("puts one row per worker in its color, failing CI first, in Korean too", asyn
   expect(new Set(rows.map(row => row.style.getPropertyValue("--flow-line"))).size).toBe(3);
   expect(rows[0].querySelector('[data-k="pr"]')?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
 });
+
+it("paints a checkout's last rows before the tree and the code, then swaps in only what changed", async () => {
+  const last = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pending" }] }) });
+  flows.a = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }] }) });
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return Response.json(at.searchParams.get("cached") ? last : flows[at.searchParams.get("worker")!]); });
+  await render({ open: true, active: false });
+  expect(calls()).toEqual(["/api/bots/bot/map/flow?worker=a&cached=1"]);
+  expect(stops()).toContain("checks:run");
+  const row = host.querySelector(".map-flow-row");
+  await render({ open: true, active: true });
+  expect(calls()).toEqual(["/api/bots/bot/map/flow?worker=a&cached=1", "/api/bots/bot/map/flow?worker=a"]);
+  expect(stops()).toContain("checks:ok");
+  expect(host.querySelector(".map-flow-row")).toBe(row);
+});
+
+it("waits for the read when a checkout has no last rows, and a late cached answer never covers it", async () => {
+  let late: (value: Response) => void = () => {};
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return at.searchParams.get("cached") ? new Promise<Response>(done => { late = done; }) : Response.json(flows.a); });
+  await render({ open: true, active: false });
+  expect(host.querySelector(".map-flow-row")).toBeNull();
+  flows.a = flow({ pr: pr({ state: "merged" }) });
+  await render({ open: true, active: true });
+  expect(stops()).toContain("merge:merged");
+  await act(async () => late(Response.json(flow())));
+  expect(stops()).toContain("merge:merged");
+});

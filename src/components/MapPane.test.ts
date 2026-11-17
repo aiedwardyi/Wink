@@ -139,16 +139,17 @@ it("pauses hidden views without losing the user's manual selection", async () =>
   expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
 });
 
-it("asks for Git rows only once the tree and the code have landed", async () => {
+it("asks for the last Git rows at once and reads them again only once the tree and the code have landed", async () => {
   const held: Record<string, (body: object) => void> = {};
+  const kind = (url: Parameters<typeof fetch>[0]) => String(url).includes("cached=1") ? "last" : /\/(repo|file|flow)\?/.exec(String(url))![1];
   vi.mocked(fetch).mockImplementation(url => {
-    const kind = /\/(repo|file|flow)\?/.exec(String(url))![1];
-    return kind === "flow" ? Promise.resolve(Response.json({ commits: [] })) : new Promise(done => { held[kind] = body => done(Response.json(body)); });
+    const asked = kind(url);
+    return asked === "flow" || asked === "last" ? Promise.resolve(Response.json(asked === "last" ? null : { commits: [] })) : new Promise(done => { held[asked] = body => done(Response.json(body)); });
   });
-  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => /\/(repo|file|flow)\?/.exec(String(url))![1]);
+  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => kind(url));
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit();
-  expect(asked().toSorted()).toEqual(["file", "repo"]);
+  expect(asked().toSorted()).toEqual(["file", "last", "last", "repo"]);
   await act(async () => held.repo(repo));
   expect(asked()).not.toContain("flow");
   await act(async () => held.file({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] }));

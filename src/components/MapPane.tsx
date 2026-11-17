@@ -263,7 +263,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId: st
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapSplit target={topRef} rows />
-      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active && rows} />
+      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} open={active} active={active && rows} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
         <div ref={barRef} className="map-crumbs">
