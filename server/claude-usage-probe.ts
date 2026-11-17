@@ -1,8 +1,11 @@
+import type { SpawnOptions } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 
 import type { AccountContext } from "./account-policy.ts";
-import { scrubbedEnv } from "./config.ts";
+import { DATA_DIR, scrubbedEnv } from "./config.ts";
 import type { RateLimitWindow } from "./contracts.ts";
 import { killCliTree, spawnCli } from "./procs.ts";
 
@@ -19,12 +22,18 @@ const response = z.object({
   response: z.object({ subtype: z.literal("success"), request_id: z.string(), response: z.unknown() }),
 });
 type Report = { windows: RateLimitWindow[]; observedAt: string };
+// Stays empty, as for the driver's lean helpers: the CLI lists its start folder.
+const LEAN_DIR = join(DATA_DIR, "helper");
 
-export function readClaudeUsage(cli: string, env: NodeJS.ProcessEnv, account: AccountContext): Promise<RateLimitWindow[]> {
+export function readClaudeUsage(cli: string, env: NodeJS.ProcessEnv, account?: AccountContext): Promise<RateLimitWindow[]> {
   return new Promise((resolve, reject) => {
-    const child = spawnCli(cli, ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"], {
-      cwd: account.home, env: scrubbedEnv(env), stdio: ["pipe", "pipe", "pipe"], account, accountDriver: "claudeAgent",
-    });
+    if (!account) mkdirSync(LEAN_DIR, { recursive: true });
+    const childEnv = scrubbedEnv(env);
+    delete childEnv.CLAUDECODE;
+    delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+    const options: SpawnOptions = { cwd: account?.home ?? LEAN_DIR, env: childEnv, stdio: ["pipe", "pipe", "pipe"] };
+    const child = spawnCli(cli, ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"],
+      account ? { ...options, account, accountDriver: "claudeAgent" } : options);
     const lines = createInterface({ input: child.stdout });
     let settled = false;
     let requestId = "initialize";
@@ -79,10 +88,11 @@ export function createClaudeUsageProbe(deps: {
   const now = deps.now ?? Date.now;
   const reads = new Map<string, { generation: number; retryAt: number; pending: Promise<Report | undefined> }>();
   let queue: Promise<unknown> = Promise.resolve();
-  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext) => {
-    const cached = reads.get(account.id);
-    if (cached && now() < cached.retryAt) return cached.generation === account.generation ? cached.pending : Promise.resolve(undefined);
-    const entry = { generation: account.generation, retryAt: Infinity, pending: Promise.resolve<Report | undefined>(undefined) };
+  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext | undefined, id = account?.id ?? "") => {
+    const generation = account?.generation ?? 0;
+    const cached = reads.get(id);
+    if (cached && now() < cached.retryAt) return cached.generation === generation ? cached.pending : Promise.resolve(undefined);
+    const entry = { generation, retryAt: Infinity, pending: Promise.resolve<Report | undefined>(undefined) };
     entry.pending = queue.then(async () => {
       entry.retryAt = now() + 300_000 + Math.floor((deps.random ?? Math.random)() * 30_000);
       try {
@@ -90,7 +100,7 @@ export function createClaudeUsageProbe(deps: {
         return { windows, observedAt: new Date(now()).toISOString() };
       } catch { return undefined; }
     });
-    reads.set(account.id, entry);
+    reads.set(id, entry);
     queue = entry.pending;
     return entry.pending;
   };

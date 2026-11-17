@@ -27,7 +27,7 @@ describe("usage swap refresh", () => {
     const reset = new Date(now + 7 * 86_400_000).toISOString();
     const read = vi.fn(async () => ({ windows: [{ id: "seven_day", usedPercent: 40, resetsAt: Date.parse(reset) }], observedAt: new Date(now).toISOString() }));
     const refresh = createUsageRefresh({ now: () => now, platform: "linux",
-      request: async () => { await read(); return Response.json({ seven_day: { utilization: 40, resets_at: reset } }); },
+      claude: async () => { await read(); return [{ id: "seven_day", usedPercent: 40, resetsAt: Date.parse(reset), windowMinutes: 10080 }]; },
       rpc: async () => { await read(); return { rateLimits: { secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: Date.parse(reset) / 1000 } } }; },
       billing: async () => { await read(); return { config: { creditUsagePercent: 40, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: reset } } }; },
       muse: async () => { await read(); return { usage: { observedAtMs: now, tier: "pro",
@@ -79,16 +79,16 @@ describe("usage swap refresh", () => {
     expect(billing).toHaveBeenCalledTimes(2);
   });
 
-  it("drops Claude's shared credential cache when its identity changes", async () => {
+  it("drops Claude's shared login cache when its identity changes", async () => {
     let used = 100;
-    const request = vi.fn(async () => Response.json({ seven_day: { utilization: used, resets_at: null } }));
-    const refresh = createUsageRefresh({ request, platform: "linux" });
+    const claude = vi.fn(async () => [{ id: "seven_day", usedPercent: used, resetsAt: null }]);
+    const refresh = createUsageRefresh({ claude, platform: "linux" });
     const options = { instanceId: "claude", environment: { CLAUDE_CODE_OAUTH_TOKEN: "fixture-only" } };
     expect((await refresh("claudeAgent", options)).report?.windows[0].usedPercent).toBe(100);
     used = 40;
     refresh.invalidate("claude");
     expect((await refresh("claudeAgent", options)).report?.windows[0].usedPercent).toBe(40);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(claude).toHaveBeenCalledTimes(2);
   });
 
   it("drops the managed Claude probe cache on an identity swap", async () => {

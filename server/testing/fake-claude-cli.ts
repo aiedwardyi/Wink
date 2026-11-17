@@ -86,6 +86,8 @@
 //                      line {pid, argv, systemPrompt, text}, so a test sees
 //                      what each turn of a retained process was sent
 //   FAKE_CLAUDE_INIT_REPLY  error: refuse an `initialize` control request
+//   FAKE_CLAUDE_GET_USAGE  path to the JSON a `get_usage` control request
+//                      answers with; FAKE_USAGE_CALLS gets that path per answer
 //   FAKE_CLAUDE_EAGER_INIT  path; a session process prints `init` before any
 //                      stdin, then creates this file
 //   FAKE_CLAUDE_HOLD_DIR  path; a prompt whose last hold:<name> is that name
@@ -1096,6 +1098,10 @@ process.stdin.on("data", (c) => {
       const requestId = String(control.request_id ?? "");
       if (control.request?.subtype === "interrupt" && onInterrupt) onInterrupt(requestId);
       else if (control.request?.subtype === "apply_flag_settings") answerFlagSettings(requestId, control.request.settings?.effortLevel);
+      else if (control.request?.subtype === "get_usage" && process.env.FAKE_CLAUDE_GET_USAGE) {
+        if (process.env.FAKE_USAGE_CALLS) appendFileSync(process.env.FAKE_USAGE_CALLS, `${process.env.FAKE_CLAUDE_GET_USAGE}\n`);
+        out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: JSON.parse(readFileSync(process.env.FAKE_CLAUDE_GET_USAGE, "utf8")) } });
+      }
       else if (control.request?.subtype === "initialize") {
         if (process.env.FAKE_CLAUDE_INIT_REPLY === "error") out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "unsupported" } });
         else {
