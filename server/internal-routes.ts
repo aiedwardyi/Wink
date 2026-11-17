@@ -34,7 +34,7 @@ import { buildNotification, type Notification } from "./notify.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
-import { cancelWake, setWake, syncAskWakes } from "./self-wake.ts";
+import { cancelWake, dropNewAskWakes, setWake, syncAskWakes } from "./self-wake.ts";
 import { agentRoster, sectionKey, type BotRecord, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks } from "./task-asks.ts";
@@ -202,6 +202,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
+      if (!saved && asks) dropNewAskWakes(routines, bot.id, current.asks, asks.asks);
       if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
