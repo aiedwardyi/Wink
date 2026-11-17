@@ -88,7 +88,7 @@ export function AboutYouCard() {
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
         <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-inset p-1.5">
-          <div tabIndex={0} className="max-h-[84px] min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink focus:outline-none">
+          <div tabIndex={0} className="max-h-[84px] min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus:outline-none">
             {t("aboutYou.prompt")}
           </div>
           <button
@@ -120,7 +120,7 @@ export function AboutYouCard() {
   );
 
   return (
-    <Card title={t("aboutYou.title")} subtitle={known ? t("aboutYou.known") : t("aboutYou.empty")}>
+    <Card subtitle={known ? t("aboutYou.known") : t("aboutYou.empty")}>
       {note && <div role="status" className="mb-3 text-[13px] text-ink">{note}</div>}
       {known ? (
         <>
