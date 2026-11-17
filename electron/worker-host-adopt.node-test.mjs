@@ -223,14 +223,15 @@ test("a pane that finished while the app was closed is told to its bot once, and
   const second = app(before.root, runtimeRoot);
   // Adoption reads the host's list, so it starts once the host has seen every command end.
   await until(async () => await second.client.prewarm() && (await second.client.panes()).every((pane) => pane.exit !== null || pane.mark?.kind === "D"));
-  await second.adopt();
+  const warned = [];
+  await second.adopt({ warn: (line) => warned.push(String(line)) });
   const [quiet, told, gone] = before.panes;
-  assert.deepEqual(sorted(second.notes.map((note) => `${note.bot}: ${note.text}`)), [
+  // A pane adoption could not take back is held with only a warning, so the warnings show why one is missing from the note.
+  assert.deepEqual([sorted(second.notes.map((note) => `${note.bot}: ${note.text}`)), warned, second.events.filter(([channel, value]) => value.id === gone.sessionId && /opened|exit|error/.test(channel)).map(([channel, value]) => [channel, value.exitCode ?? value.message])], [[
     `bot-0: FINISHED WHILE WINK WAS DOWN: KEEP-0 [pane ${quiet.sessionId.slice(0, 8)}] command ended, no report: read it, then close it; KEEP-2 [pane ${gone.sessionId.slice(0, 8)}] exit 3, no report: read it, then close it.`,
     `bot-1: FINISHED WHILE WINK WAS DOWN: KEEP-1 [pane ${told.sessionId.slice(0, 8)}] reported (report above).`,
-  ]);
+  ], [], [["terminal:opened", undefined], ["terminal:exit", 3]]]);
   assert.match(second.host.watchBot("bot-0", quiet.sessionId, { send: () => 0, drop() {}, end() {} }).snapshot.output, /WORK=42/);
-  assert.deepEqual(second.events.filter(([channel, value]) => value.id === gone.sessionId && /opened|exit/.test(channel)).map(([channel, value]) => [channel, value.exitCode]), [["terminal:opened", undefined], ["terminal:exit", 3]]);
   await until(async () => (await second.client.panes()).length === 2, 30_000);
   assert.deepEqual(second.of("terminal:closed").map((pane) => pane.id), [told.sessionId]);
   await second.adopt();
@@ -238,6 +239,23 @@ test("a pane that finished while the app was closed is told to its bot once, and
   assert.equal(second.host.liveWorkerCount(), 1);
   await closeAll(second, [quiet, gone]);
 });
+
+// A report is not the command's end: a crash leaves no kept mark, and a quit inside the idle window keeps the pane.
+for (const end of ["kill", "quit"]) {
+  test(`a pane that reported and still runs comes back running after a ${end} of the app`, { ...windows, timeout: 300_000 }, async (t) => {
+    const before = await left(t, { end, reported: ["KEEP-0"] });
+    const [pane] = before.panes;
+    assert.deepEqual(record(before.root).map((run) => [run.state, run.kept === true]), [["reported", end === "quit"]]);
+    const second = app(before.root, runtimeRoot);
+    await second.adopt();
+    assert.deepEqual(second.notes.map((note) => note.text), [`KEPT RUNNING: KEEP-0 [pane ${pane.sessionId.slice(0, 8)}] (script) still running.`]);
+    const { generation } = second.of("terminal:opened").find((item) => item.id === pane.sessionId);
+    await second.host.inputBot(pane.botId, { sessionId: pane.sessionId, generation, data: "two\r" });
+    await until(() => second.text(pane.sessionId).includes("LINE2=two"));
+    assert.deepEqual([second.of("terminal:closed"), (await second.client.panes()).map((item) => item.pid), alive(pane.pid)], [[], [pane.pid], true]);
+    await closeAll(second, [pane]);
+  });
+}
 
 test("a pane that finished while Wink was closed (host exited after its last kept pane ended) reports as finished, not restarted", { ...windows, timeout: 120_000 }, async (t) => {
   const before = await left(t, { count: 1, command: [GONE], typed: null });

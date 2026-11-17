@@ -485,6 +485,38 @@ test("the pane cap and a failed start both open the pane locally", windows, asyn
   assert.equal(f.lines.length, 3);
 });
 
+test("an end the host told before an attach does not cut off that attach's replay", windows, async (t) => {
+  const f = fixture(t);
+  await fakeHost(f, {
+    list: () => [],
+    // A pane that ended as the app came back: its end crosses the attach on the wire, then follows the ring again, as the real host sends it.
+    attach({ id }, peer) {
+      peer.emit("exit", { id, exitCode: 3 });
+      peer.emit("gone", { id });
+      setImmediate(() => {
+        peer.data(id, 1, Buffer.from("A"));
+        peer.data(id, 2, Buffer.from("B"));
+        peer.emit("exit", { id, exitCode: 3 });
+        peer.emit("gone", { id });
+      });
+      return { pid: 4242, seq: 2, first: 1, truncated: false, exit: 3, cols: 80, rows: 24 };
+    },
+    forget: () => true,
+  });
+  const client = f.make({ adopt: true });
+  assert.equal(await client.prewarm(), true);
+  const { pty, replayed } = client.attach("ended", 0);
+  const order = [];
+  let caughtUp = false;
+  void replayed.then(() => { caughtUp = true; });
+  pty.onData((text) => order.push(text));
+  pty.onExit(({ exitCode }) => order.push(`exit ${exitCode}`));
+  await pty.exited;
+  // The list reply comes after every frame the host sent before it.
+  await client.panes();
+  assert.deepEqual([order, caughtUp], [["A", "B", "exit 3"], true]);
+});
+
 test("a caller without the secret gets nothing", { ...windows, timeout: 60_000 }, async (t) => {
   const f = fixture(t);
   assert.equal(await f.make().prewarm(), true);

@@ -1954,8 +1954,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         emit(session, "terminal:opened", { id: session.id, botId: run.botId, label: run.label ?? null, generation: session.generation });
         // A pane that ended while the app was away gets its row first, so the row shows as ended.
         if (session.exitCode !== null) emit(session, "terminal:exit", { id: session.id, exitCode: session.exitCode });
-        const text = session.screen.text();
-        return { sessionId: session.id, running, busy: AGENT_BUSY_RE.test(text) || agentJobsRunning(text), exitCode: session.exitCode, reported };
+        return { sessionId: session.id, running, exitCode: session.exitCode, reported };
       });
     },
     dispose() {
