@@ -6,6 +6,7 @@ import { useJoinedRoom } from "@/lib/joined-rooms";
 import { hostLines, isTeamRoom, joinedLines, roomTeamBots, type RoomLine } from "@/lib/team-rooms";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
+import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
@@ -352,7 +353,7 @@ export function SoundPill({ bot, live }: { bot: Bot; live: Live }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   return (
-    <button type="button" data-live-call-sound onClick={() => live.call.resume()} className="flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full bg-accent pl-2.5 pr-3 text-[13px] font-medium text-accent-ink hover:brightness-110 max-md:h-10">
+    <button type="button" data-live-call-sound onClick={() => live.call.resume()} className={cn("flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full pl-2.5 pr-3 text-[13px] font-medium max-md:h-10", PRIMARY_BUTTON)}>
       <Volume2 size={16} aria-hidden className="shrink-0 animate-pulse motion-reduce:animate-none" />
       <span className="min-w-0 truncate">{words.noSound.replace("{bot}", () => bot.name)}</span>
     </button>
