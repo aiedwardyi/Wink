@@ -94,6 +94,6 @@ export async function joinedFileRoute(
   }
   const held: GuestResult<{ file: JoinedFile; path: string }> = picture ? await client.picture(roomId) : await client.file(roomId, fileId!);
   if (!held.ok) reply(res, held.status, { error: held.error });
-  else if (!(await sendBlob(res, held.value.path, held.value.file, picture || preview !== undefined))) reply(res, 404, { error: "not found" });
+  else if (!(await sendBlob(req, res, held.value.path, held.value.file, picture || preview !== undefined))) reply(res, 404, { error: "not found" });
   return true;
 }

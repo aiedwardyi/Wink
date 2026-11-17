@@ -10,6 +10,7 @@ import { pipeline, type Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
 import { sniffImageMime } from "../attachments.ts";
+import { byteRange } from "../byte-range.ts";
 import { IMMUTABLE_CACHE } from "../compression.ts";
 import { DATA_DIR } from "../config.ts";
 import { RateLimiter } from "../phone-auth.ts";
@@ -408,12 +409,13 @@ async function syncDir(dir: string): Promise<void> {
   }
 }
 
-/** Pictures preview inline under their own fixed type; everything else only downloads. */
+/** Pictures preview inline; media keeps its type for playback. */
 export function fileHeaders(file: RoomFile, preview: boolean): Record<string, string> {
   const image = file.type.startsWith("image/");
+  const media = /^(video|audio)\//.test(file.type);
   const ascii = file.name.replace(/[^\x20-\x7e]|["\\]/g, "_");
   return {
-    "content-type": image ? file.type : "application/octet-stream",
+    "content-type": image || media ? file.type : "application/octet-stream",
     "content-length": String(file.bytes),
     "content-disposition": `${preview ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
     "x-content-type-options": "nosniff",
@@ -425,7 +427,7 @@ export function fileHeaders(file: RoomFile, preview: boolean): Record<string, st
 }
 
 /** Streams a blob at `path`; false (nothing written) when it can't be opened. */
-export async function sendBlob(res: ServerResponse, path: string, file: RoomFile, preview: boolean): Promise<boolean> {
+export async function sendBlob(req: IncomingMessage, res: ServerResponse, path: string, file: RoomFile, preview: boolean): Promise<boolean> {
   if (preview && !file.type.startsWith("image/")) return false;
   let handle: FileHandle | undefined;
   try {
@@ -435,17 +437,34 @@ export async function sendBlob(res: ServerResponse, path: string, file: RoomFile
     await handle?.close();
     return false;
   }
-  res.writeHead(200, fileHeaders(file, preview));
-  pipeline(handle.createReadStream(), res, () => {});
+  const range = byteRange(req.headers.range, file.bytes);
+  if (range === "bad") {
+    await handle.close();
+    res.writeHead(416, { "content-range": `bytes */${file.bytes}`, "accept-ranges": "bytes" });
+    res.end();
+    return true;
+  }
+  const start = range === "all" ? 0 : range.start;
+  const end = range === "all" ? file.bytes - 1 : range.end;
+  res.writeHead(range === "all" ? 200 : 206, {
+    ...fileHeaders(file, preview),
+    "content-length": String(end - start + 1),
+    "accept-ranges": "bytes",
+    ...(range === "all" ? {} : { "content-range": `bytes ${start}-${end}/${file.bytes}` }),
+  });
+  if (file.bytes === 0) {
+    await handle.close();
+    res.end();
+  } else pipeline(handle.createReadStream({ start, end }), res, () => {});
   return true;
 }
 
 /** The ACL is the caller's; this only resolves an id inside one room. */
-export function serveRoomFile(res: ServerResponse, roomId: string, id: string, preview: boolean): Promise<boolean> {
+export function serveRoomFile(req: IncomingMessage, res: ServerResponse, roomId: string, id: string, preview: boolean): Promise<boolean> {
   const release = holdRoomFiles();
   res.once("close", release);
   const file = roomFile(roomId, id);
-  return file ? sendBlob(res, join(roomDir(roomId), file.id), file, preview) : Promise.resolve(false);
+  return file ? sendBlob(req, res, join(roomDir(roomId), file.id), file, preview) : Promise.resolve(false);
 }
 
 /** On start: half-written uploads, blobs without a row, and day-old uploads no message took. */

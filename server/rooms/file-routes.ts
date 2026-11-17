@@ -45,7 +45,7 @@ export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, re
   const action = fileAction(match);
   if (action !== "upload") {
     try {
-      if (!(await serveRoomFile(res, roomId, match[2]!, action === "preview"))) reply(res, 404, { error: "not found" });
+      if (!(await serveRoomFile(req, res, roomId, match[2]!, action === "preview"))) reply(res, 404, { error: "not found" });
     } catch { reply(res, 503, { error: "room files folder is unavailable" }); }
     return;
   }
