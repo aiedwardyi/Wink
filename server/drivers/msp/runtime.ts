@@ -74,7 +74,7 @@ export interface MspSupport {
   install?: EngineInstall;
   credentialEnv?: readonly string[];
   transformEnv?(env: Record<string, string | undefined>, config: MspMuseConfig): void;
-  isAuthenticated(env: Record<string, string | undefined>, config: MspMuseConfig): boolean | Promise<boolean>;
+  isAuthenticated(env: Record<string, string | undefined>, config: MspMuseConfig): boolean | undefined | Promise<boolean | undefined>;
   account?(env: Record<string, string | undefined>): string | undefined;
   requireAuthenticationBeforeSpawn?: boolean;
   /** Map an MSP turn error to a provider code (auth shapes). */
@@ -653,7 +653,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         };
         active.set(threadId, { turnId, interrupt: earlyInterrupt, asks });
         try {
-          if (support.requireAuthenticationBeforeSpawn && !(await withWslProbeReason("turn", () => support.isAuthenticated(env, config)))) {
+          if (support.requireAuthenticationBeforeSpawn && await withWslProbeReason("turn", () => support.isAuthenticated(env, config)) === false) {
             emit({ ...base(threadId, turnId), type: "turn.started" });
             emit({ ...base(threadId, turnId), type: "runtime.error", message: support.loginNote, signIn: true });
             active.delete(threadId);
@@ -1522,7 +1522,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           const round = ++prepares;
           const env = childEnv();
           try {
-            if (support.requireAuthenticationBeforeSpawn && !(await support.isAuthenticated(env, config))) {
+            if (support.requireAuthenticationBeforeSpawn && await support.isAuthenticated(env, config) === false) {
               lastCapture = null;
               pool.invalidate({ instanceId, incarnation }, "signed out");
               return;
