@@ -230,7 +230,7 @@ export class MyRoomBotTurns {
         return queueMicrotask(() => this.drain());
       }
       const trusted = [...(works.has("host") ? [state.host] : []), ...state.people.filter((person) => works.has(person.id)).map((person) => person.name)].map((name) => JSON.stringify(name));
-      const hostWorks = state.people.some((person) => person.works !== undefined)
+      const hostWorks = state.people.every((person) => person.works !== undefined)
         ? ` "Can make bots work" on ${JSON.stringify(state.host)}'s Wink: ${state.people.map((person) => `${JSON.stringify(person.name)} ${person.works ? "on" : "off"}`).join(", ")}; your @ to ${JSON.stringify(state.host)}'s bots asks as ${me}.`
         : "";
       const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
