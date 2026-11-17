@@ -127,6 +127,7 @@ describe("MSP turns (fake host)", () => {
     delete process.env.FAKE_MSP_ITEMS;
     delete process.env.FAKE_MSP_GATE_FILE;
     delete process.env.FAKE_MSP_VERSION;
+    delete process.env.FAKE_MSP_CONTRIBUTOR;
     delete process.env.META_API_KEY;
     recorder?.stop();
     await instance?.dispose();
@@ -144,6 +145,30 @@ describe("MSP turns (fake host)", () => {
     await instance.adapter.sendTurn({ threadId: "t-serve-args", text: "hi" });
     expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
     expect(JSON.parse(readFileSync(dump, "utf8")).argv).toEqual(argv);
+  });
+
+  describe("under the user's contributor mode", () => {
+    const turn = async (threadId: string, model: string) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "hi", model });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    beforeEach(() => {
+      process.env.FAKE_MSP_CONTRIBUTOR = "1";
+      process.env.FAKE_MSP_STATE = join(scratch, "models.json");
+      process.env.FAKE_MSP_VERSION = "Muse Code 1.4.20 (1.4.20-R8619.1)";
+    });
+
+    it.each(["muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor"])("replies on %s, twice on one thread", async (model) => {
+      await create();
+      expect(await turn("t-contributor", model)).toMatchObject({ ok: true });
+      expect(await turn("t-contributor", model)).toMatchObject({ ok: true });
+    });
+
+    it("never hands an Ember turn the prewarmed handshake host", async () => {
+      await create();
+      await instance.prepare!();
+      expect(await turn("t-contributor-warm", "muse-ember-1.0")).toMatchObject({ ok: true });
+    });
   });
 
   describe("system text", () => {

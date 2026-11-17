@@ -187,6 +187,41 @@ describe("queued send through the message POST", () => {
   });
 });
 
+describe("a line typed while the bot works", () => {
+  const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread")) => {
+    const startQuick = vi.fn();
+    const h = harness(steer, true, {
+      routesQuick, startQuick, quick: { accountReady: () => true },
+      instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
+    });
+    Object.assign(h.store, { groupByThread: () => undefined });
+    h.bot.activeThreadId = activeThreadId;
+    return { ...h, startQuick };
+  };
+
+  it("goes to the quick helper when the turn runs in a room, not Sends next", async () => {
+    const h = working("room");
+    expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ quick: true, message: { text: "tldr pls ?", quick: { state: "asked" } } });
+    expect(h.startQuick).toHaveBeenCalledOnce();
+    expect(h.steer).not.toHaveBeenCalled();
+  });
+
+  it("steers into a turn a pane note started in this chat", async () => {
+    const h = working("thread");
+    expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ steered: true });
+    expect(h.steer).toHaveBeenCalledWith("thread", "tldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
+    expect(h.startQuick).not.toHaveBeenCalled();
+  });
+
+  it("holds a card answer for the bot, the same as a typed answer, while the turn runs in a room", async () => {
+    const h = working("room");
+    h.messages.push({ id: "card", at: 0, role: "bot", kind: "options", card: { title: "?", subtitle: "", options: ["Yes", "No"], askUser: true } });
+    expect((await h.post({ text: "Yes", cardId: "card" })).body).toMatchObject({ queued: true });
+    expect((await h.post({ text: "Yes" })).body).toMatchObject({ queued: true });
+    expect(h.startQuick).not.toHaveBeenCalled();
+  });
+});
+
 describe("a model switch during a busy turn", () => {
   const grok = { instanceId: "grok", model: "grok-4.7", mode: "pinned" as const };
 

@@ -15,7 +15,7 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, STYLE_GAIN, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
 import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
 import { Fold } from "./Fold";
@@ -58,19 +58,20 @@ function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { p
   useEffect(() => (onCall ? stop() : undefined), [onCall]);
   useEffect(() => () => clip.current?.pause(), []);
   // the call's own level and pitch-kept speed, so the sample sounds like the call
-  const level = OUTPUT_GAIN * STYLE_GAIN[style] * useCallVolume();
+  const level = OUTPUT_GAIN * useCallVolume();
+  const pace = callPace({ speed, style });
   useEffect(() => {
     if (!clip.current) return;
     clip.current.volume = level;
-    clip.current.playbackRate = speed;
-  }, [level, speed]);
+    clip.current.playbackRate = pace;
+  }, [level, pace]);
   const preview = (name: LiveVoice) => {
     const was = playing;
     stop();
     if (was === name) return;
     const audio = new Audio(`/voice-preview/${name}-${language}.mp3`);
     audio.volume = level;
-    audio.playbackRate = speed;
+    audio.playbackRate = pace;
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);

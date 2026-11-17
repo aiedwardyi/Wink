@@ -412,6 +412,10 @@ describe("workspace", () => {
     expect(memoryHealthOf("- Builds\n", ["ui.md", "MEMORY.conflict-e059d14f.md"]).orphans).toEqual(["ui.md"]);
   });
 
+  it("memoryHealthOf never counts the decision timeline as unnamed", () => {
+    expect(memoryHealthOf("- Builds\n", ["decisions.md", "ui.md"]).orphans).toEqual(["ui.md"]);
+  });
+
   it("memoryHealthOf over a full file with 40 side files averages under 0.2 ms", () => {
     const names = Array.from({ length: 40 }, (_, i) => `topic-${i}.md`);
     const line = (i: number) => `- note ${i} ${names[i % 40]} ${"z".repeat(119)}`.slice(0, 119);

@@ -64,6 +64,10 @@
 //   FAKE_MSP_INIT_DELAY_MS  hold the initialize result this long.
 //   FAKE_MSP_GATE_FILE  gate file for echo-gated.
 //   FAKE_MSP_VERSION   the `--version` line.
+//   FAKE_MSP_CONTRIBUTOR  1 = contributor mode on in the user's Muse settings: a
+//                   host without `--contributor-mode off` asks for
+//                   `<model>-contributor`, and a model with no such build fails
+//                   its turn like the real 404.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -115,6 +119,8 @@ const recordConfig = (entry: unknown) => {
 };
 
 const SESSION_ID = "fake-msp-session";
+const CONTRIBUTOR_BUILDS = ["muse-spark-1.3", "muse-spark-1.2"];
+const contributorOff = argv.some((arg, i) => arg === "--contributor-mode" && argv[i + 1] === "off");
 const TURN_ID = "fake-msp-turn-1";
 const ITEM_ID = "fake-msp-item-1";
 
@@ -420,6 +426,23 @@ function handle(msg: any) {
         }
       }
       if (mode === "hang") return;
+      const served = readModels()[msg.params?.sessionId];
+      if (process.env.FAKE_MSP_CONTRIBUTOR === "1" && !contributorOff && served && !CONTRIBUTOR_BUILDS.includes(served.replace(/-contributor$/, ""))) {
+        const message = `model \`${served}\` does not exist or you lack access [request_id=fake]`;
+        out({
+          jsonrpc: "2.0",
+          method: "turn/completed",
+          params: {
+            sessionId: SESSION_ID,
+            turnId: TURN_ID,
+            terminal: "failed",
+            error: { kind: "modelError", message, retryable: false },
+            reason: message,
+            viewCursor: "v:5",
+          },
+        });
+        return;
+      }
       if (mode === "quota" || mode === "quota-no-reset") {
         const message = `API error 429 [request_id=fake]: Subscription quota exhausted.${mode === "quota" ? " Your usage window resets at 2026-10-10T17:03:32Z." : ""} (rate_limit_error)`;
         out({

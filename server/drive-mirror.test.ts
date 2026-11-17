@@ -847,13 +847,16 @@ describe("Drive mirror", () => {
     expect(table(pcs[0]).binding.rootId).toBeNull();
   });
 
-  it("rejects bytes that no longer match the listed checksum", async () => {
+  it("rejects bytes that no longer match the listed checksum and still finishes the pass", async () => {
     const remote = seed("devices/device-work.json", "listed");
+    seed("devices/device-laptop.json", "laptop");
     const client = createDriveClient({ getAccessToken: async () => "test-access", fetch: drive.fetch });
-    const mirror = mirrorFor(pcs[0], { client: { ...client, downloadFile: async (id) => { drive.edit(remote.id, Buffer.from("changed")); return client.downloadFile(id); } } });
-    await expect(mirror.syncOnce()).rejects.toMatchObject({ problem: "content-changed" });
+    const mirror = mirrorFor(pcs[0], { client: { ...client, downloadFile: async (id, size) => { if (id === remote.id) drive.edit(remote.id, Buffer.from("changed")); return client.downloadFile(id, size); } } });
+    const summary = await mirror.syncOnce();
+    expect(summary.failed).toEqual(["devices/device-work.json"]);
+    expect(summary.downloaded).toEqual(["devices/device-laptop.json"]);
     expect(existsSync(join(pcs[0].folder, "devices/device-work.json"))).toBe(false);
-    expect(table(pcs[0]).files).toEqual({});
+    expect(Object.keys(table(pcs[0]).files)).toEqual(["devices/device-laptop.json"]);
   });
 
   it("preserves a write-once file that appears during download", async () => {

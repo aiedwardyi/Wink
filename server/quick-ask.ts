@@ -46,7 +46,7 @@ export interface QuickGate {
 /** Gate 0, then the rules. Any doubt goes to the bot. */
 function route(gate: QuickGate): ReturnType<typeof nominate> {
   const { bot, threadId } = gate;
-  if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return "main";
+  if (!bot.busy || bot.threadId !== threadId) return "main";
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return "main";
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return "main";
   if (!gate.instance.fork && !gate.instance.generateText) return "main";
@@ -54,6 +54,8 @@ function route(gate: QuickGate): ReturnType<typeof nominate> {
   const question = scanQuestion(gate.messages);
   if (question && typedReply(question, gate.text) !== null) return "main";
   if (gate.messages.some(isOpenRequest)) return "main";
+  // a turn in another thread (a room hand-off, a routine) cannot take the line, so the helper answers or hands off any of it
+  if ((bot.activeThreadId ?? threadId) !== threadId) return "quick";
   return nominate(gate.text);
 }
 
