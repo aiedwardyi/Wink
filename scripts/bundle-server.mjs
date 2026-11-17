@@ -43,6 +43,7 @@ const ENTRY_POINTS = [
   "thread-sync-v2.ts",
   "thread-sync-v2-worker.ts",
   "backup-worker.ts",
+  "boot-reads-worker.ts",
   "computer-proxy.ts",
   "container-mcp.ts",
   "vps-container-mcp.ts",

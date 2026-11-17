@@ -127,6 +127,28 @@ try {
   proxyReport = { error: String((error && error.message) || error) };
 }
 
+// boot-reads.ts spawns this worker after the first paint; a bundle without it
+// boots and serves, then quietly never recovers mail, asks or sync notices.
+const bootProbe = join(staging, "server", "probe-boot-reads.mjs");
+writeFileSync(
+  bootProbe,
+  [
+    'import { Worker } from "node:worker_threads";',
+    'const worker = new Worker(new URL("./boot-reads-worker.js", import.meta.url), {',
+    `  workerData: { dataDir: ${JSON.stringify(home)}, now: Date.now(), askThreads: [], cutoverAt: null, notices: { migration: "", conflict: [] } },`,
+    "});",
+    'worker.once("message", (reply) => { console.log(JSON.stringify(reply)); process.exit(0); });',
+    'worker.once("error", (error) => { console.log(JSON.stringify({ error: String(error) })); process.exit(0); });',
+  ].join("\n"),
+);
+let bootReport = null;
+try {
+  const { stdout } = await promisify(execFile)(process.execPath, [bootProbe], { cwd: staging });
+  bootReport = JSON.parse(stdout);
+} catch (error) {
+  bootReport = { error: String((error && error.message) || error) };
+}
+
 // The public MCP process is a second packaged entry point. Send a request and
 // close stdin immediately: this proves both that the bundle has no external
 // dependencies and that shutdown lets the final JSON-RPC frame drain.
@@ -211,6 +233,12 @@ if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
   process.exit(1);
 }
 
+if (!bootReport || bootReport.error || !Array.isArray(bootReport.rows?.receipts)) {
+  console.error("the packaged boot-reads-worker.js did not load and reply inside the packaged server dir:");
+  console.error(JSON.stringify(bootReport, null, 2));
+  process.exit(1);
+}
+
 if (
   !mcpReport ||
   mcpReport.error ||
@@ -228,4 +256,5 @@ if (
 const count = Object.keys(proxyReport.resolved).length;
 console.log(`packaged boot answered health then /api/bots with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
+console.log("packaged boot-reads-worker.js loaded and returned its rows ✓");
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");

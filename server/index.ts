@@ -313,6 +313,8 @@ import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
+import { recoverHandedMail } from "./mail-index.ts";
+import { bootReads, skipBootReads, startBootReads } from "./boot-reads.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
@@ -368,7 +370,7 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
-import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks } from "./quick-ask.ts";
 import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
@@ -427,6 +429,7 @@ import {
 import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
+  CONFLICT_NOTICE_V2,
   chatSyncBotId,
   createThreadSyncPoll,
   deleteSyncedThread,
@@ -441,7 +444,7 @@ import {
   type ThreadSyncHost,
 } from "./thread-sync.ts";
 import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from "./picture-sync.ts";
-import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
+import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
@@ -1092,7 +1095,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
-const mailboxReceipts = createMailboxReceipts();
+const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
   dataDir: DATA_DIR,
   store,
@@ -2288,6 +2291,7 @@ function initializeThreadSyncV2() {
       return pending instanceof Promise ? pending.then(prune) : prune();
     },
     rooms: roomThreads,
+    bootReads,
   });
   return threadSyncV2;
 }
@@ -6686,10 +6690,10 @@ const approvalBus: ApprovalBus = { store, broadcast };
 // Approvals live only in memory, so any peer card still open on disk is one
 // whose resolver died with the previous process. Left alone it can never be
 // answered, and the composer stays disabled behind it — settle them at boot.
-{
-  const stale = startupTiming.measure("peerRecovery", () => dismissStalePeerCards(approvalBus));
+void bootReads().then((rows) => {
+  const stale = dismissStalePeerCards(approvalBus, rows.peerCards);
   if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
-}
+}).catch((error: unknown) => console.warn("peer approvals: boot dismissal failed", error));
 
 // Handoffs a previous process queued but never ran. The source turn died
 // with that process, and an interrupted turn already drops its queue rather
@@ -6700,6 +6704,8 @@ _loadPending();
   const dropped = discardOrphanedDelegations(commsBus);
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
+void bootReads().then((rows) => recoverHandedMail(store, rows.handed, performance.timeOrigin))
+  .catch((error: unknown) => console.warn("mail: boot handoff recovery failed", error));
 
 configureRoomAsks({
   store,
@@ -9472,7 +9478,9 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-startupTiming.measure("quick asks", () => recoverQuickAsks(store));
+// the boot drain has already run by the time the worker replies
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error))
+  .then(drainQueuedSends).catch((error: unknown) => console.warn("[quick] drain after recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
@@ -9516,6 +9524,11 @@ if (early) {
 phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
+// nothing before serving reads messages.db beyond keys and newest pages; these finders read the rest, once, off this thread
+startupTiming.afterPaint("bootReads", () => startBootReads({
+  dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
+  notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
+}));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
@@ -9542,6 +9555,7 @@ hostShutdown = () => {
   if (hostShutdownStarted) return;
   hostShutdownStarted = true;
   startupTiming.close();
+  skipBootReads();
   usageStats.stop();
   askHold.flush();
   const routineThreadByBotId: Record<string, string> = {};
