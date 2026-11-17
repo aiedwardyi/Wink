@@ -138,7 +138,7 @@ function ReplyBox({ parentId, onDone, autoFocus = false, round = true }: { paren
           aria-label={t("board.addReply")}
           autoFocus={autoFocus}
           maxLength={4000}
-          className="min-w-0 flex-1 bg-transparent py-1 text-[14px] text-ink outline-none placeholder:text-ink-secondary"
+          className="min-w-0 flex-1 bg-transparent py-1 text-[14px] text-ink outline-none placeholder:text-ink-secondary max-md:text-[16px]"
         />
         {text.trim() && (
           <button type="submit" disabled={busy} className="h-7 shrink-0 rounded-full bg-accent px-3 text-[13px] font-semibold text-accent-ink disabled:opacity-60">
