@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -546,6 +547,12 @@ describe("task state clipping", () => {
     const { kept, dropped } = groundTaskArtifacts(refs.map((ref) => ({ ref, label: "L" })), cwd, { kind: "roots", roots: [cwd] });
     expect(kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "L" }]);
     expect(dropped).toEqual(refs.slice(1));
+  });
+
+  it.runIf(process.platform === "win32")("scopes a folder given by its Windows short name", (context) => {
+    const short = execFileSync("powershell", ["-NoProfile", "-Command", `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${cwd}').ShortPath`], { encoding: "utf8", windowsHide: true }).trim();
+    if (short.toLowerCase() === cwd.toLowerCase()) return context.skip();
+    expect(groundTaskArtifacts([{ ref: "brief.md", label: "L" }], short, { kind: "roots", roots: [short] }).kept).toHaveLength(1);
   });
 
   it("saves a mixed update and reports the clip and the drop in one line", () => {

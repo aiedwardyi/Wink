@@ -506,7 +506,7 @@ function groundedTaskArtifact(cwd: string, ref: string, scope: FileScope): strin
   if (NETWORK_PATH.test(ref)) return null;
   try {
     const candidate = realpathSync(resolve(cwd, ref));
-    return !NETWORK_PATH.test(candidate) && inScope(scope, candidate) && statSync(candidate).isFile() ? candidate : null;
+    return !NETWORK_PATH.test(candidate) && inScope(scope, realpathSync.native(candidate)) && statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }
