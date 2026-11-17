@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChartScatter, ChevronDown, ChevronRight, Coins, Import, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
@@ -702,7 +702,7 @@ export function SettingsModal({
               </>
             )}
             {section === "models-index" && <ModelIndexSection />}
-            {section === "shortcuts" && <KeyboardShortcuts pickerStyle={modelDialEnabled(state.config)} />}
+            {section === "shortcuts" && <KeyboardShortcuts />}
           </div>
         </div>
         )}

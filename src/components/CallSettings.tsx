@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Pause, Play } from "lucide-react";
+import { Pause, Play } from "lucide-react";
 
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -17,10 +17,8 @@ import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
 import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
-import { Fold } from "./Fold";
+import { DetailsSwitch } from "./BotDetailsRows";
 import { MENU_CLASS } from "./MessageMenu";
-import { ROW_BUTTON } from "./SettingsPrimitives";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] text-ink";
@@ -166,23 +164,23 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <span className={LABEL}>{t("callMenu.captions")}</span>
-        <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
-      </div>
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 max-[379px]:gap-2">
         <span className={LABEL}>{t("callMenu.style")}</span>
         <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
           {CALL_STYLES.map((style) => (
             <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
-              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8", PILL,
+              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8 max-[379px]:px-1.5", PILL,
                 style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
               {t(`callMenu.style.${style}`)}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-2 max-[379px]:gap-1.5">
+          <span className={LABEL}>{t("callMenu.captions")}</span>
+          <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
         </div>
       </div>
       <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
@@ -264,38 +262,5 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
         document.body,
       )}
     </span>
-  );
-}
-
-/** Bot details rows: Voice opens the panel in place, Language picks the call language. */
-export function VoiceChatSettings({ bot }: { bot: Bot }) {
-  const { t } = useI18n();
-  const { voice, speed } = useCallPrefs(bot);
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  return (
-    <section aria-label={t("callMenu.voiceChat")}>
-      <h3 className="mb-1.5 px-1 text-[13px] font-medium text-ink-secondary">{t("callMenu.voiceChat")}</h3>
-      <div className={DETAILS_BOX}>
-        <div className={DETAILS_ROW}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium text-ink">{t("callMenu.voice")}</span>
-            <button type="button" data-call-voice-row="" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)} className={cn(ROW_BUTTON, "gap-1 text-ink")}>
-              <span>{`${voiceLabel(t, voice)} ${speed.toFixed(1)}x`}</span>
-              <ChevronDown size={12} aria-hidden className={cn("text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
-            </button>
-          </div>
-          <Fold open={open} id={id}>
-            <CallSettings bot={bot} language={false} className="mt-3" />
-          </Fold>
-        </div>
-        <div className={DETAILS_ROW}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium text-ink">{t("callMenu.language")}</span>
-            <CallLanguage bot={bot} />
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }

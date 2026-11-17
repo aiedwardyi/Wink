@@ -33,7 +33,7 @@ function harness() {
 it("a tapped choice is the person's own shown line, idle or into a running turn", async () => {
   const idle = harness();
   await idle.send({ text: "Sure", cardId: idle.card.id });
-  expect(idle.startTurn.mock.calls[0]![2]).not.toHaveProperty("answersCard", expect.anything());
+  expect(idle.startTurn.mock.calls[0]!.slice(0, 2)).toEqual([idle.bot.id, "Sure"]);
 
   const busy = harness();
   busy.store.setActivity(busy.bot.id, "working");

@@ -26,6 +26,7 @@ import {
   type PersistedRoomHold,
 } from "@/lib/drafts";
 import { BotAvatar, RoomBotAvatar } from "./Avatar";
+import { BotModelLine } from "./BotModelLine";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -89,7 +90,6 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
-import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
 import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
@@ -696,6 +696,7 @@ export function Composer({
         sendId: entry.draft.sendId,
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
+        actedAt: entry.at,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -969,6 +970,7 @@ export function Composer({
       sendId: next.draft.sendId,
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
+      actedAt: next.at,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1133,7 +1135,10 @@ export function Composer({
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                  {peer.bot && <BotModelLine bot={peer.bot} />}
+                </span>
                 <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
@@ -1501,7 +1506,7 @@ export function Composer({
           </>
           )}
           {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <CallSettingsHold bot={caller}><button
+            <button
               type="button"
               onClick={onCall}
               onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
@@ -1511,7 +1516,7 @@ export function Composer({
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
             >
               <Phone size={16} />
-            </button></CallSettingsHold>
+            </button>
           ))}
           </div>
         </div>

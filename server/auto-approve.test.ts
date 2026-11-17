@@ -2,7 +2,11 @@
 // WITHOUT a human looking, so they get pinned down hard: what auto mode
 // waves through, what it refuses to wave through, and the fact that a
 // question is never answered by the machine.
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { approvalKey, autoDecision, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -267,13 +271,76 @@ describe("unattended turns", () => {
   const bot = { autoApprove: true, alwaysAllow: ["Bash:git"] };
   const askBot = { alwaysAllow: ["Bash:git"] };
 
-  it("keeps auto mode when nobody started the turn", () => {
+  const workspace = mkdtempSync(join(process.env.ORBIT_SCRATCH ?? tmpdir(), "unattended-"));
+  const away = { unattended: true, workspace };
+
+  beforeAll(() => {
+    for (const path of ["build/output.js", "tmp/out.log", "build/out.js", "my notes/old.md", "src/old.ts"]) {
+      const file = join(workspace, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "keep");
+    }
+  });
+  afterAll(() => rmSync(workspace, { recursive: true, force: true }));
+
+  it("keeps auto mode for ordinary work when nobody started the turn", () => {
     expect(autoVerdict(bot, "Bash", "npm test", { unattended: true })).toEqual(autoVerdict(bot, "Bash", "npm test"));
-    expect(autoVerdict(bot, "Bash", "npm test", { unattended: true })).toMatchObject({
+    expect(autoVerdict(bot, "Bash", "npm test", away)).toMatchObject({
       approve: "auto-approved Bash",
       source: "auto-mode",
     });
-    expect(autoVerdict(bot, "Bash", "rm -rf dist", { unattended: true }).source).toBe("auto-mode");
+  });
+
+  it("denies a destructive command when nobody started the turn", () => {
+    expect(autoVerdict(bot, "Bash", "rm -rf dist", { unattended: true })).toMatchObject({ approve: null, source: "unattended-deny" });
+    expect(autoVerdict(bot, "Bash", "git push --force origin main", away)).toMatchObject({ approve: null, source: "unattended-deny" });
+  });
+
+  it("denies a delete outside the workspace when nobody started the turn", () => {
+    for (const [tool, summary] of [
+      ["Bash", "rm ~/.bashrc"],
+      ["Bash", "npm test && rm /work/other/data.db"],
+      ["Bash", "rm ../other-project/notes.md"],
+      ["powershell", "Remove-Item C:\\Users\\you\\Documents\\report.docx"],
+      ["delete", "Delete /work/other/data.db"],
+      ["Bash", 'rm "/work/my notes/old.md"'],
+      ["Bash", "cd /work/other && rm data.db"],
+      ["Bash", "cd .. && rm notes.md"],
+      ["Bash", "cd $HOME; rm notes.md"],
+      ["Bash", "cd; rm notes.md"],
+    ]) {
+      expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ approve: null, source: "unattended-deny" });
+    }
+  });
+
+  it("keeps reads, edits and in-project deletes running when nobody started the turn", () => {
+    for (const [tool, summary] of [
+      ["Read", JSON.stringify({ file_path: "/etc/hosts" })],
+      // routines update notes kept outside the bot's folder
+      ["Write", JSON.stringify({ file_path: "/notes/vault/daily.md", content: "x" })],
+      ["Bash", "cat /etc/hosts"],
+      ["Write", JSON.stringify({ file_path: "/work/project/src/a.ts", content: "x" })],
+      ["Edit", JSON.stringify({ file_path: "src/a.ts", old_string: "a", new_string: "b" })],
+      ["Bash", "rm build/output.js"],
+      ["Bash", `rm "${join(workspace, "tmp", "out.log")}"`],
+      ["delete", "Delete src/old.ts"],
+      ["Bash", "del /q build\\out.js"],
+      ["Bash", `rm "${join(workspace, "my notes", "old.md")}"`],
+      ["Bash", "cd src && rm old.ts"],
+      ["Bash", `cd "${join(workspace, "build")}"; rm out.js`],
+      ["Write", JSON.stringify({ file_path: "/work/project/cleanup.sh", content: "rm -rf dist\ngit reset --hard\n" })],
+      ["Edit", JSON.stringify({ file_path: "src/docs.md", old_string: "a", new_string: "run rm -rf node_modules" })],
+      ["edit", "Edit src/a.ts"],
+      ["WebFetch", "https://example.com/docs"],
+    ]) {
+      expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ source: "auto-mode" });
+    }
+  });
+
+  it("leaves an attended Auto turn as it was", () => {
+    const here = { workspace };
+    expect(autoVerdict(bot, "Bash", "rm -rf dist", here)).toMatchObject({ approve: "auto-approved Bash", source: "auto-mode" });
+    expect(autoVerdict(bot, "Bash", "rm ~/.bashrc", here)).toMatchObject({ source: "auto-mode" });
   });
 
   it("does not let an Ask bot's always-allow grant answer for it", () => {
@@ -367,5 +434,72 @@ describe("power-off command vs branch/path/message", () => {
     expect(autoVerdict({}, "Bash", raw).source).toBe("destructive-guard");
     // redaction does not touch power-off tokens; truncated harmless branch stays auto-mode
     expect(autoVerdict(bot, "Bash", redactSecretsInText(branchPush)).source).toBe("auto-mode");
+  });
+});
+
+describe("unattended worktree cleanup", () => {
+  const bot = { autoApprove: true };
+  let base = "";
+  let home = "";
+  let main = "";
+  let stale = "";
+  let leftover = "";
+  let elsewhere = "";
+  const savedRoot = process.env.ORBIT_WORKTREE_ROOT;
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", windowsHide: true });
+  const link = (target: string, path: string) => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+  const away = () => ({ unattended: true, workspace: home });
+  const verdict = (command: string) => autoVerdict(bot, "PowerShell", command, away());
+
+  beforeAll(() => {
+    base = realpathSync.native(mkdtempSync(join(process.env.ORBIT_SCRATCH ?? tmpdir(), "omb-wt-clean-")));
+    home = join(base, "Desktop");
+    main = join(home, "Orbit");
+    elsewhere = join(base, "Documents");
+    mkdirSync(main, { recursive: true });
+    mkdirSync(join(elsewhere, "keep"), { recursive: true });
+    git(main, "init", "-q");
+    git(main, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+    stale = join(base, "orbit-wt", "index-2026-11-17");
+    git(main, "worktree", "add", "-q", "--detach", stale);
+    mkdirSync(join(stale, "src"));
+    leftover = join(base, "orbit-wt", "index-2026-11-10");
+    process.env.ORBIT_WORKTREE_ROOT = join(base, "orbit-wt");
+    mkdirSync(join(leftover, "src"), { recursive: true });
+  });
+  afterAll(() => {
+    if (savedRoot === undefined) delete process.env.ORBIT_WORKTREE_ROOT;
+    else process.env.ORBIT_WORKTREE_ROOT = savedRoot;
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("unattended routine removes its own stale worktree", () => {
+    expect(verdict(`Remove-Item -Recurse -Force "${stale}"`)).toMatchObject({ source: "auto-mode" });
+    expect(verdict(`git -C "${main}" worktree prune; Remove-Item -Recurse -Force "${leftover}"`)).toMatchObject({ source: "auto-mode" });
+    expect(autoVerdict(bot, "Bash", `rm -rf "${join(stale, "src")}"`, away())).toMatchObject({ source: "auto-mode" });
+  });
+
+  it("still denies a delete through a junction pointing outside the worktree", () => {
+    const shared = join(stale, "node_modules");
+    link(elsewhere, shared);
+    try {
+      expect(verdict(`Remove-Item -Recurse -Force "${stale}"`)).toMatchObject({ approve: null, source: "unattended-deny" });
+      expect(verdict(`Remove-Item -Recurse -Force "${shared}"`)).toMatchObject({ approve: null, source: "unattended-deny" });
+      expect(verdict(`Remove-Item "${shared}"`)).toMatchObject({ approve: null, source: "unattended-deny" });
+    } finally {
+      unlinkSync(shared);
+    }
+  });
+
+  it("still denies the live checkout, a whole worktree root, and paths that climb out", () => {
+    for (const command of [
+      `Remove-Item -Recurse -Force "${main}"`,
+      `Remove-Item -Recurse -Force "${join(base, "orbit-wt")}"`,
+      `Remove-Item -Recurse -Force "${join(stale, "..", "..", "Documents")}"`,
+      `Remove-Item -Recurse -Force "${elsewhere}"`,
+      `cd "${stale}"; Remove-Item -Recurse -Force ../../Documents`,
+    ]) {
+      expect(verdict(command), command).toMatchObject({ approve: null, source: "unattended-deny" });
+    }
   });
 });

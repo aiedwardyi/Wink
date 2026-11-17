@@ -111,7 +111,7 @@ class FakeElectronUpdater extends EventEmitter {
   }
 }
 
-function launch(t, { platform = "win32", running = "1.0.192", channelFile, versions = {}, responses = [], early = [] } = {}) {
+function launch(t, { platform = "win32", running = "1.0.192", channelFile, versions = {}, responses = [], early = [], stopped = 0 } = {}) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "updater-"));
   t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
   if (channelFile) updateChannel.writeUpdateChannel(userData, channelFile);
@@ -184,7 +184,7 @@ function launch(t, { platform = "win32", running = "1.0.192", channelFile, versi
   h.api = vm.runInContext(`${source}\n({ startUpdater, switchUpdateChannel, updaterBridge, consumePendingUpdateInstall, onUpdaterFailure })`, context);
   const win = { isDestroyed: () => false, webContents: { send() {} } };
   for (const next of early) h.api.switchUpdateChannel(next);
-  h.api.startUpdater(win, (key, vars) => translate("en", key, vars));
+  h.api.startUpdater(win, (key, vars) => translate("en", key, vars), () => stopped);
   h.timerList = () => h.timers.map(({ kind, ms }) => `${kind} ${ms}`);
   h.status = () => h.api.updaterBridge.state().status;
   return h;
@@ -266,12 +266,26 @@ test("back to stable from a dev build stages the latest stable, asks, and instal
 
   await h.api.switchUpdateChannel("stable");
   assert.deepEqual(h.updater.downloads, ["1.0.193-dev.47", "1.0.192"]);
-  assert.deepEqual(h.dialogs, [{ message: "Wink 1.0.192 is ready.", detail: "Restarting closes every pane.", buttons: ["Restart now", "Later"] }]);
+  assert.deepEqual(h.dialogs, [{ message: "Wink 1.0.192 is ready.", detail: "Workers keep running.", buttons: ["Restart now", "Later"] }]);
   assert.deepEqual(h.quits, ["quit"]);
   assert.equal(h.api.consumePendingUpdateInstall(), true);
   assert.equal(updateChannel.readUpdateChannel(h.userData), "stable");
   // The task stays while the dev build runs, so Later or a failed install can try again.
   assert.deepEqual(h.tasks.at(-1), [TASK]);
+});
+
+test("the keep-running line never says panes or workers close", () => {
+  for (const [locale, text, closes] of [["en", "Workers keep running.", /pane|clos|stop/i], ["ko", "작업자는 계속 실행됩니다.", /창|닫|중지/]]) {
+    assert.equal(translate(locale, "update.workersKeep"), text);
+    assert.doesNotMatch(text, closes);
+  }
+});
+
+test("back to stable with a worker running outside the worker host keeps the old line", async (t) => {
+  const versions = { "orbit-releases": "1.0.192", Wink: "1.0.193-dev.47" };
+  const h = launch(t, { running: "1.0.193-dev.45", channelFile: "dev", versions, stopped: 1 });
+  await h.api.switchUpdateChannel("stable");
+  assert.deepEqual(h.dialogs.map(({ detail }) => detail), ["Restarting closes every pane."]);
 });
 
 test("back to stable while the stable feed is unreachable never offers the dev build seen before", async (t) => {

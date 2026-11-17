@@ -736,8 +736,6 @@ describe("agents-proxy MCP surface", () => {
     expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
     expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
     expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
-    expect(asks.items.properties.due).toMatchObject({ type: "string" });
-    expect(asks.items.properties.due.description).toMatch(/promise a time/i);
     for (const [field, limit] of [[asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
       expect(field.description).toContain(String(limit));
     }
@@ -746,7 +744,6 @@ describe("agents-proxy MCP surface", () => {
     const sent = [
       { ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348" },
       { id: "A2", status: "done" },
-      { ask: "Phone Model Index designs", status: "open", due: "2026-11-17T07:30:00+09:00" },
     ];
     taskStateNotice = "Asks saved: added A3; 2 open.";
     const res = await callTool("update_task_state", { asks: sent });

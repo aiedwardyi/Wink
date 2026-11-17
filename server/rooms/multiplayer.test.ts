@@ -306,7 +306,7 @@ describe("a teammate's request under the host's setting for the bot", () => {
     const scope = {
       event: { type: "request.opened", requestType: "permission", requestId: "r1", threadId: group.threadId, tool: "Bash", summary: "npm run build", ...event },
       bot: undefined, group: store.group(group.id), speaker: { botId: wink }, store, teammateAskTurn, readOnlyAskTurn, readOnlyTurnThreads, failTeammateAskTurn, autoVerdict, ASK_DENY_NOTE, pushMessage,
-      isUnattended: () => false, botAccounts: { instance: () => ({ adapter: { respondToRequest } }) }, appendDecision: vi.fn(), DATA_DIR,
+      isUnattended: () => false, turnCwdByThread: new Map(), botAccounts: { instance: () => ({ adapter: { respondToRequest } }) }, appendDecision: vi.fn(), DATA_DIR,
     };
     new Function(...Object.keys(scope), js(`switch (event.type) { ${fold!.getText(index)} }`))(...Object.values(scope));
     return { respondToRequest, pushMessage };

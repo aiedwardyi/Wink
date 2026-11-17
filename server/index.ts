@@ -21,7 +21,7 @@ import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
-import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNATTENDED_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
 import { requestReview, resolveAutoReviewMode, shouldReview } from "./auto-review.ts";
 import {
   resolveAutomaticSelection,
@@ -3533,6 +3533,9 @@ function staleTurnEvent(threadId: string, turnId: string | undefined): boolean {
 const unattendedBots = new Map<string, number>();
 const UNATTENDED_TTL_MS = 30 * 60_000;
 
+// The folder each thread's last turn was sent to; unattended deletes stay inside it.
+const turnCwdByThread = new Map<string, string>();
+
 function markUnattended(botId: string) {
   unattendedBots.set(botId, Date.now());
 }
@@ -3912,21 +3915,23 @@ bus.subscribe((event: RuntimeEvent) => {
         });
         break;
       }
-      // A background ask comes only from work an Auto turn started, and the
-      // driver kept desktop asks to attended ones; the mark may have aged since.
-      const unattended = permission && asker && event.requestId && !event.background ? isUnattended(asker.id) : false;
+      // A background ask comes only from work an Auto turn started; the driver
+      // tags it with that turn's origin, since the bot's mark may have aged since.
+      const unattended = permission && asker && event.requestId ? event.unattended === true || (!event.background && isUnattended(asker.id)) : false;
       // Verdicts run on the original event. The bus redacts only the NDJSON
       // tee; SSE/broadcast (PR72) redacts the client copy. Masking first
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
       const verdict = permission && asker && event.requestId && !readOnly && (!cardless || asker.autoApprove)
-        ? autoVerdict(asker, event.tool, event.action ?? event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused })
+        ? autoVerdict(asker, event.tool, unattended ? event.action ?? "" : event.approvalScope ? event.action ?? event.summary : event.summary, { unattended, scope: event.approvalScope, refused: event.actionRefused ?? (unattended && event.action === undefined ? "unreadable" : undefined), workspace: turnCwdByThread.get(event.threadId) })
         : null;
       const skipNote = verdict?.source === "away-desktop-deny"
         ? AWAY_DESKTOP_DENY_NOTE
         : verdict?.source === "unchecked-desktop-deny" && event.actionRefused
           ? UNCHECKED_DESKTOP_DENY_NOTE[event.actionRefused]
-          : null;
+          : verdict?.source === "unattended-deny"
+            ? UNATTENDED_DENY_NOTE
+            : null;
       if (skipNote && verdict && asker && event.requestId) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
@@ -3946,7 +3951,7 @@ bus.subscribe((event: RuntimeEvent) => {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: `${verdict.source === "away-desktop-deny" ? "Skipped desktop control while you were away" : "Skipped a desktop action Auto mode couldn't check"}: ${summary.slice(0, 120)}`, ok: false },
+              tool: { name: `${verdict.source === "away-desktop-deny" ? "Skipped desktop control while you were away" : verdict.source === "unattended-deny" ? "Skipped while you were away" : "Skipped a desktop action Auto mode couldn't check"}: ${summary.slice(0, 120)}`, ok: false },
             });
             appendDecision(DATA_DIR, {
               threadId: event.threadId,
@@ -3957,6 +3962,7 @@ bus.subscribe((event: RuntimeEvent) => {
               summary,
               decision: "auto-denied",
               source: verdict.source,
+              rule: verdict.rule,
               unattended: unattended || undefined,
             });
           } catch {
@@ -4377,10 +4383,10 @@ bus.subscribe((event: RuntimeEvent) => {
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
           clearSendRunning(bot.id);
+          memoryPass.onSettled(bot.id, event.threadId, flushNotes);
           if (!store.groupByThread(event.threadId)) {
             summaryBuild.onSettled(bot.id, event.threadId);
             summaryRepair.onSettled(bot.id, event.threadId);
-            memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
@@ -4427,6 +4433,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
       if (speaker && group?.busyBotId === speaker.botId) {
+        memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
@@ -4895,6 +4902,8 @@ type StartTurnOptions = {
    * dispatch the same user action twice. */
   sendId?: string;
   call?: CallTag;
+  answersCard?: string;
+  actedAt?: number;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4928,7 +4937,7 @@ const CORPUS_SEARCH_INSTRUCTIONS =
 const PLAIN_WORDS_INSTRUCTIONS =
   " Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES_INSTRUCTIONS =
-  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and build a guard that day: a check that fails on it, not just a note.";
+  " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
   " When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
 // One block for every route, so none can carry one rule set without the other.
@@ -5206,6 +5215,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           replyToId: opts?.replyTo?.id,
           sendId: opts?.sendId,
           call: opts?.call,
+          answersCard: opts?.answersCard,
+          actedAt: opts?.actedAt,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -6157,6 +6168,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
         trace?.assembled(system, text);
+        if (cwd) turnCwdByThread.set(threadId, cwd);
+        else turnCwdByThread.delete(threadId);
         return live.adapter.sendTurn({
         ...(trace ? { trace } : {}),
         threadId,
@@ -7235,6 +7248,8 @@ async function runClaimedGroupMemberTurn(
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
       if (!lane) workerTurns.capture(bot.id, threadId, live);
       pendingInterruptThreads.started(threadId, turnKey, epoch);
+      if (cwd) turnCwdByThread.set(threadId, cwd);
+      else turnCwdByThread.delete(threadId);
       return live.adapter.sendTurn({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
@@ -7364,11 +7379,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, roomFileIds: readonly string[] = []) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
-  const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
+  const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
+  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7383,6 +7399,8 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     replyToId: replyTo?.id,
     sendId,
     ...(askerId ? { askedBy: askerId } : {}),
+    answersCard,
+    actedAt,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -7991,7 +8009,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), answered: (botId) => botCalls.answered(botId), roomTail });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   firstTurnLaunch,
@@ -8945,7 +8963,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
-    if (m && method === "POST") return await liveCall(req, res, m);
+    if (m && method === "POST") {
+      if (m[2] === "token") botCalls.answered(m[1]!);
+      return await liveCall(req, res, m);
+    }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);

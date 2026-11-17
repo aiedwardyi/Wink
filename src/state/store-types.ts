@@ -616,6 +616,7 @@ export type Action =
       type: "sendGroup";
       groupId: string;
       text: string;
+      actedAt?: number;
       sendId?: string;
       replyToId?: string;
       threadId?: string;

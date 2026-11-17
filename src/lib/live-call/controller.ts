@@ -34,6 +34,8 @@ export type CallState = {
   notice?: { kind: "notSent" | "noReply"; text: string; why?: string };
   /** The mic has sent total silence since the call connected or its last sound. */
   micSilent?: true;
+  /** The phone would not play the voice: the call asks for a tap instead of talking unheard. */
+  noSound?: true;
 };
 
 export type CallAudioPort = {
@@ -298,6 +300,10 @@ export class LiveCall {
   private micTimer?: ReturnType<typeof setInterval>;
   private readyTimer?: ReturnType<typeof setTimeout>;
   private turnHadAudio = false;
+  // Voice played this turn while the phone would not sound it.
+  private turnUnheard = false;
+  // One greeting per call: a reconnect re-sends an unfinished line, never a hello they already heard.
+  private greeted = false;
   private held: Held[] = [];
   private playing?: { item: Held; ended: boolean };
   private context: string[] = [];
@@ -375,6 +381,7 @@ export class LiveCall {
       }
       this.spokeAt = 0;
       this.turnHadAudio = true;
+      this.greeted ||= !this.stalled;
       clearTimeout(this.closeTimer);
       this.refresh();
     };
@@ -418,7 +425,10 @@ export class LiveCall {
     // The mic opens on the tap, beside the token, so words said while the call connects are kept.
     // A voice that will not play yet waits on a tap; only the mic's own refusal fails the call.
     const mic = (this.mic ??= this.deps.audio.capture((pcm) => this.frame(pcm)).then((played) => {
-      if (played === false) this.stalled = true;
+      if (played === false) {
+        this.stalled = true;
+        this.set({ noSound: true });
+      }
       return null;
     }, (error) => error ?? new Error("mic failed")));
     const session = await this.token(false);
@@ -603,7 +613,7 @@ export class LiveCall {
         this.early = undefined;
         for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
         // Sound from the tap may be a quick call or a click: the greeting waits a beat for his words, and goes only if none came.
-        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
+        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.greeted && !this.stats.userLines && !spokenText(this.heardBuf) });
         if (early?.talked) this.pause();
         this.release();
         this.restyle();
@@ -616,6 +626,7 @@ export class LiveCall {
           this.stats.repeats += 1;
         }
         if (this.dropping) return;
+        this.turnUnheard ||= this.stalled;
         if (this.echo) this.echo.push(pcm);
         else this.deps.audio.play(pcm);
       },
@@ -1225,11 +1236,13 @@ export class LiveCall {
     const full = spokenText(this.saidBuf);
     this.saidBuf = "";
     this.lineIds.voice = 0;
+    const unheard = this.turnUnheard;
+    this.turnUnheard = false;
     if (!full) return;
     const text = heardPart(full, share);
     this.lastSaid = full;
     this.stats.voiceLines += 1;
-    this.postLines([{ who: "voice", text, at: this.now() }]);
+    this.postLines([{ who: "voice", text, at: this.now(), ...(unheard ? { unheard } : {}) }]);
   }
 
   /** Every call row goes through here. */
@@ -1644,6 +1657,7 @@ export class LiveCall {
     const ok = await this.deps.audio.heal();
     if (this.ended || run !== this.heals) return;
     this.stalled = !ok;
+    if (ok && this.snapshot.noSound) this.set({ noSound: undefined });
     this.release();
     this.refresh();
   }

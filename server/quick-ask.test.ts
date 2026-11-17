@@ -9,7 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks, routesQuick, type QuickGate } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks, routesAck, routesQuick, type QuickGate } from "./quick-ask.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
@@ -107,14 +107,50 @@ describe("quick route", () => {
     expect(withRouter.rows().some((row) => row.quick)).toBe(false);
   });
 
-  it("steers a busy, non-nominated send as today", async () => {
+  it("steers a busy approval as today, with no reply beside it", async () => {
     const h = harness();
-    const response = await h.send({ text: "also update the docs when you are done" });
+    const response = await h.send({ text: "yes go ahead and update the docs" });
     expect(response.data.steered).toBe(true);
     expect(h.steer).toHaveBeenCalledTimes(1);
     expect(h.ask).not.toHaveBeenCalled();
-    expect(h.rows().at(-1)).toMatchObject({ steered: true, text: "also update the docs when you are done" });
+    expect(h.rows().at(-1)).toMatchObject({ steered: true, text: "yes go ahead and update the docs" });
     expect(h.rows().at(-1)?.quick).toBeUndefined();
+  });
+
+  it.each([
+    "also update the docs when you are done",
+    "i know ur working, but its odd, im testing the sidekick thing but it doesnt seem like our feature works",
+    "when u got time read this real quick to see if it'll help us with ci https://example.com/ci-cost",
+  ])("steers at once, then posts one short reply under it: %s", async (text) => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "Got it, that goes in next.", ms: 4 } });
+    const response = await h.send({ text });
+    expect(response.data.steered).toBe(true);
+    expect(h.steer.mock.calls[0]![1]).toContain(text);
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledWith(expect.anything(), h.bot.threadId, expect.objectContaining({ text, ack: true }));
+    const [sent, reply] = h.rows().slice(-2);
+    expect(sent).toMatchObject({ role: "user", text, steered: true });
+    expect(sent!.quick).toBeUndefined();
+    expect(reply).toMatchObject({ role: "bot", kind: "text", text: "Got it, that goes in next.", quick: { state: "answer", askId: sent!.id } });
+    expect(h.steer.mock.calls[1]![1]).toMatch(/^\[Wink note, automated, not from the person\.[\s\S]*A: Got it, that goes in next\.$/);
+  });
+
+  it("leaves a steered send alone when the helper has no reply", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: "help me answer ur questions" });
+    const count = h.rows().length;
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(h.rows()).toHaveLength(count);
+  });
+
+  it("posts no reply beside a card tap or a stop", async () => {
+    const h = harness();
+    const card = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "?", subtitle: "Drop them all, or pick?", options: ["Drop all", "Let me pick"], askUser: true } });
+    await h.send({ text: "Let me pick", cardId: card.id });
+    await h.send({ text: "no stop" });
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer).toHaveBeenCalledTimes(2);
   });
 
   it("answers a nominated ask in two rows without a steer", async () => {
@@ -584,12 +620,22 @@ describe("Gate 0", () => {
     expect(routesQuick(base)).toBe(true);
   });
 
+  it("sends a statement to the bot with a reply beside it, but not a card tap or a room send", () => {
+    const statement = { ...base, text: "help me answer ur questions" };
+    expect(routesQuick(statement)).toBe(false);
+    expect(routesAck(statement)).toBe(true);
+    expect(routesAck(base)).toBe(false);
+    expect(routesAck({ ...statement, answersCard: "c" })).toBe(false);
+    expect(routesAck({ ...statement, room: true })).toBe(false);
+  });
+
   it("passes any line while the bot's turn runs in another thread", () => {
     const elsewhere = { ...busy, activeThreadId: "room" };
     expect(routesQuick({ ...base, bot: elsewhere, text: "tldr pls ?" })).toBe(true);
     expect(routesQuick({ ...base, bot: elsewhere, text: "ship it" })).toBe(true);
     expect(routesQuick({ ...base, text: "tldr pls ?" })).toBe(false);
     expect(routesQuick({ ...base, bot: elsewhere, messages: [card] })).toBe(false);
+    expect(routesQuick({ ...base, bot: elsewhere, answersCard: card.id })).toBe(false);
   });
 
   it.each<[string, Partial<QuickGate>]>([
@@ -633,6 +679,13 @@ describe("Gate 0", () => {
     expect(routesQuick({ ...base, messages: [choices] })).toBe(true);
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true, options: [QUESTION, "Hold for QA"] })] })).toBe(false);
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true })] })).toBe(false);
+  });
+
+  it("skips the helper for a tapped choice, even when an older card is the one still open", () => {
+    const older = closed({ staysOpen: true, options: ["Yes", "No"] });
+    const tapped: Message = { ...closed({ staysOpen: true, options: [QUESTION, "Later"], answered: QUESTION }), id: "c2", at: 2 };
+    expect(routesQuick({ ...base, messages: [older, tapped] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [older, tapped], answersCard: tapped.id })).toBe(false);
   });
 
   it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {

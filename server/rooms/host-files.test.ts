@@ -51,7 +51,7 @@ function routes(botCaller = false) {
     resolveReplyTarget: () => undefined,
     groupIsWorking: () => false,
     botCaller: () => botCaller,
-    startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string, _asker?: string, roomFileIds?: readonly string[]) =>
+    startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string, _asker?: string, _card?: string, roomFileIds?: readonly string[]) =>
       hostSend(store.group(groupId) as HostedGroup, text, replyTo, sendId, roomFileIds).message,
   } as unknown as Parameters<typeof createGroupRoutes>[0]);
 }

@@ -8,13 +8,13 @@
 .show-pane-tabs button { height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; cursor: default; }
 .show-pane-tabs button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
-.show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media { min-height: calc(100% - var(--head) - 20px); }
+.show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media, .show-pane > .show-workers { min-height: calc(100% - var(--head) - 20px); }
 .show-pane-tabs button:disabled { opacity: .45; }
 /* A click on the file already showing; an inset ring above the frame, since the pane sits flush against the window edge. */
 .show-pane.arrival-glow::before { z-index: 1; animation-duration: 1.2s; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-accent) 92%, transparent), inset 0 0 14px 3px color-mix(in oklab, var(--color-accent) 60%, transparent); }
 /* Show and Check stay mounted behind the other tabs, so the file never reloads and the check keeps streaming. */
-.show-pane:not([data-tab="show"]) > .show-frame, .show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane) { display: none; }
-.show-pane > .map-pane { min-height: calc(100% - var(--head) - 20px); }
+.show-pane:not([data-tab="show"]) > .show-frame, .show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane) { display: none; }
+.show-pane > .map-pane, .show-pane > .timeline-pane { min-height: calc(100% - var(--head) - 20px); }
 
 .show-frame-icon { flex-shrink: 0; color: var(--color-ink-secondary); }
 .show-frame-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }

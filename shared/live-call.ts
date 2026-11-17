@@ -44,9 +44,10 @@ export const LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.ge
 export const CALL_ID = /^c-[0-9a-f]{12}$/;
 
 /** `voice` marks the voice's speech, `notice` the app's own line in the voice's place (never sent to the bot), `order` a confirmed work order, `ask` a quick ask. A call's first row gets `ms` on hang-up, and `summary` when one came back. */
-export type CallTag = { id: string; voice?: true; notice?: true; order?: true; ask?: true; ms?: number; summary?: string };
+export type CallTag = { id: string; voice?: true; notice?: true; unheard?: true; order?: true; ask?: true; ms?: number; summary?: string };
 export type CallRoom = { id: string; kind: "host" | "joined" };
-export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number };
+/** `unheard`: a voice line the phone would not sound. */
+export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number; unheard?: true };
 
 // Korean trails off mid-thought (음, 그러니까...), so both ends are LOW and the pause is long.
 export const LIVE_VAD = {
@@ -89,3 +90,4 @@ export function isVoiceLine(row: { call?: CallTag }): boolean {
 
 /** Leads a voice line wherever it is replayed to a model: the voice checked nothing. */
 export const VOICE_SAID = "[said on a call, unverified]";
+export const VOICE_UNHEARD = "[said on a call, not heard]";

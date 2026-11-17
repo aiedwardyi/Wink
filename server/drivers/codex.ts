@@ -18,11 +18,13 @@ import { z } from "zod";
 
 import { applyCredentialAllowlist } from "../config.ts";
 import { computerProxyEnv } from "../container-computer.ts";
+import { guardInput } from "../auto-approve.ts";
 import { describeSpawnFailure, execCli, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 import { startTurnTrace, traceHelperCall, traceRuntimeEvent } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
+import { askPreallowedOps, type BuiltinServer } from "./builtin-ops.ts";
 
 import type {
   DriverCreateInput,
@@ -601,13 +603,14 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // local-computer-block backstop applies to remembered always-allows.
       const controlsHost = turn.integrations?.localComputer?.scope === "local-computer";
       // Wink's own tools Claude pre-allows (claude.ts `allowed`) never card.
+      const builtinAllowed = (server: BuiltinServer, mount: string) =>
+        turn.approval === "ask" ? askPreallowedOps(server).map((op) => `${mount}/${op}`) : [mount];
       const preAllowed = new Set([
-        turn.integrations?.agents && "agents",
-        turn.integrations?.phone && "openmausbot_phone",
-        turn.integrations?.browser && "browser",
+        ...(turn.integrations?.agents ? builtinAllowed("agents", "agents") : []),
+        ...(turn.integrations?.phone ? builtinAllowed("phone", "openmausbot_phone") : []),
+        ...(turn.integrations?.browser ? builtinAllowed("browser", "browser") : []),
         (turn.integrations?.computer || (turn.integrations?.localComputer && !controlsHost)) && "computer",
-        turn.integrations?.terminal && "terminal/terminal_read",
-        turn.integrations?.terminal && "terminal/terminal_playbook",
+        ...(turn.integrations?.terminal ? askPreallowedOps("terminal").map((op) => `terminal/${op}`) : []),
       ]);
       const handleServerRequest = (msg: any) => {
         const method = msg.method as string;
@@ -689,6 +692,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           tool,
           summary,
           choices,
+          ...(controlsHost && turn.attended ? {} : guardInput(params)),
           approvalScope: controlsHost ? "local-computer" : undefined,
         });
       };

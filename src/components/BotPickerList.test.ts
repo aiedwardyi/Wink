@@ -3,6 +3,12 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store";
+
+vi.mock("@/state/store", async (original) => ({
+  ...await original<typeof import("@/state/store")>(),
+  useStore: () => ({ state: { instances: [] } }),
+}));
+
 import { BotPickerList } from "./BotPickerList";
 
 it("gives picked and unpicked bots the shared hover and keyboard focus surface", async () => {

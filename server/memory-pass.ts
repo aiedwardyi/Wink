@@ -31,7 +31,6 @@ const FACT_MAX = 200;
 const DECISION_MAX = 100;
 const DECISIONS_PER_PASS = 3;
 const CONTEXT_MAX = 400;
-const CONTEXT_LINE_MAX = 200;
 const CONTEXT_SCAN = 50;
 const PICTURE_SCAN = 200;
 const PICTURES_MAX = 8;
@@ -58,11 +57,11 @@ export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: Usag
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
-export type UserLine = { text: string; context?: string; pictures?: Picture[]; files?: string[]; at?: number };
+export type UserLine = { text: string; context?: string; options?: string[]; pictures?: Picture[]; files?: string[]; at?: number; tap?: boolean };
 export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
-  store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage">;
+  store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
   /** The Claude one-shot call, whatever engine the bot runs; null when no Claude CLI is set up. */
   generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
@@ -102,15 +101,15 @@ export function eligibleRow(message: Message | undefined): message is Message & 
 }
 
 /** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
-export function userTyping(text: string, dropSensitive = true): string {
+export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
   const typed = text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
-    .replace(/<attached-(?:image|file)\b[^>]*\/>/gi, "")
+    .replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
   // the whole message: a label and its value can sit in different paragraphs
-  if (dropSensitive && secretLike(typed)) return "";
-  const unwrapped = typed.replace(/"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
+  if (dropSensitive && secretValue(typed)) return "";
+  const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
     .filter((paragraph) => paragraph.length <= 400 && paragraph.split("\n").length <= 6)
@@ -132,12 +131,18 @@ export function replyContext(text: string): string {
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
 /** For each id, the bot's text reply or ask_user card just before it, if no other user line sits between. */
-export function replyContexts(messages: readonly Message[], ids: string[]): Map<string, string> {
+export function replyContexts(messages: readonly Message[], ids: string[]): Map<string, { context: string; options?: string[] }> {
   const wanted = new Set(ids);
-  const found = new Map<string, string>();
+  const found = new Map<string, { context: string; options?: string[] }>();
   for (let i = messages.length - 1, seen = 0; i >= 0 && seen < wanted.size; i -= 1) {
     if (!wanted.has(messages[i]!.id)) continue;
     seen += 1;
+    const answer = messages[i]!.answersCard;
+    const answered = answer ? messages.slice(0, i).find((message) => message.id === answer && message.role === "bot" && message.kind === "options" && message.card?.askUser && !message.card.requestId)?.card : undefined;
+    if (answered) {
+      found.set(messages[i]!.id, { context: replyContext(`${answered.subtitle}\n${answered.options.join("\n")}`), options: answered.options });
+      continue;
+    }
     let card: { subtitle: string; options: string[] } | undefined;
     let reply: string | undefined;
     for (let j = i - 1; j >= Math.max(0, i - CONTEXT_SCAN); j -= 1) {
@@ -152,7 +157,7 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
     }
     // a card often just says "pick 1-3", so behind a reply only its options ride, last so the cap keeps them
     const context = replyContext(reply ? [reply, ...(card?.options ?? [])].join("\n") : card ? `${card.subtitle}\n${card.options.join("\n")}` : "");
-    if (context) found.set(messages[i]!.id, context);
+    if (context) found.set(messages[i]!.id, card ? { context, options: card.options } : { context });
   }
   return found;
 }
@@ -167,7 +172,8 @@ const plainLine = (text: string) => text.replace(CONTEXT_TAGS, " ").replace(/\s+
 
 /** The images the user attached to a row. */
 export function attachedImages(text: string): string[] {
-  return [...new Set([...text.matchAll(ATTACHED)].map((match) => match[1]!).filter(Boolean))];
+  const typed = userTyping(text, false, true);
+  return [...new Set([...typed.matchAll(ATTACHED)].map((match) => match[1]!.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")).filter(Boolean))];
 }
 
 /** For each id, the pictures the bot showed or named since the user's line before it: show_image sources that still exist, else the shown copy, and image paths in its text. */
@@ -278,6 +284,14 @@ export function secretLike(text: string): boolean {
   return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+function secretValue(text: string): boolean {
+  const plain = text
+    .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
+    .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
+    .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
+  return secretLike(plain);
+}
+
 const STOP_WORDS = new Set(["the", "and", "but", "for", "with", "are", "was", "that", "this", "you", "your", "can", "can't", "cant", "don't", "dont", "just", "have", "has", "not", "i'm", "it's", "its", "really"]);
 
 function quoteWords(quote: string): string[] {
@@ -301,15 +315,14 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
 
-/** The one stamped Auto Notes line in the Decisions section on this question: "key: pick" first, else one that opens with the key. */
+/** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
 function legacyLine(key: string, lines: string[], taken: Set<string>): string | undefined {
-  const span = decisionSpan(lines);
   const asked = pickKey(key);
-  if (!span || !asked) return undefined;
-  const noted = lines.slice(span[0] + 1, span[1]).map((line) => line.replace(/\r$/, "")).filter((line) => NOTED.test(line) && !taken.has(line));
-  const subject = (line: string) => NOTED.exec(line)![1]!;
-  for (const opens of [(text: string) => /^[^:]+:/.test(text) && pickKey(text.slice(0, text.indexOf(":"))) === asked, (text: string) => `${pickKey(text)} `.startsWith(`${asked} `)]) {
-    const found = noted.filter((line) => opens(subject(line)));
+  if (!asked) return undefined;
+  const noted = lines.map((line) => line.replace(/\r$/, "")).filter((line) => /^\s*[-*+]\s+/.test(line) && !taken.has(line));
+  const subject = (line: string) => NOTED.exec(line)?.[1] ?? line.replace(/^\s*[-*+]\s+/, "");
+  for (const opens of [(line: string) => /^[^:]+:/.test(subject(line)) && pickKey(subject(line).slice(0, subject(line).indexOf(":"))) === asked, (line: string) => NOTED.test(line) && `${pickKey(subject(line))} `.startsWith(`${asked} `)]) {
+    const found = noted.filter(opens);
     if (found.length) return found.length === 1 && lines.filter((line) => sameLine(line, found[0]!)).length === 1 ? found[0] : undefined;
   }
   return undefined;
@@ -370,7 +383,8 @@ function clauseOf(text: string, said: string): string {
   const line = squash(text);
   const target = squash(said);
   const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const at = target.length >= 4 ? line.indexOf(target) : line.search(new RegExp(`(?<![\\p{L}\\p{N}'])${escaped}(?![\\p{L}\\p{N}'])`, "u"));
+  const matches = [...line.matchAll(new RegExp(`(?<![\\p{L}\\p{N}'])${escaped}(?![\\p{L}\\p{N}'])`, "gu"))];
+  const at = matches.at(-1)?.index ?? -1;
   if (at < 0) return target;
   const marks = [...line.matchAll(CLAUSE)];
   const start = marks.filter((mark) => mark.index! + mark[0].length <= at).at(-1)?.index ?? 0;
@@ -394,17 +408,37 @@ function clauses(text: string): Array<{ words: string[]; asked: boolean }> {
 function userChose(picked: string, said: string, own: UserLine[]): boolean {
   const label = LABEL.exec(picked.trim())?.[1]?.toLowerCase();
   const stems = contentWords(picked);
-  return (own.length ? own : [{ text: said }]).some(({ text, context }) => {
+  return (own.length ? own : [{ text: said }]).some(({ text, context, options: card }) => {
     const spoken = clauseOf(text, said);
     const long = words(spoken).length > SHORT_ANSWER;
     const parts = clauses(spoken);
+    const ordinal = /\b(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|option|choice))?\b/.exec(spoken)?.[1];
+    const explicit = parts.some(({ words: clause }) => Boolean(label && clause.includes(label)) || stems.length > 0 && stems.every((stem) => clause.some((word) => sameStem(stem, word))));
+    if (ordinal && !explicit) {
+      if (parts.some(({ words: clause, asked }) => asked || NEGATED.test(clause.join(" ")))) return false;
+      const options = [...(context ?? "").matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)].map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
+      // the context runs a card's unlettered options together
+      if (!options.length && card?.length) options.push(...card);
+      if (!options.length && context?.includes(" or ")) options.push(...context.split(/[.!?]/).filter(Boolean).at(-1)!.split(/,?\s+or\s+/));
+      const index = ordinal === "last" ? options.length - 1 : ["first", "second", "third", "fourth", "fifth"].indexOf(ordinal) >= 0 ? ["first", "second", "third", "fourth", "fifth"].indexOf(ordinal) : Number(ordinal[0]) - 1;
+      const option = options[index];
+      if (!option) return false;
+      if (LABELED.test(option)) return sameOption(picked, option);
+      const chosen = contentWords(option);
+      const other = options.filter((_, at) => at !== index).flatMap(contentWords);
+      const distinctive = stems.filter((stem) => chosen.some((word) => sameStem(stem, word)) && !other.some((word) => sameStem(stem, word)));
+      return distinctive.length > 0 && !stems.some((stem) => other.some((word) => sameStem(stem, word)) && !chosen.some((word) => sameStem(stem, word)));
+    }
     const named = parts.flatMap(({ words: clause, asked }, index) => {
       let at = clause.findIndex((word) => contentWords(word).length > 0 && stems.some((stem) => sameStem(stem, word)));
       // a label counts in a short answer, or in a short opening clause of a longer line: "a" or "i" only as its last word
-      if (at < 0 && label && (!long || (index === 0 && clause.length <= SHORT_ANSWER))) at = long && (label === "a" || label === "i") ? (clause.at(-1) === label ? clause.length - 1 : -1) : clause.indexOf(label);
+      const opening = parts.slice(0, index).every(({ words: prior, asked: question }) => !question && !NEGATED.test(prior.join(" ")) && !prior.some((word) => /^[a-h]$/.test(word)));
+      const explicit = /\b(?:choose|pick|use|prefer|want|with)\s+(?:option\s+)?[a-h1-9]\b/.test(clause.join(" "));
+      if (at < 0 && label && (!long || explicit || (opening && clause.length <= SHORT_ANSWER))) at = long && !explicit && (label === "a" || label === "i") ? (clause.at(-1) === label ? clause.length - 1 : -1) : clause.indexOf(label);
       return at < 0 ? [] : [!asked && !NEGATED.test(clause.slice(0, at).join(" "))];
     });
-    if (named.length) return named.includes(true);
+    // The last mention can withdraw an earlier choice in the same line.
+    if (named.length) return named.at(-1)!;
     const plain = parts.every(({ words: clause, asked }) => !asked && !NEGATED.test(clause.join(" ")));
     return !long && plain && CHOOSING.test(words(spoken).join(" ")) && Boolean(context && ASKED.test(context));
   });
@@ -442,7 +476,7 @@ function shownPicture(value: string | null | undefined, shown: Picture[]): Pictu
 /** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, on 3 questions at most, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
-  const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretLike(paragraph));
+  const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
   const lines = notes.split("\n");
   const span = decisionSpan(lines);
   const inSection = (target: string) => {
@@ -470,7 +504,8 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     if (before && !paragraphs.some((paragraph) => quotes(paragraph, said))) said = confirmed(sources, said, line, before) ?? said;
     if (!line || line.length > (decision || tweak ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
     if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
-    if (secretLike(line) || secretLike(said)) return null;
+    const sensitive = decision || tweak ? secretValue : secretLike;
+    if (sensitive(line) || sensitive(said)) return null;
     const own = sources.filter(({ text }) => quotes(text, said));
     const at = own.at(-1)?.at ?? 0;
     if (tweak) {
@@ -489,7 +524,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const id = `pick ${pickKey(thing)} ${squash(said)}`;
       if ((keys.size >= DECISIONS_PER_PASS && !keys.has(pickKey(thing))) || seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, own)) return null;
       // an older Auto Notes line on this question leaves MEMORY.md for the timeline, named by the note-taker or not
-      const listed = replaceable(replaces, lines, claims) && inSection(replaces) && !taken.has(replaces) ? replaces : undefined;
+      const listed = replaceable(replaces, lines, claims) && (inSection(replaces) || legacyLine(thing, [replaces], taken) === replaces) && !taken.has(replaces) ? replaces : undefined;
       const target = listed ?? legacyLine(thing, lines, taken);
       if (target) taken.add(target);
       const shown = [...sources.flatMap(({ pictures }) => pictures ?? []), ...recorded];
@@ -505,18 +540,22 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
         if (found && found.path !== picture?.path && !overPictures.some((other) => other.path === found.path)) overPictures.push(found);
       }
       if (picture && !overPictures.length && recorded.includes(picture)) overPictures.push(...recorded.filter((other) => other.path !== picture.path));
+      // the same short answer can sit on two questions; the one whose question names the pick says how and when it was chosen
+      const asked = own.filter(({ context }) => contentWords(line).some((stem) => contentWords(context ?? "").some((word) => sameStem(stem, word))));
+      const source = asked.length ? asked : own;
       const files = [...new Set(own.flatMap(({ files }) => files ?? []))];
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
       keys.add(pickKey(thing));
       live.add(pickKey(thing));
       decided.add(squash(said));
-      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at, key: thing, picked: line, said };
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: source.at(-1)?.at ?? 0, key: thing, picked: line, said };
       if (over.length) pick.over = over;
       if (picture) pick.picture = picture;
       if (overPictures.length) pick.overPictures = overPictures;
       if (files.length) pick.files = files;
-      if (old) pick.legacy = { day: old[2]!, line: old[1]! };
+      if (source.length && source.every((line) => line.tap)) pick.tapped = true;
+      if (target) pick.legacy = { day: old?.[2] ?? day(pick.at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
       const note: Note = { line: named, kind: "decision", pick };
       if (target) note.replaces = target;
       return note;
@@ -619,6 +658,21 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let warned = false;
   let disposed = false;
+  const roomKey = (botId: string, threadId: string) => JSON.stringify([botId, threadId]);
+  const roomSource = (key: string): [string, string] | undefined => {
+    try {
+      const value: unknown = JSON.parse(key);
+      return Array.isArray(value) && value.length === 2 && value.every((part) => typeof part === "string") ? value as [string, string] : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const sourceThread = (key: string) => roomSource(key)?.[1] ?? key;
+  const sourceBot = (key: string) => {
+    const room = roomSource(key);
+    return room ? deps.store.groupByThread(room[1])?.memberIds?.includes(room[0]) ? deps.store.bot?.(room[0]) : undefined : deps.store.botByThread(key);
+  };
+  const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
 
   try {
     const state = stateSchema.parse(JSON.parse(readFileSync(statePath, "utf8")));
@@ -690,7 +744,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       return done(threadId, batch.ids);
     }
     // a turn may be writing MEMORY.md and its own save chip; retry after it
-    if (deps.busy(botId, threadId)) {
+    if (busy(botId, threadId)) {
       held.set(threadId, batch);
       log({ botId, threadId, facts: accepted.length, ms, result: "busy" });
       return arm(botId, threadId);
@@ -737,7 +791,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
     }
-    deps.store.appendMessage(threadId, {
+    deps.store.appendMessage(sourceThread(threadId), {
       role: "bot",
       kind: "activity",
       tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)) },
@@ -761,21 +815,23 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     const generate = deps.generate(botId);
     if (!generate) return warnOnce("no Claude CLI instance");
-    const messages = deps.store.messagesFor(threadId);
+    const messages = deps.store.messagesFor(sourceThread(threadId));
     const rows = pendingRows(messages, ids);
     const typed = ids.flatMap((id) => {
       const row = rows.get(id);
       // a pasted tag cannot open or close a prompt block
       const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
-      return text ? [{ id, text, at: row!.at, files: attachedImages(row!.text ?? "") }] : [];
+      return text ? [{ id, text, at: row!.actedAt ?? row!.at, tap: Boolean(row!.answersCard), files: attachedImages(row!.text ?? "") }] : [];
     });
-    const contexts = replyContexts(messages, typed.filter(({ text }) => text.length <= CONTEXT_LINE_MAX).map(({ id }) => id));
+    const contexts = replyContexts(messages, typed.map(({ id }) => id));
     const shown = replyPictures(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
-    const lines = typed.map(({ id, text, at, files }) => {
+    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
       const line: UserLine = { text, at };
+      if (tap) line.tap = true;
       const context = contexts.get(id);
       const pictures = shown.get(id);
-      if (context) line.context = context;
+      if (context) line.context = context.context;
+      if (context?.options) line.options = context.options;
       if (pictures) line.pictures = pictures;
       if (files.length) line.files = files;
       return line;
@@ -820,7 +876,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         continue;
       }
       queue.splice(i, 1);
-      if (deps.busy(botId, threadId)) {
+      if (busy(botId, threadId)) {
         arm(botId, threadId);
         continue;
       }
@@ -844,20 +900,28 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     if (change.type === "bot.deleted" || (change.type === "bot" && !deps.enabled(change.botId))) return stop();
     if (change.type !== "message" || change.imported) return;
     const { message, threadId } = change;
-    if (message.role !== "user" || message.kind !== "text" || deps.store.groupByThread(threadId)) return;
-    const bot = deps.store.botByThread(threadId);
-    if (!bot || !deps.enabled(bot.id)) return;
-    const ids = pending.get(threadId) ?? [];
-    if (!ids.includes(message.id)) ids.push(message.id);
-    pending.set(threadId, ids.slice(-MAX_PENDING));
-    clearTimeout(timers.get(threadId));
-    timers.delete(threadId);
-    saveSoon();
+    if (message.role !== "user" || message.kind !== "text") return;
+    const group = deps.store.groupByThread(threadId);
+    if (group && (!eligibleRow(message) || message.author?.kind === "person" || message.author?.kind === "bot")) return;
+    const bot = group ? undefined : deps.store.botByThread(threadId);
+    const targets = group ? (group.memberIds ?? []).map((id) => deps.store.bot?.(id)).filter((bot) => bot !== undefined && bot !== null) : bot ? [bot] : [];
+    let queued = false;
+    for (const target of targets) {
+      if (!deps.enabled(target.id)) continue;
+      const key = group ? roomKey(target.id, threadId) : threadId;
+      const ids = pending.get(key) ?? [];
+      if (!ids.includes(message.id)) ids.push(message.id);
+      pending.set(key, ids.slice(-MAX_PENDING));
+      clearTimeout(timers.get(key));
+      timers.delete(key);
+      queued = true;
+    }
+    if (queued) saveSoon();
   });
 
   const stop = () => {
     const off = (threadId: string) => {
-      const bot = deps.store.botByThread(threadId);
+      const bot = sourceBot(threadId);
       return !bot || !deps.enabled(bot.id);
     };
     for (const [threadId, timer] of timers) {
@@ -875,16 +939,20 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   stop();
   for (const threadId of pending.keys()) {
-    const bot = deps.store.botByThread(threadId);
+    const bot = sourceBot(threadId);
     if (bot) arm(bot.id, threadId);
   }
 
   return {
     onSettled(botId, threadId, flush) {
-      const count = pending.get(threadId)?.length ?? 0;
-      if (disposed || !count || !deps.enabled(botId)) return;
-      if (flush || count >= BATCH_MESSAGES || held.has(threadId)) enqueue(botId, threadId);
-      else arm(botId, threadId);
+      const group = deps.store.groupByThread(threadId);
+      const targets = group ? (group.memberIds ?? []).map((id) => ({ botId: id, key: roomKey(id, threadId) })) : [{ botId, key: threadId }];
+      for (const { botId, key } of targets) {
+        const count = pending.get(key)?.length ?? 0;
+        if (disposed || !count || !deps.enabled(botId)) continue;
+        if (flush || count >= BATCH_MESSAGES || held.has(key)) enqueue(botId, key);
+        else arm(botId, key);
+      }
     },
     onConfigChanged() {
       if (!disposed) stop();

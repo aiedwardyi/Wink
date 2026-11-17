@@ -49,7 +49,7 @@ describe("room sends and chat sync", () => {
     syncHold.release(group.threadId);
     await vi.advanceTimersByTimeAsync(200);
     await sent;
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "hi", undefined, undefined, undefined, []);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "hi", undefined, undefined, undefined, undefined, [], undefined);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
   });
 

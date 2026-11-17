@@ -7,7 +7,7 @@ import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
 import { applyPendingModel, switchHeld } from "./pending-model.ts";
-import { quickAskRecovery, routesQuick } from "./quick-ask.ts";
+import { quickAskRecovery, routesAck, routesQuick } from "./quick-ask.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -123,6 +123,14 @@ describe("queued send through the message POST", () => {
     expect(h.startTurn).not.toHaveBeenCalled();
   });
 
+  it("keeps the time the user queued a send when Send now promotes it", async () => {
+    const h = harness();
+    const sendId = "send-now-acted000000000";
+    const held = queue.queueSteeredMessage(h.bot.id, h.bot.threadId, "later", { sendId, after: true, actedAt: 1_000 });
+    const receipt = await h.post({ text: "later", sendId, queueId: held.id, threadId: h.bot.threadId, actedAt: 3_000 });
+    expect(receipt.body).toMatchObject({ steered: true, message: { sendId, actedAt: 1_000 } });
+  });
+
   it("keeps the original receipt and FIFO when the engine declines the steer", async () => {
     const h = harness(vi.fn(async () => false));
     const selected = h.hold("first");
@@ -191,7 +199,7 @@ describe("a line typed while the bot works", () => {
   const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread")) => {
     const startQuick = vi.fn();
     const h = harness(steer, true, {
-      routesQuick, startQuick, quick: { accountReady: () => true },
+      routesQuick, routesAck, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
     });
     Object.assign(h.store, { groupByThread: () => undefined });

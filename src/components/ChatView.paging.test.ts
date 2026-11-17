@@ -8,8 +8,10 @@ import type { TurnStreamState } from "@/lib/turn-stage";
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
 
+import { closeShow, useWorkersThread } from "@/lib/show-pane";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
+import { ShowPane } from "./ShowPane";
 
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => {
@@ -145,12 +147,16 @@ async function mount(view: "chat" | "room") {
     disconnect() {}
   });
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  function WorkersPane() {
+    const thread = useWorkersThread();
+    return thread ? createElement(ShowPane, { workers: true, source: { threadId: thread, messages: [] }, hidden: false }) : null;
+  }
   function Live() {
     store = useStore();
     const b = store.state.bots.find((candidate) => candidate.id === store.state.selectedId) ?? store.state.bots[0];
     const g = store.state.groups[0];
     const transcript = view === "chat" ? (b ? createElement(ChatView, { bot: b }) : null) : g ? createElement(GroupView, { group: g }) : null;
-    return createElement(Suspense, { fallback: null }, transcript, createElement(Gate));
+    return createElement(Suspense, { fallback: null }, transcript, createElement(Gate), createElement(WorkersPane));
   }
   const host = document.createElement("div");
   document.body.append(host);
@@ -160,7 +166,7 @@ async function mount(view: "chat" | "room") {
     FakeEventSource.last!.onmessage!({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c1" }), lastEventId: "" });
   });
   unmount = async () => {
-    await act(async () => root.unmount());
+    await act(async () => { root.unmount(); closeShow(); });
     host.remove();
   };
   return host;
@@ -353,7 +359,7 @@ describe("paged transcripts", () => {
     await act(async () => store.dispatch({ type: "focusMessage", threadId, messageId: "old-hit" }));
     await vi.waitFor(() => expect(host.querySelector('[data-mid="old-hit"]')).not.toBeNull());
     expect(host.querySelector("[data-worker-run] [data-worker-state]")?.getAttribute("data-worker-state")).toBe("done");
-    const strip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
+    const strip = host.querySelector<HTMLButtonElement>("[data-show-pane-button]")!;
     expect(strip.closest("[class*='@container/chathead']")).not.toBeNull();
     // JOB's launch is only on the jumped page. Chat still lists it: one live pane starts with its pane id. A room has no roster.
     const chat = view === "chat";
@@ -361,6 +367,7 @@ describe("paged transcripts", () => {
       ? "1 working, 0 waiting, 0 failed, 1 done. Show workers"
       : "1 working, 0 waiting, 0 failed, 0 done. Show workers");
     await act(async () => strip.click());
+    await vi.waitFor(() => expect(document.querySelector("[data-side-panel] [data-worker-list] li")).not.toBeNull());
     expect(Array.from(document.querySelectorAll("[data-worker-list] li")).map((li) => li.textContent)).toEqual(
       chat ? ["CURRENTscriptWorking", "JOBscriptDone"] : ["CURRENTscriptWorking"],
     );
@@ -385,7 +392,7 @@ describe("paged transcripts", () => {
     await vi.waitFor(() => expect(host.querySelector('[data-mid="old-hit"]')).not.toBeNull());
     expect(readBot).not.toHaveBeenCalled();
     expect(onExit).not.toHaveBeenCalled();
-    expect(host.querySelector("[data-worker-strip]")).toBeNull();
+    expect(host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label")).toBe("Show and media");
     expect(host.querySelector("[data-worker-run]")).not.toBeNull();
   });
 
