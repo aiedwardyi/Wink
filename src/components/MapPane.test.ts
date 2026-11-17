@@ -139,16 +139,17 @@ it("pauses hidden views without losing the user's manual selection", async () =>
   expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
 });
 
-it("asks for Git rows only once the tree and the code have landed", async () => {
+it("asks for the last Git rows at once and reads them again only once the tree and the code have landed", async () => {
   const held: Record<string, (body: object) => void> = {};
+  const kind = (url: Parameters<typeof fetch>[0]) => String(url).includes("cached=1") ? "last" : /\/(repo|file|flow)\?/.exec(String(url))![1];
   vi.mocked(fetch).mockImplementation(url => {
-    const kind = /\/(repo|file|flow)\?/.exec(String(url))![1];
-    return kind === "flow" ? Promise.resolve(Response.json({ commits: [] })) : new Promise(done => { held[kind] = body => done(Response.json(body)); });
+    const asked = kind(url);
+    return asked === "flow" || asked === "last" ? Promise.resolve(Response.json(asked === "last" ? null : { commits: [] })) : new Promise(done => { held[asked] = body => done(Response.json(body)); });
   });
-  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => /\/(repo|file|flow)\?/.exec(String(url))![1]);
+  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => kind(url));
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit();
-  expect(asked().toSorted()).toEqual(["file", "repo"]);
+  expect(asked().toSorted()).toEqual(["file", "last", "last", "repo"]);
   await act(async () => held.repo(repo));
   expect(asked()).not.toContain("flow");
   await act(async () => held.file({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] }));
@@ -928,4 +929,26 @@ it("puts a second drag line between the tree and the Git rows, hidden when no Gi
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
   expect(css).toContain(".map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }");
   expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
+});
+
+it("keeps a loaded Map through wide, narrow and wide again with no size-only fetch or blank code", async () => {
+  let narrow = false;
+  const flips = new Set<() => void>();
+  vi.stubGlobal("matchMedia", (query: string) => ({ get matches() { return query.includes("max-width") && narrow; }, addEventListener: (_: string, fn: () => void) => flips.add(fn), removeEventListener: (_: string, fn: () => void) => flips.delete(fn) }));
+  const { ShowPane } = await import("./ShowPane");
+  await act(async () => root.render(createElement(ShowPane, { map: true, botId: "bot", hidden: false })));
+  for (let i = 0; i < 100 && !stream; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  await emit([workers[0]]);
+  const code = () => document.querySelector(".map-code")?.textContent ?? "";
+  for (let i = 0; i < 100 && !code().includes("const edited"); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(code()).toContain("const edited = true;");
+  const streams = vi.mocked(EventSource).mock.calls.length;
+  const calls = vi.mocked(fetch).mock.calls.length;
+  const seen = [];
+  for (const next of [true, false]) {
+    await act(async () => { narrow = next; flips.forEach(flip => flip()); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    seen.push({ code: code(), streams: vi.mocked(EventSource).mock.calls.length - streams, fetches: vi.mocked(fetch).mock.calls.length - calls });
+  }
+  expect(seen).toEqual([{ code: "1+const edited = true;", streams: 0, fetches: 0 }, { code: "1+const edited = true;", streams: 0, fetches: 0 }]);
 });

@@ -54,6 +54,20 @@ An app update or restart closes every pane mid-run: before suggesting one, tell 
 
 <!-- on demand -->
 
+## Standards
+
+- Lauren's rules: fix the root cause, never a timer or retry patch. Make it unrepeatable
+  (a lint naming the fix, a type, a right-way-only API or a test), list other copies,
+  and prove it with red-then-green artifacts. Unrepeatable means a test, lint, type or
+  tool fix. Never a new feature or anything the user sees unless the user asks for it.
+- Undo first. Fix cards (Purpose says fix, bug, broke or regression): `revert <sha or PR>`
+  if an unasked change caused it, else `no earlier change caused this (searched: <terms>)`,
+  or `new code: "<user's words>" (<date>)` if the user asked for new code.
+- A bot's own process slip is fixed in its own notes or scripts. A new feature, guard
+  or visible change needs the user's OK first.
+- Launch only cards the user asked for (their words in Purpose). Anything else is a
+  one-line suggestion that waits for a yes.
+
 ## Cards
 
 Every worker gets a card, a markdown file. Write it to disk, then spawn the
@@ -91,6 +105,9 @@ What to build or fix, and why. 2-5 lines. Quote the user's latest words verbatim
 - Search built.md, the status board and earlier cards: lines it touches, or
   `none found (searched: <terms>)`. Then files to open first.
 
+## Undo first
+- Fix cards: the undo line from Standards.
+
 ## Files
 - Files to start from.
 
@@ -108,8 +125,9 @@ The exact shape of its final message, plus one line: what it reused.
 - One card, one branch, one worktree. The worker does exactly what the card says.
 - A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
   Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
-- A repeat mistake gets a failing check, not a rule line. Automate a job (routine, fan-out) only after one run passes Verify before push.
-- Launch only cards that serve the current goal or that the user asked for.
+- Reuse first: a card for a new surface (like group rooms next to 1:1 chats) names the existing component or
+  code path it extends; never a parallel copy. Shared UI parts: docs/ui-kit.md, enforced by `pnpm check:ui-kit`.
+- A repeat mistake gets a failing check, not a rule line, in code you were asked to change. Your own process slips: fix your notes or scripts. Automate a job (routine, fan-out) only after one run passes Verify before push.
 - Parallel cards: split shared ids, routes and names between them up front.
 - If their branches must work together, end with one INTEGRATE card: merge the
   named branches in a scratch worktree, run the checks, report like a worker.

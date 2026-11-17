@@ -23,7 +23,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 
 import { ATTACHMENTS_DIR, sniffImageMime } from "../attachments.ts";
-import { BACKGROUND_DENY_NOTE } from "../auto-approve.ts";
+import { BACKGROUND_DENY_NOTE, guardInput } from "../auto-approve.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
 import { brokerSocketPath, cliVersion, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
@@ -1112,8 +1112,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const retryScale = Number(process.env.FAKE_CLAUDE_RETRY_SCALE ?? "1");
       const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
-      const asks = turn.approval === "ask" && config.permissionMode !== "bypassPermissions";
-      const auto = turn.approval === "auto";
+      // a read-only turn always asks, so full auto or a user's own defaultMode can't lift it
+      const asks = (turn.approval === "ask" && config.permissionMode !== "bypassPermissions") || turn.readOnly === true;
+      const auto = turn.approval === "auto" && !turn.readOnly;
       const autoAttended = auto && turn.attended === true;
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
@@ -1146,8 +1147,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const injected = input.account ? { model: turnModel, injected: false } : applyClaudeInject({ ...turnEnvironment }, turnModel);
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
-      if (turn.leanStartup === true) args.push("--setting-sources", "project");
+      // read-only: no user, project or local settings, so none of their hooks or enabled plugins run; --settings still applies
+      if (turn.readOnly) args.push("--setting-sources", "");
+      else if (turn.leanStartup === true) args.push("--setting-sources", "project");
       else if (baseHome) args.push(...userSetupArgs(baseHome, baseConfig));
+      if (turn.readOnly) args.push("--strict-mcp-config", "--no-chrome");
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless
@@ -1224,7 +1228,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       let broker: ReturnType<typeof createPermissionBroker> | undefined;
       let socketPath: string | null = null;
       const ogbArgs = [PERM_PROXY_PATH, ""];
-      if (config.permissionMode !== "bypassPermissions") {
+      if (permissionMode !== "bypassPermissions") {
         socketPath = permissionSocketPath(threadId);
         ogbArgs[1] = socketPath;
         args.push("--permission-prompt-tool", "mcp__ogb__approve");
@@ -1237,6 +1241,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // through `ps` for the life of the turn, to any local process. The CLI
       // accepts a FILE for this flag, so the secrets go in a 0600 file that
       // is removed when the turn settles.
+      if (turn.readOnly) {
+        for (const name of Object.keys(mcpServers)) if (name !== "agents" && name !== "ogb") delete mcpServers[name];
+        allowed.splice(0, allowed.length, ...allowed.filter((tool) => tool === "mcp__agents" || tool === "mcp__ogb"));
+      }
       let mcpConfigPath: string | null = null;
       if (Object.keys(mcpServers).length || turn.system) {
         mcpConfigPath = join(mkdtempSync(join(tmpdir(), "omb-mcp-")), "mcp.json");
@@ -1379,8 +1387,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             return (desktop ? backgroundAutoAttended(s) : backgroundAuto(s)) ? "auto" : "denied";
           },
           onAsk: (ask) => {
-            const eventTurnId = sessions.get(threadId)?.turn?.turnId ?? turnId;
+            const s = sessions.get(threadId);
+            const eventTurnId = s?.turn?.turnId ?? turnId;
+            // a helper keeps the origin of the turn that started it
+            const unattended = s ? (ask.background ? !backgroundAutoAttended(s) : s.auto && !s.autoAttended) : false;
             askTools.set(ask.id, typeof ask.tool === "string" ? ask.tool : undefined);
+            const approvalScope = askScope(ask.tool);
             emit({
               ...base(threadId, eventTurnId),
               type: "request.opened",
@@ -1389,9 +1401,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               tool: ask.tool,
               summary: askSummary(ask),
               inputDigest: inputDigest(ask.input ?? askArgs(ask)),
-              approvalScope: askScope(ask.tool),
+              approvalScope,
+              ...(approvalScope ? guardInput(ask.input) : {}),
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
               ...(ask.background ? { background: true } : {}),
+              ...(unattended ? { unattended: true } : {}),
             });
           },
           onResolve: (resolved) => {
@@ -2363,6 +2377,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           queueing: true,
           steerConsumed: true,
           readOnlyTurns: true,
+          laneTurns: true,
           pinnedSystem: true,
           localComputerMcp: config.permissionMode !== "bypassPermissions",
           askApproval: config.permissionMode !== "bypassPermissions",

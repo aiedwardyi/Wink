@@ -1332,8 +1332,10 @@ export class Store {
     return this.thread(threadId).messages;
   }
 
-  hasUnansweredQuickAsk(threadId: string): boolean {
-    return mdb.hasUnansweredQuickAsk(threadId);
+  /** One row by id: the cached copy when the thread is loaded, else a key read. */
+  row(threadId: string, messageId: string): Message | undefined {
+    const t = this.threads.get(threadId);
+    return t ? t.messages.find((m) => m.id === messageId) : mdb.readMessage(threadId, messageId);
   }
 
   activeLeaf(threadId: string): string | null {
@@ -1512,6 +1514,19 @@ export class Store {
     if (t.messages[idx].comm?.mailKey && t.messages[idx].comm?.peer === "reply") this.indexMail(threadId, t.messages[idx]);
     this.emit({ type: "message.patch", threadId, message: t.messages[idx] });
     return t.messages[idx];
+  }
+
+  /** patchMessage for a thread that may not be loaded: reads and writes the one row by key and loads nothing. */
+  patchRow(threadId: string, messageId: string, patch: Partial<Message>): Message | null {
+    if (this.threads.has(threadId)) return this.patchMessage(threadId, messageId, patch);
+    const row = mdb.readMessage(threadId, messageId);
+    if (!row) return null;
+    const next = redactBotAuthored({ ...row, ...patch, card: patch.card ?? row.card });
+    this.beforeWrite(threadId);
+    this.persistThread(threadId, [{ kind: "row", value: next }], () => mdb.updateMessage(threadId, next));
+    if (next.comm?.mailKey && next.comm?.peer === "reply") this.indexMail(threadId, next);
+    this.emit({ type: "message.patch", threadId, message: next });
+    return next;
   }
 
   private indexMail(threadId: string, row: Message): void {
@@ -2206,19 +2221,30 @@ export class Store {
   }
 
   removeSyncNotices(threadId: string, ids: string[]): void {
+    const moved = new Map<string, Message>();
+    let leaf: string | null | undefined;
     mdb.withMessageTransaction((db) => {
       for (const id of ids) {
         const row = db.prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id);
         if (!row) continue;
         const message: Message = JSON.parse(String(row.json));
         const parent = message.parentId ?? null;
+        // SAFETY: json is the stored Message.
+        for (const child of db.prepare("SELECT json FROM messages WHERE thread_id = ? AND json_extract(json, '$.parentId') = ?").all(threadId, id) as Array<{ json: string }>) {
+          const next: Message = { ...JSON.parse(child.json), parentId: parent };
+          moved.set(next.id, next);
+        }
         db.prepare("UPDATE messages SET json = json_set(json, '$.parentId', ?) WHERE thread_id = ? AND json_extract(json, '$.parentId') = ?")
           .run(parent, threadId, id);
-        db.prepare("UPDATE thread_state SET active_leaf_id = ? WHERE thread_id = ? AND active_leaf_id = ?").run(parent, threadId, id);
+        if (db.prepare("UPDATE thread_state SET active_leaf_id = ? WHERE thread_id = ? AND active_leaf_id = ?").run(parent, threadId, id).changes) leaf = parent;
         db.prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(threadId, id);
+        moved.delete(id);
       }
     });
     this.threads.delete(threadId);
+    // a client that already painted this chat follows the new parents and leaf
+    for (const message of moved.values()) this.emit({ type: "message.patch", threadId, message });
+    if (leaf) this.emit({ type: "thread", threadId, activeLeafId: leaf });
   }
 
   applySyncChanges(botId: string, threadId: string, changes: SyncChange[]): void {

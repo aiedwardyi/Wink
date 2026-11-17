@@ -4,11 +4,17 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store-types";
 
 const contexts: Array<{ state: string; resume: ReturnType<typeof vi.fn> }> = [];
+const voices: Array<{ play: ReturnType<typeof vi.fn> }> = [];
 const bot = { id: "b1", name: "Scout" } as Bot;
 
 beforeEach(() => {
   vi.resetModules();
   contexts.length = 0;
+  voices.length = 0;
+  vi.stubGlobal("Audio", class {
+    play = vi.fn(async () => {});
+    constructor() { voices.push(this); }
+  });
   vi.stubGlobal("AudioContext", class {
     state = "suspended";
     resume = vi.fn(async () => {});
@@ -30,6 +36,7 @@ it("starts the voice call a tapped bot call opened, with its blocker as the open
   expect(contexts[0]!.resume).toHaveBeenCalledTimes(1);
   window.dispatchEvent(new Event("pointerdown"));
   expect(contexts[0]!.resume).toHaveBeenCalledTimes(2);
+  expect(voices[0]!.play).toHaveBeenCalledTimes(2);
   expect(answerCall(bot, note)).toBeNull();
 });
 

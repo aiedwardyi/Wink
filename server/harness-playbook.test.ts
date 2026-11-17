@@ -41,7 +41,7 @@ describe("harness playbook", () => {
     const squash = (text: string) => text.replace(/\s+/g, "");
     const close = "</harness_playbook>";
     const body = harnessPlaybookBody();
-    expect(body.startsWith("## Cards")).toBe(true);
+    expect(body.startsWith("## Standards")).toBe(true);
     expect(body).not.toContain(close);
     expect(harnessPlaybookBody(`${loadHarnessPlaybook()}\n\n`)).toBe(body);
     expect(squash(`${harnessPlaybookPrompt(true).slice(0, -close.length)}<!-- on demand -->${body}${close}`)).toBe(squash(loadHarnessPlaybook()));
@@ -94,6 +94,28 @@ describe("harness playbook", () => {
     expect(gate.hold("s1", launch(String.raw`C:\cards\GONE.md`))).toBeUndefined();
     expect(gate.hold("s1", "claude --model x 'Fix the header.'")).toBeUndefined();
     expect(gate.hold("s1", `type ${empty}`)).toBeUndefined();
+  });
+
+  it("holds a fix card until its Undo first section names the change it undoes", () => {
+    const card = (purpose: string, undo?: string) => `# CARD | opus | high | FRESH\n## Purpose\n${purpose}\n## Already built\n- none found (searched: header)\n${undo === undefined ? "" : `## Undo first\n${undo}\n`}## Files\n- a.ts\n`;
+    const cards = new Map([
+      [String.raw`C:\cards\NONE.md`, card("Fix the header that broke on phone.")],
+      [String.raw`C:\cards\BLANK.md`, card("Bug: the header overlaps the list.", "")],
+      [String.raw`C:\cards\VAGUE.md`, card("A regression in the send button.", "- revert the header change")],
+      [String.raw`C:\cards\NOTERMS.md`, card("Fixes the broken chat list.", "- no earlier change caused this")],
+      [String.raw`C:\cards\SHA.md`, card("Fix the header.", "- revert a1e35093c")],
+      [String.raw`C:\cards\PR.md`, card("Fix the header.", "revert PR #1838")],
+      [String.raw`C:\cards\SEARCHED.md`, card("Fix the header.", "- no earlier change caused this (searched: header, layout)")],
+      [String.raw`C:\cards\NEW.md`, card("Fix the header.", '- new code: "build me a new header" (11-17)')],
+      [String.raw`C:\cards\BUILD.md`, card("Build the Q3 board deck.")],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    const launch = (name: string) => `claude --model x 'Read C:\\cards\\${name}.md and do it.'`;
+    for (const name of ["NONE", "BLANK", "VAGUE", "NOTERMS"]) {
+      expect(gate.hold("s1", launch(name)), name).toBe(`Held: C:\\cards\\${name}.md is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`);
+    }
+    for (const name of ["SHA", "PR", "SEARCHED", "NEW", "BUILD"]) expect(gate.hold("s1", launch(name)), name).toBeUndefined();
   });
 
   it("finds a relative card in the spawn's cwd and skips it without one", () => {
@@ -268,6 +290,26 @@ describe("harness playbook", () => {
     expect(prompt).toContain("## Already built - Search built.md, the status board and earlier cards: lines it touches, or `none found (searched: <terms>)`. Then files to open first.");
   });
 
+  it("opens the on-demand part with Standards, Lauren's rules first", () => {
+    const body = harnessPlaybookBody().replace(/\s+/g, " ");
+    expect(body.startsWith("## Standards")).toBe(true);
+    const order = [
+      "Lauren's rules: fix the root cause",
+      "Unrepeatable means a test, lint, type or tool fix. Never a new feature or anything the user sees unless the user asks for it.",
+      "Undo first.",
+      "A bot's own process slip is fixed in its own notes or scripts. A new feature, guard or visible change needs the user's OK first.",
+      "Launch only cards the user asked for (their words in Purpose). Anything else is a one-line suggestion that waits for a yes.",
+      "## Cards",
+    ].map((line) => body.indexOf(line));
+    expect(order).not.toContain(-1);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    for (const old of ["serve the current goal", "build a guard that day"]) expect(loadHarnessPlaybook()).not.toContain(old);
+  });
+
+  it("has fix cards name the change they undo", () => {
+    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("- Undo first. Fix cards (Purpose says fix, bug, broke or regression): `revert <sha or PR>` if an unasked change caused it, else `no earlier change caused this (searched: <terms>)`, or `new code: \"<user's words>\" (<date>)` if the user asked for new code.");
+  });
+
   it("logs every walk snag to one shared list", () => {
     expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("Each walk logs every snag to one shared findings list; the next walk reads it and covers only screens changed since, unless the user asks for more.");
   });
@@ -328,7 +370,7 @@ describe("harness playbook", () => {
 
   it("carries the four house rules", () => {
     const prompt = loadHarnessPlaybook();
-    expect(prompt).toContain("- Launch only cards that serve the current goal or that the user asked for.");
+    expect(prompt.replace(/\s+/g, " ")).toContain("- Launch only cards the user asked for (their words in Purpose). Anything else is a one-line suggestion that waits for a yes.");
     expect(prompt).toContain("- Before a fan-out, check each engine's usage left; never put several workers on a low engine.");
     expect(prompt).toContain("- Say merged, deployed, released or in the app only once gh, the live site or user's build shows it.");
     expect(prompt).toContain("- Never stop a worker or others' processes unless the user names it.");
@@ -376,7 +418,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16203);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(17374);
   });
 
   it("fills the worktree path from the configured root", () => {

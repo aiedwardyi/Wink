@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, mapClashes, rowY, treeClimb, treeEdges, treeIndex, treeLayout } from "./map-tree";
+import { fmt, mapClashes, rowY, TREE, treeClimb, treeEdges, treeIndex, treeLayout } from "./map-tree";
 
 it("sizes a folder box for the padding, border and gap its name and count are drawn with", () => {
   const box = readFileSync("src/components/MapTree.css", "utf8").match(/\.map-tree-box \{([^}]*)\}/)![1];
@@ -142,4 +142,50 @@ it("spaces a stack's file rows by the given pitch, so a phone can give each a fi
   expect(rowY(mouse, mouse, 1) - rowY(mouse, mouse, 0)).toBe(17);
   expect(rowY(finger, finger, 1) - rowY(finger, finger, 0)).toBe(44);
   expect(finger.h - mouse.h).toBe(3 * (44 - 17));
+});
+
+it("sizes a +N folders box for the padding, border and gap its label and count are drawn with", () => {
+  const box = readFileSync("src/components/MapTree.css", "utf8").match(/\.map-tree-box \{([^}]*)\}/)![1];
+  const px = (rule: RegExp) => Number(box.match(rule)![1]);
+  const edge = 2 * px(/ padding: 0 (\d+)px;/) + 2 * px(/ border: (\d+)px /);
+  const gap = px(/ gap: (\d+)px;/);
+  const paths = ["README.md", "src/index.ts", "src/lib/util.ts", ...Array.from({ length: 1111 }, (_, i) => `docs/page-${i}.md`), ...Array.from({ length: 50 }, (_, i) => `assets/img-${i}.png`)];
+  const { items } = treeLayout(treeIndex("repo", paths), { width: 120, phone: false, changed: new Set(["src/lib/util.ts"]), measure: text => text.length * 7, folders: n => `+${n} folders`, files: n => `+${n} files` });
+  const more = items.filter(it => it.kind === "more");
+  expect(more.length).toBeGreaterThan(0);
+  for (const it of more) expect(it.bw).toBe(it.label!.length * 7 + (it.sub ? it.sub.length * 7 + gap : 0) + edge);
+});
+
+it("keeps every row inside the tree and its boxes and file squares apart when nothing else can fold", () => {
+  const tops = ["src", "packages", "server", "tests", "docs", "assets", "public", "scripts"];
+  const paths = tops.flatMap(top => ["components", "lib", "routes", "store", "unit"].flatMap(sub => Array.from({ length: 30 }, (_, i) => `${top}/${sub}/file-${i}.ts`))).concat(tops.map(top => `${top}/index.ts`));
+  const changed = new Set(tops.flatMap(top => [`${top}/components/file-1.ts`, `${top}/lib/file-2.ts`, `${top}/index.ts`]));
+  const team = { named: new Set<string>(), marks: new Set<string>(), rank: () => 0 };
+  for (const width of [600, 900, 1200]) for (const phone of [false, true]) {
+    const { items } = treeLayout(treeIndex("repo", paths), { width, phone, changed, team, measure: text => text.length * 7, folders: n => `+${n} folders`, files: n => `+${n} files` });
+    for (const y of new Set(items.map(it => it.y))) {
+      const row = items.filter(it => it.y === y).toSorted((a, b) => a.x - b.x);
+      for (let i = 1; i < row.length; i++) expect(row[i].x, `${width} ${phone} ${row[i - 1].id} / ${row[i].id}`).toBeGreaterThanOrEqual(row[i - 1].x + row[i - 1].w);
+      expect(row[0].x).toBeGreaterThanOrEqual(0);
+      for (const it of row) if (it.squares) expect(14 + it.per! * TREE.SQ, `${width} ${phone} ${it.id} squares`).toBeLessThanOrEqual(it.w);
+      expect(row.at(-1)!.x + row.at(-1)!.w, `${width} ${phone} right edge`).toBeLessThanOrEqual(width);
+    }
+  }
+});
+
+it("keeps a stack wide enough for its hidden-files label when the row narrows", () => {
+  const paths = ["a/x/file.ts", "b/x/file.ts", "a/file.ts", "b/file.ts", ...["a", "b"].flatMap(top => Array.from({ length: 9999 }, (_, i) => `${top}/other-${i}.ts`))];
+  const changed = new Set(paths.slice(0, 4));
+  const measure = (text: string) => text.length * 7;
+  for (const width of [342, 300, 260]) {
+    const { items } = treeLayout(treeIndex("repo", paths), { width, phone: false, changed, measure, folders: n => `+${n} folders`, files: n => `+${fmt(n)} files` });
+    const stacks = items.filter(it => it.hidden);
+    expect(stacks.length).toBeGreaterThan(0);
+    for (const it of stacks) expect(14 + measure(`+${fmt(it.hidden!)} files`), `${width} ${it.id} label`).toBeLessThanOrEqual(it.w);
+    for (const y of new Set(items.map(it => it.y))) {
+      const row = items.filter(it => it.y === y).toSorted((a, b) => a.x - b.x);
+      for (let i = 1; i < row.length; i++) expect(row[i].x, `${width} ${row[i - 1].id} / ${row[i].id}`).toBeGreaterThanOrEqual(row[i - 1].x + row[i - 1].w);
+      expect(row.at(-1)!.x + row.at(-1)!.w, `${width} right edge`).toBeLessThanOrEqual(width);
+    }
+  }
 });

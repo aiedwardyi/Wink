@@ -289,7 +289,7 @@ describe("reaction plumbing", () => {
 });
 
 describe("bot self-reactions", () => {
-  async function react(emoji: string, reactions = [{ emoji: "💎", by: "bot-1" }]) {
+  async function react(emoji: string, reactions = [{ emoji: "💎", by: "bot-1" }], room?: { lines: string[]; answered?: string }) {
     const parsed = ts.createSourceFile("index.ts", indexSource, ts.ScriptTarget.Latest, true);
     const find = (node: ts.Node): ts.Node | undefined => {
       if (ts.isIfStatement(node) && node.expression.getText(parsed).includes('path === "/api/internal/react"')) return node;
@@ -304,22 +304,26 @@ describe("bot self-reactions", () => {
     };
     const handler = findHandler(internalParsed)!;
     let toggled = false;
+    let reacted = "";
     const deps = {
+      deps: { answeredLine: () => room?.answered }, // becomes the `deps` param of the eval'd route function
       readBody: async () => ({ fromBotId: "bot-1", fromThreadId: "thread-1", emoji }),
       req: {}, res: {}, EXTENDED_REACTIONS,
       json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
       connectorThread: () => true,
       store: {
         bot: () => ({ id: "bot-1" }),
-        activePath: () => [{ id: "user-1", role: "user", kind: "text", reactions }],
-        toggleReaction: () => { toggled = true; return {}; },
+        activePath: () => room
+          ? [...room.lines.map((id) => ({ id, role: "user", kind: "text" })), { id: "bot-line", role: "bot", kind: "text" }]
+          : [{ id: "user-1", role: "user", kind: "text", reactions }],
+        toggleReaction: (_thread: string, id: string) => { toggled = true; reacted = id; return {}; },
       },
     };
     const javascript = ts.transpileModule(`return async () => ${route.thenStatement.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const handlerJavascript = ts.transpileModule(`return ${handler.getText(internalParsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const guardDeps = { ...deps, internalRoutes: { react: new Function(...Object.keys(deps), handlerJavascript)(...Object.values(deps)) } };
     const result = await new Function(...Object.keys(guardDeps), javascript)(...Object.values(guardDeps))();
-    return { ...result, toggled };
+    return { ...result, toggled, reacted };
   }
 
   it("lets a bot remove its own retired reaction", async () => {
@@ -330,6 +334,17 @@ describe("bot self-reactions", () => {
     expect(await react("💎", [])).toMatchObject({ status: 400, toggled: false });
     expect(await react("💎", [{ emoji: "💎", by: "other-bot" }])).toMatchObject({ status: 400, toggled: false });
     expect(await react("👍", [])).toMatchObject({ status: 200, toggled: true });
+  });
+
+  it("reacts to the room line this turn answers, not a newer one from someone else", async () => {
+    const lines = ["peter-line", "eddie-line"];
+    expect(await react("👍", [], { lines, answered: "peter-line" })).toMatchObject({ status: 200, reacted: "peter-line" });
+  });
+
+  it("falls back to the latest person line when no room turn is bound or its line is gone", async () => {
+    const lines = ["peter-line", "eddie-line"];
+    expect(await react("👍", [], { lines })).toMatchObject({ reacted: "eddie-line" });
+    expect(await react("👍", [], { lines, answered: "deleted-line" })).toMatchObject({ reacted: "eddie-line" });
   });
 
   it("lets the react tool submit a retired emoji for removal", () => {
@@ -347,13 +362,23 @@ describe("bot self-reactions", () => {
   it("only tells a bot it can react when the agents integration is actually mounted", () => {
     expect(indexSource).toContain("reactionToolGuidance");
     expect(indexSource).toContain('const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";');
-    expect(indexSource).toContain("canMessage && reactionToolGuidance()");
+    expect(indexSource).toContain("Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH && reactionToolGuidance()");
+  });
+
+  it("tells a read-only room turn it can react, since react is mounted there and a reaction is not a write", () => {
+    const agentsProxySource = readFileSync(join(here, "drivers/agents-proxy.ts"), "utf8");
+    expect(agentsProxySource).toMatch(/READ_ONLY_TOOLS = new Set\([^)]*"react"/);
+    expect(indexSource).not.toContain("canMessage && reactionToolGuidance()");
+  });
+
+  it("binds a room's react to the line the turn was dispatched for", () => {
+    expect(indexSource).toContain("answeredLine: (threadId) => roomTurnInstruction.get(threadId)");
   });
 
   it("reacts to the calling bot's own latest user message, never an arbitrary thread", () => {
     expect(indexSource).toContain('path === "/api/internal/react"');
     expect(internalSource).toContain("connectorThread(from.id, fromThreadId)");
-    expect(internalSource).toContain("store.activePath(fromThreadId).findLast");
+    expect(internalSource).toContain("store.activePath(fromThreadId).filter");
     expect(internalSource).toContain("store.toggleReaction(fromThreadId, target.id, emoji, fromBotId)");
   });
 

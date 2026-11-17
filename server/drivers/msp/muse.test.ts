@@ -36,6 +36,15 @@ describe("museServeArgs", () => {
     expect(museServeArgs("Muse Code 1.4.20 (1.4.20-R8619.1)", true)).toEqual(trust);
   });
 
+  it("turns contributor mode off for a model with no contributor build", () => {
+    const v = "Muse Code 1.4.20 (1.4.20-R8619.1)";
+    expect(museServeArgs(v, false, "muse-ember-1.0")).toEqual([...trust, ...off, "--contributor-mode", "off"]);
+    expect(museServeArgs(v, true, "muse-ember-1.0")).toEqual([...trust, "--contributor-mode", "off"]);
+    for (const model of ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2", undefined]) {
+      expect(museServeArgs(v, false, model)).toEqual([...trust, ...off]);
+    }
+  });
+
   it("leaves older and unknown CLIs on a plain serve", () => {
     expect(museServeArgs("Muse Code 1.4.14 (1.4.14-R7309.1)", false)).toEqual([]);
     expect(museServeArgs("Muse Code 1.3.20", false)).toEqual([]);

@@ -9,7 +9,8 @@ import { DATA_DIR } from "./config.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks, routesQuick, type QuickGate } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks, routesAck, routesQuick, type QuickGate } from "./quick-ask.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { drainSteeredMessages, foldQueuedSends, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
@@ -106,14 +107,50 @@ describe("quick route", () => {
     expect(withRouter.rows().some((row) => row.quick)).toBe(false);
   });
 
-  it("steers a busy, non-nominated send as today", async () => {
+  it("steers a busy approval as today, with no reply beside it", async () => {
     const h = harness();
-    const response = await h.send({ text: "also update the docs when you are done" });
+    const response = await h.send({ text: "yes go ahead and update the docs" });
     expect(response.data.steered).toBe(true);
     expect(h.steer).toHaveBeenCalledTimes(1);
     expect(h.ask).not.toHaveBeenCalled();
-    expect(h.rows().at(-1)).toMatchObject({ steered: true, text: "also update the docs when you are done" });
+    expect(h.rows().at(-1)).toMatchObject({ steered: true, text: "yes go ahead and update the docs" });
     expect(h.rows().at(-1)?.quick).toBeUndefined();
+  });
+
+  it.each([
+    "also update the docs when you are done",
+    "i know ur working, but its odd, im testing the sidekick thing but it doesnt seem like our feature works",
+    "when u got time read this real quick to see if it'll help us with ci https://example.com/ci-cost",
+  ])("steers at once, then posts one short reply under it: %s", async (text) => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "Got it, that goes in next.", ms: 4 } });
+    const response = await h.send({ text });
+    expect(response.data.steered).toBe(true);
+    expect(h.steer.mock.calls[0]![1]).toContain(text);
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledWith(expect.anything(), h.bot.threadId, expect.objectContaining({ text, ack: true }));
+    const [sent, reply] = h.rows().slice(-2);
+    expect(sent).toMatchObject({ role: "user", text, steered: true });
+    expect(sent!.quick).toBeUndefined();
+    expect(reply).toMatchObject({ role: "bot", kind: "text", text: "Got it, that goes in next.", quick: { state: "answer", askId: sent!.id } });
+    expect(h.steer.mock.calls[1]![1]).toMatch(/^\[Wink note, automated, not from the person\.[\s\S]*A: Got it, that goes in next\.$/);
+  });
+
+  it("leaves a steered send alone when the helper has no reply", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: "help me answer ur questions" });
+    const count = h.rows().length;
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(h.rows()).toHaveLength(count);
+  });
+
+  it("posts no reply beside a card tap or a stop", async () => {
+    const h = harness();
+    const card = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "?", subtitle: "Drop them all, or pick?", options: ["Drop all", "Let me pick"], askUser: true } });
+    await h.send({ text: "Let me pick", cardId: card.id });
+    await h.send({ text: "no stop" });
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer).toHaveBeenCalledTimes(2);
   });
 
   it("answers a nominated ask in two rows without a steer", async () => {
@@ -453,16 +490,17 @@ describe("quick route", () => {
   });
 });
 
+const recover = (store: Store) => recoverQuickAsks(store, Promise.resolve(bootRowsNow([...quickAskThreads(store).keys()]).asks));
+
 describe("boot recovery", () => {
-  it("hands an orphaned ask to its bot once, as an ordinary turn", () => {
+  it("hands an orphaned ask to its bot once, as an ordinary turn", async () => {
     const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = store.createBot({}, { seedMessages: false });
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
     const answered = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "which branch?", quick: { state: "asked" } });
     store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: answered.id } });
     const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
-    recoverQuickAsks(store);
-    recoverQuickAsks(store);
+    await Promise.all([recover(store), recover(store)]);
     expect(_queuedCount(bot.threadId)).toBe(1);
     const run = vi.fn();
     drainSteeredMessages(store, run);
@@ -470,7 +508,7 @@ describe("boot recovery", () => {
     expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
   });
 
-  it("recovers an ask in an old, long thread after a restart, reading only that thread", () => {
+  it("recovers an ask in an old, long thread after a restart, reading only that thread", async () => {
     const before = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = before.createBot({}, { seedMessages: false });
     const quiet = before.createBot({}, { seedMessages: false });
@@ -484,14 +522,35 @@ describe("boot recovery", () => {
     const after = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const read = vi.spyOn(Store.prototype, "messagesFor");
     const path = vi.spyOn(Store.prototype, "activePath");
-    recoverQuickAsks(after);
+    await recover(after);
     expect([...read.mock.calls, ...path.mock.calls].filter(([threadId]) => threadId === quiet.threadId)).toEqual([]);
     expect(_queuedCount(bot.threadId)).toBe(1);
     expect(after.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
     expect(after.messagesFor(bot.threadId).find((row) => row.id === old.id)?.quick).toEqual({ state: "asked" });
   });
 
-  it("recovers an ask from a thread that is still a legacy file", () => {
+  it("leaves an ask on a branch the chat moved off", async () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const start = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "never mind", parentId: start.id });
+    expect(bootRowsNow([bot.threadId]).asks).toEqual([]);
+    await recover(store);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it("leaves an ask whose answer lands after the boot read", async () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    const asks = bootRowsNow([bot.threadId]).asks;
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: ask.id } });
+    await recoverQuickAsks(store, Promise.resolve(asks));
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it("recovers an ask from a thread that is still a legacy file", async () => {
     const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = store.createBot({}, { seedMessages: false });
     const legacy = [
@@ -499,19 +558,19 @@ describe("boot recovery", () => {
       { id: "m2", at: 2, role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } },
     ];
     writeFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), JSON.stringify(legacy));
-    recoverQuickAsks(new Store(() => ({ instanceId: "claude", model: "opus" })));
+    await recover(new Store(() => ({ instanceId: "claude", model: "opus" })));
     expect(_queuedCount(bot.threadId)).toBe(1);
   });
 
-  it("moves an orphaned ask to handoff", () => {
+  it("moves an orphaned ask to handoff", async () => {
     const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = store.createBot({}, { seedMessages: false });
     const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
-    recoverQuickAsks(store);
+    await recover(store);
     expect(store.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
   });
 
-  it("leaves chats with no pending ask unread", () => {
+  it("leaves chats with no pending ask unread", async () => {
     const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
     const bot = store.createBot({}, { seedMessages: false });
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
@@ -519,7 +578,7 @@ describe("boot recovery", () => {
     store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: asked.id } });
     const messages = vi.spyOn(store, "messagesFor");
     const path = vi.spyOn(store, "activePath");
-    recoverQuickAsks(store);
+    await recover(store);
     expect(messages).not.toHaveBeenCalledWith(bot.threadId);
     expect(path).not.toHaveBeenCalledWith(bot.threadId);
     expect(_queuedCount(bot.threadId)).toBe(0);
@@ -529,7 +588,7 @@ describe("boot recovery", () => {
     const h = harness({ result: { route: "handoff", ms: 3 } });
     await h.send({ text: QUESTION });
     await h.stop();
-    recoverQuickAsks(h.store);
+    await recover(h.store);
     expect(_queuedCount(h.bot.threadId)).toBe(0);
   });
 
@@ -539,8 +598,7 @@ describe("boot recovery", () => {
     const own = h.bot.threadId;
     const other = h.store.createTask(h.bot.id)!;
     await new Promise((resolve) => setImmediate(resolve));
-    recoverQuickAsks(h.store);
-    recoverQuickAsks(h.store);
+    await Promise.all([recover(h.store), recover(h.store)]);
     expect(_queuedCount(own)).toBe(1);
     expect(_queuedCount(other.threadId)).toBe(0);
     await h.settled();
@@ -562,9 +620,26 @@ describe("Gate 0", () => {
     expect(routesQuick(base)).toBe(true);
   });
 
+  it("sends a statement to the bot with a reply beside it, but not a card tap or a room send", () => {
+    const statement = { ...base, text: "help me answer ur questions" };
+    expect(routesQuick(statement)).toBe(false);
+    expect(routesAck(statement)).toBe(true);
+    expect(routesAck(base)).toBe(false);
+    expect(routesAck({ ...statement, answersCard: "c" })).toBe(false);
+    expect(routesAck({ ...statement, room: true })).toBe(false);
+  });
+
+  it("passes any line while the bot's turn runs in another thread", () => {
+    const elsewhere = { ...busy, activeThreadId: "room" };
+    expect(routesQuick({ ...base, bot: elsewhere, text: "tldr pls ?" })).toBe(true);
+    expect(routesQuick({ ...base, bot: elsewhere, text: "ship it" })).toBe(true);
+    expect(routesQuick({ ...base, text: "tldr pls ?" })).toBe(false);
+    expect(routesQuick({ ...base, bot: elsewhere, messages: [card] })).toBe(false);
+    expect(routesQuick({ ...base, bot: elsewhere, answersCard: card.id })).toBe(false);
+  });
+
   it.each<[string, Partial<QuickGate>]>([
     ["idle", { bot: { ...bot, busy: false } }],
-    ["busy on another thread", { bot: { ...busy, activeThreadId: "room" } }],
     ["sent after this turn", { deliverAfter: true }],
     ["a Reply", { replyTo: card }],
     ["a queued send", { queueId: "q1" }],

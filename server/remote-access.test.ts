@@ -76,7 +76,9 @@ describe("remote access", () => {
     const key = loadOrCreateRemoteKey(freshDir());
     expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/terminal-bridge")).toBe(false);
     expect(apiRequestAuthorized(true, `orbit_remote=${key}`, key, "/api/internal/terminal-bridge")).toBe(true);
-    expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/agents")).toBe(true);
+    expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/agents")).toBe(false);
+    expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/call-api")).toBe(false);
+    expect(apiRequestAuthorized(true, `orbit_remote=${key}`, key, "/api/internal/call-api")).toBe(true);
   });
 
   it("lets the remote cookie drive the desktop updater", () => {

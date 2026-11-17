@@ -39,6 +39,7 @@ function routes() {
     botCalls,
     taskPacketForWrite: () => structuredClone(packet),
     persistTaskPacket: (next: TaskResumePacket) => (packet = next),
+    readOnlyTurn: () => false,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 }
 

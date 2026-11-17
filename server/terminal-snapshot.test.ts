@@ -6,10 +6,11 @@ import { describe, expect, it } from "vitest";
 import { terminalPaneCountsGrant, terminalReadGrant, terminalSendGrant } from "./terminal-grant.ts";
 import { acceptedPaneCounts, botClosedPanes, raisePaneAttention, terminalPaneCountsResponse, terminalSendResponse, terminalSnapshotResponse, terminalStartResponse } from "./terminal-snapshot.ts";
 import { closeBotPanes } from "./terminal-cleanup.ts";
+import { apiRequestAuthorized } from "./remote-access.ts";
 
 const ACCESS = { url: "http://127.0.0.1:52150", token: "bridge-secret" };
 const server = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
-const remoteAccess = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "remote-access.ts"), "utf8");
+const cookieOpens = (path: string) => apiRequestAuthorized(false, "orbit_remote=remote-key", "remote-key", path);
 
 describe("deleted bot pane cleanup", () => {
   it("retires spawned panes with the deleted bot's grant", async () => {
@@ -69,7 +70,7 @@ describe("remote terminal start", () => {
 
   it("routes the remote start through the app's own auth", () => {
     expect(server).toContain("terminalStartResponse(terminalBridgeAccess, bot.id)");
-    expect(remoteAccess).toMatch(/BEARER_ONLY_PATHS = new Set\(\[[^\]]*"\/api\/internal\/terminal-bridge"/);
+    expect(cookieOpens("/api/internal/terminal-bridge")).toBe(false);
   });
 });
 
@@ -192,7 +193,7 @@ describe("terminal snapshot relay", () => {
     expect(route).toContain('method === "GET"');
     expect(route).toContain('json(res, 404, { error: "no such bot" })');
     expect(route).toContain('terminalSnapshotResponse(terminalBridgeAccess, bot.id, url.searchParams.get("sessionId"), undefined, { panesOnly: url.searchParams.get("panes") === "1" })');
-    expect(remoteAccess).not.toMatch(/BEARER_ONLY_PATHS = new Set\([^)]*\/terminal"/);
+    expect(cookieOpens("/api/bots/bot-1/terminal")).toBe(true);
   });
 });
 
@@ -260,7 +261,7 @@ describe("terminal pane counts", () => {
     const route = server.slice(start, start + 240);
     expect(route).toContain('method === "GET"');
     expect(route).toContain("terminalPaneCountsResponse(terminalBridgeAccess)");
-    expect(remoteAccess).not.toMatch(/BEARER_ONLY_PATHS = new Set\([^)]*pane-counts/);
+    expect(cookieOpens("/api/terminal/pane-counts")).toBe(true);
   });
 });
 
@@ -398,7 +399,7 @@ describe("terminal send relay", () => {
     expect(route).toContain('method === "POST"');
     expect(route).toContain('json(res, 404, { error: "no such bot" })');
     expect(route).toContain("terminalSendResponse(terminalBridgeAccess, bot.id, await readBody(req))");
-    expect(remoteAccess).not.toMatch(/BEARER_ONLY_PATHS = new Set\([^)]*\/terminal\/send"/);
+    expect(cookieOpens("/api/bots/bot-1/terminal/send")).toBe(true);
   });
 });
 

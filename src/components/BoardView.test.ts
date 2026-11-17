@@ -39,6 +39,9 @@ const render = async (node: Parameters<typeof createElement>[0]) => {
   await settle();
 };
 const rows = () => [...host.querySelectorAll("[data-board-post]")].map((row) => row.getAttribute("data-board-post"));
+// reduced motion unmounts a closed post at once; the push/pop test turns it off
+const realMatchMedia = window.matchMedia.bind(window);
+const reduceMotion = (reduce: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: reduce && query.includes("reduce") }));
 
 beforeEach(() => {
   host = document.createElement("div");
@@ -46,6 +49,7 @@ beforeEach(() => {
   root = createRoot(host);
   mock.state = { bots: [bot("astra", "Astra"), bot("carbon", "Carbon")], selectedId: "", config: undefined };
   mock.dispatched = [];
+  reduceMotion(true);
   posts = [];
   replies = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -63,6 +67,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("Forum", () => {
@@ -84,6 +89,82 @@ describe("Forum", () => {
     expect(host.querySelector('[data-board-post="pfix"]')!.textContent).toContain("Use Claude");
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Back to Forum"]')!.click());
     expect(rows()).toEqual(["pnew", "pold"]);
+  });
+
+  it("says it is loading while the server has not answered yet", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    await render(BoardView);
+    expect(host.querySelector("[data-board-loading]")?.textContent).toBe("Loading posts…");
+    await act(async () => answer(new Response(JSON.stringify({ posts: [post("p1", {})] }), { headers: { "content-type": "application/json" } })));
+    await settle();
+    expect(host.querySelector("[data-board-loading]")).toBeNull();
+    expect(rows()).toEqual(["p1"]);
+  });
+
+  const openPost = async () => {
+    posts = [post("pesc", { title: "Esc post", body: "Esc post", created_at: 1 })];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pesc"] button')!.click());
+    expect(host.querySelector("article")).not.toBeNull();
+  };
+  const esc = (target: EventTarget = document.body) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+
+  it("Esc inside an open post returns to the list, and Esc on the list leaves it alone", async () => {
+    await esc();
+    await openPost();
+    await esc();
+    expect(host.querySelector("article")).toBeNull();
+    expect(rows()).toEqual(["pesc"]);
+    await esc();
+    expect(rows()).toEqual(["pesc"]);
+    expect(host.querySelector("[data-board-view]")).not.toBeNull();
+  });
+
+  it("Esc keeps the post open while a reply is being typed", async () => {
+    await openPost();
+    const input = host.querySelector<HTMLInputElement>('[data-board-reply-box="pesc"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "half a thought");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await esc(input);
+    expect(host.querySelector("article")).not.toBeNull();
+    await esc();
+    expect(host.querySelector("article")).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await esc();
+    expect(host.querySelector("article")).toBeNull();
+  });
+
+  it("the back button sits clear of the phone menu badge: no negative margin below md", async () => {
+    await openPost();
+    const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back to Forum"]')!;
+    expect([...back.classList]).not.toContain("-ml-2");
+  });
+
+  it("an open post's back reads ‹ Forum on the shared back button", async () => {
+    await openPost();
+    const back = host.querySelector<HTMLButtonElement>("[data-back-button]")!;
+    expect(back.textContent).toBe("Forum");
+    expect(back.getAttribute("aria-label")).toBe("Back to Forum");
+    expect(host.querySelector("h1")).toBeNull();
+  });
+
+  it("a post pushes in and pops out like a side panel", async () => {
+    reduceMotion(false);
+    await openPost();
+    const page = host.querySelector<HTMLElement>("[data-side-panel]")!;
+    expect(page.contains(host.querySelector("article"))).toBe(true);
+    expect([...page.classList]).toEqual(expect.arrayContaining(["max-md:animate-panel-in", "md:animate-panel-slide", "md:*:animate-fade-in"]));
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-back-button]")!.click());
+    expect(page.hasAttribute("data-closing")).toBe(true);
+    expect(host.querySelector('[role="list"] [data-board-post="pesc"]')).not.toBeNull();
+    await vi.waitFor(() => expect(host.querySelector("[data-side-panel]")).toBeNull());
+    expect(host.querySelector("article")).toBeNull();
   });
 
   it("names the bot and the model it ran from the post, even for a bot this PC does not have", async () => {
@@ -177,6 +258,15 @@ describe("Forum", () => {
     expect(rows()).toEqual(["phand"]);
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="phand"] button')!.click());
     expect(rows()).toEqual(["phand", "pstuck", "pfix"]);
+  });
+
+  it("shows the five engine marks above a friendly line when empty", async () => {
+    await render(BoardView);
+    const empty = host.querySelector("[data-board-empty]")!;
+    expect([...empty.querySelectorAll("[data-board-mark]")].map((mark) => mark.getAttribute("data-board-mark")))
+      .toEqual(["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"]);
+    expect(empty.querySelectorAll("[data-board-mark] svg")).toHaveLength(5);
+    expect(empty.textContent).toBe("Nothing here yet. Your bots post here when they're stuck or find something worth sharing.");
   });
 
   it("reloads when the Board changes and says so when empty", async () => {

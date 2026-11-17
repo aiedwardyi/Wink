@@ -34,8 +34,8 @@ import { buildNotification, type Notification } from "./notify.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
-import { cancelWake, dropNewAskWakes, setWake, syncAskWakes } from "./self-wake.ts";
-import { agentRoster, sectionKey, type BotRecord, type GroupRecord, type Store } from "./store.ts";
+import { cancelWake, setWake } from "./self-wake.ts";
+import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
@@ -53,6 +53,7 @@ type InternalRouteDeps = {
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
   createdBotSelection: (chief: ModelSelection, model: unknown, effort: unknown) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
@@ -60,6 +61,9 @@ type InternalRouteDeps = {
   broadcast: (payload: Record<string, unknown>) => void;
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
+  readOnlyTurn: (botId: string, threadId: string) => boolean;
+  /** The user line a running room turn was dispatched to answer. */
+  answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold">;
@@ -95,6 +99,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     computerControl,
     askBotAndWait,
     checkedMemberIds,
+    checkedGroupResponder,
     createdBotSelection,
     store,
     keepGoing,
@@ -149,6 +154,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!bot) return json(res, 403, { error: "unknown sender" });
       const conversation = store.conversationForBot(bot.id, body.fromThreadId);
       if (!conversation) return json(res, 403, { error: "source conversation does not belong to sender" });
+      if (deps.readOnlyTurn(bot.id, body.fromThreadId)) {
+        return json(res, 403, { error: 'update_task_state is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
+      }
       const task = store.taskByThread(bot.id, body.fromThreadId);
       const groupTask = conversation.group
         ? store.groupTaskByThread(conversation.group.id, body.fromThreadId)
@@ -195,21 +203,19 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const asks = body.asks ? mergeTaskAsks(next, body.asks, Date.now()) : null;
       if (asks && "error" in asks) return json(res, 400, { error: asks.error });
-      const wakeNotes = asks ? syncAskWakes(routines, { botId: bot.id, threadId: body.fromThreadId }, current.asks, asks.asks) : [];
       if (asks) Object.assign(next, { asks: asks.asks, lastAskId: asks.lastAskId });
       next.updatedAt = Date.now();
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
-      if (!saved && asks) dropNewAskWakes(routines, bot.id, current.asks, asks.asks);
       if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, ...wakeNotes, board?.notice].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {
@@ -410,7 +416,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
-      const target = store.activePath(fromThreadId).findLast((m) => m.role === "user" && m.kind === "text");
+      const lines = store.activePath(fromThreadId).filter((m) => m.role === "user" && m.kind === "text");
+      const answered = deps.answeredLine(fromThreadId);
+      const target = lines.find((m) => m.id === answered) ?? lines.at(-1);
       if (!target) return json(res, 200, { error: "no user message to react to yet" });
       if (!(EXTENDED_REACTIONS as readonly string[]).includes(emoji) && !target.reactions?.some((reaction) => reaction.emoji === emoji && reaction.by === fromBotId)) {
         return json(res, 400, { error: "unsupported emoji" });
@@ -547,12 +555,15 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     },
     callKeyApi: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const fromThreadId = String(body.fromThreadId ?? "");
-      const from = store.bot(String(body.fromBotId ?? ""));
-      if (!from) return json(res, 403, { error: "unknown sender" });
-      if (!fromThreadId) return json(res, 400, { error: "no active thread" });
+      const source = deps.resolveCommsCaller?.(req.headers.authorization);
+      const from = source ? store.bot(source.botId) : undefined;
+      if (!source || !from || body.fromBotId !== source.botId || body.fromThreadId !== source.threadId) return json(res, 403, { error: "unknown sender" });
+      const fromThreadId = source.threadId;
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) {
+        return json(res, 403, { error: 'call_api is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
+      }
       const parsed = callApiRequestSchema.safeParse(body);
       if (!parsed.success) return json(res, 400, { error: "needs credential_id, method, and url; headers must be strings" });
       try {
@@ -762,15 +773,20 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           return json(res, 400, { error: "setup.bulletin must be at most 12000 characters" });
         }
       }
+      const answers = body.answers ?? "everyone";
+      const defaultResponder = checkedGroupResponder(
+        answers === "everyone" || answers === "mentions" ? { kind: answers } : { kind: "member", botId: answers },
+        memberIds,
+      );
+      if (!defaultResponder) {
+        return json(res, 400, { error: 'answers must be "everyone", "mentions", or a member bot id' });
+      }
       // A room the user asked for is usable the moment it exists - the
       // setup step would only stand between them and the bots they just
-      // asked to assemble. The lead is the one decision worth taking off
-      // the sender: memberIds[0] is always the sender, so picking it made
-      // every bot-opened room answer to the bot that opened it.
-      const lead = memberIds.find((id) => id !== sender.id) ?? sender.id;
+      // asked to assemble.
       const group = store.createGroup(name, memberIds, false, section, {
         bulletin,
-        defaultResponder: { kind: "member", botId: lead },
+        defaultResponder,
         completed: true,
       });
       return json(res, 201, {

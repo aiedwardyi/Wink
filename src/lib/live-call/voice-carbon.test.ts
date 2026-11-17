@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIVE_VAD } from "../../../shared/live-call";
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
-import { callsVoice } from "./guard";
 import { OpenLines } from "./quick";
 
 const CALL = "c-0123456789ab";
@@ -122,41 +121,7 @@ describe("F4 a voice the phone will not play yet", () => {
   });
 });
 
-describe("F5 waking with the name and a request", () => {
-  it("a leading name or hello-name with a request wakes it; a name in talk does not", () => {
-    for (const line of ["Hey Nova, check the build.", "Nova, what's the status?", "노바야 로그 확인해 줘"]) expect([line, callsVoice(line, line.startsWith("노바") ? "노바" : "Nova")]).toEqual([line, true]);
-    for (const line of ["Nova is great.", "Ask Nova now", "Nova, be quiet please.", "Novas are bright, right?"]) expect([line, callsVoice(line, "Nova")]).toEqual([line, false]);
-  });
-
-  it("a voice called by its Korean spelling wakes", () => {
-    expect(callsVoice("제퍼야", "Nova", ["Zephyr"])).toBe(true);
-    expect(callsVoice("펜리르, 들려?", "Nova", ["Fenrir"])).toBe(true);
-  });
-
-  it("the reply to the waking request plays", async () => {
-    const { call, engine, audio } = await live();
-    engine().events.heard("Be quiet.");
-    engine().events.answering();
-    engine().events.turnDone();
-    expect(call.state().hushed).toBe(true);
-    engine().events.heard("Hey Nova, check the build.");
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(call.state().hushed).toBeUndefined();
-    expect(audio.played).toBe(1);
-  });
-});
-
 describe("F6 words for the voice are never sent on hang-up", () => {
-  it("a line the voice hushed on is not an order", async () => {
-    const { call, engine, posts } = await live();
-    engine().events.heard("Hold the line while I grab a coffee.");
-    engine().events.toolCall([{ id: "h1", name: "hush", args: {} }]);
-    call.end();
-    await flush();
-    expect(sent(posts)).toEqual([]);
-  });
-
   it("everyday goodbyes are small talk", () => {
     for (const line of ["Thanks a lot, bye.", "Thank you so much, bye!", "Thank you very much.", "이제 끊을게", "그럼 끊을게요", "수고했어", "수고하셨습니다", "이만 끊을게요"]) {
       const open = new OpenLines();

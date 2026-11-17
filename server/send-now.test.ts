@@ -7,7 +7,8 @@ import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
 import { applyPendingModel, switchHeld } from "./pending-model.ts";
-import { routesQuick } from "./quick-ask.ts";
+import { quickAskRecovery, routesAck, routesQuick } from "./quick-ask.ts";
+import { answeredAgain } from "./ask-user.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -46,12 +47,12 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
-    noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop,
+    noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: (_thread: string, id?: string) => messages.find((m) => m.id === id),
     botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing }, steer, interruptTurn } }]]),
     instanceForBot: () => ({ adapter: { capabilities: { queueing }, steer, interruptTurn } }),
     beginPeerUserReply, cfg: {},
-    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [],
+    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [], answeredAgain,
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
     resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
     ...extra,
@@ -184,6 +185,41 @@ describe("queued send through the message POST", () => {
     h.drain();
     expect(h.drainRun).toHaveBeenCalledTimes(1);
     expect(h.messages).toMatchObject([{ text: "failure", sendId: selected.sendId }]);
+  });
+});
+
+describe("a line typed while the bot works", () => {
+  const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread")) => {
+    const startQuick = vi.fn();
+    const h = harness(steer, true, {
+      routesQuick, routesAck, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
+      instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
+    });
+    Object.assign(h.store, { groupByThread: () => undefined });
+    h.bot.activeThreadId = activeThreadId;
+    return { ...h, startQuick };
+  };
+
+  it("goes to the quick helper when the turn runs in a room, not Sends next", async () => {
+    const h = working("room");
+    expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ quick: true, message: { text: "tldr pls ?", quick: { state: "asked" } } });
+    expect(h.startQuick).toHaveBeenCalledOnce();
+    expect(h.steer).not.toHaveBeenCalled();
+  });
+
+  it("steers into a turn a pane note started in this chat", async () => {
+    const h = working("thread");
+    expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ steered: true });
+    expect(h.steer).toHaveBeenCalledWith("thread", "tldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
+    expect(h.startQuick).not.toHaveBeenCalled();
+  });
+
+  it("holds a card answer for the bot, the same as a typed answer, while the turn runs in a room", async () => {
+    const h = working("room");
+    h.messages.push({ id: "card", at: 0, role: "bot", kind: "options", card: { title: "?", subtitle: "", options: ["Yes", "No"], askUser: true } });
+    expect((await h.post({ text: "Yes", cardId: "card" })).body).toMatchObject({ queued: true });
+    expect((await h.post({ text: "Yes" })).body).toMatchObject({ queued: true });
+    expect(h.startQuick).not.toHaveBeenCalled();
   });
 });
 

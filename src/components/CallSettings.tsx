@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Pause, Play } from "lucide-react";
+import { Pause, Play } from "lucide-react";
 
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
+import { setCallCaptions, useCallCaptions } from "@/lib/live-call/captions";
 import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
 import { hapticTick } from "@/lib/phone-swipe";
@@ -14,12 +15,10 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, STYLE_GAIN, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
-import { Fold } from "./Fold";
+import { DetailsSwitch } from "./BotDetailsRows";
 import { MENU_CLASS } from "./MessageMenu";
-import { ROW_BUTTON } from "./SettingsPrimitives";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] text-ink";
@@ -57,19 +56,20 @@ function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { p
   useEffect(() => (onCall ? stop() : undefined), [onCall]);
   useEffect(() => () => clip.current?.pause(), []);
   // the call's own level and pitch-kept speed, so the sample sounds like the call
-  const level = OUTPUT_GAIN * STYLE_GAIN[style] * useCallVolume();
+  const level = OUTPUT_GAIN * useCallVolume();
+  const pace = callPace({ speed, style });
   useEffect(() => {
     if (!clip.current) return;
     clip.current.volume = level;
-    clip.current.playbackRate = speed;
-  }, [level, speed]);
+    clip.current.playbackRate = pace;
+  }, [level, pace]);
   const preview = (name: LiveVoice) => {
     const was = playing;
     stop();
     if (was === name) return;
     const audio = new Audio(`/voice-preview/${name}-${language}.mp3`);
     audio.volume = level;
-    audio.playbackRate = speed;
+    audio.playbackRate = pace;
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);
@@ -159,6 +159,7 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
   const volume = useCallVolume();
+  const captions = useCallCaptions();
   const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed, prefs.style);
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
@@ -166,16 +167,20 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 max-[379px]:gap-2">
         <span className={LABEL}>{t("callMenu.style")}</span>
         <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
           {CALL_STYLES.map((style) => (
             <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
-              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8", PILL,
+              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8 max-[379px]:px-1.5", PILL,
                 style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
               {t(`callMenu.style.${style}`)}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-2 max-[379px]:gap-1.5">
+          <span className={LABEL}>{t("callMenu.captions")}</span>
+          <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
         </div>
       </div>
       <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
@@ -190,8 +195,8 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   );
 }
 
-/** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls. */
-export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactNode }) {
+/** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls, or with `tap` toggles it. */
+export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: ReactNode; tap?: boolean }) {
   const { t } = useI18n();
   const anchor = useRef<HTMLSpanElement>(null);
   const press = useRef<{ x: number; y: number; held: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -207,12 +212,19 @@ export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactN
   };
   useEffect(() => () => clearTimeout(press.current?.timer), []);
   // The Language menu is portaled outside the panel.
-  useListMenuDismiss('[data-call-settings-menu], [role="menu"]', "[data-call-hold]", !at, close);
+  useListMenuDismiss(`[data-call-settings-menu], [role="menu"]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
   useBackLayer(Boolean(at), close);
   const rect = shown.value;
   const width = Math.min(360, window.innerWidth - 16);
   return (
     <span ref={anchor} data-call-hold="" className="flex select-none [-webkit-touch-callout:none]"
+      data-call-tap={tap || undefined}
+      onClick={tap ? (event) => {
+        // the menu is portaled, but its clicks still bubble here through the React tree
+        if (!(event.target instanceof Node && anchor.current?.contains(event.target))) return;
+        if (at) close();
+        else open();
+      } : undefined}
       onContextMenu={(event) => {
         event.preventDefault();
         open();
@@ -250,38 +262,5 @@ export function CallSettingsHold({ bot, children }: { bot: Bot; children: ReactN
         document.body,
       )}
     </span>
-  );
-}
-
-/** Bot details rows: Voice opens the panel in place, Language picks the call language. */
-export function VoiceChatSettings({ bot }: { bot: Bot }) {
-  const { t } = useI18n();
-  const { voice, speed } = useCallPrefs(bot);
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  return (
-    <section aria-label={t("callMenu.voiceChat")}>
-      <h3 className="mb-1.5 px-1 text-[13px] font-medium text-ink-secondary">{t("callMenu.voiceChat")}</h3>
-      <div className={DETAILS_BOX}>
-        <div className={DETAILS_ROW}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium text-ink">{t("callMenu.voice")}</span>
-            <button type="button" data-call-voice-row="" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)} className={cn(ROW_BUTTON, "gap-1 text-ink")}>
-              <span>{`${voiceLabel(t, voice)} ${speed.toFixed(1)}x`}</span>
-              <ChevronDown size={12} aria-hidden className={cn("text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
-            </button>
-          </div>
-          <Fold open={open} id={id}>
-            <CallSettings bot={bot} language={false} className="mt-3" />
-          </Fold>
-        </div>
-        <div className={DETAILS_ROW}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium text-ink">{t("callMenu.language")}</span>
-            <CallLanguage bot={bot} />
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }

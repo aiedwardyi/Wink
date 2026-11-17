@@ -736,8 +736,6 @@ describe("agents-proxy MCP surface", () => {
     expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
     expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
     expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
-    expect(asks.items.properties.due).toMatchObject({ type: "string" });
-    expect(asks.items.properties.due.description).toMatch(/promise a time/i);
     for (const [field, limit] of [[asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
       expect(field.description).toContain(String(limit));
     }
@@ -746,7 +744,6 @@ describe("agents-proxy MCP surface", () => {
     const sent = [
       { ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348" },
       { id: "A2", status: "done" },
-      { ask: "Phone Model Index designs", status: "open", due: "2026-11-17T07:30:00+09:00" },
     ];
     taskStateNotice = "Asks saved: added A3; 2 open.";
     const res = await callTool("update_task_state", { asks: sent });
@@ -908,6 +905,15 @@ describe("agents-proxy MCP surface", () => {
     expect(lastCreateBody).toMatchObject({ model: "grok-4.6", effort: "xhigh" });
   });
 
+  it("create_bot has no per-turn cap", async () => {
+    for (let i = 0; i < 6; i++) {
+      lastCreateBody = null;
+      const res = await callTool("create_bot", { name: `Pixel ${i}`, role: "Designer", instructions: "Draw things." });
+      expect(res.result.isError).toBeFalsy();
+      expect(lastCreateBody).toMatchObject({ name: `Pixel ${i}` });
+    }
+  });
+
   it("create_channel tells the model to call the tool instead of scanning localhost", async () => {
     const list = await rpc("tools/list");
     const tool = list.result.tools.find((t: { name: string }) => t.name === "create_channel");
@@ -942,6 +948,14 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toMatch(/ask_bot/i);
     expect(res.result.content[0].text).toMatch(/1:1/);
     expect(res.result.isError).toBeFalsy();
+  });
+
+  it("forwards who answers in a channel", async () => {
+    lastCreateChannelBody = null;
+    await callTool("create_channel", { name: "Panel", member_ids: ["bot-designer"], answers: "mentions" });
+    expect(lastCreateChannelBody).toMatchObject({ answers: "mentions" });
+    await callTool("create_channel", { name: "Panel", member_ids: ["bot-designer"] });
+    expect(lastCreateChannelBody).not.toHaveProperty("answers");
   });
 
   it("rejects create_channel without a name or members before calling the harness", async () => {
@@ -1373,11 +1387,11 @@ describe("agents-proxy read-only room turn", () => {
   it("lists no saved keys, connected apps, bot asks, Forum posts or Agentic Mode", async () => {
     const { list } = await probeWithIdentity(identity);
     expect(list.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
-      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "update_task_state", "usage_status", "wait_delegation",
+      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "usage_status", "wait_delegation",
     ]);
   });
 
-  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post"])("refuses %s before calling the harness", async (name) => {
+  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post", "update_task_state"])("refuses %s before calling the harness", async (name) => {
     const { call } = await probeWithIdentity(identity, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toBe(`${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`);

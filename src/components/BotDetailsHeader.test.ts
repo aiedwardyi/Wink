@@ -71,7 +71,7 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(phoneHeaderName).not.toContain("data-chat-terminal");
     expect(chatHeader).not.toContain("data-chat-terminal");
     expect(chatHeader).not.toContain("TerminalSquare");
-    expect(chatHeader).toContain("onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />");
+    expect(chatHeader).toContain("onOpenTerminalPane, onOpenTerminal }} />");
     expect(chatHeader).toContain('className="min-w-0 flex-1 overflow-hidden max-md:hidden"');
   });
 
@@ -99,7 +99,6 @@ describe("QA 17 one Bot-details header entry", () => {
   it("gives every header icon button the same soft hover fill", () => {
     const hover = (source: string, marker: string) => headerBlock(source, marker, "/>").match(/hover:bg-[\w-]+/g);
     expect(hover(chatHeader, "data-chat-keep-going")).toEqual(["hover:bg-control"]);
-    expect(hover(chatHeader, "<WorkerChip")).toEqual(["hover:bg-control"]);
     expect(hover(chatHeader, "onClick={() => find.toggleFind()}")).toEqual(["hover:bg-control"]);
     expect(hover(verifyCard, "data-verify-watch-icon")).toEqual(["hover:bg-control"]);
   });

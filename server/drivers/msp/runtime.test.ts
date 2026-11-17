@@ -127,6 +127,7 @@ describe("MSP turns (fake host)", () => {
     delete process.env.FAKE_MSP_ITEMS;
     delete process.env.FAKE_MSP_GATE_FILE;
     delete process.env.FAKE_MSP_VERSION;
+    delete process.env.FAKE_MSP_CONTRIBUTOR;
     delete process.env.META_API_KEY;
     recorder?.stop();
     await instance?.dispose();
@@ -144,6 +145,30 @@ describe("MSP turns (fake host)", () => {
     await instance.adapter.sendTurn({ threadId: "t-serve-args", text: "hi" });
     expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
     expect(JSON.parse(readFileSync(dump, "utf8")).argv).toEqual(argv);
+  });
+
+  describe("under the user's contributor mode", () => {
+    const turn = async (threadId: string, model: string) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "hi", model });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    beforeEach(() => {
+      process.env.FAKE_MSP_CONTRIBUTOR = "1";
+      process.env.FAKE_MSP_STATE = join(scratch, "models.json");
+      process.env.FAKE_MSP_VERSION = "Muse Code 1.4.20 (1.4.20-R8619.1)";
+    });
+
+    it.each(["muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor"])("replies on %s, twice on one thread", async (model) => {
+      await create();
+      expect(await turn("t-contributor", model)).toMatchObject({ ok: true });
+      expect(await turn("t-contributor", model)).toMatchObject({ ok: true });
+    });
+
+    it("never hands an Ember turn the prewarmed handshake host", async () => {
+      await create();
+      await instance.prepare!();
+      expect(await turn("t-contributor-warm", "muse-ember-1.0")).toMatchObject({ ok: true });
+    });
   });
 
   describe("system text", () => {
@@ -733,6 +758,23 @@ describe("MSP turns (fake host)", () => {
     expect(recorder.events.map((e) => e.type)).not.toContain("request.opened");
     const [decide] = JSON.parse(readFileSync(`${dump}.decide.json`, "utf8"));
     expect(decide.params).toMatchObject({ choiceId: "allow-once" });
+  });
+
+  it("runs a read-only turn on a host of its own that can't write or run shell, denies its asks even on full auto, and keeps no host", async () => {
+    const dump = join(scratch, "muse-read-only.json");
+    process.env.FAKE_MSP_DUMP = dump;
+    await create("approval", true);
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "hi", approval: "auto", readOnly: true });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(recorder.events.map((e) => e.type)).not.toContain("request.opened");
+    const [decide] = JSON.parse(readFileSync(`${dump}.decide.json`, "utf8"));
+    expect(decide.params).toMatchObject({ choiceId: "deny" });
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv.slice(-2)).toEqual(["--disable-write", "--disable-shell"]);
+    expect(instance.adapter.access!({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
+    recorder.events.length = 0;
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "hi again" });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).not.toContain("--disable-write");
   });
 
   it("answers a userInput question", async () => {
@@ -1590,6 +1632,18 @@ describe("MSP warm host (recorded transport)", () => {
     expect(peers).toHaveLength(3);
     expect(exited(peers[1])).toBe(true);
     expect(kept()).toBe(1);
+  });
+
+  it("retires the thread's kept host before a read-only turn resumes its session elsewhere", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    expect(kept()).toBe(1);
+    await completed(await send({ resumeCursor: cursorOf(first), readOnly: true }));
+    expect(exited(peers[0])).toBe(true);
+    await completed(await send({ resumeCursor: cursorOf(first) }));
+    expect(peers).toHaveLength(3);
+    expect(methods(peers[2])).toContain("session/resume");
   });
 
   it("prepare and sendTurn build the same fingerprint for the same shape", async () => {
