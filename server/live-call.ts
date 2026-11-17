@@ -28,6 +28,10 @@ const NEW_SESSION_MS = 60_000;
 // A dropped call resumes within this window with the same brief and voice.
 const BRIEF_TTL_MS = 2 * 60 * 60_000;
 const BRIEFS_KEPT = 16;
+// The voice, style and language a live call opened or swapped with; a resume after a restart or an evicted brief reads them back.
+export const CALL_PICKS_FILE = "live-call-picks.json";
+const CALL_PICKS_KEPT = 50;
+const picksFileSchema = z.record(z.string(), z.object({ botId: z.string(), picks: callPrefsSchema }));
 const LINES_MAX = 50;
 const LINE_MAX_CHARS = 4_000;
 export const SUMMARY_MODEL = "gemini-3.5-flash-lite";
@@ -225,6 +229,21 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
   const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; style: CallStyle; at: number }>();
+  const picksPath = join(dataDir, CALL_PICKS_FILE);
+  const savedPicks = () => {
+    try {
+      const parsed = picksFileSchema.safeParse(JSON.parse(readFileSync(picksPath, "utf8")));
+      return parsed.success ? parsed.data : {};
+    } catch {
+      return {};
+    }
+  };
+  const savePicks = (change: (kept: z.infer<typeof picksFileSchema>) => void) => {
+    const kept = savedPicks();
+    change(kept);
+    mkdirSync(dataDir, { recursive: true });
+    writeFileAtomic(picksPath, JSON.stringify(Object.fromEntries(Object.entries(kept).slice(-CALL_PICKS_KEPT))));
+  };
 
   // A pick changed mid-call opens a new session beside the live one: the call so far rides its brief.
   // A swap carries the picks themselves: the bot's own save may still be in flight.
@@ -240,6 +259,10 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
+    savePicks((kept) => {
+      delete kept[callId];
+      kept[callId] = { botId: bot.id, picks: { voice, style, language: app } };
+    });
     return entry;
   };
 
@@ -267,8 +290,9 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
     const swap = body.swap === true && callId === body.callId;
-    // A swap or a new call carries the picks; a resume keeps the session's own.
-    const picks = swap || body.callId === undefined ? callPrefsSchema.safeParse(body.call).data ?? bot.call : bot.call;
+    // A swap or a new call carries the picks; a resume keeps the call's own, even when its brief is gone.
+    const own = savedPicks()[callId];
+    const picks = swap || body.callId === undefined ? callPrefsSchema.safeParse(body.call).data ?? bot.call : own?.botId === bot.id ? own.picks : bot.call;
     const { brief, locale, voice, style } = await briefFor(bot, callId, body.locale, swap, picks);
     const at = now();
     const expiresAt = at + TOKEN_MS;
@@ -321,6 +345,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     // One voice per call: the setup names it once per socket, so the row shows what every turn used.
     const voice = briefs.get(parsed.data.callId)?.voice;
     briefs.delete(parsed.data.callId);
+    if (savedPicks()[parsed.data.callId]) savePicks((kept) => { delete kept[parsed.data.callId]; });
     const path = join(dataDir, LIVE_CALL_FILE);
     mkdirSync(join(dataDir, "diag"), { recursive: true });
     let kept: string[] = [];
