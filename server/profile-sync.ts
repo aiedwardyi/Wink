@@ -13,6 +13,8 @@ export const PROFILE_SYNC_VERSION = 1 as const;
 export const PROFILE_SYNC_CHANGES_DIR = "changes";
 export const PROFILE_SYNC_WORKSPACE_FILE = "workspace.json";
 const PROFILE_SYNC_MAX_FILES = 100_000;
+// a change log can hold PROFILE_SYNC_MAX_FILES, far past the open-file limit of a Mac or Linux process
+const PROFILE_SYNC_OPEN_READS = 32;
 
 const ID = z.string().trim().min(1).max(96).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const COLOR = z.enum([
@@ -454,17 +456,31 @@ export async function readSyncOperationsAsync(folder: string): Promise<ReturnTyp
   }
   const jsonNames = names.filter(isSyncOperationFile).sort();
   const truncated = jsonNames.length > PROFILE_SYNC_MAX_FILES;
-  const read = await Promise.all(jsonNames.slice(0, PROFILE_SYNC_MAX_FILES).map(async (name) => {
-    try {
-      return { name, operation: parseSyncOperationText(await readFile(join(directory, basename(name)), "utf8")) };
-    } catch {
-      return { name, operation: null };
+  const files = jsonNames.slice(0, PROFILE_SYNC_MAX_FILES);
+  const read: Array<{ name: string; operation: ProfileSyncOperation | null }> = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(PROFILE_SYNC_OPEN_READS, files.length) }, async () => {
+    while (next < files.length) {
+      const index = next++;
+      const name = files[index]!;
+      try {
+        read[index] = { name, operation: parseSyncOperationText(await readFile(join(directory, basename(name)), "utf8")) };
+      } catch {
+        read[index] = { name, operation: null };
+      }
     }
   }));
   const operations = read.flatMap((item) => item.operation ? [item.operation] : []);
   const invalidFiles = read.flatMap((item) => item.operation ? [] : [item.name]);
   if (truncated) invalidFiles.push("[profile sync change log exceeds the supported file limit]");
   return { operations, invalidFiles, truncated };
+}
+
+/** Null when target() moved during the read: a folder or workspace swap resets the maps these operations would be applied with. */
+export async function readSyncOperationsFor(folder: string, target: () => string): Promise<ReturnType<typeof readSyncOperations> | null> {
+  const before = target();
+  const read = await readSyncOperationsAsync(folder);
+  return target() === before ? read : null;
 }
 
 export function loadOrCreateSyncWorkspace(folder: string, fallbackWorkspaceId: string): string {

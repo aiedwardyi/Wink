@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,8 @@ import {
   parseSyncOperationText,
   readSyncAvatarAsset,
   readSyncOperations,
+  readSyncOperationsAsync,
+  readSyncOperationsFor,
   resolveSyncAvatarPath,
   saveProfileSyncSettings,
   serializeSyncOperation,
@@ -42,6 +45,7 @@ import {
 } from "./profile-sync.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
+vi.mock("node:fs/promises", async (original) => ({ ...await original<typeof import("node:fs/promises")>() }));
 
 const roots: string[] = [];
 
@@ -276,6 +280,42 @@ describe("profile sync operations", () => {
     expect(result.operations).toEqual([record]);
     expect(result.invalidFiles).toEqual([]);
     expect(result.truncated).toBe(false);
+  });
+
+  it("reads a long change log off the event loop with a bounded number of files open", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-bounded-"));
+    roots.push(root);
+    for (let index = 0; index < 200; index++) writeSyncOperation(root, operation({ operationId: `op-${index}`, sequence: index + 1 }));
+    const readFile = fsp.readFile;
+    let open = 0;
+    let most = 0;
+    vi.spyOn(fsp, "readFile").mockImplementation(async (...args: Parameters<typeof readFile>) => {
+      most = Math.max(most, ++open);
+      try {
+        return await readFile(...args);
+      } finally {
+        open--;
+      }
+    });
+    try {
+      const read = await readSyncOperationsAsync(root);
+      expect(read).toEqual(readSyncOperations(root));
+      expect(read.operations).toHaveLength(200);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(most).toBeLessThanOrEqual(32);
+  });
+
+  it("drops a change log read when the sync target moves during it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-moved-"));
+    roots.push(root);
+    writeSyncOperation(root, operation());
+    let target = "folder-a\nworkspace-a";
+    expect(await readSyncOperationsFor(root, () => target)).toEqual(readSyncOperations(root));
+    const moved = readSyncOperationsFor(root, () => target);
+    target = "folder-b\nworkspace-b";
+    expect(await moved).toBeNull();
   });
 
   it("detects an arriving auto notes record without another bot edit", () => {

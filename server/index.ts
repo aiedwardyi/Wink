@@ -410,7 +410,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
-  readSyncOperationsAsync,
+  readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
   syncOperationsSignature,
@@ -1762,7 +1762,9 @@ async function importProfileChanges(): Promise<void> {
   ensureProfileSyncWorkspace(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
-  const remote = await readSyncOperationsAsync(folder);
+  const remote = await readSyncOperationsFor(folder, () => `${profileSyncSettings.folder}\n${profileSyncSettings.workspaceId}\n${profileSyncSettings.syncChats}`);
+  // profileSyncSeen is untouched, so the next poll reads the new target
+  if (!remote) return;
   if (remote.invalidFiles.length && signature !== profileSyncSeen.signature) {
     console.warn(`bot sync: skipped unreadable files [${remote.invalidFiles.slice(0, 5).join(", ")}]`);
   }
