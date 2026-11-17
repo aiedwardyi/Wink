@@ -222,7 +222,7 @@ function cleanable(path: string, workspace: string): boolean {
   const live = realPath(workspace);
   if (!real || !live || within(real, live)) return false;
   const root = realPath(worktreeRoot());
-  return (!!root && real !== root && within(root, real)) || inOwnedWorktree(real, live);
+  return (!!root && real !== root && within(root, real)) || inOwnedWorktree(stat?.isDirectory() ? real : dirname(real), live);
 }
 
 /**

@@ -2957,6 +2957,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("denies a destructive ask from a helper an unattended Auto turn left running", async () => {
     await create("background-task");
+    mkdirSync(join(scratch, "build"), { recursive: true });
+    writeFileSync(join(scratch, "build", "out.js"), "keep");
     const harness = instance.adapter.onEvent((e) => {
       if (e.type !== "request.opened" || !e.requestId) return;
       const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended, workspace: scratch });

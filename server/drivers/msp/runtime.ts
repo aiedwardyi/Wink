@@ -1111,7 +1111,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             requestType: "permission",
             tool,
             summary,
-              ...guardInput(params),
+            ...guardInput(params),
             choices: choices.map((c: ApprovalChoice) => String(c?.label ?? "")).filter(Boolean),
           });
         };

@@ -1195,7 +1195,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             tool,
             summary,
             inputDigest: inputDigest(toolCall.rawInput ?? args),
-            ...guardInput(toolCall.rawInput),
+            ...(controlsHost && turn.attended ? {} : guardInput(toolCall.rawInput)),
             approvalScope: controlsHost ? "local-computer" : undefined,
           });
         };

@@ -2,9 +2,21 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { autoVerdict, guardInput, type AutoApprover } from "./auto-approve.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...fs,
+    lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
+      // POSIX throws for file/.git where Windows reports a missing path.
+      if (/[\\/]keep\.txt[\\/]\.git$/.test(String(args[0]))) throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+      return fs.lstatSync(...args);
+    },
+  };
+});
 
 const scratch = process.env.ORBIT_SCRATCH ?? tmpdir();
 mkdirSync(scratch, { recursive: true });
@@ -31,7 +43,7 @@ function find(root: ts.Node, matches: (node: ts.Node) => boolean): ts.Node {
   return found;
 }
 
-function opened(driver: string, input: Record<string, unknown>, tool = "Bash") {
+function opened(driver: string, input: Record<string, unknown>, tool = "Bash", attendedDesktop = false) {
   const file = source(`./drivers/${driver}.ts`);
   const event = find(file, (node) => ts.isCallExpression(node) && node.expression.getText(file) === "emit"
     && !!node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])
@@ -39,9 +51,9 @@ function opened(driver: string, input: Record<string, unknown>, tool = "Bash") {
     && !node.arguments[0].properties.some((prop) => ts.isPropertyAssignment(prop) && prop.name.getText(file) === "requestType" && prop.initializer.getText(file) === '"question"')) as ts.CallExpression;
   const helpers = driver === "claude" ? ["askArgs", "askSummary"].map((name) => find(file, (node) => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(file)).join("\n") : "";
   const scope = {
-    base: () => ({}), threadId: "thread", eventTurnId: "turn", turnId: "turn", requestId: "request",
+    base: () => ({ threadId: "thread" }), threadId: "thread", eventTurnId: "turn", turnId: "turn", requestId: "request",
     ask: { id: "request", kind: "permission", tool, input }, tool, summary: String(input.command ?? "tool").slice(0, 200),
-    approvalScope: undefined, controlsHost: false, unattended: true, inputDigest: () => "digest", guardInput,
+    approvalScope: attendedDesktop ? "local-computer" : undefined, controlsHost: attendedDesktop, turn: { attended: attendedDesktop }, unattended: true, inputDigest: () => "digest", guardInput,
     params: driver === "msp/runtime" ? { ...input, rawArgs: input.command, toolName: tool } : input,
     toolCall: { rawInput: input }, args: String(input.command ?? "tool"), isQuestion: false, isMcpElicitation: false, choices: [],
   };
@@ -86,8 +98,12 @@ describe("approval input", () => {
   }
 
   it("checks every tool's complete input", () => {
-    const event = opened("claude", { prefix: "a".repeat(205), command: "git reset --hard" }, "mcp__custom__execute");
+    const event = opened("claude", { prefix: "a".repeat(205), script: "git reset --hard" }, "mcp__custom__execute");
     expect(decide(event)).toMatchObject({ approve: null, source: "unattended-deny" });
+  });
+
+  it("keeps file contents from being treated as commands", () => {
+    expect(decide(opened("claude", { file_path: join(project, "cleanup.sh"), content: "rm -rf dist" }, "Write"))).toMatchObject({ source: "auto-mode" });
   });
 
   it("denies missing or unreadable input when unattended", () => {
@@ -101,6 +117,12 @@ describe("approval input", () => {
     expect(decide(event, false)).toMatchObject({ source: "auto-mode" });
     expect(decide(opened("claude", { command: "git status" }), false, { autoApprove: false, alwaysAllow: ["Bash:git"] })).toMatchObject({ source: "always-allow" });
   });
+
+  for (const driver of ["codex", "acp/core"]) {
+    it(`${driver} preserves the attended desktop verdict`, () => {
+      expect(decide(opened(driver, { command: "echo safe", script: "git reset --hard" }, "Bash", true), false)).toMatchObject({ source: "auto-mode" });
+    });
+  }
 });
 
 describe("resolved delete paths", () => {
@@ -108,7 +130,9 @@ describe("resolved delete paths", () => {
   const bot = { autoApprove: true };
 
   it("denies a file reached through an in-project junction", () => {
-    expect(autoVerdict(bot, "Bash", `rm "${join(project, "shared", "keep.txt")}"`, away)).toMatchObject({ approve: null, source: "unattended-deny" });
+    const command = `rm "${join(project, "shared", "keep.txt")}"`;
+    expect(autoVerdict(bot, "Bash", command, away)).toMatchObject({ approve: null, source: "unattended-deny" });
+    expect(decide(opened("claude", { command }))).toMatchObject({ approve: null, source: "unattended-deny" });
   });
 
   it("fails closed for an unresolvable target", () => {

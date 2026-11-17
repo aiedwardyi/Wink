@@ -690,7 +690,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           tool,
           summary,
           choices,
-          ...guardInput(params),
+          ...(controlsHost && turn.attended ? {} : guardInput(params)),
           approvalScope: controlsHost ? "local-computer" : undefined,
         });
       };
