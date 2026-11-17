@@ -16,7 +16,7 @@ import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store, type Message } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
-import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople } from "./db.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { GuestClient } from "./guest-client.ts";
@@ -737,8 +737,25 @@ describe("bots in two homes hand work to each other", () => {
     await until(() => Boolean(joinedRoom(roomId)?.state?.teamBots?.length));
     const log = () => recentRoomEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
     const joinedLog = () => joinedEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
-    return { roomId, answer, log, joinedLog };
+    return { roomId, group, answer, log, joinedLog };
   }
+
+  it("tells JJ's bot the host's switches as of each turn, and that only an @ here reaches Edward's bots", async () => {
+    const prompts: string[] = [];
+    const { roomId, group, log } = await homes(() => "", (prompt) => (prompts.push(prompt), "On it."));
+    hostSays(group, "@스타줌 chart Q3");
+    await until(() => log().length === 2);
+    expect(prompts[0]).toContain('"Can make bots work" on "Edward"\'s Wink: "JJ" off; your @ to "Edward"\'s bots asks as "JJ".');
+    expect(prompts[0]).toContain('Bots here: "Rando" ("Edward"). Each is on its owner\'s PC; only @ here reaches it.');
+    const jj = roomPeople(roomId)[0]!;
+    setPersonWorks(roomId, jj.id, true);
+    store.emit({ type: "group", groupId: group.id });
+    await until(() => joinedRoom(roomId)?.state?.people[0]?.works === true);
+    hostSays(group, "@스타줌 and Q4");
+    await until(() => log().length === 4);
+    expect(prompts[1]).toContain('"Can make bots work" on "Edward"\'s Wink: "JJ" on; your @ to "Edward"\'s bots asks as "JJ".');
+    expect(prompts[1]).not.toContain('"JJ" off');
+  });
 
   it("asks back and forth with no person in between, and a line with no bot tag ends it", async () => {
     const randos = ["@스타줌 7:30 at Mapo works, booking it."];

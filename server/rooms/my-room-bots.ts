@@ -6,7 +6,7 @@ import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
-import { collabLine } from "./multiplayer.ts";
+import { collabLine, REACH_LINE } from "./multiplayer.ts";
 import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 
 export type MyBotTurn = { working?: boolean; since?: number; waiting?: boolean; error?: "failed" };
@@ -230,11 +230,14 @@ export class MyRoomBotTurns {
         return queueMicrotask(() => this.drain());
       }
       const trusted = [...(works.has("host") ? [state.host] : []), ...state.people.filter((person) => works.has(person.id)).map((person) => person.name)].map((name) => JSON.stringify(name));
+      const hostWorks = state.people.some((person) => person.works !== undefined)
+        ? ` "Can make bots work" on ${JSON.stringify(state.host)}'s Wink: ${state.people.map((person) => `${JSON.stringify(person.name)} ${person.works ? "on" : "off"}`).join(", ")}; your @ to ${JSON.stringify(state.host)}'s bots asks as ${me}.`
+        : "";
       const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
       const asker = `${JSON.stringify(entry.author.name)}${owner ? ` (${JSON.stringify(owner)}'s bot)` : ""}`;
       const prompt = [
-        `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only. ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
-          ? ` Bots here: ${others.join(", ")}. @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
+        `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only.${hostWorks} ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
+          ? ` Bots here: ${others.join(", ")}. ${REACH_LINE} @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
           : ""})`,
         ...(window.length ? ["Room lines since your last answer:", ...window.map(lineOf)] : []),
         ...(quote ? [`They replied to: ${lineOf(quote)}`] : []),
