@@ -27,7 +27,7 @@ const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
 // engines that passed the real-engine accuracy bar
 const QUICK_ENGINES: ReadonlySet<string> = new Set(["claudeAgent"]);
 
-export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
+export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string; ack?: boolean }) => Promise<QuickResult>;
 
 export interface QuickGate {
   bot: BotRecord;
@@ -44,18 +44,22 @@ export interface QuickGate {
 }
 
 /** Gate 0, then the rules. Any doubt goes to the bot. */
-export function routesQuick(gate: QuickGate): boolean {
+function route(gate: QuickGate): ReturnType<typeof nominate> {
   const { bot, threadId } = gate;
-  if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
-  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return false;
-  if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
-  if (!gate.instance.fork && !gate.instance.generateText) return false;
+  if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return "main";
+  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return "main";
+  if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return "main";
+  if (!gate.instance.fork && !gate.instance.generateText) return "main";
   // typing answers the pinned card, unless it only types past its choices
   const question = scanQuestion(gate.messages);
-  if (question && typedReply(question, gate.text) !== null) return false;
-  if (gate.messages.some(isOpenRequest)) return false;
-  return nominate(gate.text) === "quick";
+  if (question && typedReply(question, gate.text) !== null) return "main";
+  if (gate.messages.some(isOpenRequest)) return "main";
+  return nominate(gate.text);
 }
+
+export const routesQuick = (gate: QuickGate) => route(gate) === "quick";
+/** Steered to the bot as the person's own words, with one short helper reply beside it. */
+export const routesAck = (gate: QuickGate) => route(gate) === "ack";
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
 const carried = new Map<string, string[]>();
@@ -220,7 +224,9 @@ export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "message
   saveRunning();
 }
 
-async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message): Promise<QuickResult> {
+type HelperDeps = Omit<QuickDeps, "handoff" | "drain">;
+
+async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message, ack?: boolean): Promise<QuickResult> {
   const usageId = `quick:${ask.id}`;
   let result: QuickResult = { route: "handoff", ms: 0 };
   deps.usage?.start(botId, threadId, usageId);
@@ -228,10 +234,10 @@ async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: str
     const messages = deps.store.activePath(threadId).filter((message) => message.id !== ask.id);
     const calls = ask.call ? callLinesSinceLastUserTurn(messages, new Set()) : [];
     const notes = [...quickAnswersSinceLastUserTurn(messages, new Set()), ...calls].join("\n\n");
-    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes });
+    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes, ack });
   } catch {}
   deps.usage?.settle(usageId);
-  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ...result.usage })}`);
+  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ack, ...result.usage })}`);
   return result;
 }
 
@@ -259,19 +265,42 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const path = store.activePath(threadId);
   // the bot's own reply already stands under the ask; a late answer could contradict it
-  const asked = path.findIndex((row) => row.id === ask.id);
-  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim())) {
+  if (!current.busy && !stopped.has(ask.id) && repliedUnder(store.activePath(threadId), ask)) {
     queueAsk(store, botId, threadId, ask);
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
+  await land(store, instance, current, threadId, ask, result.text);
+}
+
+const repliedUnder = (path: Message[], ask: Message) => {
+  const asked = path.findIndex((row) => row.id === ask.id);
+  return asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim());
+};
+
+/** The helper's reply as a row under the ask, then a note to the bot while it still works there. */
+async function land(store: QuickDeps["store"], instance: ProviderInstance | null | undefined, current: BotRecord, threadId: string, ask: Message, text: string): Promise<void> {
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
-  const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
+  const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {
     const row = store.messagesFor(threadId).find((message) => message.id === answer.id);
     if (row?.quick) store.patchMessage(threadId, answer.id, { quick: { ...row.quick, noted: true } });
   })?.catch(() => false);
+}
+
+/** One short helper reply under a send the bot already took as the person's own words; none when the helper has none. */
+export async function ackQuick(deps: HelperDeps, botId: string, threadId: string, sent: Message): Promise<void> {
+  const { store } = deps;
+  const bot = store.bot(botId);
+  const instance = bot ? deps.instance(bot, threadId) : null;
+  if (!instance) return;
+  const result = await askHelper(deps, instance, botId, threadId, sent, true);
+  const current = store.bot(botId);
+  if (!current || result.route === "handoff" || !result.text) return;
+  const path = store.activePath(threadId);
+  // an edit or rewind dropped the send, or the finished turn already replied to it
+  if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
+  await land(store, instance, current, threadId, sent, result.text);
 }
