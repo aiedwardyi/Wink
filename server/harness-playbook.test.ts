@@ -96,6 +96,28 @@ describe("harness playbook", () => {
     expect(gate.hold("s1", `type ${empty}`)).toBeUndefined();
   });
 
+  it("holds a fix card until its Undo first section names the change it undoes", () => {
+    const card = (purpose: string, undo?: string) => `# CARD | opus | high | FRESH\n## Purpose\n${purpose}\n## Already built\n- none found (searched: header)\n${undo === undefined ? "" : `## Undo first\n${undo}\n`}## Files\n- a.ts\n`;
+    const cards = new Map([
+      [String.raw`C:\cards\NONE.md`, card("Fix the header that broke on phone.")],
+      [String.raw`C:\cards\BLANK.md`, card("Bug: the header overlaps the list.", "")],
+      [String.raw`C:\cards\VAGUE.md`, card("A regression in the send button.", "- revert the header change")],
+      [String.raw`C:\cards\NOTERMS.md`, card("Fixes the broken chat list.", "- no earlier change caused this")],
+      [String.raw`C:\cards\SHA.md`, card("Fix the header.", "- revert a1e35093c")],
+      [String.raw`C:\cards\PR.md`, card("Fix the header.", "revert PR #1838")],
+      [String.raw`C:\cards\SEARCHED.md`, card("Fix the header.", "- no earlier change caused this (searched: header, layout)")],
+      [String.raw`C:\cards\NEW.md`, card("Fix the header.", '- new code: "build me a new header" (11-17)')],
+      [String.raw`C:\cards\BUILD.md`, card("Build the Q3 board deck.")],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    const launch = (name: string) => `claude --model x 'Read C:\\cards\\${name}.md and do it.'`;
+    for (const name of ["NONE", "BLANK", "VAGUE", "NOTERMS"]) {
+      expect(gate.hold("s1", launch(name)), name).toBe(`Held: C:\\cards\\${name}.md is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`);
+    }
+    for (const name of ["SHA", "PR", "SEARCHED", "NEW", "BUILD"]) expect(gate.hold("s1", launch(name)), name).toBeUndefined();
+  });
+
   it("finds a relative card in the spawn's cwd and skips it without one", () => {
     const cwd = String.raw`D:\wt\site`;
     const gate = createPlaybookGate("BODY", (path) => (path === join(cwd, "CARD.md") ? "# CARD\n## Already built\n" : undefined));
@@ -268,6 +290,10 @@ describe("harness playbook", () => {
     expect(prompt).toContain("## Already built - Search built.md, the status board and earlier cards: lines it touches, or `none found (searched: <terms>)`. Then files to open first.");
   });
 
+  it("has fix cards name the change they undo", () => {
+    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("## Undo first - Fix cards (Purpose says fix, bug, broke or regression): `revert <sha or PR>` if an unasked change caused it, else `no earlier change caused this (searched: <terms>)`, or `new code: \"<user's words>\" (<date>)` if the user asked for new code.");
+  });
+
   it("logs every walk snag to one shared list", () => {
     expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("Each walk logs every snag to one shared findings list; the next walk reads it and covers only screens changed since, unless the user asks for more.");
   });
@@ -376,7 +402,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16424);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(16685);
   });
 
   it("fills the worktree path from the configured root", () => {

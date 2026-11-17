@@ -91,6 +91,11 @@ What to build or fix, and why. 2-5 lines. Quote the user's latest words verbatim
 - Search built.md, the status board and earlier cards: lines it touches, or
   `none found (searched: <terms>)`. Then files to open first.
 
+## Undo first
+- Fix cards (Purpose says fix, bug, broke or regression): `revert <sha or PR>`
+  if an unasked change caused it, else `no earlier change caused this (searched: <terms>)`,
+  or `new code: "<user's words>" (<date>)` if the user asked for new code.
+
 ## Files
 - Files to start from.
 
