@@ -13,10 +13,10 @@ let phone = true;
 let crowded: "cluster" | "child" | null = null;
 let chipWidth = 132;
 
-function Harness({ botName = "A long bot name" }: { botName?: string }) {
+function Harness({ botName = "A long bot name", enabled = true }: { botName?: string; enabled?: boolean }) {
   const cluster = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  usePhoneHeaderNameFloor(cluster, name, botName, false);
+  usePhoneHeaderNameFloor(cluster, name, botName, false, enabled);
   return createElement("header", null,
     createElement("div", { ref: cluster, "data-cluster": true },
       createElement("button", { "data-avatar": true }),
@@ -132,6 +132,18 @@ it("never writes a negative min-width when the chip is narrower than its label",
   expect(host.querySelector<HTMLElement>("[data-model-label]")!.style.textOverflow).toBe("ellipsis");
   expect(host.querySelector<HTMLElement>("[data-chip]")!.style.minWidth).toBe("max-content");
   expect(host.querySelector<HTMLElement>("[data-controls]")!.style.minWidth).toBe("");
+});
+
+it("skips the measure while disabled and fits once enabled", async () => {
+  const measure = vi.mocked(Range.prototype.getBoundingClientRect);
+  await act(async () => root.render(createElement(Harness, { enabled: false })));
+  expect(measure).not.toHaveBeenCalled();
+  for (const element of host.querySelectorAll<HTMLElement>("[data-name], [data-cluster], [data-chip], [data-model-label]")) {
+    expect(element.getAttribute("style") ?? "").toBe("");
+  }
+  await act(async () => root.render(createElement(Harness, { enabled: true })));
+  expect(measure).toHaveBeenCalled();
+  expect(host.querySelector<HTMLElement>("[data-name]")!.style.minWidth).not.toBe("");
 });
 
 it("leaves desktop sizing alone", async () => {

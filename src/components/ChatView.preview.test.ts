@@ -6,6 +6,7 @@ import { StoreProvider, type Bot, type Group, type Message } from "@/state/store
 import { ChatPeekParts, ChatPreviewContext } from "@/lib/chat-preview";
 import { setRoomHolds, takeClosedRoomHold } from "@/lib/drafts";
 import { PHONE_QUERY, swipeBlocked } from "@/lib/phone-swipe";
+import { usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_TAIL_SIZE } from "@/lib/transcript-window";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
@@ -83,7 +84,7 @@ afterEach(async () => {
 });
 
 describe("cached chat preview", () => {
-  it.each(["loaded", "loading"] as const)("measures the header once with %s fonts and repeats only for a pending font load", async (status) => {
+  it.each(["loaded", "loading"] as const)("measures the header once on promotion with %s fonts and repeats only for a pending font load", async (status) => {
     const descriptor = Object.getOwnPropertyDescriptor(document, "fonts");
     const loaded = new Set<() => void>();
     const fonts = {
@@ -97,7 +98,11 @@ describe("cached chat preview", () => {
     const appended = vi.spyOn(document.body, "appendChild");
     const copies = () => appended.mock.calls.filter(([node]) => node instanceof HTMLElement && node.style.left === "-9999px").length;
     try {
-      await render(true);
+      const bot = { ...neighbor, id: "header", threadId: "thread-header", messages: [], hasMore: false, pinnedMessageId: undefined };
+      await render(true, bot);
+      await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+      expect(measure).not.toHaveBeenCalled();
+      await render(false, bot);
       await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
       expect(measure).toHaveBeenCalledTimes(1);
       expect(copies()).toBe(0);
@@ -239,6 +244,33 @@ describe("cached chat preview", () => {
     expect(host.querySelectorAll("[data-mid]")).toHaveLength(32);
     expect(host.querySelector('[data-mid="heavy-199"]')).not.toBeNull();
     expect(requests.some((url) => url.includes("/api/threads/"))).toBe(false);
+  });
+
+  it("reads the transcript end on a vertical touch but not during a horizontal chat swipe", async () => {
+    let reads = 0;
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-orbit-transcript")) reads += 1;
+      return 0;
+    });
+    const bot = { ...neighbor, id: "swipe", threadId: "thread-swipe", messages: [], hasMore: false, pinnedMessageId: undefined };
+    function Stage() {
+      const stage = usePhoneSwipe(bot.id, true, () => {}, undefined, () => [bot.id, "next"]);
+      return createElement("div", { ref: stage }, createElement(ChatView, { bot }));
+    }
+    await act(async () => root.render(createElement(StoreProvider, null, createElement(Stage))));
+    const scroll = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    const gesture = (moves: [number, number][]) => act(async () => {
+      for (const [type, [clientX, clientY]] of [["touchstart", [300, 300]], ...moves.map((move) => ["touchmove", move] as const), ["touchend", [0, 0]]] as const) {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX, clientY }] });
+        scroll.dispatchEvent(event);
+      }
+    });
+    reads = 0;
+    await gesture([[200, 302], [150, 304]]);
+    expect(reads).toBe(0);
+    await gesture([[300, 280]]);
+    expect(reads).toBeGreaterThan(0);
   });
 
   it("uses the real header and transcript without paging, quote, pin or composer reads", async () => {
