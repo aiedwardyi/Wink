@@ -238,7 +238,7 @@ function iconBacking(source, marker) {
 // Header icons that float straight on the scene. The phone menu is placed by
 // drawer-button.ts: 30px box, 14px in from the side it opens from, 15px down.
 const SCENE_ICONS = [{ name: "phone menu", marker: "[data-phone-menu]", ink: "--color-ink-secondary", min: 3, size: 30, inset: 14, top: 15 }];
-// The tile is the scene at 2x of a 132px thumbnail laid out at 0.45 (0.3 for snow): 0.9px per CSS px in both.
+// A tile is a 2x capture of a 132px thumbnail whose chat was laid out 132 / scale CSS px wide (scale 0.45, snow 0.3): 264 / 293 and 396 / 440 are both 0.9 tile px per CSS px.
 const STILL_PX_PER_CSS_PX = 0.9;
 
 function sharpPath() {
