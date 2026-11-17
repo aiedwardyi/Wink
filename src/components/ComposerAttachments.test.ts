@@ -4,6 +4,9 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { intakeFiles } from "@/lib/composer-attachments";
+import { trayMedia } from "@/lib/tray-media";
+
 import { ComposerAttachments } from "./ComposerAttachments";
 
 describe("ComposerAttachments remove button", () => {
@@ -83,5 +86,26 @@ describe("ComposerAttachments upload chip", () => {
     expect(nameClass("uploading")).not.toContain("pointer-coarse:pr-5");
     expect(nameClass("failed")).toContain("pointer-coarse:pr-5");
     expect(nameClass("repick")).toContain("pointer-coarse:pr-5");
+  });
+});
+
+describe("ComposerAttachments media previews", () => {
+  it("previews a picked picture and clip from memory, not a FILE tile", async () => {
+    const shot = new File([new Uint8Array(3)], "shot.png", { type: "image/png" });
+    const clip = new File([new Uint8Array(3)], "clip.mp4", { type: "video/mp4" });
+    const notes = new File(["x"], "notes.pdf", { type: "application/pdf" });
+    const { attachments } = await intakeFiles([shot, clip, notes], { allowImages: false, getPath: (file) => `C:/w/${file.name}`, t: (key) => key });
+    expect(attachments.map((a) => trayMedia(a.id) !== undefined)).toEqual([true, true, false]);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () =>
+      root.render(createElement(ComposerAttachments, { items: attachments, onAdd: () => {}, onRemove: () => {}, onDisplayInChatBox: () => {}, notice: null, onNotice: () => {} })),
+    );
+    expect(host.querySelector('img[alt="shot.png"]')?.getAttribute("src")).toMatch(/^blob:/);
+    expect(host.textContent).toContain("IMAGE");
+    expect(host.querySelectorAll(".relative.h-\\[76px\\]")).toHaveLength(2);
+    await act(async () => root.unmount());
+    host.remove();
   });
 });

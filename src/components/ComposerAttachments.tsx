@@ -20,6 +20,8 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { usePresence } from "@/lib/use-presence";
 import { AttachmentPreviewDialog, previewImage, type PreviewImage } from "./AttachmentPreview";
 import { FileDropOverlay } from "./FileDropOverlay";
+import { MediaClip } from "./MediaClip";
+import { trayMedia } from "@/lib/tray-media";
 import { trackScreen } from "@/lib/usage-stats";
 
 /** Electron 32 removed File.path; only the preload can name a file. */
@@ -109,6 +111,7 @@ export function ComposerAttachments({
         <div className={cn("flex gap-2 overflow-x-auto pr-1.5 pt-1.5", row && "max-w-[50%] shrink-0 gap-2.5")}>
           {items.map((a) => {
             const local = a.kind === "upload" ? localFile?.(a.id) : undefined;
+            const media = local ? undefined : trayMedia(a.id);
             return a.kind === "upload" && local?.picture ? (
               <LocalPictureChip key={a.id} name={a.name} size={a.size} blob={local.file} onRemove={() => onRemove(a.id)} onPreview={setPreview} small={row} />
             ) : a.kind === "upload" && local ? (
@@ -145,27 +148,34 @@ export function ComposerAttachments({
                 <button
                   type="button"
                   onClick={() => { trackScreen("attachment-preview"); setPreview(previewImage(a.path)); }}
-                  className={cn(PICTURE, row ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}
+                  className={cn(PICTURE, "relative", row ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}
                   aria-label={`Preview ${a.name}`}
                 >
-                  <img
+                  {media && !attachmentImageUrl(a.path) ? <MediaThumb blob={media} name={a.name} small={row} /> : <img
                     src={attachmentImageUrl(a.path) ?? undefined}
                     alt={a.name}
                     loading="lazy"
                     className={row ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"}
-                  />
+                  />}
                 </button>
                 {!row && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>}
               </Chip>
             ) : a.kind === "upload" ? (
               <Chip
                 key={a.id}
-                kind="FILE"
+                kind={media?.type.startsWith("image/") ? "IMAGE" : "FILE"}
                 title={a.name}
                 onRemove={() => onCancelUpload(a.id)}
                 removeLabel={t("composer.uploadCancel")}
               >
-                <UploadBody upload={a} onRetry={() => onRetryUpload?.(a.id)} onRepick={() => onRepickUpload?.(a.id)} />
+                <UploadBody upload={a} media={media} onRetry={() => onRetryUpload?.(a.id)} onRepick={() => onRepickUpload?.(a.id)} />
+              </Chip>
+            ) : media ? (
+              <Chip key={a.id} kind={media.type.startsWith("image/") ? "IMAGE" : "FILE"} title={a.path} onRemove={() => onRemove(a.id)} small={row}>
+                <div className={cn(PICTURE, "relative", row ? SMALL_PICTURE : "h-[76px] w-full rounded-lg")}>
+                  <MediaThumb blob={media} name={a.name} small={row} />
+                </div>
+                {!row && <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>}
               </Chip>
             ) : (
               <Chip key={a.id} kind="FILE" title={a.path} onRemove={() => onRemove(a.id)} small={row}>
@@ -217,19 +227,68 @@ function LocalPictureChip({ name, size, blob, onRemove, onPreview, small = false
   );
 }
 
-function UploadBody({ upload, onRetry, onRepick }: { upload: UploadAttachment; onRetry: () => void; onRepick: () => void }) {
+function clock(seconds: number): string {
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function useClipLength(src: string | undefined): string | undefined {
+  const [length, setLength] = useState<string>();
+  useEffect(() => {
+    if (!src) return;
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.onloadedmetadata = () => {
+      if (Number.isFinite(video.duration)) setLength(clock(video.duration));
+    };
+    video.src = src;
+    return () => {
+      video.onloadedmetadata = null;
+      video.removeAttribute("src");
+    };
+  }, [src]);
+  return length;
+}
+
+/** A picked picture, or a clip's first frame with a play mark and its length, from the file in memory; its box is `relative`. */
+function MediaThumb({ blob, name, small = false }: { blob: Blob; name: string; small?: boolean }) {
+  const url = useMemo(() => URL.createObjectURL(blob), [blob]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  const video = blob.type.startsWith("video/");
+  const length = useClipLength(video ? url : undefined);
+  if (!video) return <img src={url} alt={name} className={small ? "size-full object-cover" : "max-h-[76px] max-w-full object-contain"} />;
+  return (
+    <>
+      <MediaClip src={url} name={name}>
+        <span className="flex min-w-0 items-center gap-2 px-2">
+          <FileIcon size={16} className="shrink-0 text-ink-secondary" />
+          {!small && <span className="truncate text-[12px] text-ink">{name}</span>}
+        </span>
+      </MediaClip>
+      {length && !small && <span className="absolute bottom-1.5 right-1.5 rounded bg-black/55 px-1 text-[10px] leading-4 text-white tabular-nums">{length}</span>}
+    </>
+  );
+}
+
+function UploadBody({ upload, media, onRetry, onRepick }: { upload: UploadAttachment; media?: Blob; onRetry: () => void; onRepick: () => void }) {
   const { t } = useI18n();
   const percent = upload.size ? Math.min(100, Math.floor((upload.sent / upload.size) * 100)) : 0;
   const action = "mt-0.5 block break-keep text-left text-[10.5px] leading-snug text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60";
   return (
     <>
-      <div className="flex h-[76px] items-center gap-2">
-        <FileIcon size={16} className="shrink-0 text-ink-secondary" />
+      {media && (
+        <div className={cn(PICTURE, "relative h-[76px] w-full rounded-lg")}>
+          <MediaThumb blob={media} name={upload.name} />
+        </div>
+      )}
+      <div className={cn("flex items-center gap-2", media ? "mt-1" : "h-[76px]")}>
+        {!media && <FileIcon size={16} className="shrink-0 text-ink-secondary" />}
         <div className="min-w-0">
           {/* an action line lifts the name under the always-on touch x */}
-          <div className={cn("truncate text-[12px] text-ink", (upload.state === "failed" || upload.state === "repick") && "pointer-coarse:pr-5")}>
+          {!media && <div className={cn("truncate text-[12px] text-ink", (upload.state === "failed" || upload.state === "repick") && "pointer-coarse:pr-5")}>
             {upload.name}
-          </div>
+          </div>}
           <div className="truncate text-[10.5px] text-ink-secondary/70">
             {formatSize(upload.size)}
             {upload.state === "uploading" && ` · ${percent}%`}

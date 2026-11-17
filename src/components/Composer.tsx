@@ -404,16 +404,21 @@ export function Composer({
       }),
     [attachments, jobs, peopleRoom],
   );
-  const uploadErrors = attachments
+  // why an upload is stuck or failed goes in the notice above the box, not only on its small chip
+  const uploadProblems = attachments
     .flatMap((a) => {
-      const error = a.kind === "upload" ? jobs.get(a.id)?.error : undefined;
-      return error && a.kind === "upload" ? [t(error, { name: a.name })] : [];
+      const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
+      const key = job?.phase === "resuming" ? "composer.uploadStuck" : job?.error;
+      return key && a.kind === "upload" ? [t(key, { name: a.name })] : [];
     })
     .join(" ");
+  const shownProblems = useRef("");
   useEffect(() => {
-    if (uploadErrors) showNotice(uploadErrors);
-  }, [uploadErrors, showNotice]);
-  const repickInput = useRef<HTMLInputElement>(null);
+    const last = shownProblems.current;
+    shownProblems.current = uploadProblems;
+    if (uploadProblems) showNotice(uploadProblems);
+    else if (last) setAttachmentNotice((notice) => (notice === last ? null : notice));
+  }, [uploadProblems, showNotice]);  const repickInput = useRef<HTMLInputElement>(null);
   const repickTarget = useRef<string | null>(null);
   const repick = (file: File | undefined) => {
     const target = attachmentsRef.current.find((a) => a.id === repickTarget.current);
@@ -1263,8 +1268,7 @@ export function Composer({
           allowImages={engineSupportsImages}
           notice={attachmentNotice}
           onNotice={showNotice}
-          localFile={room ? roomPicture : undefined}
-          onDropFiles={room ? (files) => void pickFiles(files) : undefined}
+          localFile={room ? roomPicture : undefined}          onDropFiles={room ? (files) => void pickFiles(files) : undefined}
           dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
           roomCopy={group?.hosted ? roomCopyPath : undefined}
           quote={replyTo && <ReplyQuote message={replyTo} fallbackName={room ? replyTo.author?.name : bot?.name} onClear={onClearReply} />}
