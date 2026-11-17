@@ -98,7 +98,7 @@ export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
     if (/^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(parts[4])) return "once";
     if (parts[4] === "head.json") return parts[3] === ids.writerId ? "own" : "peer";
   }
-  if (root === "board" && parts.length === 3 && /^p[0-9a-f]{24}\.json$/.test(parts[2])) return parts[1] === ids.profileDeviceId ? "own" : "peer";
+  if (root === "board" && parts.length === 3 && /^(?:p[0-9a-f]{24}|deleted)\.json$/.test(parts[2])) return parts[1] === ids.profileDeviceId ? "own" : "peer";
   return "unknown";
 }
 

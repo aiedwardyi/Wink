@@ -99,6 +99,7 @@ describe("Drive mirror", () => {
     ["threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "once"], ["assets/a.png", "once"], ["pictures/a.png", "once"], ["workspace.json", "once"],
     ["threads/bot/thread.conflict-work-1.json", "once"], ["threads/bot/thread.deleted.json", "once"], ["memory/bot/.ancestry/MEMORY.md.json", "once"],
     ["board/device-home/p0123456789abcdef01234567.json", "own"], ["board/device-work/p0123456789abcdef01234567.json", "peer"],
+    ["board/device-home/deleted.json", "own"], ["board/device-work/deleted.json", "peer"],
     ["board/device-work/notes.json", "unknown"], ["board/p0123456789abcdef01234567.json", "unknown"],
     ["devices/device-home.json.1.tmp", "ignore"], ["notes.txt", "unknown"], ["memory-v2 (0)/bot/aaaaaaaaaaaa.json", "unknown"],
   ])("classifies %s as %s", (path, rule) => {

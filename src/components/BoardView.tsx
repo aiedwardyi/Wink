@@ -262,6 +262,8 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const page = usePresence(open);
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
+  const [deleteFailed, setDeleteFailed] = useState(false);
+  const remove = (id: string) => deleteFromBoard(id).then(() => setDeleteFailed(false), () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
     if (!isOpen || hidden) return;
@@ -269,6 +271,8 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return;
       if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
+      // the open menu takes this Escape
+      if (document.querySelector("[data-message-menu], [data-selection-menu]")) return;
       event.preventDefault();
       setOpenId(null);
     };
@@ -356,7 +360,10 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             inert={page.closing}
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app"
           >
-            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}><Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} /></div>
+            <div className={cn("flex w-full flex-col px-5 pb-4", CHAT_COLUMN_CLASS)}>
+              {deleteFailed && <div role="alert" className="pb-3 text-[13px] text-danger">{t("errors.request")}</div>}
+              <Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} />
+            </div>
           </div>
         )}
       </div>
@@ -369,7 +376,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isOwnReply(menuPost) ? () => void deleteFromBoard(menuPost.id).catch(() => {}) : undefined}
+          onDelete={menuPost && isOwnReply(menuPost) ? () => void remove(menuPost.id) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (

@@ -149,10 +149,12 @@ export function createBoard(options: BoardOptions) {
   const now = options.now ?? Date.now;
   let cache: Map<string, BoardPost> | null = null;
   const posts = () => (cache ??= new Map(readPosts(options.dir).map((post) => [post.id, post])));
+  let view: Map<string, BoardPost> | null = null;
   let deleted: Set<string> | null = null;
   const gone = () => (deleted ??= new Set(readDeleted(options.dir)));
 
   const drop = (id: string) => {
+    view = null;
     posts().delete(id);
     rmSync(join(options.dir, `${id}.json`), { force: true });
     if (gone().has(id)) return;
@@ -162,6 +164,7 @@ export function createBoard(options: BoardOptions) {
   };
 
   const write = (post: BoardPost) => {
+    view = null;
     mkdirSync(options.dir, { recursive: true });
     writeFileAtomic(join(options.dir, `${post.id}.json`), `${JSON.stringify(post, null, 2)}\n`);
     posts().set(post.id, post);
@@ -178,14 +181,16 @@ export function createBoard(options: BoardOptions) {
   };
 
   // copied chat stays on disk but is never read back, nor the fix it wrote into its parent
-  const readable = (): BoardPost[] => {
+  const readable = (): Map<string, BoardPost> => {
+    if (view) return view;
     const all = [...posts().values()];
     const copied = new Set(all.filter(copiedChat).map((post) => `${post.parent_id}\n${post.fix || post.body}`));
-    return all.flatMap((post) => (copiedChat(post) ? [] : [{
+    view = new Map(all.flatMap((post) => (copiedChat(post) ? [] : [[post.id, {
       ...post,
       fix: copied.has(`${post.id}\n${post.fix}`) ? "" : post.fix,
       helped_bot_ids: post.helped_bot_ids.filter((id) => id !== BOARD_USER),
-    }]));
+    }]])));
+    return view;
   };
 
   const solved = (held: BoardPost, fix: string, at: number): BoardPost => {
@@ -197,10 +202,10 @@ export function createBoard(options: BoardOptions) {
   const board = {
     dir: options.dir,
     list(): BoardPost[] {
-      return readable().sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+      return [...readable().values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
     },
     get(id: string): BoardPost | undefined {
-      return readable().find((post) => post.id === id);
+      return readable().get(id);
     },
     /** Writes the post the event names; the same event again updates that post. A fix also solves its parent. */
     post(input: NewBoardPost): BoardPost {
@@ -245,8 +250,12 @@ export function createBoard(options: BoardOptions) {
       options.changed?.();
       return next;
     },
+    /** Replies under a removed post move up to its parent, so they stay in their thread. */
     remove(id: string): boolean {
-      if (!posts().has(id)) return false;
+      const held = posts().get(id);
+      if (!held) return false;
+      const at = now();
+      for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
       drop(id);
       options.changed?.();
       return true;

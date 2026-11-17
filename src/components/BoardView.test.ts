@@ -317,6 +317,23 @@ describe("Forum", () => {
     await settle();
     expect(rows()).toEqual(["pbot", "pcarbon"]);
     expect(host.querySelector("article")!.textContent).toContain("1 reply");
+    // Escape takes the menu, not the open post
+    await menuFor("article");
+    await esc();
+    expect(host.querySelector("article")).not.toBeNull();
+  });
+
+  it("says so when a delete fails and keeps the reply", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
+    const ok = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board/delete" ? new Response("{}", { status: 500 }) : ok(url, init))));
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
+    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await settle();
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("Wink couldn't finish that. Try again.");
+    expect(rows()).toEqual(["pbot", "pmine"]);
   });
 
   it("shows the five engine marks above a friendly line when empty", async () => {

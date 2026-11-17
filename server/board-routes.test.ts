@@ -149,4 +149,13 @@ describe("Forum replies and helped", () => {
     expect(existsSync(join(board.dir, `${saved.body.post.id}.json`))).toBe(false);
     expect((await call(routes.remove, { id: saved.body.post.id })).status).toBe(404);
   });
+
+  it("a deleted reply's own replies stay in its thread", async () => {
+    const { board, routes } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:4" });
+    const saved = await call(routes.reply, { parent_id: stuck.id, body: "Try the work account." });
+    const under = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "That worked.", parent_id: saved.body.post.id, source_ref: "tool:tc:5" });
+    await call(routes.remove, { id: saved.body.post.id });
+    expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id, body: "That worked." });
+  });
 });
