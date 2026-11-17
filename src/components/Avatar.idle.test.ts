@@ -1,11 +1,16 @@
 import "./ProfileFields.test-dom.ts";
 import { act, createElement, createRef, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Bot } from "@/state/store";
 import { BotAvatar, MausAvatar, type MausAvatarHandle } from "./Avatar";
 import { BotPickerList } from "./BotPickerList";
+
+vi.mock("@/state/store", async (original) => ({
+  ...await original<typeof import("@/state/store")>(),
+  useStore: () => ({ state: { instances: [] } }),
+}));
 
 async function renderInto(node: ReactNode) {
   const host = document.createElement("div");
