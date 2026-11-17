@@ -170,13 +170,46 @@ describe("MemoryMap", () => {
     expect(more.textContent).toBe("Show all 12");
     expect(more.getAttribute("aria-expanded")).toBe("false");
     await act(async () => more.click());
-    expect(shown()).toHaveLength(12);
+    expect(shown()).toHaveLength(10);
     expect(more.textContent).toBe("Show less");
+    const rest = host.querySelector<HTMLButtonElement>(".mm-asks-rest + .mm-asks-more")!;
+    expect(rest.textContent).toBe("Show all (12)");
+    await act(async () => rest.click());
+    expect(shown()).toHaveLength(12);
+    expect(host.querySelector(".mm-asks-rest + .mm-asks-more")).toBeNull();
+    await act(async () => more.click());
+    await act(async () => more.click());
+    expect(shown()).toHaveLength(10);
     await act(async () => root.unmount());
     applyLocale("ko");
     await mount({ bot: asked(["open", "open", "open", "building"]) });
     expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ask 0시작 전");
     expect(host.querySelector(".mm-asks-more")!.textContent).toBe("4개 모두 보기");
+  });
+
+  it.each([["long", 97], ["knowledge", 100]] as const)("opens a long %s to its first 10 rows and one Show all row, and starts short again after a close", async (kind, total) => {
+    const facts = Array.from({ length: 100 }, (_, index) => `- Fact ${index} (noted 2026-10-29)`).join("\n");
+    await mount({ text: facts, topics: Array.from({ length: 100 }, (_, index) => ({ name: `topic-${index}.md`, bytes: 100 })) });
+    const panel = host.querySelector<HTMLButtonElement>(`button.mm-panel[data-kind="${kind}"]`)!;
+    const rows = () => panel.parentElement!.querySelectorAll(".mm-fold .mm-list > li");
+    const more = () => panel.parentElement!.querySelector<HTMLButtonElement>(".mm-fold .mm-list + .mm-asks-more");
+    await act(async () => panel.click());
+    expect(rows()).toHaveLength(10);
+    expect(more()!.textContent).toBe(`Show all (${total})`);
+    await act(async () => more()!.click());
+    expect(rows()).toHaveLength(total);
+    expect(more()).toBeNull();
+    await act(async () => panel.click());
+    await act(async () => panel.click());
+    expect(rows()).toHaveLength(10);
+  });
+
+  it("names the Show all row in Korean", async () => {
+    applyLocale("ko");
+    await mount({ bot: asked(Array(12).fill("done")) });
+    await act(async () => host.querySelector<HTMLButtonElement>(".mm-asks-done-toggle")!.click());
+    expect(host.querySelectorAll(".mm-asks-closed li")).toHaveLength(10);
+    expect(host.querySelector(".mm-asks-closed + .mm-asks-more")!.textContent).toBe("모두 보기 (12)");
   });
 
   it("keeps three or fewer open asks without a Show all row", async () => {

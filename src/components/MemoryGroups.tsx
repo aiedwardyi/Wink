@@ -12,6 +12,7 @@ import { MemoryCleanTint, reducedMemoryMotion } from "./MemoryCleanMotion";
 // the stamp memory-pass.ts appendNotes puts on every Auto notes line
 const NOTED = /^\s*[-*+]\s+(.+?)\s+\(noted (\d{4})-(\d{2})-(\d{2})\)\s*$/;
 const SHOWN = 5;
+export const LONG_SHOWN = 10;
 
 export function notedLines(text: string): Array<{ fact: string; at: Date }> {
   return text
@@ -169,6 +170,15 @@ export function NotedLines({ text, messages = [], target, botId, active = true, 
       )}
     </ul>
   );
+}
+
+// a list mounted again starts short, so closing its section resets it
+export function useShowAll<T>(rows: T[], first = LONG_SHOWN) {
+  const { t } = useI18n();
+  const [all, setAll] = useState(false);
+  const reset = () => setAll(false);
+  if (all || rows.length <= first) return { shown: rows, more: null, reset };
+  return { shown: rows.slice(0, first), more: <button type="button" className="mm-asks-more" onClick={() => setAll(true)}>{t("bot.memoryShowAll", { count: rows.length })}</button>, reset };
 }
 
 export function MemoryEmpty() {
