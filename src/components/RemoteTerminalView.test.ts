@@ -925,6 +925,37 @@ describe("RemoteTerminalView", () => {
     await act(async () => second.root.unmount());
   });
 
+  it("forgets a gone remembered worker even when the close unmounts the view", async () => {
+    store.api.mockImplementation(async (path: string) => {
+      if (path.includes("sessionId=")) throw new Error("Unknown terminal");
+      return { screenText: "main", sessionId: "main", generation: 1, panes: [{ sessionId: "main", label: null, main: true }] };
+    });
+    lastViewedPanes.set("bot-1", "worker");
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onClose = vi.fn(() => root.unmount());
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose }))));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(lastViewedPanes.get("bot-1")).toBeNull();
+  });
+
+  it("opens a requested worker instead of closing when the remembered one is gone", async () => {
+    const panes = [{ sessionId: "main", label: null, main: true }, { sessionId: "other", label: "Other", main: false }];
+    store.api.mockImplementation(async (path: string) => {
+      const id = new URL(path, "http://localhost").searchParams.get("sessionId") ?? "main";
+      if (!panes.some((pane) => pane.sessionId === id)) throw new Error("Unknown terminal");
+      return { screenText: id, sessionId: id, generation: 1, panes };
+    });
+    lastViewedPanes.set("bot-1", "worker");
+    const onClose = vi.fn();
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose, paneFocus: { sessionId: "other" } }))));
+    await vi.waitFor(() => expect(title(host)).toBe("Terminal / Other"));
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
   it("sends a line with a trailing newline and replaces the snapshot", async () => {
     store.api.mockImplementation(async (path: string) =>
       path.endsWith("/send") ? { screenText: "$ ls\nREADME.md", sessionId: "s1", generation: 2 } : { screenText: "$", sessionId: "s1", generation: 2 });

@@ -161,6 +161,7 @@ export function RemoteTerminalView({
         setSelectedPane(null);
         if (targetPane === restoringRef.current) {
           restoringRef.current = null;
+          lastViewedPanes.set(bot.id, null);
           closeRef.current();
           return;
         }
@@ -197,6 +198,7 @@ export function RemoteTerminalView({
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
+    restoringRef.current = null;
     if (paneFocus.sessionId === null) {
       focusedRef.current = paneFocus;
       setSelectedPane(mainPane ? null : MAIN_TAB);
