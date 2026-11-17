@@ -218,6 +218,8 @@ const appServerAlive = (server: AppServer) =>
 // Only a Wink setting overrides; otherwise the user's own codex config decides.
 // untrusted asks before any edit or command that is not read-only.
 function codexPolicy(fullAuto: boolean, turn: AccessTurn) {
+  // the sandbox stops writes; untrusted sends every escalation to Wink, which denies it on a read-only turn
+  if (turn.readOnly) return { approvalPolicy: "untrusted", sandbox: "read-only" } as const;
   return {
     approvalPolicy: fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : undefined,
     sandbox: fullAuto ? "danger-full-access" : undefined,
@@ -627,7 +629,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               ? "ask_user"
               : "shell";
         const owned = isMcpElicitation && (preAllowed.has(params.serverName) || preAllowed.has(`${params.serverName}/${mcpTool}`));
-        if ((config.fullAuto && !isQuestion) || owned) {
+        // a read-only turn's escalations go to Wink, which denies them, whatever the instance's Auto
+        if (((config.fullAuto && !isQuestion) || owned) && !turn.readOnly) {
           return send({
             jsonrpc: "2.0",
             id: msg.id,
@@ -967,9 +970,18 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         let resumeFailed = false;
         // Ask must reach the person; otherwise the user's own approvals_reviewer decides.
         const approvalsReviewer = approvalPolicy === "untrusted" ? "user" : undefined;
+        // read-only: every MCP server but Wink's read-only agents proxy, every plugin (they bring their own servers,
+        // computer use among them), apps and the owner's hooks are off, so no per-tool approval of the user's applies
+        const mcpOff: Record<string, false> = {};
+        if (turn.readOnly && !warm) {
+          const read = await request("config/read", {});
+          for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents") mcpOff[`mcp_servers.${name}.enabled`] = false;
+          for (const id of Object.keys(read?.config?.plugins ?? {})) mcpOff[`plugins.${id}.enabled`] = false;
+          Object.assign(mcpOff, { "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
+        }
         if (cursor && !warm) {
           try {
-            const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox });
+            const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox, ...(turn.readOnly && { config: mcpOff }) });
             codexThreadId = resumed?.thread?.id ?? cursor;
           } catch {
             resumeFailed = true;
@@ -987,7 +999,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             approvalsReviewer,
             ...(turn.system ? { developerInstructions: turn.system } : {}),
             ephemeral: false,
-            config: { web_search: "live" },
+            config: { web_search: "live", ...mcpOff },
           });
           trace?.delivered("thread/start", () => ({ system: turn.system ?? "" }));
           codexThreadId = started?.thread?.id ?? null;
@@ -1152,6 +1164,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         images: true,
         effortLevels: ["low", "medium", "high", "xhigh", "max"],
         rateLimits: true,
+        readOnlyTurns: true,
         askApproval: !config.fullAuto,
         // turn.system rides once, as thread/start developerInstructions; a resumed thread keeps that copy.
         pinnedSystem: true,

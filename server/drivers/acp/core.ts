@@ -1135,6 +1135,16 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             });
 
           const toolCall = params.toolCall ?? {};
+          // a read-only turn approves nothing, whatever the instance's Auto
+          if (turn.readOnly) {
+            const reject = optionFor("reject");
+            if (!reject) missing("reject");
+            return send({
+              jsonrpc: "2.0",
+              id: msg.id,
+              result: reject ? { outcome: { outcome: "selected", optionId: reject } } : cancelled(),
+            });
+          }
           if (config.fullAuto) {
             const allow = optionFor("allow");
             if (!allow) missing("allow");
@@ -1519,6 +1529,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             effortLevels: support.effortLevels,
             localComputerMcp: !config.fullAuto,
             askApproval: !config.fullAuto,
+            readOnlyTurns: true,
           },
           sendTurn,
           // fullAuto selects "allow" on every session/request_permission; the rest reach Wink

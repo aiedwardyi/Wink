@@ -1373,11 +1373,11 @@ describe("agents-proxy read-only room turn", () => {
   it("lists no saved keys, connected apps, bot asks, Forum posts or Agentic Mode", async () => {
     const { list } = await probeWithIdentity(identity);
     expect(list.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
-      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "update_task_state", "usage_status", "wait_delegation",
+      "board_search", "check_delegation", "list_bots", "list_routines", "no_reply_needed", "react", "usage_status", "wait_delegation",
     ]);
   });
 
-  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post"])("refuses %s before calling the harness", async (name) => {
+  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post", "update_task_state"])("refuses %s before calling the harness", async (name) => {
     const { call } = await probeWithIdentity(identity, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toBe(`${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`);
