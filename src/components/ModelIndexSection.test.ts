@@ -955,37 +955,36 @@ describe("model index provider marks", () => {
   const providers = { anthropic: "claudeAgent", openai: "codex", google: "geminiAgent", xai: "grokAgent", meta: "museAgent" } as const;
   const glyph = (element: Element) => [...element.querySelectorAll("path, rect")].map((part) => [part.tagName, part.getAttribute("d"), part.getAttribute("width")]);
 
-  it("uses the picker mark for each chart badge and the base icon for each phone chip", async () => {
+  it("uses the base icon for each chart badge and the picker mark for each phone chip", async () => {
     for (const [provider, driverKind] of Object.entries(providers) as Array<[keyof typeof providers, string]>) {
       const expected = document.createElement("div");
       expected.innerHTML = renderToStaticMarkup(createElement(ProviderMark, { driverKind, size: 12 }));
       await act(async () => root.render(createElement("svg", null, createElement(Badge, { provider: provider as keyof typeof providers, r: 8, clip: "test" }))));
-      expect(host.querySelector("image, img")).toBeNull();
-      expect(glyph(host)).toEqual(glyph(expected));
+      const icon = host.querySelector("image");
+      expect(icon?.getAttribute("href")).toContain({ anthropic: "icon-45-engine-claude.png", openai: "icon-46-engine-codex.png", google: "icon-47-engine-gemini.png", xai: "icon-48-engine-grok.png", meta: "icon-49-engine-muse.png" }[provider]);
       await act(async () => root.render(createElement(ProviderChips, { providers: [provider as keyof typeof providers], value: null, onChange: () => undefined, t })));
-      const icon = host.querySelector("img");
-      expect(icon?.getAttribute("src")).toContain({ anthropic: "icon-45-engine-claude.png", openai: "icon-46-engine-codex.png", google: "icon-47-engine-gemini.png", xai: "icon-48-engine-grok.png", meta: "icon-49-engine-muse.png" }[provider]);
-      expect(host.querySelector("svg")).toBeNull();
+      expect(host.querySelector("img")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
     }
     await act(async () => root.render(createElement("svg", null, createElement(Badge, { provider: "other", r: 8, clip: "test" }))));
     expect(host.querySelector("svg svg, image")).toBeNull();
     expect(host.querySelector('circle[style*="--mi-other"]')).not.toBeNull();
   });
 
-  it("renders marks in desktop chart, phone list and phone chart", async () => {
+  it("renders marks in the phone list and base icons in charts", async () => {
     const desktop = host.querySelector("[data-mi-badge]")!;
-    expect(desktop.querySelector("svg")).not.toBeNull();
-    expect(desktop.querySelector("image, img")).toBeNull();
+    expect(desktop.querySelector("svg")).toBeNull();
+    expect(desktop.querySelector("image[href*='icon-']")).not.toBeNull();
     vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
     try {
       await mount();
       const row = host.querySelector("[data-mi-row]")!;
-      expect(row.querySelector("img[src*='icon-']")).not.toBeNull();
-      expect(row.querySelector("svg")).toBeNull();
+      expect(row.querySelector("img[src*='icon-']")).toBeNull();
+      expect(row.querySelector("svg")).not.toBeNull();
       pick("Chart", "Chart");
       const dot = host.querySelector("[data-mi-dot]")!;
-      expect(dot.querySelector("svg")).not.toBeNull();
-      expect(dot.querySelector("image, img")).toBeNull();
+      expect(dot.querySelector("svg")).toBeNull();
+      expect(dot.querySelector("image[href*='icon-']")).not.toBeNull();
     } finally {
       vi.restoreAllMocks();
     }

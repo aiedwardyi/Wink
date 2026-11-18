@@ -80,10 +80,11 @@ export function bestValue(rows: readonly PhoneModel[]): string | undefined {
 }
 
 function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
-  const id = provider === "other" ? undefined : AVATAR[provider];
   const radius = size > 20 ? "rounded-lg" : "rounded-[4px]";
-  return id ? (
-    <img src={botAvatarAssetPath(id)} alt="" width={size} height={size} draggable={false} className={cn("block shrink-0", radius)} style={{ width: size, height: size }} />
+  return provider !== "other" ? (
+    <span className={cn("flex shrink-0 items-center justify-center", radius)} style={{ width: size, height: size }}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size * 0.75} />
+    </span>
   ) : (
     <span aria-hidden className={cn("block shrink-0", radius)} style={{ width: size, height: size, background: color(provider) }} />
   );
@@ -91,16 +92,12 @@ function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
 
 /** A lab's logo in a round badge, for charts; clip is a circle clipPath in objectBoundingBox units. */
 export function Badge({ provider, r, clip }: { provider: ChartProvider; r: number; clip: string }) {
+  const id = provider === "other" ? undefined : AVATAR[provider];
   return (
     <>
       <circle r={r + 1.5} style={{ fill: "var(--color-panel)" }} />
-      {provider !== "other" ? (
-        <g clipPath={`url(#${clip})`}>
-          <circle r={r} style={{ fill: "var(--color-panel)" }} />
-          <svg x={-r * 0.75} y={-r * 0.75} width={r * 1.5} height={r * 1.5}>
-            <ProviderMark driverKind={DRIVER[provider]} size={r * 1.5} />
-          </svg>
-        </g>
+      {id ? (
+        <image href={botAvatarAssetPath(id)} x={-r} y={-r} width={r * 2} height={r * 2} clipPath={`url(#${clip})`} preserveAspectRatio="xMidYMid slice" />
       ) : (
         <circle r={r} style={{ fill: color(provider) }} />
       )}
