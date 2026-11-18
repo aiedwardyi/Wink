@@ -31,6 +31,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
       const tall = above.getBoundingClientRect().height;
       const row = list.firstElementChild?.getBoundingClientRect().height ?? 0;
       const room = handle.parentElement?.querySelector<HTMLElement>(":scope > .map-code")?.clientHeight ?? 0;
+      // Under REST of code room the rows may only shrink: max stays at tall.
       return { from: tall, solo: above, min: Math.min(tall, tall - list.clientHeight + row), max: Math.max(tall, Math.min(tall + list.scrollHeight - list.clientHeight, tall + room - REST)) };
     }
     const from = top.getBoundingClientRect().height;
