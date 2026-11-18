@@ -9,9 +9,10 @@ import type { SceneModule } from "@/scenes/scene-host";
 import { sceneOf } from "./ChatScene";
 
 type Running = { skin: string; events: string[]; frames: number; stopped: boolean };
-const { running, broken, fakeScene } = vi.hoisted(() => {
+const { running, broken, chunks, fakeScene } = vi.hoisted(() => {
   const running: Running[] = [];
   const broken = { on: false };
+  const chunks: { load?: (scene: string) => Promise<SceneModule> } = {};
   const fakeScene: SceneModule = {
     pauseOnBlur: false,
     create: (api) => {
@@ -28,9 +29,9 @@ const { running, broken, fakeScene } = vi.hoisted(() => {
       };
     },
   };
-  return { running, broken, fakeScene };
+  return { running, broken, chunks, fakeScene };
 });
-vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("./ChatScene")>()), loadScene: async () => fakeScene }));
+vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("./ChatScene")>()), loadScene: async (scene: string) => chunks.load?.(scene) ?? fakeScene }));
 
 const { SkinPicker } = await import("./SkinPicker");
 
@@ -76,6 +77,7 @@ afterEach(async () => {
   persistPreference("en");
   running.length = 0;
   broken.on = false;
+  chunks.load = undefined;
   document.documentElement.removeAttribute("data-orbit-idle");
   vi.unstubAllGlobals();
 });
@@ -299,6 +301,37 @@ describe("Moving tiles", () => {
     expect(running).toHaveLength(0);
     await painted();
     expect(running).toHaveLength(animated.length);
+  });
+
+  it("starts every tile together once the last scene chunk has arrived", async () => {
+    const arrive = new Map<string, () => void>();
+    chunks.load = (scene) => new Promise((done) => arrive.set(scene, () => done(fakeScene)));
+    await open();
+    await painted();
+    const scenes = [...arrive.keys()];
+    expect(scenes).toHaveLength(new Set(animated.map((skin) => sceneOf(skin as SkinId))).size);
+    for (const scene of scenes.slice(0, -1)) {
+      arrive.get(scene)!();
+      await act(async () => {});
+      expect(running).toHaveLength(0);
+    }
+    arrive.get(scenes.at(-1)!)!();
+    await act(async () => {});
+    expect(running).toHaveLength(animated.length);
+    flush(1);
+    for (const run of running) expect(run.frames).toBe(1);
+  });
+
+  it("starts the other tiles when one scene chunk fails to load", async () => {
+    chunks.load = async (scene) => {
+      if (scene === "snow") throw new Error("stale chunk");
+      return fakeScene;
+    };
+    await open();
+    await painted();
+    const lost = animated.filter((skin) => sceneOf(skin as SkinId) === "snow").length;
+    expect(running).toHaveLength(animated.length - lost);
+    expect(document.querySelectorAll("[data-mini-scene][data-live]")).toHaveLength(animated.length - lost);
   });
 
   it("starts nothing when the picker closes before its first paint", async () => {
