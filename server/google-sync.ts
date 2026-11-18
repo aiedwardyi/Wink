@@ -568,6 +568,11 @@ export function createGoogleSync(options: Options) {
     /** False while this PC's copy of that PC's presence record may be stale. */
     deviceKnown: (deviceId: string) => !catchUp() || (behind !== null && !behind.has(`devices/${deviceId}.json`)),
     held: (botId: string) => binding.kind === "ok" && binding.binding.heldBots.includes(botId),
+    /** The engines write the Drive mirror, whose downloads pull each head they land. */
+    mirrored(): boolean {
+      const folder = options.folder();
+      return Boolean(folder && samePath(folder, mirrorPath()));
+    },
     /** A bound, ready PC whose engines lost the mirror folder, or never republished into it, points them back at it. */
     resume(): void {
       const bound = binding.kind === "ok" ? binding.binding : null;

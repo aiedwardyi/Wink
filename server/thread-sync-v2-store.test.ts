@@ -1293,15 +1293,23 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     expect((await b.snapshot()).events).toEqual([]);
   });
 
-  it("defers flush while a turn is running", async () => {
+  it("publishes a saved prompt while its turn runs and defers the reply", async () => {
     const folder = temp();
     const a = pc(folder, "a");
-    await a.call("append", { text: "stream" });
+    const b = pc(folder, "b");
+    const prompt = await a.call<Message>("append", { text: "prompt" });
     await a.call("live", { value: true });
+    expect(await a.call("saved")).toBe("written");
+    await a.call("append", { role: "bot", text: "stream" });
     expect(await a.call("flush")).toBe("running");
-    expect(existsSync(join(folder, "threads-v2"))).toBe(false);
+    await b.call("pull");
+    const during = await b.snapshot();
+    expect(during.rows.map((row) => row.text)).toEqual(["prompt"]);
+    expect(during.leaf).toBe(prompt.id);
     await a.call("live", { value: false });
     expect(await a.call("flush")).toBe("written");
+    await b.call("pull");
+    expect((await b.snapshot()).rows.map((row) => row.text)).toEqual(["prompt", "stream"]);
   });
 
   it("coalesces writes on the three-second timer and retries after a running turn", async () => {
@@ -1324,14 +1332,68 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     const folder = temp();
     const a = pc(folder, "a");
     const b = pc(folder, "b");
+    await a.call("append", { text: "prompt" });
     await a.call("live", { value: true });
+    expect(await a.call("saved")).toBe("written");
     await a.call("append", { role: "bot", text: "reply" });
     await a.call("live", { value: false });
     expect(await a.call("settle")).toBe("written");
     const writers = join(folder, "threads-v2", "bot", "thread");
     expect(readdirSync(writers).filter((writer) => existsSync(join(writers, writer, "head.json")))).toHaveLength(1);
     await b.call("pull");
-    expect((await b.snapshot()).rows.map((row) => row.text)).toEqual(["reply"]);
+    expect((await b.snapshot()).rows.map((row) => row.text)).toEqual(["prompt", "reply"]);
+  });
+
+  it("lands a mid-turn prompt, its reply and an edit once each, never into the other PC's running turn", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    const prompt = await a.call<Message>("append", { text: "prompt" });
+    await a.call("live", { value: true });
+    expect(await a.call("saved")).toBe("written");
+    await b.call("live", { value: true });
+    await b.call("pull");
+    expect((await b.snapshot()).rows).toEqual([]);
+    await b.call("live", { value: false });
+    await b.call("pull");
+    expect((await b.snapshot()).rows.map((row) => row.id)).toEqual([prompt.id]);
+    await a.call("append", { role: "bot", text: "reply" });
+    await a.call("live", { value: false });
+    expect(await a.call("settle")).toBe("written");
+    const edited = await a.call<Message>("branch", { id: prompt.id, text: "edited prompt" });
+    await a.call("live", { value: true });
+    expect(await a.call("saved")).toBe("written");
+    await b.call("pull");
+    const [mine, theirs] = await Promise.all([a.snapshot(), b.snapshot()]);
+    const visible = (rows: Message[]) => rows.map(({ id, parentId, role, text }) => ({ id, parentId, role, text })).sort((x, y) => x.id.localeCompare(y.id));
+    expect(theirs.rows).toHaveLength(3);
+    expect(visible(theirs.rows)).toEqual(visible(mine.rows));
+    expect([mine.leaf, theirs.leaf]).toEqual([edited.id, edited.id]);
+    await a.call("live", { value: false });
+  });
+
+  it("wakes Drive after a saved or timer publish, not for a flush the turn holds", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    await a.call("append", { text: "prompt" });
+    await a.call("live", { value: true });
+    expect(await a.call("flush")).toBe("running");
+    expect((await a.snapshot()).published).toBe(0);
+    expect(await a.call("saved")).toBe("written");
+    expect((await a.snapshot()).published).toBe(1);
+    await a.call("live", { value: false });
+    await a.call("append", { text: "later" });
+    await vi.waitFor(async () => expect((await a.snapshot()).published).toBe(2), { timeout: 10_000, interval: 100 });
+  });
+
+  it("pulls a peer head the moment it lands in the shared folder", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    await b.call("start");
+    const row = await a.call<Message>("append", { text: "first" });
+    expect(await a.call("flush")).toBe("written");
+    await vi.waitFor(async () => expect((await b.snapshot()).rows.map((item) => item.id)).toEqual([row.id]), { timeout: 5_000, interval: 25 });
   });
 
   it("bounds worker publication to the versions captured while idle", async () => {

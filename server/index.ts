@@ -2217,6 +2217,11 @@ function publishSettledTurn(threadId: string): void {
   void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(threadId) : undefined).then(() => googleSync.kick());
 }
 
+/** A saved send or edit reaches the other PCs before its turn settles. */
+function publishSavedSend(threadId: string): void {
+  if (threadSyncGate.enabled) void threadSyncV2?.saved(threadId);
+}
+
 /** Runs before a route answers, so the user never types on a stale copy. */
 function pullSyncedThread(threadId: string): void | Promise<void> {
   if (threadSyncGate.enabled) return threadSyncV2?.pull(threadId).catch((error) => console.warn("chat sync v2: pull failed", error));
@@ -2311,6 +2316,8 @@ function initializeThreadSyncV2() {
     rooms: roomThreads,
     bootReads,
     painted: () => syncPainted,
+    published: () => void googleSync.kick(),
+    watch: () => !googleSync.mirrored(),
   });
   return threadSyncV2;
 }
@@ -5250,6 +5257,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
         });
   }
+  if (!opts?.cardContinuation) publishSavedSend(threadId);
   let rootId = rootForStart(threadId, turnStartedByUser(opts)
     ? { kind: "human", messageKey: userMessage.sendId ?? userMessage.id }
     : opts?.commsRoot !== undefined || commsDepth > 0
