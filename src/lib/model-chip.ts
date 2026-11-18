@@ -160,6 +160,7 @@ const FAMILY_ACCENTS = {
 
 const DRIVER_FAMILIES = new Map<string, keyof typeof FAMILY_ACCENTS>([
   ["codex", "gpt"],
+  ["grok", "grok"],
   ["grokAgent", "grok"],
   ["antigravityAgent", "gemini"],
   ["geminiAgent", "gemini"],

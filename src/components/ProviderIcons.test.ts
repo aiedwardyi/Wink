@@ -3,24 +3,24 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { readdirSync, readFileSync } from "node:fs";
-import { BrandMark, ClaudeMark, claudeFit, claudeViewBox, GeminiMark, MuseMark, ProviderMark, QwenMark } from "./ProviderIcons";
+import { ProviderBrandMark, ClaudeMark, claudeFit, claudeViewBox, GeminiMark, MuseMark, ProviderMark, QwenMark } from "./ProviderIcons";
 
 // The Model Index and the dial color or dim their own marks.
 const OWN_COLOR = ["ProviderIcons.tsx", "ModelChart.tsx", "ModelIndexPhone.tsx", "ModelDial.tsx"];
 
-describe("BrandMark", () => {
+describe("ProviderBrandMark", () => {
   it.each([["codex", "#3594ff"], ["grokAgent", "#8b929c"], ["museAgent", "#43ce8b"]])("colors the %s ink mark", (driverKind, color) => {
-    expect(renderToStaticMarkup(createElement(BrandMark, { driverKind, size: 16 }))).toContain(`--color-ink:${color}`);
+    expect(renderToStaticMarkup(createElement(ProviderBrandMark, { driverKind, size: 16 }))).toContain(`--color-ink:${color}`);
   });
 
   it.each(["claudeAgent", "antigravityAgent"])("leaves the already colored %s mark alone", (driverKind) => {
-    expect(renderToStaticMarkup(createElement(BrandMark, { driverKind, size: 16 }))).toBe(renderToStaticMarkup(createElement(ProviderMark, { driverKind, size: 16 })));
+    expect(renderToStaticMarkup(createElement(ProviderBrandMark, { driverKind, size: 16 }))).toBe(renderToStaticMarkup(createElement(ProviderMark, { driverKind, size: 16 })));
   });
 
   it("is the only mark components draw, so no engine logo is plain ink", () => {
     const plain = readdirSync(__dirname).filter((name) => /\.tsx$/.test(name) && !OWN_COLOR.includes(name))
       .filter((name) => /<ProviderMark\b/.test(readFileSync(`${__dirname}/${name}`, "utf8")));
-    expect(plain, "draw engine logos with BrandMark so Codex, Grok and Muse keep their brand colors").toEqual([]);
+    expect(plain, "draw engine logos with ProviderBrandMark so Codex, Grok and Muse keep their brand colors").toEqual([]);
   });
 });
 

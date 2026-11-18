@@ -204,7 +204,7 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
 const INK_MARKS = new Set(["codex", "grok", "grokAgent", "museAgent"]);
 
 /** ProviderMark in the site's brand color: the ink marks take their family accent. */
-export function BrandMark(props: IconProps & { driverKind: string }) {
+export function ProviderBrandMark(props: IconProps & { driverKind: string }) {
   if (!INK_MARKS.has(props.driverKind)) return <ProviderMark {...props} />;
   return <span data-brand-mark="" className="contents" style={{ "--color-ink": modelFamilyAccent(props.driverKind) } as CSSProperties}><ProviderMark {...props} /></span>;
 }

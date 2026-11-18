@@ -12,7 +12,7 @@ import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { noReplySource, switchFromNoReply } from "@/lib/no-reply-switch";
 import type { AcceptedSend } from "@/lib/send-accept";
-import { BrandMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { EngineSetup, engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -321,7 +321,7 @@ export function ModelPickerControl({
       className="flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 bg-control/60 py-1 pl-2 pr-2.5 text-[13px] text-ink hover:bg-raised-hover"
       title={modelChipTitle({ mode: selection.mode, instance: active, model: selection.model, effort: selection.effort }, t) + (shortcutEnabled ? ` (${shortcut}+M)` : "")}
     >
-      {active ? <BrandMark driverKind={active.driverKind} size={14} className="shrink-0" /> : <Sparkles size={14} className="shrink-0 text-accent" />}
+      {active ? <ProviderBrandMark driverKind={active.driverKind} size={14} className="shrink-0" /> : <Sparkles size={14} className="shrink-0 text-accent" />}
       {/* Only the label side may shrink: a long name truncates in place while
           the accent dot, effort, and chevron stay visible at any width. The
           label is always the full selected model — never the bare engine

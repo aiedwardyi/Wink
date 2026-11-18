@@ -11,7 +11,7 @@ import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import type { InstanceInfo } from "@/state/store";
 import { HOLD_MS, HOLD_SLOP } from "./MessageMenu";
-import { BrandMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 
 const OWNS_TAP = "button, a[href], [role='button'], [role='tab'], [tabindex]:not([tabindex='-1'])";
 
@@ -27,7 +27,7 @@ export function EngineMark({ instance, size, className, children, tapToShow = fa
   const { t } = useI18n();
   return (
     <EngineHover text={engineHoverText(instance, t)} label={children} tapToShow={tapToShow}>
-      <BrandMark driverKind={instance.driverKind} size={size} className={className} />
+      <ProviderBrandMark driverKind={instance.driverKind} size={size} className={className} />
     </EngineHover>
   );
 }

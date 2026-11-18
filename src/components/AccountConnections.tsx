@@ -15,7 +15,7 @@ import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
 import { engineChecking, useEngineSignIn } from "./EngineSetup";
-import { BrandMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
 
@@ -232,7 +232,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">
-      <ConnectionRow mark={<BrandMark driverKind={accounts[0]!.driverKind} size={16} />}
+      <ConnectionRow mark={<ProviderBrandMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
         {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
