@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { closeMessageDb, messageDatabase } from "../message-db.ts";
 import { Store, type BotRecord, type Message, type StoreChange, type TaskRecord } from "../store.ts";
+import { syncHold } from "../sync-hold.ts";
 import { CONFLICT_NOTICE, loadThreadSyncLedger, pullThread, saveThreadSyncLedger, uploadThread, type ThreadSyncHost } from "../thread-sync.ts";
 import { ThreadSyncV2 } from "../thread-sync-v2.ts";
 import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
@@ -27,6 +28,7 @@ export interface TestArgs {
   leaf?: string | null;
   at?: number;
   compaction?: ContextCompactionV1;
+  botSyncId?: string;
 }
 
 export interface Snapshot {
@@ -46,6 +48,7 @@ export interface Snapshot {
   memo: number | null;
   pulls: string[];
   logs: string[];
+  published: number;
 }
 
 export type TestResult = Snapshot | Message | TaskRecord | BotRecord | string | null | undefined;
@@ -60,6 +63,7 @@ let live = false;
 let openThread: string | null = null;
 const pulls: string[] = [];
 let runningCalls = 0;
+let published = 0;
 let startAt = Infinity;
 const events: Array<StoreChange & { importing: boolean }> = [];
 const host = () => ({
@@ -79,6 +83,7 @@ const host = () => ({
   project: (message: Message) => message,
   imported: () => { if (!live) store.followNewestTask(bot.id); },
   maintenance: () => {},
+  published: () => { published++; },
 });
 const gate = createThreadSyncV2Gate(input.dataDir, "");
 const ledger = loadThreadSyncLedger(input.dataDir);
@@ -176,7 +181,15 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
       case "race": live = false; runningCalls = 0; startAt = 3; break;
       case "flush": value = await sync?.flush(threadId); break;
       case "settle": value = await sync?.settle(threadId); break;
-      case "pull": await sync?.pull(threadId); break;
+      case "saved": value = await sync?.saved(threadId); break;
+      case "savedDuring": {
+        const saving = sync?.saved(threadId);
+        value = store.appendMessage(threadId, { role: "bot", kind: "text", text: args.text, at: Date.now() });
+        await saving;
+        break;
+      }
+      case "hold": value = syncHold.until(threadId) === undefined ? "free" : "held"; break;
+      case "pull": await sync?.pull(threadId, args.botSyncId); break;
       case "note": value = sync?.notes(threadId)[0] ?? null; break;
       case "consumeForkByWriter": {
         const scope = { botSyncId: "bot", threadId };
@@ -252,7 +265,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         const pending = hasSync ? Number(db.prepare("SELECT COUNT(*) AS n FROM sync_v2_packets WHERE applied = 0").get()!.n) : 0;
         const disk = db.prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid").all(threadId).map((row) => JSON.parse(String(row.json)));
         value = { rows: store.messagesFor(threadId), disk, leaf: store.activeLeaf(threadId), events: events.splice(0), tasks: store.tasks(bot.id), outbox, pending, files: readdirSync(input.dataDir), hasSync, noticeChecks, historyScans, headChecks, conflictScans,
-          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), logs };
+          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), logs, published };
         break;
       }
       case "close":

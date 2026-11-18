@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -59,6 +59,10 @@ export interface SyncStoreHost {
   bootReads(): Promise<Pick<BootRows, "migration" | "conflicts">>;
   /** Settles once the first page has painted; the first poll waits for it. */
   painted?(): Promise<unknown>;
+  /** This PC wrote a chat head outside a settled turn. */
+  published?(): void;
+  /** False while a transport already pulls each head it lands in the folder. */
+  watch?(): boolean;
 }
 
 /** The cutover time v1 notices are cleaned from, or null before a cutover. */
@@ -317,11 +321,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }).catch((error: unknown) => console.warn("chat sync v2: boot notice cleanup failed", error)).finally(() => cleaning.clear());
   // the cleanup is awaited outside serial(): a task in it flushes when it lands, not on a retry timer, and other tasks don't queue behind it
   let closed = false;
-  const flushNow = async (threadId: string) => {
+  const flushNow = async (threadId: string, through?: number, wake = false) => {
     if (cleaning.has(threadId)) await cleaned;
     // close() drained the queue without this flush; running it now would reopen the worker
     if (closed) return "skipped" as const;
-    return serial(() => flush(threadId));
+    return serial(() => flush(threadId, through, wake));
   };
 
   function project(threadId: string, target: Target, mutations: SyncMutation[]): SyncMutation[] {
@@ -420,26 +424,38 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return next;
   }
 
-  async function flush(threadId: string): Promise<"running" | "written" | "skipped"> {
-    if (host.running(threadId) || cleaning.has(threadId)) return "running";
+  /** `through` publishes only versions committed before a turn started, so it may run during that turn; `wake` tells the host when files changed. */
+  async function flush(threadId: string, through?: number, wake = false): Promise<"running" | "written" | "skipped"> {
+    if ((through === undefined && host.running(threadId)) || cleaning.has(threadId)) return "running";
     const task = stored(threadId);
     if (!task?.eligible) return "skipped";
     const transport = await client();
     if (!transport) return "skipped";
-    if (host.running(threadId)) return "running";
+    if (through === undefined && host.running(threadId)) return "running";
+    // A settle queued first may have published past it already.
+    if (through !== undefined && through <= publishedSeq(threadId)) return "written";
+    let pictured = false;
     for (;;) {
       const pictures = withMessageTransaction((db) => z.array(z.object({ id: z.number(), json: z.string() })).parse(
         db.prepare("SELECT id, json FROM sync_v2_pictures WHERE thread = ? ORDER BY id LIMIT 128").all(threadId)));
       if (!pictures.length) break;
+      pictured = true;
       publishThreadPictures({ folder: workerFolder!, dataDir: host.dataDir, messages: pictures.map((row): Message => JSON.parse(row.json)) });
       withMessageTransaction((db) => db.prepare("DELETE FROM sync_v2_pictures WHERE thread = ? AND id <= ?").run(threadId, pictures.at(-1)!.id));
     }
-    bytesPublished += (await transport.flush(task, undefined, engine.seen(task.threadId)[writer] ?? 0)).bytesWritten;
+    const { bytesWritten } = await transport.flush(task, undefined, through ?? engine.seen(task.threadId)[writer] ?? 0);
+    bytesPublished += bytesWritten;
+    if (wake && (bytesWritten || pictured)) host.published?.();
     return "written";
   }
 
-  function publish(threadId: string): Promise<"running" | "written" | "skipped"> {
-    return flushNow(threadId).then((result) => {
+  function publishedSeq(threadId: string): number {
+    const row = withMessageTransaction((db) => db.prepare("SELECT json_extract(head, '$.lastSeq') AS seq FROM sync_v2_threads WHERE thread = ?").get(threadId));
+    return Number(row?.seq ?? 0);
+  }
+
+  function publish(threadId: string, wake = false): Promise<"running" | "written" | "skipped"> {
+    return flushNow(threadId, undefined, wake).then((result) => {
       if (result === "running") schedule(threadId);
       else if (result === "written") retry.delete(threadId);
       return result;
@@ -453,10 +469,47 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (timers.has(threadId)) return;
     const timer = setTimeout(() => {
       timers.delete(threadId);
-      void publish(threadId);
+      void publish(threadId, true);
     }, FLUSH_DELAY_MS);
     timer.unref?.();
     timers.set(threadId, timer);
+  }
+
+  let watcher: FSWatcher | undefined;
+  let watched: string | null = null;
+  const waking = new Set<string>();
+
+  /** A head names its bot or room scope, so a chat this PC has not seen yet resolves as discovery does. */
+  function scoped(threadId: string, botSyncId: string): Target | null {
+    return host.target(threadId) ?? [...host.bots(), ...host.rooms?.scopes() ?? []].find((target) => target.botSyncId === botSyncId) ?? null;
+  }
+
+  /** Another PC's head landing in the folder pulls its chat now; the poll stays the backup. */
+  function watchFolder(): void {
+    const folder = host.enabled() && host.watch?.() !== false ? host.folder() : null;
+    if (folder === watched && (watcher || !folder)) return;
+    watcher?.close();
+    watcher = undefined;
+    watched = folder;
+    if (!folder) return;
+    try {
+      watcher = watch(folder, { recursive: true }, (_event, name) => {
+        const [root, botSyncId, threadId, writerId, file, ...rest] = String(name ?? "").split(/[\\/]/);
+        if (file !== "head.json" || rest.length || writerId === writer || !/^threads-v2(?: \([1-9]\d*\))?$/.test(root) || waking.has(threadId)) return;
+        waking.add(threadId);
+        void serial(() => {
+          waking.delete(threadId);
+          return pull(threadId, scoped(threadId, botSyncId));
+        }).catch(() => {});
+      });
+      // a dropped watch is tried again on the next poll
+      watcher.on("error", () => {
+        watcher?.close();
+        watcher = undefined;
+      });
+    } catch {
+      watcher = undefined;
+    }
   }
 
   async function pull(threadId: string, target = host.target(threadId)): Promise<void> {
@@ -680,6 +733,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   async function poll(): Promise<void> {
+    if (pollTimer) watchFolder();
     const transport = await client();
     if (!transport) return;
     for (const threadId of retry) schedule(threadId);
@@ -732,7 +786,16 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       timers.delete(threadId);
       return publish(threadId);
     },
-    pull: (threadId: string) => serial(() => pull(threadId)),
+    /** A saved send or edit publishes now, through what it committed, though its turn has started. */
+    saved(threadId: string): Promise<"running" | "written" | "skipped"> {
+      const through = engine.seen(threadId)[writer] ?? 0;
+      return flushNow(threadId, through, true).catch(() => {
+        retry.add(threadId);
+        return "skipped" as const;
+      });
+    },
+    /** `botSyncId` is the scope of a peer head that just landed. */
+    pull: (threadId: string, botSyncId?: string) => serial(() => pull(threadId, botSyncId === undefined ? host.target(threadId) : scoped(threadId, botSyncId))),
     poll: () => serial(poll),
     /** Sends every sealed segment and fresh picture again; files the folder already holds are kept. */
     republish(): void {
@@ -771,6 +834,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       return missed ? [`[Chat sync] ${missed} message${missed === 1 ? "" : "s"} from the other PC arrived before your last reply.`] : [];
     },
     start(): void {
+      watchFolder();
       const moved = followBotIds();
       void Promise.resolve(host.painted?.()).then(() => serial(poll)).catch(() => {});
       if (!pollTimer) {
@@ -788,6 +852,9 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     stop(): void {
       clearInterval(pollTimer);
       pollTimer = undefined;
+      watcher?.close();
+      watcher = undefined;
+      watched = null;
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
     },
