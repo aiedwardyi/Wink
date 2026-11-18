@@ -2,6 +2,22 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.284] - 2026-11-19
+
+### Changed
+- The Media tab opens fast, even in chats with many pictures.
+- Leaving a chat while it loads never jumps you back to it.
+
+### Fixed
+- The X on a folded question really closes it.
+- Bot pictures in team rooms reach every member.
+- The Import Memory prompt box shows less and scrolls the rest.
+- What's New clips play smoothly.
+- Engine logos in Connections show their brand colors.
+- Model Index shows each lab's logo on chart dots, chips and ranked rows.
+- The side pane tab highlight stays centered.
+- Map divider lines move only their neighbours.
+
 ## [1.0.283] - 2026-11-18
 
 ### Changed
