@@ -136,7 +136,8 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function mount(view: "chat" | "room") {
+// `pages`: each chat mounts its own view, as phone swipe pages do
+async function mount(view: "chat" | "room", pages = false) {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("ResizeObserver", class {
     constructor(callback: () => void) {
@@ -155,7 +156,7 @@ async function mount(view: "chat" | "room") {
     store = useStore();
     const b = store.state.bots.find((candidate) => candidate.id === store.state.selectedId) ?? store.state.bots[0];
     const g = store.state.groups[0];
-    const transcript = view === "chat" ? (b ? createElement(ChatView, { bot: b }) : null) : g ? createElement(GroupView, { group: g }) : null;
+    const transcript = view === "chat" ? (b ? createElement(ChatView, { key: pages ? b.id : undefined, bot: b }) : null) : g ? createElement(GroupView, { group: g }) : null;
     return createElement(Suspense, { fallback: null }, transcript, createElement(Gate), createElement(WorkersPane));
   }
   const host = document.createElement("div");
@@ -756,6 +757,42 @@ describe("paged transcripts", () => {
     await act(async () => store.dispatch({ type: "select", id: "a" }));
     expect(host.textContent).toContain("a row 5000;");
     expect(host.querySelector('[data-mid="a2500"]')).toBeNull();
+  });
+
+  it("opens at the newest message on return after leaving a jump still loading", async () => {
+    const thread = (p: string) =>
+      Array.from({ length: 5000 }, (_, i): Message => ({ id: `${p}${i}`, at: 1, role: "user", kind: "text", text: `${p} row ${i};` }));
+    const threads: Record<string, Message[]> = { "thread-a": thread("a"), "thread-b": thread("b") };
+    const b = { ...bot(threads["thread-b"]!.slice(-200), true), id: "b", threadId: "thread-b", name: "B" } as Bot;
+    const held: (() => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path === "/api/bots?messages=200") {
+        return Response.json({ bots: [bot(threads["thread-a"]!.slice(-200), true), b], groups: [], computerControl: {} });
+      }
+      const around = path.match(/^\/api\/threads\/([\w-]+)\/messages\?around=(\w+)&limit=200$/);
+      if (around) {
+        const all = threads[around[1]!]!;
+        const index = all.findIndex((message) => message.id === around[2]);
+        const page = Response.json({ messages: all.slice(index - 99, index + 101), hasMore: true });
+        return new Promise<Response>((resolve) => held.push(() => resolve(page)));
+      }
+      return new Promise<Response>(() => {});
+    }));
+    const host = await mount("chat", true);
+    await act(async () => store.dispatch({ type: "select", id: "a" }));
+    await vi.waitFor(() => expect(host.textContent).toContain("a row 4999;"));
+    await act(async () => store.dispatch({ type: "focusMessage", threadId: "thread-a", messageId: "a2500" }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    await act(async () => store.dispatch({ type: "select", id: "b" }));
+    await vi.waitFor(() => expect(host.textContent).toContain("b row 4999;"));
+    await act(async () => held.shift()!());
+    await act(async () => store.dispatch({ type: "select", id: "a" }));
+    await act(async () => held.shift()?.());
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(host.textContent).toContain("a row 4999;");
+    expect(host.querySelector('[data-mid="a2500"]')).toBeNull();
+    expect(button(host, "Jump to latest")).toBeUndefined();
   });
 
   it("shows an edit made in a jump window on its new branch with the ancestors", async () => {
