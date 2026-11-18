@@ -3,6 +3,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
@@ -171,6 +172,60 @@ it("reads no note for panes edited after every note of an unloaded chat", async 
   parse.mockRestore();
   expect(shown.workers.map(worker => worker.reason)).toEqual([undefined, undefined]);
   expect(notes).toBe(0);
+});
+
+// Two rows whose edits left no change, so each reason reads every note since 0, and `count` notes about other panes.
+function cleanPanes(count: number) {
+  const folders = [repo().root, repo().root];
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  for (const root of folders) {
+    const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
+    setup.appendMessage(bot.threadId, row);
+  }
+  const database = messageDatabase();
+  const insert = database.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, 'bot', 'note', ?, ?)");
+  database.exec("BEGIN");
+  for (let n = 0; n < count; n++) {
+    const text = `[pane 0f0f0f0f] done ${n}\n${"x".repeat(1_000)}`;
+    insert.run(bot.threadId, `note${n}`, n, text, JSON.stringify({ id: `note${n}`, at: n, role: "bot", kind: "note", text }));
+  }
+  database.exec("COMMIT");
+  return { store: new Store(() => ({ instanceId: "claude", model: "opus" })), botId: bot.id };
+}
+
+it("keeps serving while it reads clean rows' reasons from an unloaded chat's notes", async () => {
+  const real = cleanPanes(10_000);
+  const loaded = real.store.loaded.bind(real.store);
+  const waits: number[] = [];
+  vi.spyOn(real.store, "loaded").mockImplementation(threadId => {
+    const queued = performance.now();
+    setImmediate(() => waits.push(performance.now() - queued));
+    return loaded(threadId);
+  });
+  const map = await open([], undefined, undefined, real);
+  expect((await map.until(() => true)).workers).toEqual([]);
+  map.close();
+  expect(real.store.loaded(real.store.bot(real.botId)!.threadId)).toBe(false);
+  expect(Math.max(...waits)).toBeLessThan(50);
+});
+
+it("reads an unloaded chat's write rows and notes once across Map reads of clean rows", async () => {
+  const real = cleanPanes(200);
+  const parse = vi.spyOn(JSON, "parse");
+  const post = vi.spyOn(Worker.prototype, "postMessage");
+  for (let read = 0; read < 2; read++) {
+    const map = await open([], undefined, undefined, real);
+    expect((await map.until(() => true)).workers).toEqual([]);
+    map.close();
+  }
+  const here = parse.mock.calls.filter(([text]) => text.includes('"kind":"note"')).length;
+  // SAFETY: cold-thread.ts posts each worker request as one object.
+  const requests = post.mock.calls.map(([request]) => request as { notesSince?: number; writes?: true });
+  parse.mockRestore();
+  post.mockRestore();
+  expect({ notes: here + 200 * requests.filter(request => request.notesSince === 0).length, writeReads: requests.filter(request => request.writes).length }).toEqual({ notes: 200, writeReads: 1 });
 });
 
 it("shows no row for a bot that only chats, or whose edit failed or left no change", async () => {

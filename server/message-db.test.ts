@@ -13,7 +13,7 @@ import {
   insertMessage,
   messageDatabase,
   notesBack,
-  notesSince,
+  notesSinceOn,
   readThread,
   replaceThread,
   scanThreadRows,
@@ -203,7 +203,7 @@ describe("message-db", () => {
     insertMessage("t", msg("text", "not a note", { at: 300 }));
     insertMessage("other", msg("elsewhere", "other chat", { role: "bot", kind: "note", at: 300 }));
     for (const cutoff of [0, 100, 299, 300, 301, 900, 901])
-      expect([...notesSince("t", cutoff)].map((m) => m.id), `since ${cutoff}`).toEqual([...notesBack("t")].filter((m) => m.at >= cutoff).map((m) => m.id));
+      expect([...notesSinceOn(messageDatabase(), "t", cutoff)].map((m) => m.id), `since ${cutoff}`).toEqual([...notesBack("t")].filter((m) => m.at >= cutoff).map((m) => m.id));
   });
 
   it("finds handed mail at boot from an index, never a scan of every row", () => {

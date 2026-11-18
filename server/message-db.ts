@@ -124,6 +124,13 @@ export function storedHead(threadId: string): string | null | undefined {
   return row.last === null ? undefined : row.leaf || row.last;
 }
 
+/** A thread's newest row cursor, or undefined when it has no rows here: every insert moves it. */
+export function lastRowid(threadId: string): number | undefined {
+  // SAFETY: MAX(rowid) returns one integer row, NULL for no rows.
+  const row = db().prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null };
+  return row.cursor ?? undefined;
+}
+
 /** Whether a thread has more than `cap` rows; counts at most cap + 1 index entries. */
 export function threadOver(threadId: string, cap: number): boolean {
   // SAFETY: COUNT(*) returns one integer row.
@@ -358,10 +365,10 @@ export function notesBackOn(handle: DatabaseSync, threadId: string): Iterable<Me
   })();
 }
 
-/** A thread's note rows stamped at or after `at`, newest first: a pane edited after every note reads none. */
-export function notesSince(threadId: string, at: number): Iterable<Message> {
+/** A thread's note rows stamped at or after `at`, newest first: a pane edited after every note reads none; cold-thread-worker.ts runs it on its own handle. */
+export function notesSinceOn(handle: DatabaseSync, threadId: string, at: number): Iterable<Message> {
   // SAFETY: This projection selects the stored message JSON.
-  const rows = db().prepare("SELECT json FROM messages INDEXED BY messages_thread_at WHERE thread_id = ? AND kind = 'note' AND at >= ? ORDER BY rowid DESC").iterate(threadId, at) as Iterable<{ json: string }>;
+  const rows = handle.prepare("SELECT json FROM messages INDEXED BY messages_thread_at WHERE thread_id = ? AND kind = 'note' AND at >= ? ORDER BY rowid DESC").iterate(threadId, at) as Iterable<{ json: string }>;
   return (function* () {
     for (const row of rows) yield rowToMessage(row);
   })();
