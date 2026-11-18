@@ -288,7 +288,7 @@ export const Transcript = memo(function Transcript({
     () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt }),
     [items, showToolCalls, showActivities, workerAt],
   );
-  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
+  const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
   const toggleFold = (id: string) => setUnfolded((current) => {
     const next = new Set(current);
@@ -302,7 +302,10 @@ export const Transcript = memo(function Transcript({
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   const findCurrent = useFindCurrentId();
-  const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id;
+  const lastBotTextId = useMemo(
+    () => transcript.findLast((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id,
+    [transcript],
+  );
   const target = roomRetry(group.messages, members, group, group.threadId, group.busyBotId, { allowSetup: true });
   const onRetryFor = (messageId: string) =>
     target && !readOnly && messageId === target.messageId
@@ -536,7 +539,7 @@ export const Transcript = memo(function Transcript({
                     </>
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={pictured.has(m.id)} />
+                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)} />
                       {translation && <RoomTranslationText translation={translation} markdown />}
                     </MessageBoundary>
                   ) : null}

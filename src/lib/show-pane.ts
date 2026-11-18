@@ -247,8 +247,8 @@ export function useTimelineThread(): string | null {
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
 
-/** Replies in a turn whose bot already put a picture in the chat, so their file links don't draw it again. */
-export function picturedReplies(messages: readonly Message[]): Set<string> {
+/** Replies and current speakers whose pictures are already in the chat. */
+export function picturedReplies(messages: readonly Message[]) {
   const pictured = new Set<string>();
   let shown = new Set<string>();
   let replies: Message[] = [];
@@ -262,8 +262,9 @@ export function picturedReplies(messages: readonly Message[]): Set<string> {
     else if (message.kind === "screen" && message.image) shown.add(message.from?.botId ?? "");
     else if (message.kind === "text") replies.push(message);
   }
+  const tailPictures = shown;
   close();
-  return pictured;
+  return { pictured, tailPictures };
 }
 
 export interface AutoShow {

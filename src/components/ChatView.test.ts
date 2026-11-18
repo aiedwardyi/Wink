@@ -1483,6 +1483,61 @@ describe("docked reply mascot", () => {
     turn: streaming ? { [thread]: `0:${tail}` } : {},
   });
 
+  it.each(["direct", "room"])("does not scan older %s history on each streamed text update", async (kind) => {
+    localStorage.setItem("omb-reply-style", "live");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const counts: number[] = [];
+    for (const size of [240, 960]) {
+      let oldReads = 0;
+      const tail = userMsg("latest", "Question");
+      const messages = Array.from({ length: size }, (_, i) => userMsg(`old-${i}`, "Previous question"));
+      messages.push(tail);
+      for (let i = 0; i < size - 200; i++) {
+        const message = messages[i]!;
+        Object.defineProperty(messages, i, { get() { oldReads++; return message; } });
+      }
+      const bot = { ...botA, messages: kind === "direct" ? messages : botA.messages };
+      const group: Group = {
+        id: "g", threadId: "thread-g", name: "Room", memberIds: [bot.id], defaultResponder: { kind: "everyone" },
+        bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, busyBotId: bot.id, messages,
+      };
+      const view = kind === "direct" ? bot : group;
+      function Chat() {
+        const { dispatch } = useStore();
+        useEffect(() => {
+          dispatch({ type: "hydrate", bots: [bot], groups: kind === "room" ? [group] : [], sidebarOrder: { sectionOrder: [], itemOrder: {} } });
+        }, [dispatch]);
+        return kind === "direct" ? createElement(ChatView, { bot: { ...bot } }) : createElement(GroupView, { group: { ...group } });
+      }
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const render = (text: string) => {
+        live.current = { ...working(view.threadId, text, tail.id), reveal: { [view.threadId]: { whole: text.length } } };
+        return act(async () => root.render(createElement(StoreProvider, null, createElement(Chat))));
+      };
+      try {
+        await render("First chunk");
+        oldReads = 0;
+        await render("First chunk, second chunk");
+        expect(host.querySelector(`[data-mid="stream:${view.threadId}:${tail.id}"]`)?.textContent).toContain("second chunk");
+        counts.push(oldReads);
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+      }
+    }
+    expect(counts[0]).toBeLessThan(10);
+    expect(counts[1]).toBe(counts[0]);
+  });
+
   it("renders the mascot standalone before any text, then docks it in the live reply's action strip", async () => {
     localStorage.setItem("omb-reply-style", "live");
     const { host, render, mascots, unmount } = await mount();

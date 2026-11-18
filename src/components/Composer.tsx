@@ -279,19 +279,19 @@ export function Composer({
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
-  const approvals = pendingApprovals(threadMessages);
+  const approvals = useMemo(() => pendingApprovals(threadMessages), [threadMessages]);
   const approval = approvals[0];
   const repliedTo = (id?: string) => (id && threadMessages.find((message) => message.id === id)) || null;
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
-  const pinned = pinnedQuestion(chatMessages, threadMessages);
+  const pinned = useMemo(() => pinnedQuestion(chatMessages, threadMessages), [chatMessages, threadMessages]);
   const questions = pinned ? openQuestions(chatMessages) : [];
   // the row's arrows show an older open question until a newer one arrives
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
   const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
-  const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
+  const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))

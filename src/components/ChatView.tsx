@@ -687,10 +687,10 @@ const MessagesList = memo(function MessagesList({
     }
     return quickAsks;
   }, [transcript]);
-  const peerReplies = useMemo(() => {
+  const { replies: peerReplies, pending: pendingPeerReply } = useMemo(() => {
     const replies = new Map<string, NonNullable<Message["comm"]>>();
     let comm: Message["comm"];
-    for (const message of streamingMessage ? [...transcript, streamingMessage] : transcript) {
+    for (const message of transcript) {
       if (message.role === "user") comm = message.from ? message.comm : undefined;
       else if (message.kind === "text" && isShownMessage(message) && message.text?.trim()) {
         // a stamped reply labels itself; either way the ask is answered once
@@ -698,9 +698,11 @@ const MessagesList = memo(function MessagesList({
         comm = undefined;
       }
     }
-    return replies;
-  }, [transcript, streamingMessage]);
-  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
+    return { replies, pending: comm };
+  }, [transcript]);
+  const streamedPeerReply = streamingMessage?.text?.trim() ? pendingPeerReply : undefined;
+  const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
+  const idleAfterOnboarding = useMemo(() => transcriptIdleAfterOnboarding(transcript), [transcript]);
   // the first user text after each bot reply, for its option chips
   const laterAnswers = useMemo(() => {
     const answers = new Map<string, string>();
@@ -733,7 +735,7 @@ const MessagesList = memo(function MessagesList({
   const findCurrent = useFindCurrentId();
   return (
     <>
-      {transcriptIdleAfterOnboarding(transcript) && !bot.busy && (
+      {idleAfterOnboarding && !bot.busy && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
           <RenameTitle
@@ -782,7 +784,8 @@ const MessagesList = memo(function MessagesList({
         const m = item.message;
         const callId = m.call?.id;
         const callHere = callId && callAt.get(callId) === m.id;
-        const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
+        const streaming = m === streamingMessage;
+        const replyComm = stampedReplyComm(m) ?? (streaming ? streamedPeerReply : peerReplies.get(m.id));
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -876,8 +879,8 @@ const MessagesList = memo(function MessagesList({
                   laterAnswer={laterAnswers.get(m.id)}
                   editing={editingId === m.id}
                   isLastBotText={m.id === lastBotTextId}
-                  streaming={m === streamingMessage}
-                  pictured={pictured.has(m.id)}
+                  streaming={streaming}
+                  pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)}
                   peerReply={Boolean(replyComm)}
                   dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
@@ -925,10 +928,11 @@ export function PinnedBanner({
   onUnpin: () => void;
 }) {
   const { t } = useI18n();
+  const held = useMemo(() => pinnedId ? messages.find((m) => m.id === pinnedId) : undefined, [messages, pinnedId]);
   const pinned = useThreadMessage(
     bot.threadId,
     bot.hasMore ? pinnedId : undefined,
-    messages.find((m) => m.id === pinnedId),
+    held,
   );
   if (!pinned || pinned.kind !== "text") return null;
   const sender =

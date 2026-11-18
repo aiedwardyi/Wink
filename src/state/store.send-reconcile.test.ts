@@ -63,10 +63,13 @@ async function mount(
   groups: Group[] = [group],
   snapshot: object = {},
   cardPatch?: () => Promise<Response>,
+  routines?: () => Promise<Response>,
 ) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {}, ...snapshot });
+    if (path === "/api/routines" && routines) return routines();
     if (init?.method === "PATCH" && path.includes("/cards/") && cardPatch) return cardPatch();
     if (init?.method === "POST" && (path.endsWith("/messages") || path.endsWith("/respond"))) return post(init);
     const page = path.match(/^\/api\/threads\/([\w-]+)\/messages\?/);
@@ -103,6 +106,29 @@ const sends = [
 const messagesOf = (threadId: string) =>
   store.state.bots.find((b) => b.threadId === threadId)?.messages ??
   store.state.groups.find((g) => g.threadId === threadId)?.messages;
+
+const liveFrame = (data: string) =>
+  FakeEventSource.last!.onmessage!({ data, lastEventId: "e2" });
+
+it("applies live chat and routine frames while the first routines request is pending", async () => {
+  let release!: (response: Response) => void;
+  const routines = vi.fn(() => new Promise<Response>((resolve) => { release = resolve; }));
+  await mount(() => Response.json({ messages: [] }), undefined, [bot], [], {}, undefined, routines);
+  const message: Message = { id: "reply", at: 1, role: "bot", kind: "text", text: "Here" };
+  const routine = { id: "r1", name: "Current" };
+  try {
+    expect(routines).toHaveBeenCalledOnce();
+    await act(async () => {
+      liveFrame(JSON.stringify({ kind: "message", threadId: bot.threadId, message }));
+      liveFrame(JSON.stringify({ kind: "routine", routine }));
+    });
+    expect(messagesOf(bot.threadId)).toEqual([message]);
+    expect(store.state.routines).toEqual([routine]);
+  } finally {
+    await act(async () => release(Response.json({ routines: [{ ...routine, name: "Stale" }] })));
+  }
+  expect(store.state.routines).toEqual([routine]);
+});
 
 it("captures a tap before card persistence can delay its message", async () => {
   const ask = { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: "Swap?", options: ["Yes, swap"], askUser: true } } as Message;
@@ -279,6 +305,29 @@ describe("a group line nobody answers", () => {
     await sendHi("s1");
     await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1")]));
     expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+  });
+
+  it("drains the next held room line when the idle send's POST response is lost", async () => {
+    let loseResponse!: (error: Error) => void;
+    const post = vi.fn(receipt({ idle: true })).mockImplementationOnce(() =>
+      new Promise<Response>((_, reject) => { loseResponse = reject; }));
+    const page = vi.fn(() => Response.json({ messages: [] }));
+    await mount(page, post, [bot], [idle]);
+    await sendHi("s1");
+    await act(async () => liveFrame(JSON.stringify({ kind: "message", threadId: idle.threadId, message: line("s1") })));
+    expect(messagesOf(idle.threadId)).toEqual([line("s1")]);
+    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ sendId: "s1", kind: "thinking" })]);
+    const held = { text: "next", requestText: "next", sendId: "s2", threadId: idle.threadId, revision: 1, attachments: [] };
+    localStorage.setItem("omb-room-holds", JSON.stringify({ [`group:${idle.id}:${idle.threadId}`]: [held] }));
+    await act(async () => {
+      liveFrame(JSON.stringify({ kind: "group.send.idle", threadId: idle.threadId, sendId: "s1" }));
+      loseResponse(new TypeError("Load failed"));
+    });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(post.mock.calls[1]![0]?.body))).toMatchObject({ text: "next", sendId: "s2" });
+    expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+    expect(messagesOf(idle.threadId)?.filter((message) => message.sendId === "s1")).toEqual([line("s1")]);
+    expect(page).not.toHaveBeenCalled();
   });
 
   it("drops Thinking when the turn ends before any member starts", async () => {
