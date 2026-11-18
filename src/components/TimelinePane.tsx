@@ -43,7 +43,7 @@ const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase
 const folds = new Map<string, boolean>();
 function useFold(key: string, initial: boolean) {
   const [open, setOpen] = useState(() => folds.get(key) ?? initial);
-  return [open, () => { folds.set(key, !open); setOpen(!open); }] as const;
+  return [open, () => { const next = !(folds.get(key) ?? initial); folds.set(key, next); setOpen(next); }] as const;
 }
 
 const ViewPicture = createContext<(path: string, threadId: string, opener: HTMLElement) => void>(() => {});

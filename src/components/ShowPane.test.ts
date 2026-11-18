@@ -514,7 +514,7 @@ it("opens every pick, and keeps a pick the user closed closed after a tab switch
   expect(rows().map((row) => row.querySelector("[data-timeline-head]")?.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true", "true"]);
   expect(rows().every((row) => row.querySelector(".timeline-detail"))).toBe(true);
   await act(async () => mapRow().querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+  await until(() => !mapRow().querySelector(".timeline-detail"));
   expect(mapRow().querySelector(".timeline-detail")).toBeNull();
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   expect(host.querySelector(".timeline-pane")).toBeNull();
