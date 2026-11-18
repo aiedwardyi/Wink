@@ -518,6 +518,21 @@ describe("account lifecycle", () => {
     expect(f.registry.accountAvailable(account.id)).toBe(false);
   });
 
+  it("reads a restoring account as checking, and signed out only once its check says so", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    let answer!: (snapshot: ProviderSnapshot) => void;
+    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    const restored = f.controller.restore();
+    await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("checking");
+    expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)?.state).toBe("ready");
+    answer({ state: "available", authenticated: false, accountAuthenticated: false });
+    await restored;
+    expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)?.state).toBe("stopped");
+  });
+
   it("retries a thrown restore probe without changing the account", async () => {
     const f = await fixture();
     const account = await f.add();

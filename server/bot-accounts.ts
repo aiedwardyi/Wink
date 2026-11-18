@@ -70,7 +70,7 @@ export class BotAccounts {
       const account = accounts.find((row) => row.id === instance.instanceId);
       if (!account) return instance;
       return { ...instance, accountOf: account.of, accountMain: !account.error && this.accounts.isDefault(account.id),
-        accountState: account.existing && this.registry.accountBlocked(account.id) ? "stopped" as const : account.state,
+        accountState: account.existing && this.registry.accountStopped(account.id) ? "stopped" as const : account.state,
         ...(this.accounts.drains[account.id] ? { drain: this.accounts.drains[account.id] } : {}),
       };
     });

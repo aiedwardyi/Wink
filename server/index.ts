@@ -3207,10 +3207,10 @@ const usageBoard = createUsageBoard({
   codexPromo: codexPromoStatus,
   accounts: {
     list: () => [
-      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountBlocked(row.id), status: providerSnapshots.get(row.id) })),
+      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountStopped(row.id), status: providerSnapshots.get(row.id) })),
       ...Object.entries(instanceConfigs(cfg)).flatMap(([id, entry]) => {
         const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
-        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountBlocked(id), status: providerSnapshots.get(id) }] : [];
+        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountStopped(id), status: providerSnapshots.get(id) }] : [];
       }),
       ...codexCreditRows(codexCreditFor()),
     ],
@@ -9171,13 +9171,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/instances") {
-      await startupTiming.waitFor("accounts").catch(() => {});
       // A plain GET runs on every page load, so it answers from the last probe:
       // one CLI launch on Windows can stall the whole server for ~5 s.
       // ?refresh=1 re-probes for a CLI installed or signed in since;
       // ?rescan=1 may also start WSL.
       const probe =
         url.searchParams.get("rescan") === "1" ? "rescan" : url.searchParams.get("refresh") === "1" ? "refresh" : "cached";
+      // A cached read needs no restore: an account whose boot check is still running reads as checking.
+      if (probe !== "cached") await startupTiming.waitFor("accounts").catch(() => {});
       // Windows never pushes PATH changes into a live process, so without
       // this a re-probe answers from the boot PATH.
       if (probe !== "cached") resetPathCache();

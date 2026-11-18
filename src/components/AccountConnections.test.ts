@@ -54,6 +54,19 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("shows an account whose first check is still running as checking, never signed out", async () => {
+  await render(3);
+  state.instances = state.instances.map((account) => account.instanceId === "account-1" ? { ...account, snapshot: { state: "checking" } } : account);
+  await update();
+  const row = host.querySelector("[data-connection-account=\"account-1\"]")!;
+  expect(row.textContent).toContain("Checking");
+  expect(row.textContent).not.toContain("Signed out.");
+  expect([...row.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Sign In");
+  state.instances = state.instances.map((account) => account.instanceId === "account-1" ? { ...account, snapshot: { state: "available", authenticated: false } } : account);
+  await update();
+  expect(host.querySelector("[data-connection-account=\"account-1\"]")!.textContent).toContain("Signed out.");
+});
+
 it("keeps each Connections email bound to its account id when Main and order change", async () => {
   await render(5);
   const labels = ["alex", "blair", "casey", "drew", "emery"];

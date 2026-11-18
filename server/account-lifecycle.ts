@@ -75,7 +75,7 @@ export class AccountLifecycle {
   }
 
   private async restoreAccount(id: string) {
-    this.registry.blockAccount(id, true);
+    this.registry.checkAccount(id);
     const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
     await this.observe(id, snapshot ?? { state: "unavailable" }).catch(() => {
       console.error("Account restoration is waiting for recovery");

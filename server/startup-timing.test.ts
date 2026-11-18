@@ -254,7 +254,7 @@ describe("startup timing", () => {
     expect(workerLaunchResponse).toHaveBeenCalledOnce();
   });
 
-  it.each(["none", "restored", "failed"])("answers instance discovery after accounts settle without waiting for refresh: %s", async (accounts) => {
+  it.each([["cached", "none"], ["cached", "restoring"], ["refresh", "restored"], ["refresh", "failed"]])("answers a %s instance read while accounts are %s, a refresh only once they settle", async (probe, accounts) => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const start = source.indexOf('if (method === "GET" && path === "/api/instances")');
     const statement = source.slice(start, source.indexOf("// ── app config", start));
@@ -269,23 +269,23 @@ describe("startup timing", () => {
     startupTiming.afterPaint("probes", () => new Promise<void>((resolve) => { release = resolve; }));
     const describeInstances = vi.fn(async (_probe: string) => []);
     const pending = runInNewContext(`(async () => { ${statement} })()`, {
-      method: "GET", path: "/api/instances", startupTiming, url: new URL("http://localhost/api/instances"),
+      method: "GET", path: "/api/instances", startupTiming, url: new URL(`http://localhost/api/instances${probe === "refresh" ? "?refresh=1" : ""}`),
       describeInstances, instanceChecks: { describe: () => describeInstances("cached") }, resetPathCache() {}, withRateLimits: (value: unknown) => value,
       rememberAutomaticAvailability() {}, json() {}, res: {},
       botAccounts: { pickerInstances: (value: unknown) => value, accountInstances: (value: unknown) => value },
     }) as Promise<void>;
     try {
       await new Promise(setImmediate);
-      if (accounts === "none") expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
-      else expect(describeInstances).not.toHaveBeenCalled();
-      startupTiming.paint();
-      await Promise.resolve();
-      if (accounts !== "none") {
+      if (probe === "cached") expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
+      else {
+        expect(describeInstances).not.toHaveBeenCalled();
+        startupTiming.paint();
+        await Promise.resolve();
         expect(describeInstances).not.toHaveBeenCalled();
         restore();
+        await new Promise(setImmediate);
+        expect(describeInstances).toHaveBeenCalledExactlyOnceWith("refresh");
       }
-      await new Promise(setImmediate);
-      expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
       await pending;
     } finally {
       startupTiming.paint();

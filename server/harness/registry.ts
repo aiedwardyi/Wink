@@ -102,6 +102,7 @@ export class ProviderRegistry {
   private signingOut = new Set<string>();
   private accounts = new Map<string, AccountContext>();
   private blockedAccounts = new Set<string>();
+  private checkingAccounts = new Set<string>();
   private accountIdentity?: (id: string, snapshot: ProviderSnapshot) => Promise<void>;
   private environmentByInstance = new Map<InstanceId, Record<string, string>>();
   private byId = new Map<InstanceId, RegistryEntry>();
@@ -271,11 +272,19 @@ export class ProviderRegistry {
 
   onAccountIdentity(listener: (id: string, snapshot: ProviderSnapshot) => Promise<void>) { this.accountIdentity = listener; }
   blockAccount(id: string, blocked: boolean) {
+    this.checkingAccounts.delete(id);
     if (blocked) this.blockedAccounts.add(id);
     else this.blockedAccounts.delete(id);
     this.get(id)?.setAccountBlocked?.(blocked);
   }
   accountBlocked(id: string) { return this.blockedAccounts.has(id); }
+  /** Blocked like blockAccount until its check answers, but reads as checking: the saved sign-in is not known to be gone. */
+  checkAccount(id: string) {
+    this.blockAccount(id, true);
+    this.checkingAccounts.add(id);
+  }
+  /** Blocked for a reason that shows as signed out; an account whose check is still running is not. */
+  accountStopped(id: string) { return this.blockedAccounts.has(id) && !this.checkingAccounts.has(id); }
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
@@ -490,7 +499,7 @@ export class ProviderRegistry {
     await this.refreshLogins();
     // A blocked account never probes, so it reads as startProbe() answers it.
     const rows = this.entries().map((entry) => this.row(entry, this.probed.get(entry.instanceId)
-      ?? (this.accountBlocked(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
+      ?? (this.accountStopped(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
     this.saveProbes();
     return this.currentAccountRows(rows);
   }
@@ -573,7 +582,7 @@ export class ProviderRegistry {
   ): Promise<Probe> {
     const id = entry.instanceId;
     const since = this.holdSeq;
-    if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
+    if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? (this.accountStopped(id) ? BLOCKED : CHECKING));
     const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
         this.probed.set(id, probe);
