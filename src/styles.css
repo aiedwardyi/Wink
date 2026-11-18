@@ -168,6 +168,7 @@
   .orbit-terminal-overlay[data-side][data-open="true"] {
     margin-left: 0;
     animation: panel-slide var(--motion-large) var(--ease-standard);
+    transition-delay: 0s;
   }
   .orbit-terminal-overlay[data-side][data-open="true"] > * {
     animation: fade-in var(--motion-moderate) var(--ease-standard);
