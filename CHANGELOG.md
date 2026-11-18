@@ -2,6 +2,18 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.283] - 2026-11-18
+
+### Changed
+- Memory use stays bounded on long runs, and pictures in very long chats open at once.
+- The first open after an update is as fast as any open, and Connections no longer sits on loading.
+- Live replies and sends never wait on slow side requests.
+
+### Fixed
+- Memory hand edits survive a sync pass, and an open Memory page stays current.
+- A fast reply keeps the live reply going, and Stop puts your typed line back in the box.
+- The side pane keeps your tab across chats, Main's shell survives Try again, and Ctrl+` focuses the terminal.
+
 ## [1.0.282] - 2026-11-18
 
 ### Added
