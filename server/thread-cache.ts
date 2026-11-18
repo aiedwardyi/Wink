@@ -37,6 +37,16 @@ export class ThreadCache<T extends { messages: readonly unknown[] }> {
 
   set(threadId: string, entry: T): void {
     this.touch(threadId, entry);
+  }
+
+  private touch(threadId: string, entry: T): void {
+    this.entries.delete(threadId);
+    this.entries.set(threadId, entry);
+    this.trim();
+  }
+
+  /** Recounted on every use: appends and synced rows grow the cached arrays without telling the cache. */
+  private trim(): void {
     let total = 0;
     for (const loaded of this.entries.values()) total += loaded.messages.length;
     if (total <= this.rows) return;
@@ -48,10 +58,5 @@ export class ThreadCache<T extends { messages: readonly unknown[] }> {
       this.entries.delete(id);
       total -= loaded.messages.length;
     }
-  }
-
-  private touch(threadId: string, entry: T): void {
-    this.entries.delete(threadId);
-    this.entries.set(threadId, entry);
   }
 }

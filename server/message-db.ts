@@ -295,11 +295,11 @@ export function applySyncedRows(
 }
 
 /** One stored row by key, without loading its thread. */
-/** Rows whose text contains `needle` (ASCII case-insensitive), oldest first; the thread's other rows are never parsed. */
+/** Rows whose text contains `needle` (ASCII case-insensitive) or an escape that may spell it, oldest first; the thread's other rows are never parsed. */
 export function textRows(threadId: string, needle: string): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
   // SAFETY: This projection selects TEXT id, role and text, and a nullable TEXT bot id from the stored JSON.
   return db()
-    .prepare("SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND text LIKE ? ESCAPE '\\' ORDER BY rowid")
+    .prepare("SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND (text LIKE ? ESCAPE '\\' OR instr(text, '%') > 0 OR instr(text, '&#') > 0) ORDER BY rowid")
     .all(threadId, `%${needle.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`) as Array<{ id: string; role: string; text: string; fromBotId: string | null }>;
 }
 

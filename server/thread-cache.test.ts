@@ -37,6 +37,14 @@ describe("thread cache", () => {
     expect([store.loaded(a!), store.loaded(b!)]).toEqual([true, true]);
   });
 
+  it("drops an idle chat once the loaded ones grow past the budget", () => {
+    const [a, b, c] = chats(3, 1);
+    const store = new Store(selection, { threadCacheRows: 3 });
+    for (const threadId of [a!, b!, c!]) store.messagesFor(threadId);
+    for (let index = 0; index < 10; index++) store.appendMessage(c!, { role: "user", kind: "text", text: `more ${index}` });
+    expect([a, b, c].map((threadId) => store.loaded(threadId!))).toEqual([false, true, true]);
+  });
+
   it("never drops a chat a turn is running in", () => {
     const setup = new Store(selection);
     const busy = setup.createBot({}, { seedMessages: false });

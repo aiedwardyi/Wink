@@ -43,6 +43,14 @@ describe("linked file rows", () => {
     expect([...rows(threadId, picture)].map((row) => row.text)).toEqual([later.text]);
   });
 
+  it("keeps a link that escapes letters of the name", async () => {
+    const { linkedRows } = await rowsModule();
+    const setup = new Store(selection);
+    const { threadId } = setup.createBot({}, { seedMessages: false });
+    const link = setup.appendMessage(threadId, { role: "bot", kind: "text", text: "[doc](/tmp/report%2Epdf)" });
+    expect([...linkedRows(new Store(selection))(threadId, "/tmp/report.pdf")].map((row) => row.id)).toEqual([link.id]);
+  });
+
   it("uses the loaded thread when there is one", async () => {
     const { linkedRows } = await rowsModule();
     const { threadId, link } = chat();
@@ -60,8 +68,12 @@ describe("linked file rows", () => {
 
   it("the linked-file route never loads the whole thread", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const route = source.slice(source.indexOf("/linked-(file(?:\\/.*)?|folder)$/"), source.indexOf("// serving is name-locked to the attachments dir"));
-    expect(route).toContain("serveLinkedFolder : serveLinkedFile");
+    const start = source.indexOf("/linked-(file(?:\\/.*)?|folder)$/");
+    const end = source.indexOf("serveLinkedFolder : serveLinkedFile", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end - start).toBeGreaterThan(0);
+    expect(end - start).toBeLessThan(1500);
+    const route = source.slice(start, end);
     expect(route).not.toMatch(/store\.(messagesFor|activePath)\(/);
   });
 });
