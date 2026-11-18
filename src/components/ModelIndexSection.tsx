@@ -31,7 +31,7 @@ import {
 } from "@/lib/model-index";
 import { MODEL_INDEX_SOURCES, type ModelIndexKey, type ModelPrice } from "../../shared/model-index-data.ts";
 import "./ModelIndexSection.css";
-import { BADGE, Badge, PROVIDER_NAME, PhoneChart, crosses, dodge, useFontLoads, PhoneRanked, PhoneSwitch, PhoneTabs, ProviderChips, bestValue, rankModels } from "./ModelIndexPhone";
+import { BADGE, PhoneBadge, PROVIDER_NAME, PhoneChart, crosses, dodge, useFontLoads, PhoneRanked, PhoneSwitch, PhoneTabs, ProviderChips, bestValue, rankModels } from "./ModelIndexPhone";
 import { Segmented } from "./Segmented";
 
 type View = "scatter" | "bars";
@@ -470,7 +470,6 @@ function Scatter({
       {zoomable && <style>{css}</style>}
       <defs>
         <clipPath id={`${gradient}-clip`}><rect x={left} y={top} width={right - left} height={bottom - top} /></clipPath>
-        <clipPath id={`${gradient}-logo`} clipPathUnits="objectBoundingBox"><circle cx={0.5} cy={0.5} r={0.46} /></clipPath>
         <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.085 }} />
           <stop offset="1" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.02 }} />
@@ -604,7 +603,7 @@ function Scatter({
                       style={{ fill: color(mark.provider), stroke: "var(--color-card)", opacity: !badges.has(mark.key) && mark.model === focus ? 1 : 0 }}
                     />
                     <g data-mi-paint data-mi-badge={badges.has(mark.key) ? "" : undefined} style={{ opacity: badges.has(mark.key) ? 1 : 0 }}>
-                      <Badge provider={chartProvider(mark.provider)} r={BADGE} clip={`${gradient}-logo`} />
+                      <PhoneBadge provider={chartProvider(mark.provider)} r={BADGE} />
                     </g>
                   </g>
                   <circle
