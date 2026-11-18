@@ -959,7 +959,7 @@ export function PinnedBanner({
   );
 }
 
-export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, findBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; findBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const preview = useChatPreview();
   const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
@@ -1027,7 +1027,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if (focusComposerBlocked || preview) return;
+      if (findBlocked || preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1035,7 +1035,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind, focusComposerBlocked, preview]);
+  }, [find.openFind, findBlocked, preview]);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const accepted = state.acceptedSends[bot.threadId];

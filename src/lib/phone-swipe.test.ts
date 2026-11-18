@@ -463,7 +463,7 @@ describe("usePhoneSwipe", () => {
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
     const overlay = app.slice(app.indexOf("const nativeViewOverlayOpen ="), app.indexOf("const swipeChatId"));
     expect(overlay).toContain("drawerOpen ||");
-    expect(app).toContain("enabled={!terminalOpen && !nativeViewOverlayOpen}");
+    expect(app).toContain("enabled={!terminalCovers && !nativeViewOverlayOpen}");
   });
 
   it("rebinds after the stage node is replaced (e.g. Back from another view)", () => {

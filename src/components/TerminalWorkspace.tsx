@@ -14,6 +14,7 @@ import { lastViewedPanes } from "@/lib/terminal-panes";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Presence } from "@/lib/use-presence";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WorkerChip, WorkerMark } from "./WorkerRows";
@@ -34,6 +35,9 @@ function samePath(a: string | null | undefined, b: string | null | undefined): b
   const norm = (value: string) => value.replace(/[\\/]+$/, "").toLowerCase();
   return norm(a) === norm(b);
 }
+
+// Docked beside the chat, Ctrl+F opens the chat's search instead of reaching the shell.
+const chatFindKey = (event: KeyboardEvent, el: Element) => (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && el.closest("[data-side]") !== null;
 
 // Live output queues of mounted overlays (read by tests).
 export const terminalLiveQueues: { id: string; data: string; seq: number }[][] = [];
@@ -70,6 +74,7 @@ export function TerminalWorkspace({
   const { t } = useI18n();
   const { dispatch } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
+  const phone = useIsPhone();
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -346,6 +351,7 @@ export function TerminalWorkspace({
     };
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
+      if (chatFindKey(event, host)) return false;
       if (event.metaKey || event.altKey) return true;
       if (terminal.options.disableStdin || (id !== null && exits.has(id))) return true;
       const key = (event.key ?? "").toLowerCase();
@@ -746,7 +752,7 @@ export function TerminalWorkspace({
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
       <header className={`@container/chathead flex h-[72px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 max-md:h-[60px] ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
         <button type="button" onClick={onClose} className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] ${HEADER_CONTROL}`}>
-          <ArrowLeft size={15} /> {t("terminal.chat")} <kbd className="text-[10px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>
+          {phone ? <><ArrowLeft size={15} /> {t("terminal.chat")}</> : t("terminal.closeDocked")} <kbd className="text-[10px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>
         </button>
         <span className="h-5 border-l border-hairline" aria-hidden />
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
@@ -783,7 +789,8 @@ export function TerminalWorkspace({
             <SquareX size={16} />
           </button>
         )}
-        <WorkerChip name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
+        {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
+        <WorkerChip key={String(visible)} name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
       </header>
       {showProjectBanner && (
         <div role="status" className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-inset px-5 py-1.5 text-[12px] text-ink">
@@ -838,7 +845,7 @@ export function TerminalWorkspace({
           event.stopPropagation();
           forwardInputRef.current("\r");
         }}
-        onKeyDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => { if (!chatFindKey(event.nativeEvent, event.currentTarget)) event.stopPropagation(); }}
         onCompositionStart={() => { composingRef.current = true; }}
         onCompositionEnd={() => { composingRef.current = false; }}
         onWheelCapture={onTerminalWheel}

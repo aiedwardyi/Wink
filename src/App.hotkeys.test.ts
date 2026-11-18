@@ -235,26 +235,63 @@ describe("worker list shortcut", () => {
     }
   });
 
-  it("toggles the terminal's own list, not the chat's, while the terminal is open", async () => {
+  it("hands the side pane to the terminal when Ctrl+` follows Alt+W", async () => {
     const { host, press, unmount } = await mount();
     try {
+      await press();
+      await paneList();
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')?.hasAttribute("data-side")).toBe(true);
+      expect(openLists()).toHaveLength(0);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("hands the side pane to Workers when Alt+W follows Ctrl+`", async () => {
+    const { host, press, unmount } = await mount();
+    try {
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')?.hasAttribute("data-side")).toBe(true);
       expect((await press()).defaultPrevented).toBe(true);
+      expect((await paneList()).textContent).toContain("Scout's workers");
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("shuts the terminal's own list when the docked terminal closes", async () => {
+    const { host, press, unmount } = await mount();
+    const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+    try {
+      await backquote();
+      const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
+      const chip = await vi.waitFor(() => {
+        const found = overlay.querySelector<HTMLButtonElement>("[data-worker-strip]");
+        if (!found) throw new Error("no worker strip in the terminal");
+        return found;
+      }, { timeout: 5000 });
+      await act(async () => chip.click());
+      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
+      await backquote();
+      await backquote();
+      expect(overlay.getAttribute("data-open")).toBe("true");
+      expect(overlay.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([false, true])("opens chat search on Ctrl+F from the terminal only beside the chat with phone=%s", async (phone) => {
+    const { host, press, unmount } = await mount(false, phone);
+    try {
       await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
       const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
-      expect(overlay).not.toBeNull();
-      expect((openLists()[0] ?? null)).toBeNull();
-      await vi.waitFor(async () => {
-        await act(async () => {});
-        expect(overlay.querySelector("[data-worker-strip]")).not.toBeNull();
-      }, { timeout: 5000 });
-      const event = await press();
-      expect(event.defaultPrevented).toBe(true);
-      expect(event.cancelBubble).toBe(true);
-      expect(openLists()).toHaveLength(1);
-      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
-      expect(overlay.querySelector("[data-worker-strip]")?.getAttribute("aria-expanded")).toBe("true");
-      await press();
-      expect((openLists()[0] ?? null)).toBeNull();
+      const key = new KeyboardEvent("keydown", { code: "KeyF", key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      await act(async () => overlay.dispatchEvent(key));
+      expect(key.defaultPrevented).toBe(!phone);
+      expect(host.querySelector("[data-chat-find]") !== null).toBe(!phone);
     } finally {
       await unmount();
     }
@@ -624,7 +661,7 @@ describe("terminal pane shortcuts", () => {
 describe("conversation layout", () => {
   it("clips the hidden terminal overlay instead of making the chat scrollable", () => {
     // overflow-hidden is still programmatically scrollable: a terminal tab scrollIntoView shifted the chat under the sidebar.
-    expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"');
+    expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip md:flex-row"');
   });
 });
 

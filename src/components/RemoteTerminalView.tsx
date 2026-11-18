@@ -372,7 +372,9 @@ export function RemoteTerminalView({
             {[shown?.cwd, noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : ""].filter(Boolean).join(" · ")}
           </p>
         </div>
+        {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
         <WorkerChip
+          key={String(visible)}
           name={bot.name}
           {...chip}
           onOpenTerminalPane={pick}
