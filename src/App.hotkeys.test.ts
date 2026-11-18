@@ -283,6 +283,20 @@ describe("worker list shortcut", () => {
     }
   });
 
+  it.each([false, true])("opens chat search on Ctrl+F from the terminal only beside the chat with phone=%s", async (phone) => {
+    const { host, press, unmount } = await mount(false, phone);
+    try {
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
+      const key = new KeyboardEvent("keydown", { code: "KeyF", key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      await act(async () => overlay.dispatchEvent(key));
+      expect(key.defaultPrevented).toBe(!phone);
+      expect(host.querySelector("[data-chat-find]") !== null).toBe(!phone);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("leaves the worker list shut under App Settings", async () => {
     const { press, unmount } = await mount();
     try {

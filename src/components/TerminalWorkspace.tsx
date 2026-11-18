@@ -36,6 +36,9 @@ function samePath(a: string | null | undefined, b: string | null | undefined): b
   return norm(a) === norm(b);
 }
 
+// Docked beside the chat, Ctrl+F opens the chat's search instead of reaching the shell.
+const chatFindKey = (event: KeyboardEvent, el: Element) => (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && el.closest("[data-side]") !== null;
+
 // Live output queues of mounted overlays (read by tests).
 export const terminalLiveQueues: { id: string; data: string; seq: number }[][] = [];
 
@@ -348,6 +351,7 @@ export function TerminalWorkspace({
     };
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
+      if (chatFindKey(event, host)) return false;
       if (event.metaKey || event.altKey) return true;
       if (terminal.options.disableStdin || (id !== null && exits.has(id))) return true;
       const key = (event.key ?? "").toLowerCase();
@@ -841,7 +845,7 @@ export function TerminalWorkspace({
           event.stopPropagation();
           forwardInputRef.current("\r");
         }}
-        onKeyDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => { if (!chatFindKey(event.nativeEvent, event.currentTarget)) event.stopPropagation(); }}
         onCompositionStart={() => { composingRef.current = true; }}
         onCompositionEnd={() => { composingRef.current = false; }}
         onWheelCapture={onTerminalWheel}

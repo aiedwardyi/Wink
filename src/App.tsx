@@ -861,6 +861,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
                       bot={pageBot}
                       hidden={terminalCovers || nativeViewOverlayOpen}
                       focusComposerBlocked={preview || paletteOpen || terminalOpen}
+                      findBlocked={preview || paletteOpen || terminalCovers}
                       onOpenTerminal={openMainTerminal}
                       onOpenTerminalPane={openTerminalPane}
                     />}
