@@ -828,6 +828,8 @@ export function reducer(state: AppState, action: Action): AppState {
           kind: paint.kind,
           text: action.text,
           at: Date.now(),
+          replyToId: action.replyToId,
+          posting: true,
         }),
       };
     }

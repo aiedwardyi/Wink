@@ -57,10 +57,12 @@ type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "mess
 const frame = (value: Frame) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 const shown = (text: string) => host.querySelector('[role="log"]')?.textContent?.split(text).length ?? 0;
 
-async function mount() {
+async function mount(idle = false) {
   // the send POST never answers, as when the server holds it for sync
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
-    ? Response.json({ bots: [bot], groups: [room], computerControl: {} })
+    ? Response.json(idle
+      ? { bots: [{ ...bot, busy: false, activity: undefined }], groups: [{ ...room, busyBotId: undefined }], computerControl: {} }
+      : { bots: [bot], groups: [room], computerControl: {} })
     : String(url).includes("/messages")
       ? new Promise<Response>(() => {})
       : Response.json({}, { status: 404 })));
@@ -94,6 +96,21 @@ describe("GroupView sent lines", () => {
     expect(reply()?.disabled).toBe(true);
     await frame({ kind: "message", threadId: "gt", message: line("u2", "one more thing", "s1") });
     expect(reply()?.disabled).toBe(false);
+  });
+
+  it("keeps a line sent into an idle room through a reconnect while the server still holds it", async () => {
+    await mount(true);
+    await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "one more thing", sendId: "s1" }));
+    expect(shown("one more thing")).toBe(2);
+    await frame({ kind: "hello", resumed: false, cursor: "s:1" });
+    expect(shown("one more thing")).toBe(2);
+  });
+
+  it("quotes the line a sent reply answers while the server still holds it", async () => {
+    await mount();
+    expect(shown("go ahead")).toBe(2);
+    await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "yes", sendId: "s1", replyToId: "u1" }));
+    expect(shown("go ahead")).toBe(3);
   });
 
   it("keeps one copy when the server's message lands", async () => {
