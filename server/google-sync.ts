@@ -168,9 +168,13 @@ export function createGoogleSync(options: Options) {
   let running: Promise<void> | null = null;
   // A kick that lands mid-pass may have written after that pass looked, so one more pass follows it, after any rate-limit wait.
   let again = false;
+  // A kick restarts the poll pace; a poke alone keeps the poll its pass would have armed.
+  let kicked = false;
   let rateLimited = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pollDue: { at: number; quiet: boolean } | undefined;
+  // The armed timer's deadline, so a pass that preempts it still sees a wake.
+  let armed: { at: number; ms: number } | undefined;
   let soon = false;
   let stopped = false;
   let chatFirst = true;
@@ -301,9 +305,18 @@ export function createGoogleSync(options: Options) {
     return account.owner()?.sub === binding.binding.owner.sub ? binding.binding : null;
   }
 
+  function woke(): void {
+    if (armed && lateTick(armed.at, armed.ms, now())) {
+      chatFirst = true;
+      behind = null;
+    }
+    armed = undefined;
+  }
+
   function schedule(ms: number, poll = false): void {
     clearTimeout(timer);
     timer = undefined;
+    armed = undefined;
     soon = false;
     if (!runnable()) {
       pollDue = undefined;
@@ -316,14 +329,12 @@ export function createGoogleSync(options: Options) {
     // A poll can come due while a pass or rate-limit wait owns the timer.
     const next = Math.max(at, tick?.at ?? due);
     soon = next === at;
+    armed = { at: next, ms: tick ? passMs : ms };
     timer = setTimeout(() => {
       timer = undefined;
       soon = false;
       if (tick) pollDue = undefined;
-      if (lateTick(next, tick ? passMs : ms, now())) {
-        chatFirst = true;
-        behind = null;
-      }
+      woke();
       void run(Boolean(tick?.quiet && !chatFirst && options.kindsReady?.()));
     }, next - at);
     timer.unref?.();
@@ -465,6 +476,7 @@ export function createGoogleSync(options: Options) {
 
   const kick = () => {
     if (!running) pollDue = undefined;
+    else kicked = true;
     return requestPass();
   };
 
@@ -476,6 +488,7 @@ export function createGoogleSync(options: Options) {
       schedule(0);
       return Promise.resolve();
     }
+    woke();
     clearTimeout(timer);
     timer = undefined;
     soon = false;
@@ -490,8 +503,9 @@ export function createGoogleSync(options: Options) {
       }
       running = null;
       const next = again && !rateLimited ? 0 : delay;
-      schedule(next, !rateLimited && next === passMs);
+      schedule(next, !rateLimited && (next === passMs || (delay === passMs && !kicked)));
       again = false;
+      kicked = false;
     })();
     return running;
   }

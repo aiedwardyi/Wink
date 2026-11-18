@@ -313,6 +313,50 @@ describe("Google reader kind recovery", () => {
     expect(existsSync(join(dataDir, "google-drive", path))).toBe(true);
   });
 
+  it("runs the quiet rescan while pokes overlap every pass", async () => {
+    const dataDir = await joined();
+    const path = await skipStyle(dataDir);
+    const fetch = drive.fetch;
+    let poking = true;
+    let fresh = false;
+    let pokes = 0;
+    vi.spyOn(drive, "fetch").mockImplementation(async (input, init) => {
+      if (fresh && poking) {
+        fresh = false;
+        pokes++;
+        sync.poked();
+        await new Promise((done) => setTimeout(done, 3_000));
+      }
+      return fetch(input, init);
+    });
+    const sync = boot(dataDir, () => true, { prepare: () => { fresh = true; } });
+    sync.resume();
+    window();
+    // Pass work reads real files, so time moves in steps it can keep up with.
+    for (let s = 0; s < 69; s++) await vi.advanceTimersByTimeAsync(1_000);
+    expect(pokes).toBeGreaterThan(20);
+    expect(existsSync(join(dataDir, "google-drive", path))).toBe(true);
+    expect(value(join(dataDir, "google-drive"))).toBe("icon-36");
+    poking = false;
+    for (let s = 0; s < 5; s++) await vi.advanceTimersByTimeAsync(1_000);
+  });
+
+  it("records a wake when a poke runs before the overdue timer", async () => {
+    vi.setSystemTime(Date.UTC(2040, 0, 4));
+    const dataDir = await joined();
+    const openThread = vi.fn(() => "thread");
+    const prepare = vi.fn(() => ({ wake: soonAfterWake(Date.now(), 600_000), deviceKnown: sync.deviceKnown("peer") }));
+    const sync = boot(dataDir, () => true, { openThread, prepare });
+    await settle(sync);
+    openThread.mockClear();
+    prepare.mockClear();
+    vi.setSystemTime(Date.now() + 120_000);
+    sync.poked();
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalled());
+    expect(prepare.mock.results[0].value).toEqual({ wake: true, deviceKnown: false });
+    await vi.waitFor(() => expect(openThread).toHaveBeenCalledOnce());
+  });
+
   it("never lets the 1.0.213 mirror download or delete a trash mark", async () => {
     const dataDir = await joined();
     const { path } = await publish({ trashed: true });
