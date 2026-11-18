@@ -17,7 +17,7 @@ import { ShowPane } from "./ShowPane";
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
-  return { ...actual, formatTime: vi.fn(actual.formatTime), useStreaming: () => live.current };
+  return { ...actual, formatTime: vi.fn(actual.formatTime), useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current) };
 });
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 // These scenarios page from a tail one whole window long; the short switch tail has its own suite.
