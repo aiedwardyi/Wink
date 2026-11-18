@@ -46,6 +46,7 @@ import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace
 import { activateExistingWindow, liveMainWindow } from "./single-instance.mjs";
 import {
   SYSTEM_IDLE_THRESHOLD_SECONDS,
+  closeLiveToasts,
   handleDesktopNotify,
   parseNotificationTargetFromCommandLine,
   taskbarBusyIndicator,
@@ -1510,6 +1511,7 @@ function createWindow() {
       if (!win.isDestroyed()) win.close();
     });
   });
+  win.on("focus", closeLiveToasts);
   win.on("query-session-end", () => closeGuard.leaveBriefly());
   win.on("query-session-end", () => errorReports.leaveBriefly());
   win.on("session-end", () => closeGuard.leave());

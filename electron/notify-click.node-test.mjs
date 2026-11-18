@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import v8 from "node:v8";
 import vm from "node:vm";
 
-import { handleDesktopNotify, parseNotifyPayload, shouldShowDesktopToast } from "./desktop-notify.mjs";
+import { closeLiveToasts, handleDesktopNotify, parseNotifyPayload, shouldShowDesktopToast } from "./desktop-notify.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -33,6 +33,7 @@ function fakeNotificationClass() {
     constructor(o) { this.options = o; this.handlers = {}; notices.push(this); }
     on(e, h) { this.handlers[e] = h; }
     show() {}
+    close() { this.closed = (this.closed ?? 0) + 1; }
   }
   return { FakeNotification, notices };
 }
@@ -85,6 +86,23 @@ test("focused on another bot shows no toast that could steal a send click", () =
   });
   assert.equal(result.shown, false);
   assert.equal(notices.length, 0);
+});
+
+test("toasts shown in the background close when the window gains focus", () => {
+  const { FakeNotification, notices } = fakeNotificationClass();
+  const payload = { title: "t", body: "b", botId: "bot-2", threadId: "thread-2", visibleThreadId: "thread-9" };
+  for (let i = 0; i < 2; i += 1) {
+    handleDesktopNotify({ win: fakeWindow(), payload, Notification: FakeNotification, nativeSupported: true });
+  }
+  assert.equal(notices.length, 2);
+  closeLiveToasts();
+  assert.deepEqual(notices.map((n) => n.closed), [1, 1]);
+  closeLiveToasts();
+  assert.deepEqual(notices.map((n) => n.closed), [1, 1]);
+});
+
+test("main closes live toasts on the main window's focus", () => {
+  assert.ok(read("electron/main.mjs").includes('win.on("focus", closeLiveToasts);'));
 });
 
 test("terminal toast click carries the terminal target, chat carries none", () => {

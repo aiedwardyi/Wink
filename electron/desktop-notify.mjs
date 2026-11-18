@@ -146,6 +146,12 @@ function retainToast(notice) {
   if (liveToasts.size > LIVE_TOAST_LIMIT) liveToasts.delete(liveToasts.values().next().value);
 }
 
+/** Focus returns: a toast still up would sit over Send and a click opens its chat. */
+export function closeLiveToasts() {
+  for (const notice of liveToasts) notice.close();
+  liveToasts.clear();
+}
+
 export function handleDesktopNotify({
   win,
   payload,
