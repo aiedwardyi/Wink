@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { readFileSync } from "node:fs";
+
 import { I18nProvider } from "@/lib/i18n";
 
 import { FoldClip } from "./FoldClip";
@@ -27,10 +29,10 @@ async function mount(full: { height: number }) {
     unobserve() {}
     disconnect() {}
   });
-  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-fold") ? full.height : 0; } });
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-fold-clip") ? full.height : 0; } });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", {
     configurable: true,
-    get(this: HTMLElement) { return this.hasAttribute("data-fold") ? Math.min(full.height, 60) : 0; },
+    get(this: HTMLElement) { return this.hasAttribute("data-fold-clip") ? Math.min(full.height, 60) : 0; },
   });
   const host = document.createElement("div");
   document.body.append(host);
@@ -44,7 +46,7 @@ describe("FoldClip", () => {
   it("watches its content, so growth inside the capped box still shows the toggle", async () => {
     const full = { height: 60 };
     const { host, watched, callbacks } = await mount(full);
-    const clip = host.querySelector("[data-fold]")!;
+    const clip = host.querySelector("[data-fold-clip]")!;
     expect(watched).toHaveLength(1);
     expect(watched[0]).not.toBe(clip);
     expect(clip.contains(watched[0])).toBe(true);
@@ -52,6 +54,16 @@ describe("FoldClip", () => {
     full.height = 120;
     await act(async () => callbacks.forEach((callback) => callback()));
     expect(host.querySelector("button")?.textContent).toBe("Show full message");
+  });
+
+  // a shared rule (Fold's [data-fold] grid) pinned the content at the cap, so the observer went quiet mid-stream
+  it("keeps the capped box free of shared motion rules", async () => {
+    const { watched } = await mount({ height: 60 });
+    const clip = watched[0].parentElement!;
+    const css = readFileSync("src/motion.css", "utf8");
+    const styled = new Set([...css.matchAll(/\[(data-[\w-]+)/g)].map((m) => m[1]));
+    expect(styled.has("data-fold")).toBe(true);
+    for (const name of clip.getAttributeNames()) expect(styled.has(name), name).toBe(false);
   });
 
   it("gives the toggle a button type", async () => {
