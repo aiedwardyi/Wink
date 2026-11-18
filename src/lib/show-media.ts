@@ -25,6 +25,7 @@ export interface MediaFile {
   /** a local path the desktop opens */
   path?: string;
   size?: number;
+  readSize?: (signal: AbortSignal) => Promise<number | null | undefined>;
   /** who sent it, in a room */
   sender?: string;
   /** served without byte ranges, so a clip's first frame would cost the whole file */
