@@ -84,7 +84,7 @@ export function TerminalWorkspace({
   const botIdRef = useRef(bot.id);
   const blockedRef = useRef(focusBlocked || !visible);
   const openShellRef = useRef<((restart: boolean) => void) | null>(null);
-  const resizeRef = useRef<(() => void) | null>(null);
+  const resizeRef = useRef<((reopen?: boolean) => void) | null>(null);
   const dropPendingReplayRef = useRef<(() => void) | null>(null);
   const replacingRef = useRef(false);
   const forwardInputRef = useRef<(data: string) => void>(() => {});
@@ -234,6 +234,38 @@ export function TerminalWorkspace({
     };
     terminal.open(host);
     const report = (cause: unknown) => { if (alive) setError(cause instanceof Error ? cause.message : String(cause)); };
+    let requestedSize: { id: string; cols: number; rows: number } | null = null;
+    let pendingResize: Promise<void> | null = null;
+    let repaintAt: { cols: number; rows: number } | null = null;
+    const syncSize = (refresh = false) => {
+      if (!alive || !visibleRef.current || replaying || !host.clientWidth || !host.clientHeight) return pendingResize;
+      fit.fit();
+      const { cols, rows } = terminal;
+      if (refresh) terminal.refresh(0, Math.max(0, rows - 1));
+      if (!id || exits.has(id)) return pendingResize;
+      // A different size already repaints an alternate screen. Bounce only at the same size.
+      const bounce = repaintAt?.cols === cols && repaintAt.rows === rows && rows > 1;
+      repaintAt = null;
+      if (!bounce && requestedSize?.id === id && requestedSize.cols === cols && requestedSize.rows === rows) return pendingResize;
+      const size = { id, cols, rows };
+      requestedSize = size;
+      const current = () => alive && id === size.id && !exits.has(size.id);
+      const next = (pendingResize ?? Promise.resolve()).then(async () => {
+        if (!current()) return;
+        if (bounce) await bridge.resize(size.id, cols, rows - 1);
+        if (current()) await bridge.resize(size.id, cols, rows);
+      }).catch((cause) => {
+        if (requestedSize === size) requestedSize = null;
+        report(cause);
+      });
+      pendingResize = next;
+      void next.then(() => { if (pendingResize === next) pendingResize = null; });
+      return next;
+    };
+    const resize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { syncSize(true); });
+    };
     const defaultFont = webBridge ? webTerminalFonts(terminal.options.fontFamily ?? "") : terminal.options.fontFamily;
     const theme = async () => {
       const request = ++appearanceRequest;
@@ -249,12 +281,7 @@ export function TerminalWorkspace({
       // Imported schemes and truecolor prompts bypass the readable palette.
       terminal.options.minimumContrastRatio = 4.5;
       if (host.parentElement) host.parentElement.style.backgroundColor = imported?.theme.background ?? "";
-      if (replaying) return;
-      fit.fit();
-      if (id) {
-        const sessionId = id;
-        void Promise.resolve().then(() => bridge.resize(sessionId, terminal.cols, terminal.rows)).catch(report);
-      }
+      syncSize();
     };
     void theme();
     fit.fit();
@@ -307,13 +334,19 @@ export function TerminalWorkspace({
       }
       const afterMessageId = submitted ? latestPaneRun(workersRef.current, sessionId)?.messageIds.at(-1) : undefined;
       const typedAt = Date.now();
-      const send = () => Promise.resolve(bridge.write(sessionId, data)).then(() => {
-        if (submitted) void Promise.resolve(api(`/api/bots/${encodeURIComponent(bot.id)}/terminal/resume`, {
-          method: "POST", body: JSON.stringify({ sessionId, afterMessageId, submittedAgo: Date.now() - typedAt }),
-        })).catch(() => {});
-      }).catch(report);
-      // Submit keys skip the microtask queue so they cannot stall behind DA/mouse replies.
-      if (/[\r\n]/.test(data)) void send();
+      const send = () => {
+        if (!alive || id !== sessionId || exits.has(sessionId)) return;
+        return Promise.resolve(bridge.write(sessionId, data)).then(() => {
+          if (submitted) void Promise.resolve(api(`/api/bots/${encodeURIComponent(bot.id)}/terminal/resume`, {
+            method: "POST", body: JSON.stringify({ sessionId, afterMessageId, submittedAgo: Date.now() - typedAt }),
+          })).catch(() => {});
+        }).catch(report);
+      };
+      const submit = /[\r\n]/.test(data);
+      // Enter can reach the shell before the resize observer runs.
+      const sizing = submit ? syncSize() : pendingResize;
+      if (sizing) void sizing.then(send);
+      else if (submit) void send();
       else void Promise.resolve().then(send);
     };
     forwardInputRef.current = forwardInput;
@@ -378,19 +411,10 @@ export function TerminalWorkspace({
       }
       return true;
     });
-    const resize = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (!alive || replaying || !host.clientWidth || !host.clientHeight) return;
-        fit.fit();
-        terminal.refresh(0, Math.max(0, terminal.rows - 1));
-        if (id) {
-          const sessionId = id;
-          void Promise.resolve().then(() => bridge.resize(sessionId, terminal.cols, terminal.rows)).catch(report);
-        }
-      });
+    resizeRef.current = (reopen) => {
+      if (reopen) requestedSize = null;
+      resize();
     };
-    resizeRef.current = resize;
     const observer = new ResizeObserver(resize);
     observer.observe(host);
     const updateAppearance = () => { void theme(); };
@@ -436,17 +460,11 @@ export function TerminalWorkspace({
       setBannerDismissed(false);
       setReplacing(false);
       replacingRef.current = false;
-      resize();
-      // Diff-rendering TUIs cannot be rebuilt from replayed history alone; a size
-      // bounce forces the app to repaint from live state (same trio a manual resize runs).
-      if (snapshot.alternate === true && code === null && terminal.rows > 1) {
-        const repaintId = snapshot.id;
-        const repaintCols = terminal.cols;
-        const repaintRows = terminal.rows;
-        void Promise.resolve()
-          .then(() => bridge.resize(repaintId, repaintCols, repaintRows - 1))
-          .then(() => bridge.resize(repaintId, repaintCols, repaintRows))
-          .catch(report);
+      repaintAt = snapshot.alternate === true && code === null
+        ? { cols: snapshot.cols ?? terminal.cols, rows: snapshot.rows ?? terminal.rows }
+        : null;
+      if (visibleRef.current) {
+        resize();
       }
       if (!blockedRef.current) terminal.focus();
     };
@@ -523,6 +541,7 @@ export function TerminalWorkspace({
       liveQueue.length = 0;
       replayComplete = false;
       terminal.options.disableStdin = true;
+      fit.fit();
       const openInput: Parameters<typeof bridge.open>[0] = { botId: expectedBotId, cols: terminal.cols, rows: terminal.rows, restart, projectCwd: expectedProject };
       if (pane) openInput.sessionId = pane;
       void Promise.resolve().then(() => bridge.open(openInput)).then(async (result) => {
@@ -641,7 +660,7 @@ export function TerminalWorkspace({
       openShellRef.current?.(false);
       // The overlay keeps layout size while hidden, so no ResizeObserver fires on
       // return; run the resize trio (fit + refresh + PTY sync) explicitly.
-      resizeRef.current?.();
+      resizeRef.current?.(true);
     } else {
       dropPendingReplayRef.current?.();
     }

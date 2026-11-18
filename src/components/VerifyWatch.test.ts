@@ -554,15 +554,15 @@ it("holds the docked panel for its exit and gives the chat its column back at on
   expect(app).toContain("usePresence(paneWatch || showing || mediaOn");
   expect(app).toContain("closing={watchShown.closing}");
   expect(app).not.toContain('watchCard ? " verify-watch-dock"');
-  expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*margin-left: calc\(-1 \* var\(--dock\)\); transition: none;/);
+  expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*position: absolute; inset: 0 0 0 auto; transition: none;/);
 });
 
-it("grows and shrinks the maximized panel on the shared tokens, never switching between flow and absolute", () => {
-  const dock = watchRule(".verify-watch");
-  for (const prop of ["width", "margin-left"]) expect(dock).toContain(`${prop} var(--motion-large) var(--ease-standard)`);
-  const maximized = watchRule(".verify-watch:has(> .verify-watch-frame[data-maximized])");
+it("keeps the chat's column when maximizing and moves the backdrop by transform", () => {
+  const maximized = watchRule(".verify-watch:not([data-closing]):has(> .verify-watch-frame[data-maximized])");
   expect(maximized).toContain("width: 100cqi;");
+  expect(maximized).toContain("margin-left: calc(var(--dock) - 100cqi);");
   expect(maximized).not.toMatch(/position:|inset:|align-items/);
+  expect(watchCss).toMatch(/\.verify-watch::after \{[^}]*transition: transform var\(--motion-large\) var\(--ease-standard\)/);
   expect(watchRule(".verify-watch-frame")).toContain("transition: min-height var(--motion-large) var(--ease-standard);");
   expect(watchRule(".verify-watch-frame[data-maximized]")).toContain("min-height: calc(100% - 24px);");
   expect(watchCss).not.toMatch(/\d\s?ms\b/);

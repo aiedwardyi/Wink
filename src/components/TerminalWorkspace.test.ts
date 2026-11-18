@@ -955,15 +955,21 @@ it("forwards binary mouse reports to the PTY", async () => {
   expect(write).toHaveBeenCalledWith("session-bin", "\x1b[M\x60\x21\x10");
 });
 
-it("forces an app repaint after attaching an alt-screen snapshot", async () => {
+it.each([
+  { cols: 80, rows: 24, sizes: [[80, 23], [80, 24]] },
+  { cols: 110, rows: 30, sizes: [[80, 24]] },
+])("repaints an alternate screen without restoring stale dimensions ($cols by $rows)", async ({ cols, rows, sizes }) => {
+  let frame!: FrameRequestCallback;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frame = cb; return 1; });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
   const resize = vi.fn(async () => {});
-  const open = vi.fn(async () => ({ id: "session-alt", cwd: "C:\\work", shell: "pwsh.exe", output: "TUI", seq: 1, exitCode: null, alternate: true }));
+  const open = vi.fn(async () => ({ id: "session-alt", cwd: "C:\\work", shell: "pwsh.exe", output: "TUI", seq: 1, exitCode: null, cols, rows, alternate: true }));
   const bridge: TerminalBridge = { appearance: vi.fn(async () => null), open, write: vi.fn(async () => {}), resize, onData: () => vi.fn(), onExit: () => vi.fn() };
   const bot = mountBridge(bridge, { id: "bot-alt", name: "Alt", cwd: "C:\\work" });
   await act(async () => root.render(createElement(TerminalWorkspace, { bot, visible: true, focusBlocked: false, onClose: vi.fn() })));
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
-  // Size bounce (rows - 1, then rows) makes a diff-rendering TUI repaint from live state.
-  expect(resize.mock.calls).toEqual([["session-alt", 80, 23], ["session-alt", 80, 24]]);
+  Object.defineProperties(host.querySelector("[data-orbit-terminal] > div")!, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
+  await act(async () => frame(0));
+  expect(resize.mock.calls).toEqual(sizes.map((size) => ["session-alt", ...size]));
 });
 
 it("replays history at the PTY's size and fits only after the replay", async () => {
@@ -1026,6 +1032,48 @@ it("re-runs fit, refresh, and PTY sync when the terminal becomes visible again",
   } finally {
     if (widthDesc) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthDesc);
     if (heightDesc) Object.defineProperty(HTMLElement.prototype, "clientHeight", heightDesc);
+  }
+});
+
+it("keeps the PTY size on close and sends each visible size once, before the next command", async () => {
+  let frame!: FrameRequestCallback;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frame = cb; return 1; });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  const resize = vi.fn(async () => {});
+  const write = vi.fn(async () => {});
+  const open = vi.fn(async () => ({ id: "session-size", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
+  const bot = mountBridge({ appearance: vi.fn(async () => null), open, write, resize, onData: () => vi.fn(), onExit: () => vi.fn() });
+  let observed!: () => void;
+  vi.stubGlobal("ResizeObserver", class { constructor(cb: () => void) { observed = cb; } observe() {} disconnect() {} });
+  const render = (visible: boolean) => act(async () => root.render(createElement(TerminalWorkspace, { bot, visible, focusBlocked: false, onClose: vi.fn() })));
+  const tick = () => act(async () => frame(0));
+  await render(true);
+  const element = host.querySelector("[data-orbit-terminal] > div")!;
+  Object.defineProperties(element, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
+  await tick();
+  resize.mockClear();
+  try {
+    await render(false);
+    terminal.cols = 68;
+    observed();
+    await tick();
+    expect(resize).not.toHaveBeenCalled();
+
+    terminal.cols = 85;
+    await render(true);
+    await tick();
+    observed();
+    await tick();
+    expect(resize.mock.calls).toEqual([["session-size", 85, 24]]);
+
+    terminal.cols = 75;
+    observed();
+    await act(async () => terminal.__emitData("ls\r"));
+    await tick();
+    expect(resize.mock.calls).toEqual([["session-size", 85, 24], ["session-size", 75, 24]]);
+    expect(resize.mock.invocationCallOrder.at(-1)).toBeLessThan(write.mock.invocationCallOrder[0]!);
+  } finally {
+    terminal.cols = 80;
   }
 });
 
