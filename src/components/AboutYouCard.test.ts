@@ -94,6 +94,14 @@ describe("About You card", () => {
     expect(host.querySelector("textarea")!.className).toContain("bg-inset");
   });
 
+  it("lets a long paste scroll inside the capped box", async () => {
+    await render();
+    await type(Array.from({ length: 40 }, (_, i) => `- Note ${i + 1}`).join("\n"));
+    const box = host.querySelector("textarea")!;
+    expect(box.classList.contains("max-h-[240px]")).toBe(true);
+    expect(box.classList.contains("overflow-y-auto")).toBe(true);
+  });
+
   const type = (value: string) => act(async () => {
     const box = host.querySelector("textarea")!;
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);

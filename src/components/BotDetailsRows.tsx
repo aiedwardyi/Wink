@@ -58,10 +58,17 @@ export function SwitchRow({ label, hint, aria, on, disabled, className, onToggle
   );
 }
 
+function scrollParent(box: HTMLTextAreaElement) {
+  for (let pane = box.parentElement; pane; pane = pane.parentElement) {
+    if (/^(auto|scroll)$/.test(getComputedStyle(pane).overflowY)) return pane;
+  }
+  return null;
+}
+
 function fit(box: HTMLTextAreaElement) {
   if (!box.clientWidth) return;
   // shrinking to measure can clamp the panel's scroll, so put it back before the frame paints
-  const scroller = box.closest<HTMLElement>(".overflow-y-auto");
+  const scroller = scrollParent(box);
   const top = scroller?.scrollTop ?? 0;
   box.style.height = "auto";
   box.style.height = `${box.scrollHeight + box.offsetHeight - box.clientHeight}px`;
@@ -129,7 +136,7 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
   useEffect(() => {
     if (!watchMetrics || !ref.current) return;
     const box = ref.current;
-    const scroller = box.closest<HTMLElement>(".overflow-y-auto");
+    const scroller = scrollParent(box);
     // a box in a hidden tab would force layout of the tab being opened; its ResizeObserver fits it on show
     const refit = () => { if (!box.closest("[hidden]")) fit(box); };
     const check = () => { if (box.scrollHeight > box.clientHeight) fit(box); };
@@ -158,5 +165,5 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
     observer.observe(box);
     return () => observer.disconnect();
   }, []);
-  return <textarea ref={ref} className={cn(className, "resize-none overflow-hidden")} {...props} />;
+  return <textarea ref={ref} className={cn("overflow-hidden", className, "resize-none")} {...props} />;
 }
