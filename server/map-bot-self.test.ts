@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
 import { createWorkerMap } from "./map-pane.ts";
-import type { Message, Store, StoreChange } from "./store.ts";
+import { DATA_DIR } from "./config.ts";
+import { Store, type Message, type StoreChange } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
 
@@ -40,12 +41,13 @@ const edited = (writes: string[], ok = true): Message => ({
   tool: completedTool({ name: "Edit" }, { eventId: `e${id}`, provider: "claude", threadId: "thread", createdAt: new Date().toISOString(), type: "item.completed", itemType: "tool", ok, writes }),
 });
 
-async function open(messages: Message[], cwd?: string, task?: { cwd?: string | null }) {
+async function open(messages: Message[], cwd?: string, task?: { cwd?: string | null }, real?: { store: Store; botId: string }) {
   const listeners: ((change: StoreChange) => void)[] = [];
-  // SAFETY: the worker map reads only these four store members.
-  const store = {
+  // SAFETY: the worker map reads only these five store members.
+  const store = real?.store ?? {
     bot: () => ({ id: "bot", name: "Teacher", threadId: "thread", cwd }),
     taskByThread: () => task,
+    loaded: () => true,
     messagesFor: () => messages,
     onChange: (listener: (change: StoreChange) => void) => { listeners.push(listener); return () => {}; },
   } as unknown as Store;
@@ -53,7 +55,7 @@ async function open(messages: Message[], cwd?: string, task?: { cwd?: string | n
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
     if (url.pathname === "/live") streams.push(res);
-    void feature.handle(req, res, "bot", url.pathname.slice(1), url);
+    void feature.handle(req, res, real?.botId ?? "bot", url.pathname.slice(1), url);
   });
   servers.push(server);
   const url = `http://127.0.0.1:${await listenLocal(server)}`;
@@ -92,6 +94,30 @@ it("shows the bot as a row with the files its own turn edited in a git folder", 
   const diff = await fetch(`${map.url}/file?worker=${shown.workers[0].id}&path=file.ts`).then(res => res.json());
   expect(diff).toMatchObject({ lines: expect.arrayContaining([expect.objectContaining({ kind: "add", text: "const after = 2;" })]) });
   map.close();
+});
+
+it("reads only the rows that wrote files and leaves a long chat unloaded", async () => {
+  const { root } = repo();
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  const write = (store: Store, threadId: string, path: string) => {
+    const { id: _id, at: _at, ...row } = edited([join(root, path)]);
+    store.appendMessage(threadId, row);
+  };
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  writeFileSync(join(root, "file.ts"), "const first = 2;\n");
+  write(setup, bot.threadId, "file.ts");
+  for (let row = 0; row < 300; row++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${row}` });
+  writeFileSync(join(root, "other.ts"), "const second = 2;\n");
+  write(setup, bot.threadId, "other.ts");
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const whole = vi.spyOn(store, "messagesFor");
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  const shown = await map.until(data => data.workers.length > 0);
+  map.close();
+  expect(shown.workers[0].files.map(file => file.path).sort()).toEqual(["file.ts", "other.ts"]);
+  expect(whole).not.toHaveBeenCalled();
+  expect(store.loaded(bot.threadId)).toBe(false);
 });
 
 it("shows no row for a bot that only chats, or whose edit failed or left no change", async () => {

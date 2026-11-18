@@ -12,6 +12,7 @@ import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
 import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
+import { notesBack, storedHead, writeRows } from "./message-db.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -249,6 +250,10 @@ export function createMapPane(deps: MapPaneDeps) {
   return { handle };
 }
 
+// A chat nobody has loaded yet stays unloaded: Map reads only its rows that wrote files, and its notes newest first (the Wink chat has 237k rows).
+const botWrites = (store: Pick<Store, "loaded" | "messagesFor">, threadId: string) =>
+  store.loaded(threadId) || storedHead(threadId) === undefined ? store.messagesFor(threadId) : writeRows(threadId);
+
 export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess | null) {
   return createMapPane({
     flows: join(DATA_DIR, "map-flows.json"),
@@ -256,7 +261,7 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
       const bot = store.bot(botId);
       const task = bot && store.taskByThread(bot.id, bot.threadId);
       // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
-      const self = bot ? mapBotSelf(store.messagesFor(bot.threadId), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
+      const self = bot ? mapBotSelf(botWrites(store, bot.threadId), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
       const bridge = access();
       if (!bridge) return self;
       const snapshot = await terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true });
@@ -265,8 +270,9 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
       return [...paneSchema.array().parse(snapshot.body.panes ?? []), ...self];
     },
     reason: (botId, pane, editedAt) => {
-      const messages = store.messagesFor(store.bot(botId)?.threadId ?? "");
-      for (const message of messages.toReversed()) {
+      const threadId = store.bot(botId)?.threadId ?? "";
+      const notes = store.loaded(threadId) || storedHead(threadId) === undefined ? store.messagesFor(threadId).toReversed() : notesBack(threadId);
+      for (const message of notes) {
         if (message.kind !== "note" || !message.text || message.at < editedAt) continue;
         const note = parsePaneNote(message.text);
         if (note.pane8 && pane.sessionId.startsWith(note.pane8) && !note.alert) return note.body.trim().split("\n")[0].slice(0, 240) || undefined;

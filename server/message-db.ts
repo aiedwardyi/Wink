@@ -358,6 +358,15 @@ export function notesBackOn(handle: DatabaseSync, threadId: string): Iterable<Me
   })();
 }
 
+/** A thread's stored rows that record file writes, oldest first. Built on first use: a 3 GB database indexes in seconds, which first start should not wait for. */
+export function writeRows(threadId: string): Message[] {
+  const database = db();
+  database.exec("CREATE INDEX IF NOT EXISTS messages_writes ON messages(thread_id) WHERE kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL");
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = database.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL ORDER BY rowid").all(threadId) as Array<{ json: string }>;
+  return rows.map(rowToMessage);
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;
