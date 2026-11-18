@@ -358,12 +358,19 @@ export function notesBackOn(handle: DatabaseSync, threadId: string): Iterable<Me
   })();
 }
 
-/** A thread's stored rows that record file writes, oldest first. Built on first use: a 3 GB database indexes in seconds, which first start should not wait for. */
-export function writeRows(threadId: string): Message[] {
-  const database = db();
-  database.exec("CREATE INDEX IF NOT EXISTS messages_writes ON messages(thread_id) WHERE kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL");
+/** A thread's note rows stamped at or after `at`, newest first: a pane edited after every note reads none. */
+export function notesSince(threadId: string, at: number): Iterable<Message> {
   // SAFETY: This projection selects the stored message JSON.
-  const rows = database.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL ORDER BY rowid").all(threadId) as Array<{ json: string }>;
+  const rows = db().prepare("SELECT json FROM messages INDEXED BY messages_thread_at WHERE thread_id = ? AND kind = 'note' AND at >= ? ORDER BY rowid DESC").iterate(threadId, at) as Iterable<{ json: string }>;
+  return (function* () {
+    for (const row of rows) yield rowToMessage(row);
+  })();
+}
+
+/** A thread's stored rows that record file writes, oldest first; cold-thread-worker.ts runs it on its own handle. No index: building one locks out every write for seconds on a 3 GB database. */
+export function writeRowsOn(handle: DatabaseSync, threadId: string): Message[] {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL ORDER BY rowid").all(threadId) as Array<{ json: string }>;
   return rows.map(rowToMessage);
 }
 

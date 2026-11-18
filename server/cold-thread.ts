@@ -3,16 +3,20 @@ import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
-import type { TailRequest } from "./cold-thread-worker.ts";
+import type { TailRead, TailRequest } from "./cold-thread-worker.ts";
 import { messageDbFile, threadOver, type ThreadRows } from "./message-db.ts";
 import type { Message, Store } from "./store.ts";
 
 type Tail = ThreadRows & { options: Message[] };
 
-let reader: ((threadId: string, count: number) => Promise<Tail>) | undefined;
+type Read = (request: TailRead) => Promise<Tail>;
+
+let reader: Read | undefined;
+// its own worker: a long chat's write scan would hold up the chat pages queued behind it
+let writes: Read | undefined;
 
 /** Spawns cold-thread-worker.ts: on a cold disk a 237k-row chat's tail held the thread that serves the app ~800 ms. */
-function startReader(): (threadId: string, count: number) => Promise<Tail> {
+function startReader(): Read {
   const source = new URL("./cold-thread-worker.ts", import.meta.url);
   const entry = existsSync(source) ? source : new URL("./cold-thread-worker.js", import.meta.url);
   const worker = new Worker(entry, { execArgv: entry.pathname.endsWith(".ts") ? ["--experimental-strip-types"] : [] });
@@ -25,13 +29,14 @@ function startReader(): (threadId: string, count: number) => Promise<Tail> {
     if (reply.tail) wait?.resolve(reply.tail);
     else wait?.reject(new Error(reply.error));
   });
-  const read = (threadId: string, count: number) => new Promise<Tail>((resolve, reject) => {
+  const read: Read = (request) => new Promise<Tail>((resolve, reject) => {
     const id = ++next;
     waiting.set(id, { resolve, reject });
-    worker.postMessage({ id, file: messageDbFile(), threadId, count } satisfies TailRequest);
+    worker.postMessage({ ...request, id, file: messageDbFile() } satisfies TailRequest);
   });
   const stopped = (error: Error) => {
     if (reader === read) reader = undefined;
+    if (writes === read) writes = undefined;
     for (const wait of waiting.values()) wait.reject(error);
     waiting.clear();
   };
@@ -61,7 +66,7 @@ export async function chatListPage(
   let tail: Tail;
   try {
     // one row past the page: offscreenLimit compares the first page row's parent with it
-    tail = await (reader ??= startReader())(threadId, limit + 1);
+    tail = await (reader ??= startReader())({ threadId, count: limit + 1 });
   } catch (error) {
     console.error("cold page read failed; the store answers", threadId, error);
     return null;
@@ -72,6 +77,20 @@ export async function chatListPage(
   const rows = offscreen ? offscreenLimit(messages, limit, offscreen, activeLeafId || messages.at(-1)!.id, options) : limit;
   const start = Math.max(0, messages.length - rows);
   return { messages: messages.slice(start), hasMore: start > 0 };
+}
+
+/** The rows that wrote files, or null when the store must answer (loaded, or the read failed). */
+export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: string): Promise<Message[] | null> {
+  if (store.loaded(threadId)) return null;
+  let rows: Message[];
+  try {
+    rows = (await (writes ??= startReader())({ threadId, writes: true })).messages;
+  } catch (error) {
+    console.error("cold write rows read failed; the store answers", threadId, error);
+    return null;
+  }
+  // a write during the read loaded the chat, and its newest rows may not be saved yet
+  return store.loaded(threadId) ? null : rows;
 }
 
 /** Chats past this many rows keep their tail page until a write or an older page loads them: a 237k-row chat took 3 s. */

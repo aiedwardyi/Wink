@@ -12,6 +12,8 @@ import {
   deleteThread,
   insertMessage,
   messageDatabase,
+  notesBack,
+  notesSince,
   readThread,
   replaceThread,
   scanThreadRows,
@@ -194,6 +196,14 @@ describe("message-db", () => {
   it("finds a thread's newest message from an index, never a scan of its rows", () => {
     const plan = messageDatabase().prepare("EXPLAIN QUERY PLAN SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").all("t1");
     expect(JSON.stringify(plan)).toContain("COVERING INDEX");
+  });
+
+  it("reads notes since a time newest inserted first, as a filtered notesBack reads them", () => {
+    [500, 300, 300, 700, 100, 300, 900, 200].forEach((at, n) => insertMessage("t", msg(`n${n}`, `note ${n}`, { role: "bot", kind: "note", at })));
+    insertMessage("t", msg("text", "not a note", { at: 300 }));
+    insertMessage("other", msg("elsewhere", "other chat", { role: "bot", kind: "note", at: 300 }));
+    for (const cutoff of [0, 100, 299, 300, 301, 900, 901])
+      expect([...notesSince("t", cutoff)].map((m) => m.id), `since ${cutoff}`).toEqual([...notesBack("t")].filter((m) => m.at >= cutoff).map((m) => m.id));
   });
 
   it("finds handed mail at boot from an index, never a scan of every row", () => {

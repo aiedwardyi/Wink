@@ -9,6 +9,7 @@ import { listenLocal } from "./phone-relay/testing/net.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { DATA_DIR } from "./config.ts";
 import { Store, type Message, type StoreChange } from "./store.ts";
+import { messageDatabase } from "./message-db.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
 
@@ -118,6 +119,58 @@ it("reads only the rows that wrote files and leaves a long chat unloaded", async
   expect(shown.workers[0].files.map(file => file.path).sort()).toEqual(["file.ts", "other.ts"]);
   expect(whole).not.toHaveBeenCalled();
   expect(store.loaded(bot.threadId)).toBe(false);
+});
+
+it("keeps serving while it reads an unloaded chat's write rows from a large database", async () => {
+  const { root } = repo();
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  writeFileSync(join(root, "file.ts"), "const first = 2;\n");
+  const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
+  setup.appendMessage(bot.threadId, row);
+  const database = messageDatabase();
+  const insert = database.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES ('other', ?, 0, 'bot', 'activity', NULL, ?)");
+  const json = JSON.stringify({ id: "r", at: 0, role: "bot", kind: "activity", tool: { name: "Bash", ok: true, detail: { output: ["x".repeat(4_000)] } } });
+  database.exec("BEGIN");
+  for (let n = 0; n < 40_000; n++) insert.run(`r${n}`, json);
+  database.exec("COMMIT");
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const loaded = store.loaded.bind(store);
+  const waits: number[] = [];
+  // Map asks whether the chat is loaded right before it reads the chat: a callback queued then must not wait on the read.
+  vi.spyOn(store, "loaded").mockImplementation(threadId => {
+    const queued = performance.now();
+    setImmediate(() => waits.push(performance.now() - queued));
+    return loaded(threadId);
+  });
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  const shown = await map.until(data => data.workers.length > 0);
+  map.close();
+  expect(shown.workers[0].files.map(file => file.path)).toEqual(["file.ts"]);
+  expect(Math.max(...waits)).toBeLessThan(50);
+});
+
+it("reads no note for panes edited after every note of an unloaded chat", async () => {
+  const folders = [repo().root, repo().root];
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  for (let n = 0; n < 200; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "note", text: `done ${n}`, at: Date.now() - 60_000 });
+  for (const root of folders) {
+    writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
+    const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
+    setup.appendMessage(bot.threadId, row);
+  }
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const parse = vi.spyOn(JSON, "parse");
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  const shown = await map.until(data => data.workers.length === 2);
+  map.close();
+  const notes = parse.mock.calls.filter(([text]) => text.includes('"kind":"note"')).length;
+  parse.mockRestore();
+  expect(shown.workers.map(worker => worker.reason)).toEqual([undefined, undefined]);
+  expect(notes).toBe(0);
 });
 
 it("shows no row for a bot that only chats, or whose edit failed or left no change", async () => {

@@ -12,7 +12,8 @@ import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
 import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
-import { notesBack, storedHead, writeRows } from "./message-db.ts";
+import { coldWriteRows } from "./cold-thread.ts";
+import { notesSince, storedHead } from "./message-db.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -250,9 +251,9 @@ export function createMapPane(deps: MapPaneDeps) {
   return { handle };
 }
 
-// A chat nobody has loaded yet stays unloaded: Map reads only its rows that wrote files, and its notes newest first (the Wink chat has 237k rows).
-const botWrites = (store: Pick<Store, "loaded" | "messagesFor">, threadId: string) =>
-  store.loaded(threadId) || storedHead(threadId) === undefined ? store.messagesFor(threadId) : writeRows(threadId);
+// A chat nobody has loaded yet stays unloaded: Map reads only its rows that wrote files, off the server thread, and its notes since the edit (the Wink chat has 237k rows).
+const botWrites = async (store: Pick<Store, "loaded" | "messagesFor">, threadId: string) =>
+  (store.loaded(threadId) || storedHead(threadId) === undefined ? null : await coldWriteRows(store, threadId)) ?? store.messagesFor(threadId);
 
 export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess | null) {
   return createMapPane({
@@ -260,18 +261,19 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
     panes: async botId => {
       const bot = store.bot(botId);
       const task = bot && store.taskByThread(bot.id, bot.threadId);
-      // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
-      const self = bot ? mapBotSelf(botWrites(store, bot.threadId), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
       const bridge = access();
-      if (!bridge) return self;
-      const snapshot = await terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true });
-      if (snapshot.status === 404) return self;
+      const [self, snapshot] = await Promise.all([
+        // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
+        bot ? botWrites(store, bot.threadId).then(rows => mapBotSelf(rows, bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd)) : [],
+        bridge && terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true }),
+      ]);
+      if (!snapshot || snapshot.status === 404) return self;
       if (snapshot.status !== 200) throw new Error("Worker panes unavailable");
       return [...paneSchema.array().parse(snapshot.body.panes ?? []), ...self];
     },
     reason: (botId, pane, editedAt) => {
       const threadId = store.bot(botId)?.threadId ?? "";
-      const notes = store.loaded(threadId) || storedHead(threadId) === undefined ? store.messagesFor(threadId).toReversed() : notesBack(threadId);
+      const notes = store.loaded(threadId) || storedHead(threadId) === undefined ? store.messagesFor(threadId).toReversed() : notesSince(threadId, editedAt);
       for (const message of notes) {
         if (message.kind !== "note" || !message.text || message.at < editedAt) continue;
         const note = parsePaneNote(message.text);
