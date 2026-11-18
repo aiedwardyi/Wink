@@ -62,8 +62,7 @@ export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.
   const kind: MediaKind = others.length && (!photos.length || pickedKind(pickFor, roomId) === "files") ? "files" : "photos";
   const months = useMemo(() => mediaMonths(kind === "photos" ? photos : others, locale), [kind, photos, others, locale]);
   const day = useMemo(() => new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }), [locale]);
-  // a room sends its clips whole, with no byte ranges, so a phone could not play one in the viewer
-  const images = useMemo(() => photos.filter((file) => file.image || (file.video && file.src && !file.whole)), [photos]);
+  const images = useMemo(() => photos.filter((file) => file.image || (file.video && file.src)), [photos]);
   // by key: a room's list reloads as new objects whenever someone posts a file
   const [openKey, setOpenKey] = useState<string | null>(null);
   const at = openKey === null ? -1 : images.findIndex((file) => file.key === openKey);
@@ -209,9 +208,9 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
 function MediaVideo({ file, top, left, size, onOpen }: { file: MediaFile; top: number; left: number; size: number; onOpen: (file: MediaFile) => void }) {
   const tile = <><Play size={22} aria-hidden="true" /><span className="w-full truncate text-center text-[11px]">{file.name}</span></>;
   return (
-    <MediaOpen file={file} style={{ top, left, width: size, height: size }} view={file.src && !file.whole ? () => onOpen(file) : undefined}
+    <MediaOpen file={file} style={{ top, left, width: size, height: size }} view={file.src ? () => onOpen(file) : undefined}
       className="absolute flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2 text-ink-secondary focus-visible:outline-2 focus-visible:outline-accent">
-      {file.src && !file.whole ? <MediaClip src={file.src} name={file.name}>{tile}</MediaClip> : tile}
+      {file.src ? <MediaClip src={file.src} name={file.name}>{tile}</MediaClip> : tile}
     </MediaOpen>
   );
 }

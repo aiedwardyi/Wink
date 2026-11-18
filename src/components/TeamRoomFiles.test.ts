@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
-import { TeamRoomRow } from "./TeamRoomRow";
+import { MediaViewerProvider } from "./MediaViewerProvider";
+import { RoomFileRows, TeamRoomRow } from "./TeamRoomRow";
 
 const mock = vi.hoisted(() => ({ request: vi.fn(), phone: false }));
 vi.mock("@/lib/api-request", () => ({ request: mock.request }));
@@ -35,6 +36,16 @@ afterEach(async () => {
 });
 
 describe("room files", () => {
+  it.each(["/api/rooms/r1", "/api/joined/rooms/r1"])("opens a video in the viewer from %s", async (base) => {
+    const files = [{ id: "a".repeat(24), name: "clip.mp4", type: "video/mp4", bytes: 100 }, { id: "b".repeat(24), name: "plan.pdf", type: "application/pdf", bytes: 200 }];
+    await render(createElement(MediaViewerProvider, { threadId: "room", messages: [], children: createElement(RoomFileRows, { base, files }) }));
+    const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("clip.mp4"));
+    expect(button).toBeDefined();
+    expect(host.querySelector('a[download="plan.pdf"]')).not.toBeNull();
+    await act(async () => button!.click());
+    expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`${base}/files/${files[0]!.id}`);
+  });
+
   it("uses the desktop picker and keeps the path when a move fails", async () => {
     const pickFolder = vi.fn(async () => "D:\\Team files");
     vi.stubGlobal("ogb", { pickFolder });

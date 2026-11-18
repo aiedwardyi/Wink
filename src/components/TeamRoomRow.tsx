@@ -28,6 +28,7 @@ import { FileAttachmentRow } from "./FileAttachmentRow";
 import { PersonLabel } from "./GroupPeople";
 import { JumpToLatest } from "./JumpToLatest";
 import { MediaViewerProvider, useMediaViewer } from "./MediaViewerProvider";
+import { MediaViewer } from "./MediaViewer";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
@@ -38,7 +39,7 @@ import { MessageBoundary } from "./TurnPresence";
 export const roomPictures = (base: string, files: readonly RoomFile[]) =>
   files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
 
-/** A line's deleted notes and download rows, below its words. */
+/** A line's deleted notes and file rows, below its words. */
 export function RoomFileRows({ base, files, className }: { base: string; files: readonly RoomFile[]; className?: string }) {
   const { t } = useI18n();
   const rows = files.filter((file) => !file.deleted && !isRoomPicture(file));
@@ -47,7 +48,7 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
       {files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
       {rows.length > 0 && (
         <div className={cn("flex flex-col gap-1.5", className)}>
-          {rows.map((file) => (
+          {rows.map((file) => file.type.startsWith("video/") ? <RoomVideoRow key={file.id} base={base} file={file} /> : (
             <a
               key={file.id}
               href={roomFileUrl(base, file, false)}
@@ -65,6 +66,19 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
       )}
     </>
   );
+}
+
+function RoomVideoRow({ base, file }: { base: string; file: RoomFile }) {
+  const viewer = useMediaViewer();
+  const [open, setOpen] = useState(false);
+  const image = { src: roomFileUrl(base, file, false), name: file.name, video: true };
+  return <>
+    <button type="button" aria-label={file.name} className="block rounded-lg text-left hover:bg-raised/50"
+      onClick={(event) => { if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setOpen(true); } }}>
+      <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
+    </button>
+    {open && <MediaViewer image={image} onClose={() => setOpen(false)} />}
+  </>;
 }
 
 type LineTranslation = ReturnType<typeof useRoomTranslation>;

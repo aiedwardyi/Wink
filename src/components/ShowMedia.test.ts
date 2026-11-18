@@ -607,7 +607,7 @@ it("a hover preview keeps its source when StrictMode runs its ref twice", async 
   expect(tile.querySelector("video")!.getAttribute("src")).toBe("/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\loop.mp4"));
 });
 
-it("a room video keeps its play icon and name, and a tap downloads it, since a room sends its files whole", async () => {
+it("a room video opens in the media viewer", async () => {
   frames(true);
   room = { files: [{ id: id(4), name: "walk.mp4", type: "video/mp4", bytes: 10, at: 4, sender: "Mina" }] };
   await render({ threadId: "r-thread", roomId: "r1", messages: [] });
@@ -616,11 +616,9 @@ it("a room video keeps its play icon and name, and a tap downloads it, since a r
   await click(tab("Media"));
   await settle();
   const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="walk.mp4"]')!;
-  expect(tile.querySelector("img")).toBeNull();
-  expect(tile.querySelector(".truncate")!.textContent).toBe("walk.mp4");
-  expect(tile.matches("a[download]")).toBe(true);
+  expect(tile.matches("button")).toBe(true);
   await click(tile);
-  expect(document.querySelector("[data-media-viewer]")).toBeNull();
+  expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(4)}`);
 });
 
 it("a video whose frame can't be read keeps its play icon and name", async () => {
