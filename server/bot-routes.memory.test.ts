@@ -9,6 +9,7 @@ import { createBotRoutes } from "./bot-routes.ts";
 import { DATA_DIR } from "./config.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { markTalked, memorySyncDir, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { validatePickBinding } from "./pick-sources.ts";
 import { applyPicks, type PickEntry } from "./picks.ts";
 import { Store } from "./store.ts";
 import { memoryHealth, readMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
@@ -136,6 +137,42 @@ it("hides ambiguous legacy pictures at the same exact timestamp without rewritin
   expect(statSync(file).mtimeMs).toBe(before);
 });
 
+it("drops legacy option pictures whose captions disagree with an exact-time pick", async () => {
+  const { file, threadId, say, read } = timelineRoute("bot-legacy-option-mismatch");
+  const answer = say(threadId, MINUTE, "/shots/settings.png");
+  writeFileSync(file, [
+    "# Decision timeline", "", "## 2026-11-17 10:00 | Settings | current", "- Picked: B - green cards", '- Said: "I choose B"',
+    "- Picture: /shots/forum.png (B - blue cards)", "- Over: A - gray cards", "- Over pictures: /shots/forum-a.png (A - red cards)",
+    "- Files: /shots/settings.png", `- At: ${answer.at}`, "",
+  ].join("\n"));
+  const [pick] = (await read()).body.entries;
+  expect(pick).toMatchObject({ picked: "B - green cards", overPictures: [], files: ["/shots/settings.png"] });
+  expect(pick?.picture).toBeUndefined();
+});
+
+it("does not borrow either attachment for two old minute-only records", async () => {
+  const { file, threadId, say, read } = timelineRoute("bot-legacy-minute-only");
+  say(threadId, MINUTE, "/shots/first.png");
+  say(threadId, MINUTE + 15_000, "/shots/second.png");
+  writeFileSync(file, ["# Decision timeline", "", ...["", " (2)"].flatMap((suffix, i) => [
+    `## 2026-11-17 10:00${suffix} | Menu ${i} | current`, "- Picked: B", '- Said: "I choose B"', "- Files: /shots/first.png; /shots/second.png", "",
+  ])].join("\n"));
+  expect((await read()).body.entries.map(({ files }) => files)).toEqual([[], []]);
+});
+
+it("holds files and time on previously saved picks that claim the same answer", async () => {
+  const { file, threadId, say, save, read } = timelineRoute("bot-old-shared-answer");
+  const answer = say(threadId, MINUTE, "/shots/settings.png");
+  save(...["Forum", "Settings"].map((key) => boundPick(threadId, answer, key, "/shots/settings.png")));
+  const saved = readFileSync(file, "utf8");
+  const { body } = await read();
+  expect(body.entries.map(({ key, picked, binding, files, at }) => [key, picked, binding, files, at])).toEqual([
+    ["Forum", "B", "unbound", [], undefined], ["Settings", "B", "unbound", [], undefined],
+  ]);
+  expect(body.text).toBe(saved);
+  expect(readFileSync(file, "utf8")).toBe(saved);
+});
+
 it("resolves an untagged legacy thumbnail to its room's thread from direct chat", async () => {
   const id = "bot-legacy-room";
   const { store, file, say, read } = timelineRoute(id);
@@ -195,7 +232,12 @@ it("reads 100 bound picks without reading their 2,000-message transcript", async
     return 'I choose B\n\n<attached-image path="/shots/menu.png"/>';
   } }));
   const transcript = vi.spyOn(store, "messagesFor").mockReturnValue(rows);
-  save(...rows.slice(0, 100).map((row, i) => boundPick(threadId, row, `Menu ${i}`, "/shots/menu.png")));
+  save(...rows.slice(0, 100).map((row, i) => {
+    const pick = boundPick(threadId, row, `Menu ${i}`, "/shots/menu.png");
+    const binding = validatePickBinding({ ...pick, over: [] }, { id: row.id, thread: threadId, at: row.at, files: pick.files });
+    expect(binding).toBeDefined();
+    return { ...pick, binding };
+  }));
   const samples = [await read(), await read(), await read()];
   console.info(`Timeline 2,000 messages, 100 picks: ${samples.map(({ ms }) => ms.toFixed(1)).join(" / ")} ms (${textReads} text reads)`);
   expect(samples.every(({ body }) => body.entries.length === 100)).toBe(true);

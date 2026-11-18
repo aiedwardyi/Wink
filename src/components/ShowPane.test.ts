@@ -8,7 +8,7 @@ import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
-import { parseTimeline } from "../../server/picks";
+import { applyPicks, parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
 
 const pdf = vi.hoisted(() => ({ pages: [] as number[], broken: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
@@ -598,11 +598,11 @@ it("orders days and picks by the current pick, even when a newer tap lost to it"
 
 ## 2026-11-17 10:00 | Latest choice | current
 - Picked: B
-- At: ${Date.UTC(2026, 10, 17, 10, 0, 35)}
+- At: ${new Date(2026, 10, 17, 10, 0, 35).getTime()}
 
 ## 2026-11-17 10:00 (2) | Earlier choice | current
 - Picked: A
-- At: ${Date.UTC(2026, 10, 17, 10, 0, 15)}
+- At: ${new Date(2026, 10, 17, 10, 0, 15).getTime()}
 
 ## 2026-11-18 10:00 | Old choice | replaced by 2026-11-14 10:00
 - Picked: B
@@ -613,6 +613,36 @@ it("orders days and picks by the current pick, even when a newer tap lost to it"
   await until(() => picked().length > 0);
   expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
   expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Latest choice", "Earlier choice", "Morning choice", "Old choice"]);
+});
+
+it("opens with the retyped pick at its latest action time even when its heading still dates the tap", async () => {
+  for (const day of [17, 18]) {
+    const pick = (key: string, messageId: string, date: number, hour: number, tapped = false) => ({
+      kind: "pick" as const, key, messageId, questionId: `${key}-question`, thread: "t1", at: new Date(2026, 10, date, hour).getTime(),
+      picked: "B - blue cards", said: "I choose B", tapped,
+    });
+    const text = applyPicks("", [pick("Forum", "m1", 17, 10, true), pick("Settings", "m2", 17, 11), pick("Forum", "m3", day, 12)])!.text;
+    expect(text).toContain("## 2026-11-17 10:00 | Forum | current");
+    picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+    await openTimeline(`b-retyped-${day}`);
+    await until(() => named("Forum")?.querySelector("q")?.textContent === "I choose B" && picked().length === 2);
+    expect(picked().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Forum", "Settings"]);
+    expect(named("Forum").closest("section")?.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day")).toBe(`2026-11-${day}`);
+    expect(named("Forum").querySelector("time")?.textContent).toContain("12:00");
+    expect(named("Forum").querySelector(".timeline-said span")?.textContent).toContain("12:00");
+    await render({ hidden: true });
+  }
+});
+
+it("shows the text of an unbound pick without printing its heading time", async () => {
+  const text = '# Decision timeline\n\n## 2026-11-17 10:00 | Forum | current\n- Picked: B - blue cards\n- Said: "I choose B"\n- Binding: unbound\n';
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-unbound");
+  await until(() => picked().length === 1);
+  expect(named("Forum").querySelector("[data-won]")?.textContent).toBe("B - blue cards");
+  expect(named("Forum").querySelector(".timeline-said span")?.textContent).toBe("Edward");
+  expect(named("Forum").querySelector("time, img")).toBeNull();
+  expect(host.querySelector("[data-timeline-day]")).toBeNull();
 });
 
 it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { replyTurns, shownPicture, type ShownPicture } from "./pick-sources.ts";
+import { replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
@@ -55,7 +55,7 @@ export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: Usag
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
-export type UserLine = { text: string; id?: string; questionId?: string; context?: string; options?: string[]; pictures?: ShownPicture[]; prior?: { questionId: string; context?: string; pictures: ShownPicture[] }; files?: string[]; at?: number; tap?: boolean };
+export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
 export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
@@ -303,7 +303,7 @@ const labeledOptions = (context = "") => [...context.matchAll(/(?:^|\s)([a-h]|\d
   .map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
 
 /** The quote is in the text, a short one as whole words, so "c" never matches inside "cards". */
-function quotes(text: string, said: string): boolean {
+export function quotes(text: string, said: string): boolean {
   const target = squash(said);
   if (target.length >= 4) return squash(text).includes(target);
   const spoken = words(target).join(" ");
@@ -431,7 +431,9 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
     const sensitive = decision || tweak ? secretValue : secretLike;
     if (sensitive(line) || sensitive(said)) return null;
-    const own = sources.filter(({ id, text }) => (!decision || !fact.message_id || fact.message_id === id) && quotes(text, said));
+    const quoting = sources.filter(({ text }) => quotes(text, said));
+    const identified = decision && fact.message_id != null ? quoting.filter(({ id }) => id === fact.message_id) : quoting;
+    const own = identified.length ? identified : quoting;
     const at = own.at(-1)?.at ?? 0;
     if (tweak) {
       const id = `tweak ${pickKey(key)} ${squash(said)}`;
@@ -441,22 +443,18 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       return { line: `${key}: ${line}`, kind: "tweak", pick: { kind: "tweak", at, key, said } };
     }
     if (decision) {
-      if (own.length !== 1) return null;
-      const source = own[0]!;
+      const source = quoting.find(({ questionId }) => fact.question_id != null && questionId === fact.question_id) ?? own[0];
+      if (!source) return null;
       const thing = key || line;
       const named = pickKey(thing) === pickKey(line) ? line : `${thing}: ${line}`;
       const options = source.options ?? labeledOptions(source.context);
       const label = LABELED.exec(line)?.[1]?.toLowerCase();
       const namedOption = label && options.find((option) => LABELED.exec(option)?.[1]?.toLowerCase() === label);
       if (namedOption && !sameOption(namedOption, line)) return null;
-      const newTextQuestion = !source.pictures?.length && (ASKED.test(source.context ?? "") || options.length > 1);
-      const continued = !newTextQuestion && source.prior && fact.question_id === source.prior.questionId ? source.prior : undefined;
-      const revisited = before && !newTextQuestion && [before.picked, ...before.over].some((option) => sameOption(option, line));
-      const recorded = before && revisited && (before.messageId || !source.id) ? [before.picture, ...before.overPictures].filter((picture): picture is Picture => Boolean(picture)) : [];
-      const available = [...(source.pictures ?? []), ...(continued?.pictures ?? [])];
+      const continued = fact.question_id === source.prior?.questionId ? source.prior : undefined;
       const context = [source.context, continued?.context].filter(Boolean).join(" ");
-      const known = sources.map((other) => other === source ? { ...source, context, pictures: available } : { text: other.text });
-      if (before) known.push({ text: [before.key, before.picked, ...before.over, ...recorded.map(({ caption }) => caption ?? "")].join("\n") });
+      const known = sources.map((other) => other === source ? { ...source, context, pictures: [...(source.pictures ?? []), ...(continued?.pictures ?? [])] } : { text: other.text });
+      if (before) known.push({ text: [before.key, before.picked, ...before.over].join("\n") });
       // a second pick on one question in the same lines is a change of mind: both land, in the order said
       const id = `pick ${pickKey(thing)} ${source.id ?? squash(said)}`;
       if ((keys.size >= DECISIONS_PER_PASS && !keys.has(pickKey(thing))) || seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, [{ ...source, context }])) return null;
@@ -467,33 +465,19 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const over = listOf(fact.over)
         .filter((option) => option.length <= DECISION_MAX && !secretLike(option) && pickKey(option) !== pickKey(line) && optionNamed(option, said, known, own))
         .slice(0, OPTIONS_MAX);
-      const linked = continued?.pictures.filter(({ caption }) => caption && [line, ...over].some((option) => sameOption(caption, option))) ?? [];
-      const shown = [...(source.pictures ?? []), ...linked, ...recorded];
-      let picture = shownPicture(fact.picture, shown);
-      // A switch can carry the saved picture of the newly chosen option.
-      if (!picture) picture = recorded.find(({ caption }) => caption !== undefined && sameOption(caption, line));
-      const overPictures: Picture[] = [];
-      for (const path of listOf(fact.over_pictures)) {
-        const found = shownPicture(path, shown);
-        if (found && found.path !== picture?.path && !overPictures.some((other) => other.path === found.path)) overPictures.push(found);
-      }
-      if (picture && !overPictures.length && recorded.includes(picture)) overPictures.push(...recorded.filter((other) => other.path !== picture.path));
-      const files = source.files ?? [];
+      const binding = validatePickBinding({
+        key: thing, picked: line, over, messageId: fact.message_id, questionId: fact.question_id, picture: fact.picture,
+        overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
+      }, identified.length === 1 ? identified[0] : undefined, before);
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
       keys.add(pickKey(thing));
       live.add(pickKey(thing));
       decided.add(squash(said));
-      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: source.at ?? 0, key: thing, picked: line, said };
-      if (source.id) {
-        pick.messageId = source.id;
-        pick.questionId = continued?.questionId ?? source.questionId ?? source.id;
-      }
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? (source.id ? 0 : source.at ?? 0), key: thing, picked: line, said };
+      if (source.id) pick.binding = binding ?? "unbound";
       if (over.length) pick.over = over;
-      if (picture) pick.picture = picture;
-      if (overPictures.length) pick.overPictures = overPictures;
-      if (files.length) pick.files = files;
-      if (source.tap) pick.tapped = true;
+      if (source.tap && binding) pick.tapped = true;
       if (target) pick.legacy = { day: old?.[2] ?? day(pick.at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
       const note: Note = { line: named, kind: "decision", pick };
       if (target) note.replaces = target;
@@ -695,8 +679,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     // a full MEMORY.md turns facts away; a pick still lands in the timeline, its old line left in place
     const changes = accepted.flatMap(({ pick }) => {
       if (!pick) return [];
-      const change = { ...pick, at: pick.kind === "pick" && pick.messageId ? pick.at : pick.at || now() };
-      if (change.kind === "pick") change.thread = sourceThread(threadId);
+      const change = { ...pick, at: pick.kind === "pick" && pick.binding && pick.binding !== "unbound" ? pick.binding.at : pick.at || now() };
       if (full && change.kind === "pick") delete change.legacy;
       return [change];
     });
@@ -765,7 +748,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     });
     const replies = replyTurns(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
     const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
-      const line: UserLine = { id, text, at };
+      const line: UserLine = { id, text, at, thread: sourceThread(threadId) };
       if (tap) line.tap = true;
       const reply = replies.get(id);
       if (reply) {
@@ -773,6 +756,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         line.context = reply.context ? replyContext(reply.context) : undefined;
         line.options = reply.options;
         line.pictures = reply.pictures;
+        line.previousAnswerId = reply.previousAnswerId;
+        line.invalidCard = reply.invalidCard;
         if (reply.prior) line.prior = { ...reply.prior, context: reply.prior.context ? replyContext(reply.prior.context) : undefined };
       }
       if (files.length) line.files = files;

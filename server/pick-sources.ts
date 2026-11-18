@@ -1,23 +1,36 @@
 import { basename, join } from "node:path";
 
-import type { Picture } from "./picks.ts";
+import { LABELED, pickKey, type PickEntry, type Picture } from "./picks.ts";
 import type { Message } from "./store.ts";
 
 const PICTURE_SCAN = 200;
 const PICTURES_MAX = 8;
 const CAPTION_MAX = 80;
 const SHOW_IMAGE = /(?:^|[_.])show_image$/;
+const PREVIEW_REQUEST = /^(?:please\s+|(?:can|could) you\s+)?(?:show\b|let me see\b)[^\n.!?]*[.!?]?$/i;
+const CORRECTION = /^(?:actually\b|(?:no[,\s]+)?wait\b|i changed my mind\b)/i;
+const CONFIRMATION = /^(?:option\s+)?[a-z1-9]\s+it is\b[^?]*$/i;
 
 export type ShownPicture = Picture & { original?: string };
 type PictureTurn = { questionId: string; context?: string; options?: string[]; pictures: ShownPicture[] };
-type ReplyPictures = PictureTurn & { prior?: PictureTurn };
+export type ReplyPictures = PictureTurn & { prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean };
+type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
+type PickClaim = {
+  key: string; picked: string; over: string[]; messageId?: string | null; questionId?: string | null; at?: number; thread?: string;
+  picture?: string | null; overPictures?: string[]; files?: string[];
+};
+const verifiedBinding = Symbol("verified pick");
+export type PickBinding = {
+  readonly [verifiedBinding]: true;
+  at: number; messageId: string; questionId: string; thread: string;
+  picture?: Picture; overPictures: Picture[]; files: string[];
+};
 
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
-function botTurn(messages: readonly Message[], end: number) {
+function botTurn(messages: readonly Message[], start: number, parent: (index: number) => number) {
   const turn: Message[] = [];
-  const limit = Math.max(0, end - PICTURE_SCAN);
-  for (let i = end - 1; i >= limit; i -= 1) {
+  for (let i = start, scanned = 0; i >= 0 && scanned < PICTURE_SCAN; i = parent(i), scanned++) {
     const row = messages[i]!;
     if (sentByPerson(row)) return { turn: turn.reverse(), previous: i };
     if (row.role === "bot" && !row.comm) turn.push(row);
@@ -29,14 +42,14 @@ const isQuestionCard = (row: Message) => row.kind === "options" && row.role === 
 
 function picturesIn(turn: Message[], attachments: string, answered?: Message): PictureTurn | undefined {
   const tools = new Map(turn.filter((row) => row.kind === "activity" && row.tool?.ok !== false && SHOW_IMAGE.test(row.tool?.name ?? "")).map((row) => [row.id, row.tool?.summary]));
-  const pictures = new Map<string, ShownPicture>();
+  const pictures: ShownPicture[] = [];
   let lastScreen: string | undefined;
   for (const row of turn) {
     if (row.kind !== "screen" || !row.image || basename(row.image) !== row.image) continue;
     const path = join(attachments, row.image);
     const caption = row.text?.replace(/\s+/g, " ").trim().slice(0, CAPTION_MAX);
     const original = row.parentId ? tools.get(row.parentId) : undefined;
-    pictures.set(path, { path, caption, original });
+    pictures.push({ path, caption, original });
     lastScreen = row.id;
   }
   const reply = turn.findLast((row) => row.kind === "text" && row.text?.trim());
@@ -45,39 +58,84 @@ function picturesIn(turn: Message[], attachments: string, answered?: Message): P
   if (!questionId) return undefined;
   const card = question?.card;
   const context = [answered ? card?.subtitle : reply?.text ?? card?.subtitle, ...(card?.options ?? [])].filter(Boolean).join("\n");
-  return { questionId, context, options: card?.options, pictures: [...pictures.values()].slice(-PICTURES_MAX) };
+  return { questionId, context, options: card?.options, pictures: pictures.slice(-PICTURES_MAX) };
 }
 
 export function replyTurns(messages: readonly Message[], ids: string[], attachments: string): Map<string, ReplyPictures> {
   const wanted = new Set(ids);
   const found = new Map<string, ReplyPictures>();
+  const byId = new Map(messages.map(({ id }, i) => [id, i]));
+  const parent = (i: number) => {
+    const id = messages[i]!.parentId;
+    const index = id === undefined ? i - 1 : id ? byId.get(id) ?? -1 : -1;
+    return index < i ? index : -1;
+  };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {
     const answer = messages[i]!;
     if (!wanted.delete(answer.id)) continue;
-    let end = i;
-    let answered: Message | undefined;
-    if (answer.answersCard) {
-      const card = messages.findIndex((row) => row.id === answer.answersCard && isQuestionCard(row));
-      if (card >= 0 && card < i) {
-        answered = messages[card];
-        // The tapped card may precede a newer turn.
-        end = card + 1;
-        while (end < i && !sentByPerson(messages[end]!)) end += 1;
-      }
-    }
-    const { turn, previous } = botTurn(messages, end);
-    const current = picturesIn(turn, attachments, answered);
-    const prior = previous >= 0 && !answered ? picturesIn(botTurn(messages, previous).turn, attachments) : undefined;
-    if (current || prior) found.set(answer.id, { ...(current ?? { questionId: answer.id, pictures: [] }), prior });
+    const card = answer.answersCard ? byId.get(answer.answersCard) : undefined;
+    const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
+    const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
+    const current = picturesIn(turn, attachments, answered) ?? { questionId: answer.id, pictures: [] };
+    const previousAnswer = messages[previous];
+    const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
+    const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
+    const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
+    found.set(answer.id, { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered) });
   }
   return found;
 }
 
-export function shownPicture(value: string | null | undefined, shown: ShownPicture[]): Picture | undefined {
-  const asked = value?.trim().toLowerCase();
+function shownPicture(value: string | null | undefined, shown: ShownPicture[]): Picture | undefined {
+  const pathKey = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+  const asked = value && pathKey(value.trim());
   if (!asked) return undefined;
-  const is = (path: string, caption?: string) => asked === path.toLowerCase() || (caption !== undefined && asked === `${path} (${caption})`.toLowerCase());
-  const exact = shown.find(({ path, caption }) => is(path, caption));
-  const aliases = exact ? [] : shown.filter(({ original, caption }) => original && is(original, caption));
-  return exact ?? (aliases.length === 1 ? aliases[0] : undefined);
+  const is = (path: string, caption?: string) => asked === pathKey(path) || (caption !== undefined && asked === pathKey(`${path} (${caption})`));
+  const matches = shown.filter(({ path, caption, original }) => is(path, caption) || (original && is(original, caption)));
+  const match = matches[0];
+  if (!match || matches.some(({ path }) => pathKey(path) !== pathKey(match.path))) return undefined;
+  return shown.some(({ path, caption }) => pathKey(path) === pathKey(match.path) && caption !== match.caption) ? undefined : { path: match.path, caption: match.caption };
+}
+
+function captionMatches(caption: string, option: string): boolean {
+  const [a, b] = [caption.trim(), option.trim()];
+  const [left, right] = [LABELED.exec(a)?.[1]?.toLowerCase(), LABELED.exec(b)?.[1]?.toLowerCase()];
+  return (!left || !right || left === right) && pickKey(a.replace(LABELED, "")) === pickKey(b.replace(LABELED, ""));
+}
+
+export function validatePickBinding(claim: PickClaim, source: PickSource | undefined, before?: PickEntry): PickBinding | undefined {
+  if (!source?.id || !source.thread || source.at === undefined || !Number.isFinite(new Date(source.at).getTime()) || source.invalidCard) return undefined;
+  if ((claim.messageId != null && claim.messageId !== source.id) || (claim.thread !== undefined && claim.thread !== source.thread) || (claim.at !== undefined && claim.at !== source.at)) return undefined;
+  const topic = (context = "") => ` ${pickKey(context)} `.includes(` ${pickKey(claim.key)} `);
+  const prior = source.prior && claim.questionId === source.prior.questionId && (source.prior.kind === "correction" || (topic(source.context) && topic(source.prior.context))) ? source.prior : undefined;
+  const recorded = source.prior?.kind === "correction" && before?.binding === "verified" && before.thread === source.thread && before.messageId === source.previousAnswerId && before.questionId === source.prior.questionId && (!claim.questionId || claim.questionId === before.questionId)
+    ? [before.picture, ...before.overPictures].filter((picture): picture is Picture => Boolean(picture)) : [];
+  const questionId = prior?.questionId ?? (recorded.length ? before?.questionId : undefined) ?? source.questionId ?? source.id;
+  if (claim.questionId != null && claim.questionId !== questionId) return undefined;
+
+  const shown = [...(source.pictures ?? []), ...(prior?.pictures ?? []), ...recorded];
+  const options = [claim.picked, ...claim.over];
+  const forOption = (picture: Picture | undefined) => {
+    if (!picture?.caption) return -1;
+    const matches = options.flatMap((option, i) => captionMatches(picture.caption!, option) ? [i] : []);
+    return matches.length === 1 ? matches[0]! : -1;
+  };
+  const winner = claim.picture ? shownPicture(claim.picture, shown) : recorded.find((picture) => forOption(picture) === 0);
+  const picture = forOption(winner) === 0 ? winner : undefined;
+  const rejected = claim.overPictures ?? (picture && recorded.some(({ path }) => path === picture.path) ? recorded.map(({ path }) => path) : []);
+  const overPictures = new Map<number, Picture | null>();
+  for (const path of rejected) {
+    const found = shownPicture(path, shown);
+    const option = forOption(found);
+    if (!found || option <= 0 || found.path === picture?.path) continue;
+    const other = overPictures.get(option);
+    if (other?.path !== found.path) overPictures.set(option, overPictures.has(option) ? null : found);
+  }
+  const paths = new Set(source.files ?? []);
+  const files = (claim.files ?? source.files ?? []).filter((path) => paths.has(path));
+  return {
+    [verifiedBinding]: true,
+    at: source.at, messageId: source.id, questionId, thread: source.thread, picture,
+    overPictures: [...overPictures.values()].filter((value): value is Picture => value !== null), files,
+  };
 }

@@ -8,6 +8,7 @@ import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
 import { openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
+import { entryTime, pickStamp } from "../../shared/timeline-time";
 import { wheelZoomFactor } from "./image-zoom";
 import { MediaViewer } from "./MediaViewer";
 import "./TimelinePane.css";
@@ -16,6 +17,7 @@ const picture = z.object({ path: z.string(), caption: z.string().optional() });
 const entry = z.object({
   id: z.string(),
   at: z.number().optional(),
+  binding: z.enum(["verified", "unbound"]).optional(),
   key: z.string(),
   replacedBy: z.string().optional(),
   picked: z.string(),
@@ -36,6 +38,7 @@ type Row = Entry & { older: Entry[]; hay: string };
 const stampOf = (id: string) => /^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?/.exec(id)?.[0] ?? id;
 const dayOf = (id: string) => id.slice(0, 10);
 const timeOf = (id: string) => stampOf(id).slice(11);
+const entryStamp = (entry: Entry) => entry.binding === "unbound" ? "" : entry.at === undefined ? stampOf(entry.id) : pickStamp(entry.at);
 const when = (stamp: string, now: Date) => (stamp.startsWith(`${now.getFullYear()}-`) ? stamp.slice(5) : stamp);
 // A picture shown in chat is copied to attachments, which any chat can load; a bot's own file loads only through a chat that links it.
 const pictureSrc = (threadId: string, path: string) => (/[\\/]attachments[\\/][^\\/]+$/.test(path) && attachmentImageUrl(path)) || linkedFileSrc(threadId, path);
@@ -69,8 +72,7 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     }
     return each;
   };
-  const offset = (entry: Entry) => (entry.at ?? 0) % 60_000;
-  const ordered = [...entries].reverse().sort((a, b) => stampOf(b.id).localeCompare(stampOf(a.id)) || offset(b) - offset(a));
+  const ordered = [...entries].reverse().sort((a, b) => entryTime(b) - entryTime(a));
   const rows = new Map<Entry, Row>();
   for (const each of ordered) {
     const head = headOf(each);
@@ -83,9 +85,10 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     const row = rows.get(each);
     if (!row) continue;
     row.hay = [row, ...row.older].flatMap((each) => [each.key, each.picked, each.said ?? "", ...each.over, ...each.tweaks.map((tweak) => tweak.said)]).join("\n").toLowerCase();
-    const day = days.get(dayOf(row.id));
+    const key = dayOf(entryStamp(row));
+    const day = days.get(key);
     if (day) day.push(row);
-    else days.set(dayOf(row.id), [row]);
+    else days.set(key, [row]);
   }
   return [...days].map(([day, list]) => ({ day, rows: list }));
 }
@@ -492,10 +495,10 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
           <svg ref={ink} className="timeline-ink" aria-hidden="true" />
           <p className="timeline-day"><b>{t("timeline.newest")}</b></p>
           {drawn.map(({ day, rows }) => {
-            const [name, date] = dayLabel(day, now, t, locale);
+            const [name, date] = day ? dayLabel(day, now, t, locale) : [];
             return (
               <section key={day}>
-                <h3 data-timeline-day={day} className="timeline-day"><b>{name}</b> · {date}</h3>
+                {day && <h3 data-timeline-day={day} className="timeline-day"><b>{name}</b> · {date}</h3>}
                 {rows.map((row) => <Decision key={row.id} row={row} opened={opened} toggle={toggle} threadId={threadId} you={you} />)}
               </section>
             );
@@ -513,12 +516,13 @@ function Decision({ row, opened, toggle, threadId, you }: { row: Row; opened: Re
   const chips = row.older.length > 0 && (
     <span className="timeline-chips">
       {row.older.map((each) => {
-        const time = timeOf(each.id);
-        const at = time && dayOf(each.id) === dayOf(row.id) ? time : when(stampOf(each.id), new Date());
+        const stamp = entryStamp(each);
+        const time = timeOf(stamp);
+        const at = time && dayOf(stamp) === dayOf(entryStamp(row)) ? time : when(stamp, new Date());
         return (
           <button key={each.id} type="button" data-timeline-replaced aria-expanded={opened.has(each.id)} onClick={() => toggle(each.id)} className="timeline-replaced hover:bg-raised-hover">
             <History size={13} aria-hidden="true" />
-            <span>{t("timeline.replaced", { when: at })} · <s>{each.picked}</s></span>
+            <span>{at && <>{t("timeline.replaced", { when: at })} · </>}<s>{each.picked}</s></span>
             <ChevronRight size={14} aria-hidden="true" className="timeline-chevron" />
           </button>
         );
@@ -538,7 +542,8 @@ function Pick({ entry, threadId: viewing, you, chips, old = false }: { entry: En
   // a room pick's own files load through the room that links them
   const threadId = entry.thread ?? viewing;
   const now = new Date();
-  const at = when(stampOf(entry.id), now);
+  const stamp = entryStamp(entry);
+  const at = when(stamp, now);
   const options = crossedOf(entry).map((each, n) => <Option key={n} label={each.label} picture={each.picture} threadId={threadId} />);
   // the pick sits among its options, second from the left, the way it was picked from a row
   options.splice(Math.min(1, options.length), 0, <Option key="won" label={entry.picked} picture={entry.picture} threadId={threadId} won />);
@@ -547,18 +552,18 @@ function Pick({ entry, threadId: viewing, you, chips, old = false }: { entry: En
       <div className="timeline-left">
         <div className="timeline-label" data-label tabIndex={0}>
           <span className="timeline-key">{old ? entry.picked : entry.key}</span>
-          <time>{old ? t("timeline.replacedAt", { when: at }) : at}</time>
+          {at && <time>{old ? t("timeline.replacedAt", { when: at }) : at}</time>}
           {chips}
         </div>
         <div className="timeline-options">{options}</div>
       </div>
       <div className="timeline-notes">
-        {entry.said !== undefined && <div className="timeline-note"><p className="timeline-said"><q>{entry.said}</q><span>{you} · {at}</span></p></div>}
+        {entry.said !== undefined && <div className="timeline-note"><p className="timeline-said"><q>{entry.said}</q><span>{you}{at && ` · ${at}`}</span></p></div>}
         {entry.tweaks.length > 0 && (
           <div className="timeline-note">
             <p className="timeline-section"><Pencil size={12} aria-hidden="true" />{t("timeline.tweaks")}</p>
             <ol className="timeline-tweaks">
-              {entry.tweaks.map((tweak, n) => <li key={n}><span>{n + 1}</span><q>{tweak.said}</q><time>{dayOf(tweak.at) === dayOf(entry.id) && timeOf(tweak.at) ? timeOf(tweak.at) : when(stampOf(tweak.at), now)}</time></li>)}
+              {entry.tweaks.map((tweak, n) => <li key={n}><span>{n + 1}</span><q>{tweak.said}</q><time>{dayOf(tweak.at) === dayOf(stamp) && timeOf(tweak.at) ? timeOf(tweak.at) : when(stampOf(tweak.at), now)}</time></li>)}
             </ol>
           </div>
         )}

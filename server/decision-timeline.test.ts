@@ -192,6 +192,23 @@ describe("decision timeline", () => {
     expect(settings).toMatchObject({ id: "2026-11-17 10:01", files: ["/shots/settings.png"] });
   });
 
+  it("keeps a pick text-only when its answer and question IDs disagree", async () => {
+    const forum = bot("Forum: A - red cards or B - blue cards?");
+    say('I choose B\n\n<attached-image path="/shots/forum.png"/>');
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    const settings = bot("Settings: A - gray cards or B - blue cards?");
+    const answer = say('I choose B\n\n<attached-image path="/shots/settings.png"/>');
+    reply(
+      { kind: "decision", key: "Forum", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: forum.id },
+      { kind: "decision", key: "Settings", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: settings.id },
+    );
+    await settle();
+    const picks = currentPicks(timeline());
+    expect(picks.find(({ key }) => key === "Forum")).toMatchObject({ picked: "B - blue cards", binding: "unbound", files: [] });
+    expect(picks.find(({ key }) => key === "Forum")).not.toHaveProperty("at");
+    expect(picks.find(({ key }) => key === "Settings")).toMatchObject({ at: answer.at, questionId: settings.id, files: ["/shots/settings.png"] });
+  });
+
   it("binds identical replies when two questions swap the same option words", async () => {
     const header = bot("Header above footer: A - green cards or B - blue cards?");
     const first = say('I choose B\n\n<attached-image path="/shots/header.png"/>');
@@ -221,6 +238,45 @@ describe("decision timeline", () => {
     const [pick] = currentPicks(timeline());
     expect(pick?.picture).toBeUndefined();
     expect(pick?.overPictures).toEqual([]);
+  });
+
+  it("does not bind a completed illustrated question to a new pick with the same caption", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "screen", image: "forum.png", text: "B - blue cards" });
+    const forum = bot("Forum: A - red cards or B - blue cards?");
+    say("I choose B");
+    store.appendMessage("t1", { role: "bot", kind: "screen", image: "settings.png", text: "B - blue cards" });
+    bot("Settings: A - gray cards or B - blue cards?");
+    const answer = say("I choose B");
+    reply({ kind: "decision", key: "Settings", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: forum.id, picture: join(dataDir, "attachments", "forum.png") });
+    await settle();
+    const [pick] = currentPicks(timeline());
+    expect(pick?.picture).toBeUndefined();
+    expect(pick).toMatchObject({ picked: "B - blue cards", binding: "unbound" });
+  });
+
+  it("uses the answer branch when another question with the same caption was delivered between them", async () => {
+    const show = (name: string, parentId: string | null) => store.appendMessage("t1", {
+      role: "bot", kind: "screen", image: `${name}.png`, text: "B - blue cards", parentId,
+    });
+    const ask = (name: string, parentId: string) => store.appendMessage("t1", { role: "bot", kind: "text", text: `${name}: A - gray cards or B - blue cards?`, parentId });
+    const forum = ask("Forum", show("forum", null).id);
+    ask("Settings", show("settings", null).id);
+    const answer = store.appendMessage("t1", { role: "user", kind: "text", text: "I choose B", parentId: forum.id });
+    const picture = join(dataDir, "attachments", "forum.png");
+    reply({ kind: "decision", key: "Forum", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: forum.id, picture });
+    await settle();
+    expect(currentPicks(timeline())[0]).toMatchObject({ questionId: forum.id, picture: { path: picture } });
+  });
+
+  it("rejects a losing option as the winner and the winner as a rejected picture", async () => {
+    const mock = showMocks();
+    const question = bot("Forum: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const answer = say("I choose C - Reddit cards");
+    reply({ kind: "decision", key: "Forum", fact: "C - Reddit cards", quote: "I choose C - Reddit cards", message_id: answer.id, question_id: question.id, picture: mock("A"), over: ["A - plain list", "B - tiles"], over_pictures: [mock("C")] });
+    await settle();
+    const [pick] = currentPicks(timeline());
+    expect(pick).toMatchObject({ picked: "C - Reddit cards", overPictures: [] });
+    expect(pick?.picture).toBeUndefined();
   });
 
   it("keeps the first winner when an illustrated question continues across turns", async () => {

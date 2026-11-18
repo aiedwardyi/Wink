@@ -1,5 +1,7 @@
 // The user's picks, one timeline per bot in memory/decisions.md: plain markdown, oldest first.
 import { createHash } from "node:crypto";
+import { entryTime, pickStamp } from "../shared/timeline-time.ts";
+import type { PickBinding } from "./pick-sources.ts";
 
 export const PICKS_FILE = "decisions.md";
 /** Estimated tokens of the current-picks block in the prompt, header included. */
@@ -24,7 +26,7 @@ const HEADER = `Current picks, newest first: the user's own, each beating older 
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -51,6 +53,7 @@ export type PickEntry = {
   thread?: string;
   messageId?: string;
   questionId?: string;
+  binding?: "verified" | "unbound";
   tweaks: Tweak[];
   extra: string[];
 };
@@ -70,6 +73,7 @@ export type PickChange =
       thread?: string;
       messageId?: string;
       questionId?: string;
+      binding?: PickBinding | "unbound";
       tapped?: boolean;
       legacy?: { day: string; line: string };
     }
@@ -83,7 +87,6 @@ const clip = (text: string, max: number) => {
 };
 const same = (a: string, b: string) => flat(a).toLowerCase() === flat(b).toLowerCase();
 const list = (value: string) => value.split(SEPARATOR).map((part) => part.trim()).filter(Boolean);
-const pad = (value: number) => String(value).padStart(2, "0");
 const monthDay = (id: string) => id.slice(5, 10);
 const pictureOf = (value: string): Picture => {
   const captioned = CAPTIONED.exec(value);
@@ -107,19 +110,11 @@ export function sameOption(a: string, b: string): boolean {
   return x === y && (within(s, t) || within(t, s));
 }
 
-export function pickStamp(ms: number): string {
-  const date = new Date(ms);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify(entry.messageId
   ? [pickKey(entry.key), entry.thread, entry.messageId]
   : [pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
 
-export const entryTime = (entry: PickEntry) => {
-  const stamp = entry.id.replace(/ \(\d+\)$/, "");
-  return entry.at ?? new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime();
-};
+export { entryTime, pickStamp } from "../shared/timeline-time.ts";
 
 /** Entries and the text above them; lines it does not know stay with their entry. */
 export function parseTimeline(text: string): Timeline {
@@ -150,6 +145,7 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Thread" && /^[\w-]+$/.test(value)) entry.thread = value;
     else if (field === "Message" && /^[\w-]+$/.test(value)) entry.messageId = value;
     else if (field === "Question" && /^[\w-]+$/.test(value)) entry.questionId = value;
+    else if (field === "Binding" && (value === "verified" || value === "unbound")) entry.binding = value;
     else if (field === "At" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) entry.at = Number(value);
     else entry.extra.push(line);
   }
@@ -173,6 +169,7 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.thread ? [`- Thread: ${entry.thread}`] : []),
       ...(entry.messageId ? [`- Message: ${entry.messageId}`] : []),
       ...(entry.questionId ? [`- Question: ${entry.questionId}`] : []),
+      ...(entry.binding ? [`- Binding: ${entry.binding}`] : []),
       ...entry.tweaks.map(({ at, said }) => `- Tweak ${at}: "${said}"`),
       ...entry.extra,
     ].join("\n"),
@@ -227,27 +224,30 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     }
     const picked = clip(change.picked, PICKED_MAX);
     if (!picked) continue;
-    if (change.messageId && entries.some((entry) => entry.messageId === change.messageId && entry.thread === change.thread && pickKey(entry.key) === pickKey(key))) continue;
+    const binding = change.binding === "unbound" ? "unbound" : change.binding && "verified";
+    const evidence: Partial<PickBinding> = change.binding === "unbound" ? {} : change.binding ?? change;
+    if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
     if (current && sameOption(current.picked, picked)) {
-      if (overTap) {
+      if (overTap || (current.binding === "unbound" && binding === "verified")) {
         // pinned first: the identity hashes the time, and a merge must still find the tap
         current.source = identity(current);
         delete current.tapped;
-        current.at = change.at;
-        if (change.messageId) {
-          current.thread = change.thread;
-          current.messageId = change.messageId;
-          current.questionId = change.questionId;
+        current.at = binding === "unbound" ? undefined : change.at;
+        current.binding = binding;
+        if (evidence.messageId || binding === "unbound") {
+          current.thread = evidence.thread;
+          current.messageId = evidence.messageId;
+          current.questionId = evidence.questionId;
           current.said = said;
-          current.files = change.files ?? [];
-          current.picture = change.picture;
-          current.overPictures = change.overPictures ?? [];
+          current.files = evidence.files ?? [];
+          current.picture = evidence.picture;
+          current.overPictures = evidence.overPictures ?? [];
         }
         retyped = true;
       }
       continue;
     }
-    const id = fresh(stamp);
+    const id = fresh(binding === "unbound" ? stamp.slice(0, 10) : stamp);
     if (change.legacy) {
       entries.push({ id: fresh(change.legacy.day), key, replacedBy: id, picked: clip(change.legacy.line, PICKED_MAX), over: [], overPictures: [], files: [], tweaks: [], extra: [] });
       replaced += 1;
@@ -259,18 +259,19 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const entry: PickEntry = {
       id, key, picked,
       over: (change.over ?? []).map((option) => clip(option, PICKED_MAX).replace(/;/g, ",")).filter(Boolean),
-      overPictures: change.overPictures ?? [],
+      overPictures: evidence.overPictures ?? [],
       said,
-      files: change.files ?? [],
+      files: evidence.files ?? [],
       tweaks: [],
       extra: [],
     };
-    if (change.picture) entry.picture = change.picture;
+    if (evidence.picture) entry.picture = evidence.picture;
     if (tapped) entry.tapped = true;
-    if (change.thread) entry.thread = change.thread;
-    if (change.messageId) entry.messageId = change.messageId;
-    if (change.questionId) entry.questionId = change.questionId;
-    if (change.messageId || change.at % 60_000) entry.at = change.at;
+    if (evidence.thread) entry.thread = evidence.thread;
+    if (evidence.messageId) entry.messageId = evidence.messageId;
+    if (evidence.questionId) entry.questionId = evidence.questionId;
+    if (binding) entry.binding = binding;
+    if (binding !== "unbound" && (evidence.messageId || change.at % 60_000)) entry.at = change.at;
     entries.push(entry);
     picks += 1;
   }
@@ -321,8 +322,8 @@ export function mergeTimelines(a: string, b: string): string | null {
         continue;
       }
       const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
-      const bound = typed ?? (before.messageId ? before : entry);
-      if (bound.messageId) {
+      const bound = typed ?? (before.binding === "verified" ? before : entry.binding === "verified" ? entry : before.messageId ? before : entry);
+      if (bound.messageId || bound.binding === "unbound") {
         merged.set(key, { ...bound, source: key, replacedBy: undefined, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
         continue;
       }
