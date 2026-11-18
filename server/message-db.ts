@@ -76,7 +76,7 @@ function db(): DatabaseSync {
   return handle;
 }
 
-export { db as messageDatabase };
+export { db as messageDatabase, DB_FILE as messageDbFile };
 
 /** Its own read-only handle, for the backup worker: no import, no schema change, no write. */
 export function openThreadExport(file: string) {
@@ -123,19 +123,26 @@ export function storedHead(threadId: string): string | null | undefined {
   return row.last === null ? undefined : row.leaf || row.last;
 }
 
-/** The newest `count` rows in insertion order, the options rows before them, and the stored head. */
-export function readThreadTail(threadId: string, count: number): ThreadRows & { options: Message[] } {
+/** Whether a thread has more than `cap` rows; counts at most cap + 1 index entries. */
+export function threadOver(threadId: string, cap: number): boolean {
+  // SAFETY: COUNT(*) returns one integer row.
+  const row = db().prepare("SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages WHERE thread_id = ? LIMIT ?)").get(threadId, cap + 1) as { n: number };
+  return row.n > cap;
+}
+
+/** The newest `count` rows in insertion order, the options rows before them, and the stored head; cold-thread-worker.ts runs it on its own handle. */
+export function threadTailOn(handle: DatabaseSync, threadId: string, count: number): ThreadRows & { options: Message[] } {
   // SAFETY: This projection selects SQLite's rowid and the stored message JSON.
-  const rows = db()
+  const rows = handle
     .prepare("SELECT rowid AS cursor, json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?")
     .all(threadId, count) as Array<{ cursor: number; json: string }>;
   const oldest = rows.at(-1)?.cursor ?? 0;
   // SAFETY: This projection selects the stored message JSON.
-  const options = db()
+  const options = handle
     .prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' AND rowid < ? ORDER BY rowid")
     .all(threadId, oldest) as Array<{ json: string }>;
   // SAFETY: thread_state.active_leaf_id is a nullable TEXT column.
-  const state = db()
+  const state = handle
     .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
     .get(threadId) as { active_leaf_id: string | null } | undefined;
   return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
@@ -287,19 +294,11 @@ export function applySyncedRows(
   return touched;
 }
 
-/** Peer-approval cards on disk, found without loading their threads. */
-export function peerCardRows(): Array<{ threadId: string; id: string }> {
-  return db().prepare(`SELECT thread_id AS threadId, id FROM messages WHERE kind = 'options'
-    AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')`)
-    .all() as Array<{ threadId: string; id: string }>;
-}
-
-/** A quick ask with no answer row, found without loading the thread. */
-export function hasUnansweredQuickAsk(threadId: string): boolean {
-  return Boolean(db().prepare(`SELECT 1 FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
-    AND json_extract(json, '$.quick.state') = 'asked'
-    AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
-      AND json_extract(json, '$.quick.askId') IS NOT NULL) LIMIT 1`).get(threadId, threadId));
+/** One stored row by key, without loading its thread. */
+export function readMessage(threadId: string, id: string): Message | undefined {
+  // SAFETY: This projection selects the stored message JSON.
+  const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { json: string } | undefined;
+  return row && rowToMessage(row);
 }
 
 /** The active path newest first, one row at a time, or null when the thread has no stored leaf. */
@@ -322,8 +321,13 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
 
 /** A thread's note rows newest first, parsed only as far as the caller reads. */
 export function notesBack(threadId: string): Iterable<Message> {
+  return notesBackOn(db(), threadId);
+}
+
+/** notesBack on another handle: boot-reads.ts reads the same rows on its worker's own connection. */
+export function notesBackOn(handle: DatabaseSync, threadId: string): Iterable<Message> {
   // SAFETY: This projection selects the stored message JSON.
-  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'note' ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
+  const rows = handle.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'note' ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
   return (function* () {
     for (const row of rows) yield rowToMessage(row);
   })();

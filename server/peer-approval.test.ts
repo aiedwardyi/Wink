@@ -17,6 +17,7 @@ import {
   type ApprovalBus,
 } from "./peer-approval.ts";
 import { closeMessageDb } from "./message-db.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { Store, type BotRecord } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "fake-model" });
@@ -128,11 +129,11 @@ describe("peer approval card lifecycle", () => {
       },
     });
 
-    expect(dismissStalePeerCards(bus)).toBe(1);
+    expect(dismissStalePeerCards(bus, bootRowsNow().peerCards)).toBe(1);
     const settled = store.messagesFor(from.threadId).find((m) => m.id === orphan.id);
     expect(settled?.card?.dismissed).toBe(true);
     // and it is idempotent — a second boot must not re-dismiss or double count
-    expect(dismissStalePeerCards(bus)).toBe(0);
+    expect(dismissStalePeerCards(bus, bootRowsNow().peerCards)).toBe(0);
   });
 
   it("finds stale cards at boot without loading threads that have none", () => {
@@ -143,7 +144,7 @@ describe("peer approval card lifecycle", () => {
       card: { title: "@Asker wants to contact @Helper", subtitle: "ping", options: ["Allow", "Deny"], requestId: "boot-dead-process", tool: "ask_bot" },
     });
     const booted = new Store(selection);
-    expect(dismissStalePeerCards({ store: booted, broadcast: () => {} })).toBe(1);
+    expect(dismissStalePeerCards({ store: booted, broadcast: () => {} }, bootRowsNow().peerCards)).toBe(1);
     expect(booted.messagesFor(from.threadId).find((message) => message.id === orphan.id)?.card?.dismissed).toBe(true);
     expect((booted as unknown as { threads: Map<string, unknown> }).threads.has(target.threadId)).toBe(false);
   });
@@ -162,7 +163,7 @@ describe("peer approval card lifecycle", () => {
       },
     });
 
-    expect(dismissStalePeerCards(bus)).toBe(1);
+    expect(dismissStalePeerCards(bus, bootRowsNow().peerCards)).toBe(1);
     expect(
       store.messagesFor(background.threadId).find((message) => message.id === orphan.id)?.card?.dismissed,
     ).toBe(true);
@@ -171,7 +172,7 @@ describe("peer approval card lifecycle", () => {
   it("leaves a live card alone at boot", async () => {
     void requestPeerApproval(bus, from, target, "ping", "ask_bot");
     expect(pendingCard(store, from)).toBeTruthy();
-    expect(dismissStalePeerCards(bus)).toBe(0);
+    expect(dismissStalePeerCards(bus, bootRowsNow().peerCards)).toBe(0);
     expect(pendingCard(store, from)).toBeTruthy();
     cancelPeerApprovalsFor(from.id); // don't leave a timer pending
   });
@@ -195,12 +196,12 @@ describe("peer approval card lifecycle", () => {
       }),
     }));
 
-    expect(dismissStalePeerCards(bus)).toBe(2);
+    expect(dismissStalePeerCards(bus, bootRowsNow().peerCards)).toBe(2);
     for (const { threadId, message } of cards) {
       expect(store.messagesFor(threadId).find((item) => item.id === message.id)?.card).toMatchObject({
         answered: "deny", dismissed: true,
       });
     }
-    expect(dismissStalePeerCards(bus)).toBe(0);
+    expect(dismissStalePeerCards(bus, bootRowsNow().peerCards)).toBe(0);
   });
 });

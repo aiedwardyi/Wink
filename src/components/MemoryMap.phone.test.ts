@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -167,6 +170,12 @@ describe("phone memory motion", () => {
     expect(travel).toBeDefined();
     expect(travel!.keyframes[0].transform).toBe("translateY(-324px)");
     await finish();
+  });
+
+  it("sizes fold rows on their first layout, so moveRows measures where the rows below land", () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MemoryMap.css"), "utf8");
+    const deferred = [...css.matchAll(/([^{}]*\.mm-fold[^{}]*)\{([^}]*)\}/g)].filter(([, , body]) => body!.includes("content-visibility")).map(([, selector]) => selector!.trim());
+    expect(deferred, "a fold row that resizes after the open frame leaves the FLIP offset stale and flashes the next row over this one").toEqual([]);
   });
 
   it("opens and closes immediately under reduced motion", async () => {

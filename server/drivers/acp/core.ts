@@ -29,6 +29,7 @@ import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { inputDigest } from "../../repeat-detector.ts";
+import { guardInput } from "../../auto-approve.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
 import { exhaustedWindow, grokRateLimitWindows, isConfirmedNonUsage, usageLimitFromError } from "../rate-limits.ts";
 
@@ -227,7 +228,7 @@ export interface AcpSupport {
   wslResolveCli?: (cli: string, probeEnv: NodeJS.ProcessEnv) => Promise<string | null>;
   /** snapshot(): can this harness actually run a turn? (env already carries the
    *  merged config). May be async for harnesses that have to ask the CLI. */
-  isAuthenticated(env: Record<string, string | undefined>, config: AcpConfig): boolean | Promise<boolean>;
+  isAuthenticated(env: Record<string, string | undefined>, config: AcpConfig): boolean | undefined | Promise<boolean | undefined>;
   account?(env: Record<string, string | undefined>): string | undefined;
   /** Stable hash of who is signed in, so an added account can tell people apart. */
   accountIdentity?(env: Record<string, string | undefined>): string | undefined;
@@ -708,7 +709,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             await wait(ensureCli(ctx.env), lease.signal, () => check());
             if (support.requireAuthenticationBeforeSpawn && !skipSubscriptionAuthForLocalInject(turn.model)) {
               const authenticated = await wait(Promise.resolve(support.isAuthenticated(ctx.env, config)), lease.signal, () => check());
-              if (!authenticated) throw new Error(support.loginNote);
+              if (authenticated === false) throw new Error(support.loginNote);
             }
             check();
             entry = spawnEntry(ctx.cliTurn, ctx.env, ctx.cwd, lease);
@@ -788,8 +789,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             if (
               support.requireAuthenticationBeforeSpawn
               && !skipSubscriptionAuthForLocalInject(turn.model)
-              && !(await wait(Promise.resolve(withWslProbeReason("turn", () => support.isAuthenticated(env, config))),
-                controller.signal, checkCaptured))
+              && await wait(Promise.resolve(withWslProbeReason("turn", () => support.isAuthenticated(env, config))),
+                controller.signal, checkCaptured) === false
             ) {
               emit({ ...base(threadId, turnId), type: "turn.started" });
               emit({ ...base(threadId, turnId), type: "runtime.error", message: support.loginNote, setup: true });
@@ -1135,6 +1136,16 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             });
 
           const toolCall = params.toolCall ?? {};
+          // a read-only turn approves nothing, whatever the instance's Auto
+          if (turn.readOnly) {
+            const reject = optionFor("reject");
+            if (!reject) missing("reject");
+            return send({
+              jsonrpc: "2.0",
+              id: msg.id,
+              result: reject ? { outcome: { outcome: "selected", optionId: reject } } : cancelled(),
+            });
+          }
           if (config.fullAuto) {
             const allow = optionFor("allow");
             if (!allow) missing("allow");
@@ -1184,6 +1195,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             tool,
             summary,
             inputDigest: inputDigest(toolCall.rawInput ?? args),
+            ...(controlsHost && turn.attended ? {} : guardInput(toolCall.rawInput)),
             approvalScope: controlsHost ? "local-computer" : undefined,
           });
         };
@@ -1482,7 +1494,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
           const authenticated = await support.isAuthenticated(env, config);
           lastCapture = authenticated ? capture() : null;
-          if (input.account) admitted = authenticated;
+          if (input.account) admitted = authenticated === true;
           const ready: ProviderSnapshot = { state: "available", version: probed.version, authenticated, account: authenticated ? support.account?.(env) : undefined,
             ...(input.account ? { accountIdentity: authenticated ? support.accountIdentity?.(env) : undefined, accountAuthenticated: authenticated } : {}) };
           if (!gated) lastSnapshot = ready;
@@ -1519,6 +1531,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             effortLevels: support.effortLevels,
             localComputerMcp: !config.fullAuto,
             askApproval: !config.fullAuto,
+            readOnlyTurns: true,
           },
           sendTurn,
           // fullAuto selects "allow" on every session/request_permission; the rest reach Wink

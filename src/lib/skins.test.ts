@@ -226,6 +226,14 @@ describe("skins", () => {
     expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
   });
 
+  it("lets no skin undo the phone bot bubble width", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const sheets = [join(root, "styles.css"), ...readdirSync(join(root, "skins")).filter((f) => f.endsWith(".css")).map((f) => join(root, "skins", f))];
+    const important = sheets.flatMap((file) => [...readFileSync(file, "utf8").matchAll(/\[data-orbit-message-body\][^{}]*\{[^}]*max-width:[^;}]*!important/g)].map(() => file));
+    expect(important).toEqual([]);
+    expect(readFileSync(join(root, "components/ChatBubble.tsx"), "utf8")).toContain('!user && "max-sm:max-w-full!"');
+  });
+
   it("gives every non-Midnight skin its own focus and control tokens", () => {
     // Midnight inherits Grok-blue --color-focus from @theme. A light skin
     // that skips the token wears that blue on stone, paper, or porcelain.
@@ -1727,7 +1735,7 @@ describe("Lagoon and Snow scene themes", () => {
 
   it.each([
     ["samurai-ink", "Samurai Ink", { app: "#0c0c0d", card: "#151516", ink: "#f1efea", accent: "#e8e4dc", focus: "#ffffff", "bubble-user": "#2e2e31" }],
-    ["night-rain", "Night Rain", { app: "#0a0b1a", card: "#131429", ink: "#eef0ff", accent: "#ff5277", focus: "#4fe3ff", "bubble-user": "#0f4f66" }],
+    ["night-rain", "Night Rain", { app: "#0a0b1a", card: "#131429", ink: "#eef0ff", accent: "#ff5277", focus: "#4fe3ff", "bubble-user": "#2a2d5e" }],
     ["warp", "Warp", { app: "#080a18", card: "#0e1126", ink: "#edf2ff", accent: "#7aa8ff", focus: "#9ad7ff", "bubble-user": "#2b3a8f" }],
     ["circuit", "Circuit", { app: "#08111f", card: "#0b1628", ink: "#eaf4ff", accent: "#2e9bff", focus: "#44e0ff", "bubble-user": "#0f3a73" }],
   ] as const)("adds %s as a dark theme with its own palette", (id, name, palette) => {
@@ -1735,6 +1743,15 @@ describe("Lagoon and Snow scene themes", () => {
     expect(LIGHT_SKIN_IDS.has(id)).toBe(false);
     expect(SKINS.find((skin) => skin.id === id)?.name).toBe(name);
     for (const [token, value] of Object.entries(palette)) expect(cssToken(id, `--color-${token}`), token).toBe(value);
+  });
+
+  it("keeps Night Rain's own bubble in the panel's indigo, not a teal that stands out", () => {
+    const bubble = cssToken("night-rain", "--color-bubble-user")!;
+    const { r, g, b } = channels(bubble);
+    const hue = (Math.atan2(Math.sqrt(3) * (g - b), 2 * r - g - b) * 180) / Math.PI;
+    expect((hue + 360) % 360).toBeGreaterThanOrEqual(230);
+    expect((hue + 360) % 360).toBeLessThanOrEqual(260);
+    expect(contrast(cssToken("night-rain", "--color-ink")!, bubble)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("dresses Snow in Wink Day's palette and Snow Night in Precision's, everywhere those skins are styled", () => {

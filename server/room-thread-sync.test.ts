@@ -11,6 +11,7 @@ import { createRoomThreads } from "./room-thread-sync.ts";
 import { Store } from "./store.ts";
 import { syncHold } from "./sync-hold.ts";
 import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
+import { testBootReads } from "./testing/boot-rows.ts";
 
 const OWN = "own-writer";
 
@@ -48,7 +49,7 @@ describe("room sends and chat sync", () => {
     syncHold.release(group.threadId);
     await vi.advanceTimersByTimeAsync(200);
     await sent;
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "hi", undefined, undefined, undefined, undefined, []);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "hi", undefined, undefined, undefined, undefined, [], undefined);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
   });
 
@@ -106,7 +107,7 @@ describe("room chats from another PC", () => {
       const store = new Store(() => ({ instanceId: "fake", model: "m" }));
       const rooms = createRoomThreads({ store, botMap: () => ({}), syncId: (botId) => botId });
       const sync = createThreadSyncV2Store({
-        store, dataDir: DATA_DIR, deviceId: "local", folder: () => null, enabled: () => true, target: (threadId) => rooms.target(threadId),
+        store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => null, enabled: () => true, target: (threadId) => rooms.target(threadId),
         bots: () => [], running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {}, rooms,
       })!;
       return { store, rooms, sync };

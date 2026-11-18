@@ -60,7 +60,10 @@ const write = (value: string) => act(async () => {
   box()!.dispatchEvent(new Event("input", { bubbles: true }));
 });
 const fileRow = () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((each) => each.textContent?.includes("Memory File"))!;
-const editFile = () => fileRow().closest("section")!.querySelector<HTMLButtonElement>("button.mm-action")!;
+const startEditing = async () => {
+  await act(async () => fold("long").click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".mm-fold button")].find((each) => each.textContent === "Edit")!.click());
+};
 const closes = () => dispatch.mock.calls.filter(([action]) => action.type === "toggleSettings");
 
 function Harness({ of = bot }: { of?: Bot }) {
@@ -330,8 +333,7 @@ describe("Memory tab on return", () => {
   it("saves typed text the moment you leave", async () => {
     await open();
     await toMemory();
-    await act(async () => fileRow().click());
-    await act(async () => editFile().click());
+    await startEditing();
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "- Uses Linux");
       box()!.dispatchEvent(new Event("input", { bubbles: true }));
@@ -345,8 +347,7 @@ describe("Memory tab on return", () => {
   it("shows the Memory File save state in its own header, not the page corner", async () => {
     await open();
     await toMemory();
-    await act(async () => fileRow().click());
-    await act(async () => editFile().click());
+    await startEditing();
     await write("- Uses Linux");
     expect(fileRow().parentElement!.querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
     expect(fileRow().querySelector("[data-save-state]")).toBeNull();
@@ -413,8 +414,7 @@ describe("Memory tab on a phone whose memory read never answers", () => {
     });
     await open();
     await toMemory();
-    await act(async () => fileRow().click());
-    await act(async () => editFile().click());
+    await startEditing();
     await write("- Uses Linux");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(puts).toEqual(["- Uses Linux"]);
@@ -560,6 +560,13 @@ describe("Long-Term and Knowledge sheets", () => {
     expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
     expect(sheet("muscle")!.textContent).toContain("Nothing yet.");
     expect(fold("muscle").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("gives the Memory File sheet no Edit control", async () => {
+    await wide();
+    await act(async () => fileRow().click());
+    expect(sheet("file")).not.toBeNull();
+    expect(sheet("file")!.querySelector("button.mm-action")).toBeNull();
   });
 
   it("shows the same save state beside Done when you edit Long-Term", async () => {

@@ -4,7 +4,7 @@
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
 import { isShownMessage } from "./shown-message";
-import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, lineSettles, typedReply, type AskState } from "../../shared/open-question";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
 
 export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
@@ -40,14 +40,6 @@ export function openQuestion(messages: readonly Message[]): Message | null {
 
 export function openQuestions(messages: readonly Message[]): readonly Message[] {
   return needsYou(messages).questions;
-}
-
-/** The open question a typed `text` settles at once, what with, and whether the line alone settles it once it lands. */
-export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string; byLine: boolean } | null {
-  const question = openQuestion(messages);
-  if (!question) return null;
-  const answered = typedReply(question, text);
-  return answered === null ? null : { question, answered, byLine: lineSettles(messages, question, text) };
 }
 
 /** An open permission ask: it takes the composer over, so it hides the pin. */

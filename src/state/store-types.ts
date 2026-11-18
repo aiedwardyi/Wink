@@ -142,8 +142,6 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
-  /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
-  answersCard?: string;
 }
 
 export type GroupDefaultResponder =
@@ -618,6 +616,7 @@ export type Action =
       type: "sendGroup";
       groupId: string;
       text: string;
+      actedAt?: number;
       sendId?: string;
       replyToId?: string;
       threadId?: string;
@@ -655,7 +654,7 @@ export type Action =
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }
   | { type: "sendSettled"; threadId: string; sendId: string; queued?: boolean }
-  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string; held?: true }
+  | { type: "sendRejected"; threadId: string; sendId: string; botId?: string }
   | { type: "editMessage"; botId: string; messageId: string; text: string; expectedSelection?: ModelSelection; onSettled?: (error?: unknown) => void }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }

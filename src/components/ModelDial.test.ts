@@ -337,12 +337,12 @@ describe("ModelDial", () => {
     expect(saved()).toBeUndefined();
   });
 
-  it("switches between dial, list, chart and machine from the Style strip", async () => {
+  it("switches between dial, list and chart from the Style strip", async () => {
     media();
     await mount();
     expect(shownView()).toBe("dial");
     await openStrip();
-    expect([...document.querySelectorAll("[data-picker-style]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart", "Machine"]);
+    expect([...document.querySelectorAll("[data-picker-style]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart"]);
     expect(document.querySelector("[data-picker-style-strip]")?.getAttribute("aria-label")).toBe("Style");
     await act(async () => viewButton("list").click());
     expect(document.querySelector(".model-dial")).toBeNull();

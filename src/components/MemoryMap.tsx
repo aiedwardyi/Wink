@@ -4,7 +4,7 @@ import type { AppState, Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
-import { currentTask, MemoryFileLines, NotedLines, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, LONG_SHOWN, MemoryFileLines, NotedLines, useShowAll, type MemoryTopic } from "./MemoryGroups";
 import { paintsGlow, smoothGlow } from "./MemoryMapGlow";
 import { AURA, fadePanel, moveRows, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { MemoryAsks } from "./MemoryAsks";
@@ -70,16 +70,21 @@ export function SleepLine({ sleep }: { sleep: SleepReadout }) {
   );
 }
 
-function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTimeFormat; fresh?: ReadonlySet<string> }) {
+function FactList({ facts, day, fresh, long = false }: { facts: MemoryFact[]; day: Intl.DateTimeFormat; fresh?: ReadonlySet<string>; long?: boolean }) {
+  const last = facts.findLastIndex((each) => fresh?.has(each.line));
+  const { shown, more } = useShowAll(facts, long ? Math.max(LONG_SHOWN, last + 1) : facts.length);
   return (
-    <ul className="mm-list">
-      {facts.map((each) => (
-        <li key={each.line} data-fresh={fresh?.has(each.line) || undefined}>
-          <span className="mm-list-text">{each.fact}</span>
-          <span className="mm-date">{each.at ? day.format(each.at) : ""}</span>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="mm-list">
+        {shown.map((each) => (
+          <li key={each.line} data-fresh={fresh?.has(each.line) || undefined}>
+            <span className="mm-list-text">{each.fact}</span>
+            <span className="mm-date">{each.at ? day.format(each.at) : ""}</span>
+          </li>
+        ))}
+      </ul>
+      {more}
+    </>
   );
 }
 
@@ -324,7 +329,7 @@ export function MemoryMap({ bot, text, topics, target, active, loading = false, 
 
   const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed || loading ? null : t("bot.memoryNone"));
   const count = (value: number) => (failed || loading ? null : value);
-  const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} />;
+  const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} long />;
   const topicList = <TopicRows botId={bot.id} topics={topics} />;
   const muscleList = map.muscle.length ? <FactList facts={map.muscle} day={day} fresh={fresh} /> : <div className="mm-empty">{t("bot.memoryNone")}</div>;
   const lists = { long: longList, knowledge: topicList, muscle: muscleList };

@@ -5,7 +5,7 @@ import type { Message } from "@/state/store-types";
 import { asRequest, LiveCall, spokenText, told, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 import { GeminiLive } from "./gemini";
-import { asksForQuiet, callsVoice, readsBack } from "./guard";
+import { readsBack } from "./guard";
 import { GAP_MS } from "./manners";
 
 class FakeEngine implements LiveEngine {
@@ -53,7 +53,7 @@ const flush = () => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : new Pro
 /** The quiet a held line waits for after the voice talks. */
 const gap = () => vi.advanceTimersByTimeAsync(GAP_MS);
 
-function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string) {
+function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000, opener?: string, room?: { id: string; kind: "host" | "joined" }) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
@@ -64,6 +64,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
     audio,
     now,
     opener,
+    ...{ room },
     post: async (path, body) => {
       posts.push({ path, body });
       const hit = Object.entries(responses).find(([suffix]) => path.endsWith(suffix));
@@ -84,6 +85,21 @@ async function started(responses?: Record<string, Posted | (() => Promise<Posted
   return s;
 }
 
+/** A call placed from a team room, past its greeting. */
+async function roomCall(kind: "host" | "joined" = "host", responses?: Record<string, Posted | (() => Promise<Posted>)>, audio = fakeAudio()) {
+  const s = setup(responses, audio, undefined, undefined, { id: "launch", kind });
+  await s.call.start();
+  s.engine().events.ready();
+  s.engine().events.turnDone();
+  return s;
+}
+
+type RoomPost = { postOffer?: { text: string; sendId: string }; postFailed?: boolean };
+const roomOffer = (call: LiveCall) => (call.state() as RoomPost).postOffer;
+const roomSends = (posts: Array<{ path: string; body: any }>) => posts.filter((post) => post.path.endsWith("/send"));
+const observeRoom = (call: LiveCall, lines: unknown[]) => (call as unknown as { observeRoom?: (lines: unknown[]) => void }).observeRoom?.(lines);
+const answerPost = (call: LiveCall, yes: boolean) => (call as unknown as { answerPost?: (yes: boolean) => Promise<void> }).answerPost?.(yes);
+
 const botRow = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "bot", kind: "text", text, at: 2_000, ...extra }) as Message;
 const userRow = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "user", kind: "text", text, at: 2_000, ...extra }) as Message;
 const orderRow = (id: string, text: string) => userRow(id, text, { call: { id: "c-0123456789ab", order: true } });
@@ -92,10 +108,235 @@ beforeEach(() => { vi.stubGlobal("crypto", { randomUUID: () => "send-1" }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("spokenText", () => {
+  it.each(["Set the threshold to < 5", "Keep it <5", "Use <threshold", "Keep x <5 and y >10"])("preserves comparisons and unfinished text: %s", (text) => {
+    expect(spokenText(text)).toBe(text);
+  });
+
+  it("stays linear on many unclosed markers", () => {
+    const start = performance.now();
+    expect(spokenText("<a".repeat(100_000))).toHaveLength(200_000);
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
   it("drops transcript markers", () => {
     expect(spokenText("<no speech>{pause}")).toBe("");
+    expect(spokenText("<no speech")).toBe("");
     expect(spokenText("...")).toBe("");
     expect(spokenText(" Hi {pause} there ")).toBe("Hi there");
+  });
+});
+
+describe("CALL-YES", () => {
+  it("keeps screen instructions for a new question after a completed send", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    await call.answer(true);
+    engine().events.heard("How do I sign in?");
+    engine().events.answering();
+    const text = "To sign in, click the button on your screen.";
+    engine().events.said(text);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
+
+  it("keeps a pending confirmation question when it arrives in chunks", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Open the Orbit folder.", ["open"]);
+    engine().events.answering();
+    engine().events.said("I'll open the Orbit folder");
+    engine().events.audio(new Int16Array([500]));
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said(", okay?");
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("I'll open the Orbit folder, okay?");
+    expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("keeps a pending confirmation question streamed after a complete sentence", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Open the Orbit folder.", ["open"]);
+    engine().events.answering();
+    engine().events.said("Okay. I'll open the Orbit folder");
+    engine().events.audio(new Int16Array([500]));
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said(", okay?");
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("Okay. I'll open the Orbit folder, okay?");
+    expect(call.state().pending?.order).toBe("Open the Orbit folder.");
+    call.end();
+    await flush();
+  });
+
+  it("speaks a relayed reply's screen instruction after an accepted send", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Sign in to Drive." } }]);
+    await call.answer(true);
+    const text = "Click the button on your screen to sign in.";
+    call.observe({ busy: false, messages: [orderRow("o", "Sign in to Drive."), botRow("r", text)] });
+    await flush();
+    expect(engine().texts.at(-1)).toBe(`[Wink] Nova replied: ${text}`);
+    engine().events.answering();
+    engine().events.said(text);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
+
+  it("cuts a contradictory On it even after a not-sent sentence", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Save the Samurai theme note.");
+    engine().events.answering();
+    engine().events.said("Not sent. On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    call.end();
+    await flush();
+  });
+
+  it("drops two marker-only audio turns after the last real line", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    turn(engine(), "I'm hanging up now.", "Bye.");
+    for (let i = 0; i < 2; i++) {
+      engine().events.answering();
+      engine().events.said("<no ");
+      engine().events.audio(new Int16Array([500]));
+      engine().events.said("speech>");
+      engine().events.turnDone();
+    }
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).toEqual(["I'm hanging up now.", "Bye."]);
+    call.end();
+    await flush();
+  });
+
+  it("cuts On it when no work was sent", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    engine().events.heard("Save the Samurai theme note.");
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain("On it.");
+    call.end();
+    await flush();
+  });
+
+  it.each(["Do that", "Thank you. Do that.", "yes do it", "go ahead", "please", "응", "해줘", "그래"])("sends the pending note on %s without a tap", async (said) => {
+    vi.useFakeTimers();
+    const { call, engine, posts } = await started();
+    engine().events.toolCall([{ id: "note", name: "propose_work", args: { order: "Add a note about the Samurai theme's mobile polish." } }]);
+    engine().events.heard(said);
+    await vi.advanceTimersByTimeAsync(LIVE_VAD.silenceDurationMs);
+    expect(call.state().pending).toBeUndefined();
+    expect(messagesOf(posts).map((post) => post.body.text)).toEqual(["Add a note about the Samurai theme's mobile polish."]);
+    expect(engine().results).toContainEqual({ id: "note", result: expect.stringMatching(/^sent\b/) });
+    call.end();
+    await flush();
+  });
+
+  it.each([
+    "On it.",
+    "On it",
+    "That update will start as soon as you confirm the request on your screen.",
+    "The update to your auto-notes will start as soon as you approve the prompt on your screen.",
+  ])("cuts an unsupported acknowledgement before its audio: %s", async (said) => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({}, audio);
+    call.propose("Add a note about the Samurai theme's mobile polish.", ["note"]);
+    engine().events.answering();
+    engine().events.said(said);
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain(said);
+    expect(engine().texts.join("\n")).not.toMatch(/on (?:their|your) screen/);
+    call.end();
+    await flush();
+  });
+
+  it("waits for the receipt before accepting On it", async () => {
+    let receipt!: (result: Posted) => void;
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({ "/messages": () => new Promise((resolve) => { receipt = resolve; }) }, audio);
+    call.propose("Add a note about the Samurai theme's mobile polish.", ["note"]);
+    const sent = call.answer(true);
+    await flush();
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    expect(linesOf(posts)).not.toContain("On it.");
+    receipt({ status: 200, data: {} });
+    await sent;
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledTimes(1);
+    call.end();
+    await flush();
+  });
+
+  it("holds audio arriving before the words of an unsupported acknowledgement", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    engine().events.answering();
+    engine().events.audio(new Int16Array([500]));
+    engine().events.said("On ");
+    expect(play).not.toHaveBeenCalled();
+    engine().events.said("it.");
+    engine().events.turnDone();
+    expect(play).not.toHaveBeenCalled();
+    call.end();
+    await flush();
+  });
+
+  it.each([false, true])("allows On it after an accepted receipt with queued=%s", async (queued) => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine, posts } = await started({ "/messages": { status: 202, data: { queued } } }, audio);
+    call.propose("Save the Samurai theme note.", ["note"]);
+    await call.answer(true);
+    engine().events.answering();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    expect(play).toHaveBeenCalledOnce();
+    expect(linesOf(posts)).toContain("On it.");
+    call.end();
+    await flush();
   });
 });
 
@@ -341,10 +582,10 @@ describe("LiveCall", () => {
     engine().events.answering();
     engine().events.said("<no speech>");
     expect(call.state().caption?.who).toBe("user");
-    engine().events.said("Sure, {pause} on it.");
-    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    engine().events.said("Want me to {pause} fix it?");
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Want me to fix it?" });
     engine().events.turnDone();
-    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Want me to fix it?" });
     engine().events.said("Next.");
     expect(call.state().caption).toEqual({ id: 3, who: "voice", text: "Next." });
   });
@@ -726,6 +967,52 @@ describe("LiveCall", () => {
     engine().events.interrupted();
     const voice = posts.filter((p) => p.path.endsWith("/call/lines")).at(-1)?.body.lines[0];
     expect(voice.text).toBe("This is a l…");
+  });
+
+  it("asks for a tap for sound when the phone will not play the voice, and a tap clears it", async () => {
+    const audio = { ...fakeAudio(), async capture() { return false; }, heal: vi.fn(async () => true) };
+    const { call, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    expect(call.state()).toMatchObject({ status: "paused", noSound: true });
+    expect(engine().texts).toEqual([]);
+    call.resume();
+    await flush();
+    expect(call.state().noSound).toBeUndefined();
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("flags voice lines the phone never sounded as not heard", async () => {
+    const audio = { ...fakeAudio(), async capture() { return false; } };
+    const { call, engine, posts } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    engine().events.heard("Hello?");
+    engine().events.answering();
+    engine().events.said("Hey, I'm here.");
+    engine().events.audio(new Int16Array(240));
+    engine().events.turnDone();
+    const voice = posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines as CallLine[]).filter((line) => line.who === "voice");
+    expect(voice).toEqual([expect.objectContaining({ text: "Hey, I'm here.", unheard: true })]);
+  });
+
+  it("greets once a call: a drop mid-greeting never says hello again", async () => {
+    const audio = fakeAudio();
+    const { call, engines, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    expect(engine().texts[0]).toMatch(/^\[Wink\] The call just started/);
+    engine().events.resumable("h1");
+    engine().events.answering();
+    engine().events.said("Hey, I'm");
+    engine().events.audio(new Int16Array(240));
+    audio.onStart();
+    engine().events.closed(1006, "");
+    await flush();
+    expect(engines).toHaveLength(2);
+    engine().events.ready();
+    await flush();
+    expect(engine().texts.filter((text) => text.includes("The call just started"))).toEqual([]);
   });
 
   it("reconnects with a fresh token and the handle after GoAway", async () => {
@@ -1303,7 +1590,7 @@ describe("VOICE-SEND: promise guard", () => {
     const { engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
     turn(engine(), "Hmm, maybe.", "On it.");
-    expect(engine().texts.at(-1)).toBe(`[Wink] Not done: "Open the Orbit folder." starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`);
+    expect(engine().texts.at(-1)).toBe(`[Wink] Not sent: "Open the Orbit folder." starts only once they say yes. A spoken yes is enough. Say that plainly in one short line; don't ask it again or offer it again.`);
   });
 
   it("a relayed result turn is not guarded", async () => {
@@ -2401,152 +2688,66 @@ describe("VOICE-HUSH: a re-offer is no answer", () => {
   });
 });
 
-describe("VOICE-HUSH: be quiet", () => {
+describe("no quiet mode", () => {
   const pcm = new Int16Array([500, -500]);
-  function speaker() {
+  const EDDIE = "The little button that says, you know, the call thing. Call quiet thing. Remove that.";
+  const LINES = ["Don't say anything.", "Be quiet.", "Hold on.", "Quiet.", "Pause.", "That's enough.", "Give me a second.", "Shh.", "조용히 해.", "잠깐만, 조용해.", EDDIE];
+  const speaker = () => {
     const audio = { ...fakeAudio(), played: 0 };
     audio.play = () => { audio.played += 1; };
     return audio;
-  }
-  const ROOM = {
-    ko: { hush: "잠깐만, 조용해.", talk: ["네, 지금 이 새로운 방에 인바이트 할게요.", "Baji Kitchen", "네.", "그걸 딱 클릭하면은 아무 변화가 없어.", "Peter는 뭐예요?", "이거 뺄 거예요. 없애 버려.", "응, 그렇게 해서 해도 돼요."], wake: "Nova야, 들려?" },
-    en: { hush: "Hold on, be quiet.", talk: ["Yeah, so this is the new room.", "Baji Kitchen", "Yes.", "What is Peter?", "Can you remove the dictation button?", "Okay, do it.", "Sure, sounds good."], wake: "Nova, you there?" },
   };
+  const hushed = (call: LiveCall) => (call.state() as Record<string, unknown>).hushed;
 
-  it.each(["ko", "en"] as const)("%s: 60 s of nearby talk after be quiet gets no voice, send or relay until they call it", async (lang) => {
-    const { hush, talk, wake } = ROOM[lang];
-    const audio = speaker();
-    const { call, engine, posts } = await started({ "/messages": ACCEPTED }, audio);
-    const e = engine();
-    e.events.turnDone();
-    const told = e.texts.length;
+  it.each(LINES)("%s never silences the call: the next line is handled as any other", async (line) => {
     vi.useFakeTimers();
-    e.events.heard(hush);
+    const audio = speaker();
+    const { call, engine } = await started({ "/messages": ACCEPTED }, audio);
+    const e = engine();
+    e.events.heard(line);
+    await vi.advanceTimersByTimeAsync(LIVE_VAD.silenceDurationMs);
     e.events.answering();
     e.events.audio(pcm);
-    e.events.said(lang === "ko" ? "네, 알겠어요." : "Okay.");
+    e.events.said("Okay.");
     e.events.turnDone();
-    call.observe({ busy: false, messages: [cardRow("q1")] });
-    const lines = linesOf(posts).length;
-    for (let t = 0; t < 60; t += 5) {
-      const line = talk[(t / 5) % talk.length]!;
-      e.events.heard(line);
-      e.events.answering();
-      e.events.audio(pcm);
-      e.events.said("Want me to look up Baji Kitchen for you?");
-      e.events.toolCall([{ id: `p${t}`, name: "propose_work", args: { order: "Look up Baji Kitchen." } }]);
-      e.events.toolCall([{ id: `a${t}`, name: "ask", args: { question: line } }]);
-      e.events.turnDone();
-      await vi.advanceTimersByTimeAsync(5_000);
-    }
-    expect(audio.played).toBe(0);
-    expect(messagesOf(posts)).toEqual([]);
-    expect(call.state().pending).toBeUndefined();
-    expect(e.texts.length).toBe(told);
-    expect(linesOf(posts).slice(lines)).toEqual(talk.concat(talk).slice(0, 12));
-    e.events.heard(wake);
-    e.events.answering();
-    e.events.audio(pcm);
+    expect(hushed(call)).toBeUndefined();
     expect(audio.played).toBe(1);
-    e.events.said("I'm here.");
+    e.events.heard("Remove the dictation button.");
+    e.events.answering();
+    e.events.toolCall([{ id: "p1", name: "propose_work", args: { order: "Remove the dictation button." } }]);
+    expect(call.state().pending?.order).toBe("Remove the dictation button.");
+    expect(e.results).toEqual([]);
+  });
+
+  it("the voice calling a hush tool does nothing: there is none", async () => {
+    const audio = speaker();
+    const { call, engine } = await started({}, audio);
+    const e = engine();
+    e.events.heard(EDDIE);
+    e.events.answering();
+    e.events.toolCall([{ id: "h1", name: "hush", args: {} }]);
+    e.events.audio(pcm);
+    expect(e.results).toEqual([{ id: "h1", result: "unknown tool" }]);
+    expect(hushed(call)).toBeUndefined();
+    expect(audio.played).toBe(1);
+  });
+
+  it("three lines said while the voice is busy get one spoken answer after", async () => {
+    vi.useFakeTimers();
+    const { call, engine } = await started({ "/messages": ACCEPTED });
+    const e = engine();
+    const told = e.texts.length;
+    e.events.heard("Remove the call quiet button.");
+    e.events.answering();
+    call.observe({ busy: false, messages: [userRow("u", "What time is it?"), botRow("t", "Noon.")] });
+    e.events.heard("Give me a second.");
+    e.events.heard("Quiet.");
+    await vi.advanceTimersByTimeAsync(LIVE_VAD.silenceDurationMs);
+    e.events.said("Okay.");
     e.events.turnDone();
     await gap();
-    expect(e.texts.slice(told)).toEqual([expect.stringMatching(/^\[Wink\] Nova asks:/)]);
-  });
-
-  it("a tap wakes it for the next turn, and naming it in the hush line does not", async () => {
-    const audio = speaker();
-    const { call, engine } = await started({}, audio);
-    engine().events.heard("Nova, stop talking.");
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(audio.played).toBe(0);
-    expect(call.state().hushed).toBe(true);
-    call.wake();
-    expect(call.state().hushed).toBeUndefined();
-    engine().events.audio(pcm);
-    engine().events.turnDone();
-    expect(audio.played).toBe(0);
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(audio.played).toBe(1);
-  });
-
-  it("hushes on a command, not on talk about quiet, and wakes on the whole name", () => {
-    for (const line of ["잠깐만, 조용해.", "조용히 좀 해줘", "말하지 마세요", "쉿!", "Be quiet.", "Hold on, be quiet.", "Can you stop talking?", "Okay just shut up"]) expect([line, asksForQuiet(line)]).toEqual([line, true]);
-    for (const line of ["Can you make the app stop talking when I mute it?", "Do not stop talking", "조용히 말해줘", "조용한 카페 찾아줘", "He told me to be quiet"]) expect([line, asksForQuiet(line)]).toEqual([line, false]);
-    expect(["Nova, you there?", "노바야", "Hey Nova."].map((h) => callsVoice(h, h === "노바야" ? "노바" : "Nova"))).toEqual([true, true, true]);
-    expect(["Hey", "That's an innovation", "Novas are bright", "Novak said", "Ask Nova now"].map((h) => callsVoice(h, "Nova"))).toEqual([false, false, false, false, false]);
-    expect(callsVoice("R2.D2?", "R2.D2")).toBe(true);
-    expect(callsVoice("R2xD2?", "R2.D2")).toBe(false);
-    const voiceNamed = [["Korean.", "Kore", false], ["Jennings.", "Jenn", false], ["Puckish.", "Puck", false], ["Kore?", "Kore", true], ["Jennifer.", "Jenn", true], ["Puck, you there?", "Puck", true]] as const;
-    for (const [line, alias, wakes] of voiceNamed) expect([line, callsVoice(line, "Nova", [alias])]).toEqual([line, wakes]);
-  });
-
-  it("hushes only when the quiet phrase is the whole line", () => {
-    for (const line of ["shut up", "Nova, be quiet please", "please stop talking", "쉿", "조용히 해", "이제 그만 말해", "좀 조용히 해 줘", "닥쳐"]) expect([line, asksForQuiet(line, "Nova")]).toEqual([line, true]);
-    expect(asksForQuiet("노바야, 조용히 해", "노바")).toBe(true);
-    for (const line of ["영어로 말하지 마", "그렇게 길게 말하지 마세요", "거짓말하지 마.", "반말하지 마", "여기 조용해", "Well, stop talking about the tests and fix the build", "Shut up, really? That is great", "Okay, hush money is a thing", "조용히 말해줘", "그건 말하지 마시고 계속해"]) expect([line, asksForQuiet(line, "Nova")]).toEqual([line, false]);
-  });
-
-  it.each([["그건 ", "말하지 마", "시고 계속해"], ["Nova, ", "stop talking", " about the tests and fix the build"]])("a fragment that passes through a quiet phrase never hushes: %s%s%s", async (...parts) => {
-    const audio = speaker();
-    const { call, engine } = await started({}, audio);
-    for (const part of parts) {
-      engine().events.heard(part);
-      engine().events.audio(pcm);
-      expect(call.state().hushed).toBeUndefined();
-    }
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(call.state().hushed).toBeUndefined();
-    expect(audio.played).toBe(parts.length + 1);
-  });
-
-  it("a whole quiet line hushes once it ends, and a wake is not undone by it", async () => {
-    const audio = speaker();
-    const { call, engine } = await started({}, audio);
-    engine().events.heard("Be quiet.");
-    expect(call.state().hushed).toBeUndefined();
-    engine().events.heard(" Hey, what time is it?");
-    engine().events.heard(" Um");
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(call.state().hushed).toBeUndefined();
-    expect(audio.played).toBe(1);
-    engine().events.turnDone();
-    engine().events.heard("이제 그만 말해");
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(call.state().hushed).toBe(true);
-    expect(audio.played).toBe(1);
-  });
-
-  it("a tap wake is not undone by a quiet line heard before it", async () => {
-    const audio = speaker();
-    const { call, engine } = await started({}, audio);
-    engine().events.heard("Be quiet.");
-    engine().events.answering();
-    engine().events.turnDone();
-    engine().events.heard("Be quiet.");
-    call.wake();
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(call.state().hushed).toBeUndefined();
-    expect(audio.played).toBe(1);
-  });
-
-  it("naming it in a quiet line while hushed keeps it quiet", async () => {
-    const audio = speaker();
-    const { call, engine } = await started({}, audio);
-    engine().events.heard("Be quiet.");
-    engine().events.answering();
-    engine().events.turnDone();
-    engine().events.heard("Nova, be quiet please.");
-    engine().events.answering();
-    engine().events.audio(pcm);
-    expect(call.state().hushed).toBe(true);
-    expect(audio.played).toBe(0);
+    expect(e.texts.slice(told)).toEqual(["[Wink] Nova replied: Noon."]);
+    expect(hushed(call)).toBeUndefined();
   });
 });
 
@@ -2764,18 +2965,18 @@ describe("VOICE-READBACK: what it said in the chat", () => {
   const TLDR = "Quick update: eval round 3 is done.";
   const ASK = "Tell me what you just said. Earlier, like in the message.";
   const readLines = (engine: FakeEngine) => engine.texts.filter((t) => t.includes("newest chat message"));
-  async function replied() {
+  async function replied(message = MESSAGE, spoken = SPOKEN) {
     vi.useFakeTimers();
     const audio = { ...fakeAudio(), played: 0 };
     audio.play = () => { audio.played += 1; };
-    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: SPOKEN } } }, audio);
+    const s = await started({ "/messages": ACCEPTED, "/api/tts/prepare": { status: 200, data: { utterances: spoken } } }, audio);
     const e = s.engine();
     e.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Run eval round 3." } }]);
     await s.call.answer(true);
     e.events.answering();
     e.events.said("On it.");
     e.events.turnDone();
-    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", MESSAGE)] });
+    s.call.observe({ busy: false, messages: [orderRow("o", "Run eval round 3."), botRow("r", message)] });
     await gap();
     e.events.answering();
     e.events.said(TLDR);
@@ -2783,6 +2984,25 @@ describe("VOICE-READBACK: what it said in the chat", () => {
     await gap();
     return { ...s, e, audio };
   }
+
+  it("reads a quoted On it without treating it as a new promise", async () => {
+    const text = "On it. I will check the build.";
+    const { call, e, audio, posts } = await replied(text, [text]);
+    e.events.heard(ASK);
+    e.events.answering();
+    e.events.turnDone();
+    await flush();
+    await gap();
+    const before = audio.played;
+    e.events.answering();
+    e.events.said(text);
+    e.events.audio(pcm);
+    e.events.turnDone();
+    expect(audio.played).toBe(before + 1);
+    expect(linesOf(posts)).toContain(text);
+    call.end();
+    await flush();
+  });
 
   it("asked three times, reads the newest message whole each time and never says its short line again", async () => {
     const { e, audio, posts } = await replied();
@@ -2933,5 +3153,121 @@ describe("one voice per call", () => {
     expect(Socket.all.map(voiceOf)).toEqual(["Alnilam", "Alnilam", "Fenrir", "Fenrir"]);
     expect(new Set(ids)).toEqual(new Set(["c-0123456789ab"]));
     expect(resumed).toBe(Socket.all[1]);
+  });
+});
+
+describe("LiveCall in a team room", () => {
+  it("carries the room in the token body, including reconnects", async () => {
+    const { call, posts, engine } = await roomCall();
+    engine().events.resumable("resume");
+    engine().events.closed(1006, "dropped");
+    await flush();
+    expect(posts.filter((post) => post.path.endsWith("/call/token")).map((post) => post.body.room)).toEqual([{ id: "launch", kind: "host" }, { id: "launch", kind: "host" }]);
+    call.end();
+  });
+
+  it("keeps a bot call's token body free of any room", async () => {
+    const { call, posts } = await started();
+    expect(posts.find((post) => post.path.endsWith("/call/token"))!.body).not.toHaveProperty("room");
+    observeRoom(call, [{ id: "m1", author: { name: "Minji" }, text: "hi", files: [] }]);
+    observeRoom(call, [{ id: "m1", author: { name: "Minji" }, text: "hi", files: [] }, { id: "m2", author: { name: "Joon" }, text: "yo", files: [] }]);
+    call.propose("Check Safari", ["t1"]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o", "Check Safari"), botRow("r", "Fixed.")] });
+    await flush();
+    expect(roomOffer(call)).toBeUndefined();
+    call.end();
+  });
+
+  it("passes a new teammate line silently, once, never as a turn", async () => {
+    const { call, engine } = await roomCall();
+    const old = { id: "m1", author: { name: "Minji" }, text: "Safari login breaks", files: [] };
+    observeRoom(call, [old]);
+    const texts = engine().texts.length;
+    const next = { id: "m2", author: { name: "민지" }, text: "I can test once fixed", files: [{ name: "check.png", id: "secret-file-id" }] };
+    observeRoom(call, [old, next]);
+    observeRoom(call, [old, next]);
+    await flush();
+    call.observe({ busy: false, messages: [] });
+    const lines = engine().contexts.filter((text) => text.includes("Room chat"));
+    expect(lines).toEqual([expect.stringContaining("민지: I can test once fixed check.png")]);
+    expect(lines[0]).not.toContain("secret-file-id");
+    expect(lines[0]).not.toContain("Safari login breaks");
+    expect(engine().texts).toHaveLength(texts);
+    call.end();
+  });
+
+  it.each(["host", "joined"] as const)("offers a voice order's reply and posts it to the %s room only on a second yes", async (kind) => {
+    const { call, engine, posts } = await roomCall(kind);
+    call.propose("Check Safari", ["t1"]);
+    await call.answer(true);
+    expect(posts.find((post) => post.path.endsWith("/messages"))?.path).toBe("/api/bots/b1/messages");
+    call.observe({ busy: false, messages: [orderRow("o1", "Check Safari"), botRow("r1", "Found a cookie setting.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    expect(roomSends(posts)).toEqual([]);
+    engine().events.heard("응, 올려줘");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toEqual([{ path: `/api/${kind === "joined" ? "joined/" : ""}rooms/launch/send`, body: { text: "Nova: Found a cookie setting.", sendId: "send-1" } }]);
+    expect(roomOffer(call)).toBeUndefined();
+    engine().events.heard("yes");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toHaveLength(1);
+    call.end();
+  });
+
+  it("hears a yes that asks for new work as that ask, not as a room post", async () => {
+    const { call, engine, posts } = await roomCall();
+    call.observe({ busy: false, messages: [orderRow("o", "Check Safari"), botRow("r", "Found a cookie setting.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    engine().events.heard("Okay, check Firefox too");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toEqual([]);
+    expect(roomOffer(call)?.text).toBe("Nova: Found a cookie setting.");
+    engine().events.heard("Yes, post it.");
+    engine().events.answering();
+    await flush();
+    expect(roomSends(posts)).toHaveLength(1);
+    call.end();
+  });
+
+  it("declines a room post, and typed or asked replies are never offered", async () => {
+    const { call, engine, posts } = await roomCall();
+    call.observe({ busy: false, messages: [userRow("typed", "What broke?"), botRow("reply", "The cookie.")] });
+    await flush();
+    expect(roomOffer(call)).toBeUndefined();
+    call.observe({ busy: false, messages: [userRow("typed", "What broke?"), botRow("reply", "The cookie."), orderRow("o", "Check"), botRow("r", "Fixed.")] });
+    await flush();
+    expect(roomOffer(call)?.text).toBe("Nova: Fixed.");
+    engine().events.heard("아니, 취소");
+    engine().events.answering();
+    await flush();
+    expect(roomOffer(call)).toBeUndefined();
+    expect(roomSends(posts)).toEqual([]);
+    call.end();
+  });
+
+  it("caps the posted result and retries with the same sendId", async () => {
+    let tries = 0;
+    const { call, posts } = await roomCall("joined", {
+      "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed. ".repeat(400)] } },
+      "/send": async () => ({ status: ++tries === 1 ? 503 : 200, data: {} }),
+    });
+    call.observe({ busy: false, messages: [orderRow("o", "Check"), botRow("r", "raw reply")] });
+    await flush();
+    expect(roomOffer(call)!.text.length).toBeLessThanOrEqual(1_500);
+    expect(roomOffer(call)!.text).toMatch(/^Nova: Fixed\./);
+    await answerPost(call, true);
+    expect((call.state() as RoomPost).postFailed).toBe(true);
+    await Promise.all([answerPost(call, true), answerPost(call, true)]);
+    const sent = roomSends(posts);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body).toEqual(sent[0]!.body);
+    expect(roomOffer(call)).toBeUndefined();
+    call.end();
   });
 });

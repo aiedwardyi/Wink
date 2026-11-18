@@ -26,6 +26,7 @@ import {
   type PersistedRoomHold,
 } from "@/lib/drafts";
 import { BotAvatar, RoomBotAvatar } from "./Avatar";
+import { BotModelLine } from "./BotModelLine";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -60,11 +61,12 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { forgetTrayMedia } from "@/lib/tray-media";
 import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -88,7 +90,6 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
-import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
 import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
@@ -223,6 +224,7 @@ export function Composer({
   call,
   onCall,
   callButton,
+  callBot,
   heldSlot,
 }: {
   bot?: Bot;
@@ -245,6 +247,8 @@ export function Composer({
   /** Starts a call from the empty box's Send spot; absent where calls can't work. */
   onCall?: () => void;
   callButton?: ReactNode;
+  /** Who a room's call button calls; a bot chat calls its own bot. */
+  callBot?: Bot;
   /** The room transcript's tail, where Ctrl+Enter holds show as 1:1 queued bubbles. */
   heldSlot?: HTMLElement | null;
 }) {
@@ -255,6 +259,7 @@ export function Composer({
   const nativeSizing = phone && window.CSS?.supports?.("field-sizing", "content") === true;
   const { capabilities } = useDesktopCapabilities();
   const rainbow = useRainbowBox();
+  const caller = bot ?? callBot;
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
@@ -363,6 +368,7 @@ export function Composer({
         dropRoomFile(id);
       // a finished file may already be in a sent message, so only unfinished uploads are cancelled
       } else if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
+      forgetTrayMedia(id);
       editAttachments((prev) => prev.filter((a) => a.id !== id));
     },
     [editAttachments, peopleRoom, roomSending],
@@ -400,15 +406,21 @@ export function Composer({
       }),
     [attachments, jobs, peopleRoom],
   );
-  const uploadErrors = attachments
+  // why an upload is stuck or failed goes in the notice above the box, not only on its small chip
+  const uploadProblems = attachments
     .flatMap((a) => {
-      const error = a.kind === "upload" ? jobs.get(a.id)?.error : undefined;
-      return error && a.kind === "upload" ? [t(error, { name: a.name })] : [];
+      const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
+      const key = job?.phase === "resuming" ? "composer.uploadStuck" : job?.error;
+      return key && a.kind === "upload" ? [t(key, { name: a.name })] : [];
     })
     .join(" ");
+  const shownProblems = useRef("");
   useEffect(() => {
-    if (uploadErrors) showNotice(uploadErrors);
-  }, [uploadErrors, showNotice]);
+    const last = shownProblems.current;
+    shownProblems.current = uploadProblems;
+    if (uploadProblems) showNotice(uploadProblems);
+    else if (last) setAttachmentNotice((notice) => (notice === last ? null : notice));
+  }, [uploadProblems, showNotice]);
   const repickInput = useRef<HTMLInputElement>(null);
   const repickTarget = useRef<string | null>(null);
   const repick = (file: File | undefined) => {
@@ -684,6 +696,7 @@ export function Composer({
         sendId: entry.draft.sendId,
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
+        actedAt: entry.at,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -838,6 +851,7 @@ export function Composer({
       const pending = { text: t, replyToId: replyTo?.id, at: Date.now(), draft: sentDraft };
       commitQueued([...queuedRef.current, pending]);
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       onConsumeReply?.();
       onSend?.();
@@ -867,6 +881,7 @@ export function Composer({
       });
     }
     setText("");
+    for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
     setAttachments([]);
     onConsumeReply?.();
     onSend?.();
@@ -912,6 +927,7 @@ export function Composer({
       });
       if (inputRef.current) inputRef.current.value = "";
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       setTerminalSendPreview(null);
     } catch (cause) {
@@ -954,6 +970,7 @@ export function Composer({
       sendId: next.draft.sendId,
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
+      actedAt: next.at,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1118,7 +1135,10 @@ export function Composer({
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                  {peer.bot && <BotModelLine bot={peer.bot} />}
+                </span>
                 <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
@@ -1291,6 +1311,7 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
+          {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
             disabled={locked}
@@ -1484,18 +1505,18 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <CallSettingsHold bot={bot}><button
+          {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
+            <button
               type="button"
               onClick={onCall}
               onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
               onFocus={warmCallAudio}
-              aria-label={t("composer.call", { name: bot.name })}
-              title={t("composer.call", { name: bot.name })}
+              aria-label={t("composer.call", { name: caller.name })}
+              title={t("composer.call", { name: caller.name })}
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
             >
               <Phone size={16} />
-            </button></CallSettingsHold>
+            </button>
           ))}
           </div>
         </div>

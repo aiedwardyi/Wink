@@ -6,11 +6,14 @@
 // It parses the CSS rather than taking a second copy of the values, so the
 // check can never pass against a palette that is no longer the shipped one.
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const css = ["src/styles.css", "src/skins/fresh-dark.css"].map((file) => readFileSync(join(root, file), "utf8")).join("\n");
+const sceneCss = readFileSync(join(root, "src/scenes/scenes.css"), "utf8");
+const drawerButton = readFileSync(join(root, "src/lib/drawer-button.ts"), "utf8");
 
 function declarations(body) {
   const tokens = {};
@@ -39,8 +42,8 @@ function parseBase(source) {
 function parseSkins(source) {
   const base = parseBase(source);
   const skins = new Map();
-  for (const [, id, body] of source.matchAll(/\[data-skin="([a-z-]+)"\]\s*\{([^}]*)\}/g)) {
-    skins.set(id, { ...base, ...declarations(body) });
+  for (const [, selectors, body] of source.matchAll(/((?:\[data-skin="[a-z-]+"\]\s*,\s*)*\[data-skin="[a-z-]+"\])\s*\{([^}]*)\}/g)) {
+    for (const [, id] of selectors.matchAll(/\[data-skin="([a-z-]+)"\]/g)) skins.set(id, { ...base, ...declarations(body) });
   }
   return skins;
 }
@@ -214,7 +217,85 @@ function isLightSkin(tokens) {
   return luminance(parseHex(app)) > 0.5;
 }
 
-export { parseCssRemaps, unmappedEmittedHexes };
+/** Each scene skin's still, from the rule that paints it behind the theme tile. */
+function parseSceneStills(source) {
+  const stills = new Map();
+  for (const [, id, file] of source.matchAll(/\[data-skin="([a-z-]+)"\]\s*>\s*\[data-mini-thread\]\s*\{[^}]*url\("\.\/tiles\/([\w-]+\.jpg)"\)/g)) {
+    stills.set(id, join(root, "src/scenes/tiles", file));
+  }
+  return stills;
+}
+
+/** The token a scene gives the icon button `marker` as its backing, if a rule does. */
+function iconBacking(source, marker) {
+  for (const [, selector, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!selector.includes(marker)) continue;
+    const token = body.match(/background(?:-color)?:\s*var\((--color-[\w-]+)\)/)?.[1];
+    if (token) return token;
+  }
+  return null;
+}
+
+// Header icons that float straight on the scene. The phone menu is placed by
+// drawer-button.ts: 30px box, 14px in from the side it opens from, 15px down.
+// The side pane toggle ends the chat header: the header's 20px px-5 in from the
+// right edge, or DRAWER_HEADER_RIGHT (read from drawer-button.ts) when the drawer opens from the right.
+const drawerHeaderRight = drawerButton.match(/DRAWER_HEADER_RIGHT = "[^"]*\bpr-(\d+)\b/);
+if (!drawerHeaderRight) throw new Error("DRAWER_HEADER_RIGHT in src/lib/drawer-button.ts has no pr-N: the side pane toggle inset cannot be derived");
+const DRAWER_HEADER_RIGHT_PX = Number(drawerHeaderRight[1]) * 4;
+const SCENE_ICONS = [
+  { name: "phone menu", marker: "[data-phone-menu]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [14], sides: ["left", "right"], top: 15 },
+  { name: "side pane toggle", marker: "[data-show-pane-button]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [20, DRAWER_HEADER_RIGHT_PX], sides: ["right"], top: 15 },
+];
+// A tile is a 2x capture of a 132px thumbnail whose chat was laid out 132 / scale CSS px wide (scale 0.45, snow 0.3): 264 / 293 and 396 / 440 are both 0.9 tile px per CSS px.
+const STILL_PX_PER_CSS_PX = 0.9;
+
+function sharpPath() {
+  const pnpm = join(root, "node_modules", ".pnpm");
+  if (existsSync(pnpm)) {
+    for (const dir of readdirSync(pnpm)) {
+      if (dir.startsWith("sharp@")) return join(pnpm, dir, "node_modules", "sharp");
+    }
+  }
+  throw new Error("sharp not found: it decodes the scene stills");
+}
+
+/** Brightest pixel of the still under a box `top` CSS px down and each `insets` px in from the `sides` it can sit on. */
+async function brightestBehind(file, { size, insets, sides, top }) {
+  const sharp = createRequire(import.meta.url)(sharpPath());
+  const { data, info } = await sharp(file).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const px = (css) => Math.round(css * STILL_PX_PER_CSS_PX);
+  let best = { r: 0, g: 0, b: 0 };
+  const starts = insets.flatMap((inset) => sides.map((side) => (side === "left" ? px(inset) : info.width - px(inset + size))));
+  for (const x0 of starts) {
+    for (let y = px(top); y < px(top + size); y++) {
+      for (let x = x0; x < x0 + px(size); x++) {
+        const i = (y * info.width + x) * 3;
+        const pixel = { r: data[i], g: data[i + 1], b: data[i + 2] };
+        if (luminance(pixel) > luminance(best)) best = pixel;
+      }
+    }
+  }
+  return best;
+}
+
+const toHex = ({ r, g, b }) => "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+
+/** Icon ink over what sits behind it: the backing the scene paints, else the scene's brightest pixel there. */
+async function sceneIconProblems(id, tokens, stills, source) {
+  const still = stills.get(id);
+  if (!still) return [];
+  const problems = [];
+  for (const icon of SCENE_ICONS) {
+    const backingToken = iconBacking(source, icon.marker);
+    const behind = backingToken ? tokens[backingToken] : toHex(await brightestBehind(still, icon));
+    const ratio = contrast(tokens[icon.ink], behind);
+    if (ratio < icon.min) problems.push({ icon: icon.name, ink: icon.ink, behind: backingToken ?? `scene pixel ${behind}`, ratio, min: icon.min });
+  }
+  return problems;
+}
+
+export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, sceneIconProblems };
 
 function isDirectRun() {
   const entry = process.argv[1];
@@ -230,6 +311,7 @@ if (isDirectRun()) {
   const skins = parseSkins(css);
   const emitted = emittedForegrounds(loadGithubDarkDefault());
   const remaps = parseCssRemaps(css);
+  const stills = parseSceneStills(sceneCss);
   // Midnight is shipped as a faithful copy of upstream, contrast gaps included;
   // it is reported but not allowed to fail the run.
   const ADVISORY = new Set(["midnight"]);
@@ -262,13 +344,18 @@ if (isDirectRun()) {
       const ratio = contrast(tokens[fg], tokens[bg]);
       if (ratio < min) problems.push({ fg, bg, ratio, min });
     }
+    const iconProblems = await sceneIconProblems(id, tokens, stills, sceneCss);
     const advisory = ADVISORY.has(id);
     if (missing.length) {
       console.log(`✗ ${id} — undefined token(s): ${[...new Set(missing)].join(", ")}`);
       if (!advisory) failed = true;
     }
+    for (const { icon, ink, behind, ratio, min } of iconProblems) {
+      console.log(`✗ ${id} — header ${icon} is unreadable: ${ink} on ${behind} is ${ratio.toFixed(2)}:1 (needs ${min}:1)`);
+      failed = true;
+    }
     if (problems.length === 0) {
-      if (!missing.length) console.log(`✓ ${id} — ${measured} pairs, none below target`);
+      if (!missing.length && !iconProblems.length) console.log(`✓ ${id} — ${measured} pairs, none below target`);
       continue;
     }
     console.log(`${advisory ? "~" : "✗"} ${id}${advisory ? " (advisory — upstream copy)" : ""}`);

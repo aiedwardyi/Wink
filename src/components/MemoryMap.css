@@ -186,6 +186,8 @@
 }
 .mm-sheet-body .mm-list { columns: 2; column-gap: 28px; padding: 6px 18px 12px; }
 .mm-list { list-style: none; margin: 0; padding: 0; }
+.mm-list + .mm-asks-more { border-top: 0; }
+.mm-sheet-body > .mm-asks-more { width: auto; margin: -12px 18px 6px; }
 .mm-list li { break-inside: avoid; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--mm-line); font-size: 13px; line-height: 18px; }
 .mm-list-text { overflow-wrap: anywhere; }
 .mm-date { font-size: 12px; color: var(--color-ink-secondary); white-space: nowrap; }
@@ -221,7 +223,6 @@
 .mm[data-stacked] .mm-count span { font-size: 12px; }
 .mm[data-stacked] .mm-panel[aria-expanded="true"] { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); box-shadow: 0 0 40px rgb(99 102 241 / calc(0.3 * var(--mem-glow))); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .mm[data-stacked] .mm-fold[data-leaving] { position: absolute; z-index: 2; top: 100%; left: 0; right: 0; pointer-events: none; }
-.mm[data-stacked] .mm-fold .mm-list:not(.mm-topics) li:nth-child(n+15) { content-visibility: auto; contain-intrinsic-block-size: auto 52px; }
 .mm-fold-edit { margin: 6px 0 2px auto; height: 44px; display: flex; }
 .mm[data-stacked] .mm-topic { min-height: 44px; }
 .mm-fold { position: relative; overflow: hidden; margin-top: -1px; padding: 4px 14px 10px; border: 1px solid rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); border-top-color: var(--mm-line); border-radius: 0 0 14px 14px; background: var(--mm-card); }

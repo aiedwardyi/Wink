@@ -9,6 +9,7 @@ import { CHAT_PEEK_WINDOW_SIZE, peekRows, useChatPeekRows, useChatPeekSettled, u
 import { tailWindowStart } from "@/lib/transcript-window";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
+import { openFile } from "@/lib/open-file";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -38,8 +39,8 @@ import { MessageBoundary } from "./TurnPresence";
 export const roomPictures = (base: string, files: readonly RoomFile[]) =>
   files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
 
-/** A line's deleted notes and download rows, below its words. */
-export function RoomFileRows({ base, files, className }: { base: string; files: readonly RoomFile[]; className?: string }) {
+/** A line's deleted notes and file rows, below its words; a row opens by the one rule in the chat's pane, else downloads. */
+export function RoomFileRows({ base, files, threadId, className }: { base: string; files: readonly RoomFile[]; threadId?: string; className?: string }) {
   const { t } = useI18n();
   const rows = files.filter((file) => !file.deleted && !isRoomPicture(file));
   return (
@@ -48,18 +49,15 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
       {rows.length > 0 && (
         <div className={cn("flex flex-col gap-1.5", className)}>
           {rows.map((file) => (
-            <a
+            <button
               key={file.id}
-              href={roomFileUrl(base, file, false)}
-              download={file.name}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={t("viewer.download", { name: file.name })}
-              title={t("viewer.downloadTitle")}
-              className="block rounded-lg hover:bg-raised/50"
+              type="button"
+              data-room-file
+              onClick={() => openFile({ threadId, path: file.name, src: roomFileUrl(base, file, false) })}
+              className="block w-full rounded-lg text-left hover:bg-raised/50"
             >
               <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
-            </a>
+            </button>
           ))}
         </div>
       )}

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { Brain, Check, ChevronDown, Pencil } from "lucide-react";
+import { Brain, Check, ChevronDown } from "lucide-react";
 import type { AppState, Bot, Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -12,6 +12,7 @@ import { MemoryCleanTint, reducedMemoryMotion } from "./MemoryCleanMotion";
 // the stamp memory-pass.ts appendNotes puts on every Auto notes line
 const NOTED = /^\s*[-*+]\s+(.+?)\s+\(noted (\d{4})-(\d{2})-(\d{2})\)\s*$/;
 const SHOWN = 5;
+export const LONG_SHOWN = 10;
 
 export function notedLines(text: string): Array<{ fact: string; at: Date }> {
   return text
@@ -77,13 +78,12 @@ export function MemoryFold({ title, hint, status, open, onToggle, ref, children 
   );
 }
 
-export function MemoryFile({ text, loading, save, open, editing, onEdit, onToggle, ref, children }: {
+export function MemoryFile({ text, loading, save, open, onDone, onToggle, ref, children }: {
   text: string;
   save?: MemorySaveStatus;
   loading: boolean;
   open: boolean;
-  editing: boolean;
-  onEdit?: (next: boolean) => void;
+  onDone?: () => void;
   onToggle: () => void;
   ref?: Ref<HTMLButtonElement>;
   children?: ReactNode;
@@ -94,10 +94,10 @@ export function MemoryFile({ text, loading, save, open, editing, onEdit, onToggl
       ref={ref}
       title={<>{t("bot.memoryFile")}{!loading && <MemoryFileLines text={text} />}</>}
       hint={t("bot.memoryThisBotHelp")}
-      status={(save || onEdit) && (
+      status={(save || onDone) && (
         <>
           {save && <SaveState status={save} />}
-          {onEdit && <MemoryEditButton editing={editing} onEdit={onEdit} />}
+          {onDone && <MemoryDoneButton onDone={onDone} />}
         </>
       )}
       open={open}
@@ -114,11 +114,11 @@ export function MemoryFileLines({ text }: { text: string }) {
   return lines > 0 ? <span className="font-normal text-ink-secondary"> · {t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines })}</span> : null;
 }
 
-export function MemoryEditButton({ editing, onEdit }: { editing: boolean; onEdit: (next: boolean) => void }) {
+export function MemoryDoneButton({ onDone }: { onDone: () => void }) {
   const { t } = useI18n();
   return (
-    <button type="button" className="mm-action" onClick={() => onEdit(!editing)}>
-      {editing ? t("bot.memoryEditDone") : <><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</>}
+    <button type="button" className="mm-action" onClick={onDone}>
+      {t("bot.memoryEditDone")}
     </button>
   );
 }
@@ -169,6 +169,15 @@ export function NotedLines({ text, messages = [], target, botId, active = true, 
       )}
     </ul>
   );
+}
+
+// a list mounted again starts short, so closing its section resets it
+export function useShowAll<T>(rows: T[], first = LONG_SHOWN) {
+  const { t } = useI18n();
+  const [all, setAll] = useState(false);
+  const reset = () => setAll(false);
+  if (all || rows.length <= first) return { shown: rows, more: null, reset };
+  return { shown: rows.slice(0, first), more: <button type="button" className="mm-asks-more" onClick={() => setAll(true)}>{t("bot.memoryShowAll", { count: rows.length })}</button>, reset };
 }
 
 export function MemoryEmpty() {

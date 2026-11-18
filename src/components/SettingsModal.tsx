@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Import, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
+import { ChartScatter, ChevronDown, ChevronRight, Coins, Import, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
 } from "@/lib/settings-chrome";
 import { SavedKeys } from "./ApiKeys";
+import { BackButton } from "./BackButton";
 import { updaterActions, useManualCheck, useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
@@ -599,11 +600,7 @@ export function SettingsModal({
         {page && (
         <div data-settings-page={phone ? section : undefined} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", phone && "relative bg-panel")}>
           <div className={phone ? "relative flex shrink-0 items-center gap-3 px-2 py-3" : "flex shrink-0 items-center justify-between px-5 py-3 gap-3"}>
-            {phone && (
-              <button onClick={back} aria-label={t("settings.sync.back")} className="flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] text-accent hover:bg-control">
-                <ChevronLeft size={20} />{t("settings.title")}
-              </button>
-            )}
+            {phone && <BackButton label={t("settings.title")} ariaLabel={t("settings.sync.back")} onClick={back} />}
             <span id={phone ? "app-settings-title" : undefined} className={cn("text-[15px] font-semibold text-ink", phone && "pointer-events-none absolute left-1/2 -translate-x-1/2")}>
               {t(SECTION_KEY[section])}
             </span>
@@ -705,7 +702,7 @@ export function SettingsModal({
               </>
             )}
             {section === "models-index" && <ModelIndexSection />}
-            {section === "shortcuts" && <KeyboardShortcuts pickerStyle={modelDialEnabled(state.config)} />}
+            {section === "shortcuts" && <KeyboardShortcuts />}
           </div>
         </div>
         )}

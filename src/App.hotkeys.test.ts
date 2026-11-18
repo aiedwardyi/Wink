@@ -15,6 +15,7 @@ import {
 } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_GAP, PHONE_MENU_BUTTON_PX } from "@/lib/phone-header";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_IDS, nextSkin, type SkinId } from "@/lib/skins";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "App.tsx"), "utf8");
@@ -140,6 +141,12 @@ describe("settings section shortcuts", () => {
 });
 
 describe("worker list shortcut", () => {
+  const openLists = () => [...document.body.querySelectorAll("[data-worker-list]:not([data-closing])")].filter((list) => !list.closest("[data-side-panel][data-closing]"));
+  const paneList = () => vi.waitFor(() => {
+    const list = document.body.querySelector<HTMLElement>("[data-side-panel]:not([data-closing]) [data-worker-list]");
+    if (!list) throw new Error("no workers list in the side pane");
+    return list;
+  });
   const mount = async (group = false, phone = false, workers = true) => {
     localStorage.setItem("omb-onboarding-done", "true");
     const messages = workers ? [{ id: "l1", at: 1, role: "bot", kind: "launch", text: "Launched WORK\nLabel: WORK | Opus 5.5 | high\nWorking folder: C:\\repo\nSession: aaaaaaaa-1" }] : [];
@@ -175,15 +182,16 @@ describe("worker list shortcut", () => {
   it.each([[false, false], [true, false], [false, true], [true, true]])("toggles the active conversation with group=%s phone=%s", async (group, phone) => {
     const { host, press, unmount } = await mount(group, phone);
     try {
-      const chip = host.querySelector("[data-worker-strip]")!;
-      expect(chip.getAttribute("aria-expanded")).toBe("false");
+      const button = host.querySelector("[data-show-pane-button]")!;
+      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(button.getAttribute("aria-pressed")).toBe("false");
       expect((await press()).defaultPrevented).toBe(true);
-      expect(chip.getAttribute("aria-expanded")).toBe("true");
-      const list = document.body.querySelector("[data-worker-list]")!;
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+      const list = await paneList();
       expect(list.textContent).toContain(group ? "Team's workers" : "Scout's workers");
-      expect(list.getAttribute("aria-modal")).toBe(phone ? "true" : null);
+      expect(document.body.querySelector('[data-side-panel] [role="tab"][aria-selected="true"]')?.textContent).toBe("Workers");
       await press();
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect((openLists()[0] ?? null)).toBeNull();
     } finally {
       await unmount();
     }
@@ -192,9 +200,9 @@ describe("worker list shortcut", () => {
   it.each([false, true])("opens the list to its terminal row at 0 workers with phone=%s", async (phone) => {
     const { host, press, unmount } = await mount(false, phone, false);
     try {
-      expect(host.querySelector("[data-worker-strip]")).not.toBeNull();
+      expect(host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label")).toBe("0 working, 0 waiting, 0 failed, 0 done. Show workers");
       expect((await press()).defaultPrevented).toBe(true);
-      const list = document.body.querySelector("[data-worker-list]")!;
+      const list = await paneList();
       expect(list.querySelectorAll("li")).toHaveLength(0);
       expect(list.lastElementChild?.hasAttribute("data-worker-terminal")).toBe(true);
     } finally {
@@ -205,9 +213,9 @@ describe("worker list shortcut", () => {
   it("prevents the Window mnemonic in a group with no workers", async () => {
     const { host, press, unmount } = await mount(true, false, false);
     try {
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label")).toBe("Show and media");
       expect((await press()).defaultPrevented).toBe(true);
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect((openLists()[0] ?? null)).toBeNull();
     } finally {
       await unmount();
     }
@@ -220,33 +228,70 @@ describe("worker list shortcut", () => {
       await press();
       for (const init of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }, { repeat: true }, { isComposing: true }, { altKey: false }]) {
         expect((await press(init)).defaultPrevented).toBe(false);
-        expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+        expect((openLists()[0] ?? null)).toBeNull();
       }
     } finally {
       await unmount();
     }
   });
 
-  it("toggles the terminal's own list, not the chat's, while the terminal is open", async () => {
+  it("hands the side pane to the terminal when Ctrl+` follows Alt+W", async () => {
     const { host, press, unmount } = await mount();
     try {
+      await press();
+      await paneList();
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')?.hasAttribute("data-side")).toBe(true);
+      expect(openLists()).toHaveLength(0);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("hands the side pane to Workers when Alt+W follows Ctrl+`", async () => {
+    const { host, press, unmount } = await mount();
+    try {
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')?.hasAttribute("data-side")).toBe(true);
       expect((await press()).defaultPrevented).toBe(true);
+      expect((await paneList()).textContent).toContain("Scout's workers");
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("shuts the terminal's own list when the docked terminal closes", async () => {
+    const { host, press, unmount } = await mount();
+    const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+    try {
+      await backquote();
+      const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
+      const chip = await vi.waitFor(() => {
+        const found = overlay.querySelector<HTMLButtonElement>("[data-worker-strip]");
+        if (!found) throw new Error("no worker strip in the terminal");
+        return found;
+      }, { timeout: 5000 });
+      await act(async () => chip.click());
+      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
+      await backquote();
+      await backquote();
+      expect(overlay.getAttribute("data-open")).toBe("true");
+      expect(overlay.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([false, true])("opens chat search on Ctrl+F from the terminal only beside the chat with phone=%s", async (phone) => {
+    const { host, press, unmount } = await mount(false, phone);
+    try {
       await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
       const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
-      expect(overlay).not.toBeNull();
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
-      await vi.waitFor(async () => {
-        await act(async () => {});
-        expect(overlay.querySelector("[data-worker-strip]")).not.toBeNull();
-      }, { timeout: 5000 });
-      const event = await press();
-      expect(event.defaultPrevented).toBe(true);
-      expect(event.cancelBubble).toBe(true);
-      expect(document.body.querySelectorAll("[data-worker-list]:not([data-closing])")).toHaveLength(1);
-      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
-      expect(overlay.querySelector("[data-worker-strip]")?.getAttribute("aria-expanded")).toBe("true");
-      await press();
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      const key = new KeyboardEvent("keydown", { code: "KeyF", key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      await act(async () => overlay.dispatchEvent(key));
+      expect(key.defaultPrevented).toBe(!phone);
+      expect(host.querySelector("[data-chat-find]") !== null).toBe(!phone);
     } finally {
       await unmount();
     }
@@ -257,23 +302,23 @@ describe("worker list shortcut", () => {
     try {
       await press({ code: "KeyT", key: "t" });
       expect((await press()).defaultPrevented).toBe(false);
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect((openLists()[0] ?? null)).toBeNull();
     } finally {
       await unmount();
     }
   });
 
-  it("hands focus back to the chip when Alt+W closes the list", async () => {
+  it("hands focus back to the pane button when Alt+W closes the list", async () => {
     const { host, press, unmount } = await mount();
     try {
       await press();
-      const inside = document.body.querySelector<HTMLElement>("[data-worker-list]")!;
+      const inside = await paneList();
       inside.tabIndex = -1;
       inside.focus();
       expect(document.activeElement).toBe(inside);
       await press();
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
-      expect(document.activeElement).toBe(host.querySelector("[data-worker-strip]"));
+      expect((openLists()[0] ?? null)).toBeNull();
+      expect(document.activeElement).toBe(host.querySelector("[data-show-pane-button]"));
     } finally {
       await unmount();
     }
@@ -426,6 +471,7 @@ describe("split number shortcuts", () => {
       unmount: async () => {
         await act(async () => root.unmount());
         host.remove();
+        lastViewedPanes.clear();
         vi.unstubAllGlobals();
         localStorage.clear();
       },
@@ -615,7 +661,7 @@ describe("terminal pane shortcuts", () => {
 describe("conversation layout", () => {
   it("clips the hidden terminal overlay instead of making the chat scrollable", () => {
     // overflow-hidden is still programmatically scrollable: a terminal tab scrollIntoView shifted the chat under the sidebar.
-    expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"');
+    expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip md:flex-row"');
   });
 });
 

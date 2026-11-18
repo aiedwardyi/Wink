@@ -19,11 +19,6 @@ const rows = (messages: Message[], showToolCalls = false, emergingId?: string | 
   chatTranscriptRows(groupActivityRuns(messages), { showToolCalls, emergingId, transcript: messages });
 
 describe("chatTranscriptRows", () => {
-  it("hides a tapped choice's line", () => {
-    const tapped: Message = { ...user("Can't tonight"), answersCard: "ask" };
-    expect(rows([say("Dinner?"), tapped, user("typed")]).map((row) => row.visible)).toEqual([true, false, true]);
-  });
-
   it("shows Terminal activity without revealing hidden screen frames", () => {
     const messages: Message[] = [
       step("Read"),

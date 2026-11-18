@@ -25,6 +25,7 @@ import type {
 import { newEventId, newId } from "../../contracts.ts";
 import { applyCredentialAllowlist } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
+import { guardInput } from "../../auto-approve.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
 import { execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
@@ -74,7 +75,7 @@ export interface MspSupport {
   install?: EngineInstall;
   credentialEnv?: readonly string[];
   transformEnv?(env: Record<string, string | undefined>, config: MspMuseConfig): void;
-  isAuthenticated(env: Record<string, string | undefined>, config: MspMuseConfig): boolean | Promise<boolean>;
+  isAuthenticated(env: Record<string, string | undefined>, config: MspMuseConfig): boolean | undefined | Promise<boolean | undefined>;
   account?(env: Record<string, string | undefined>): string | undefined;
   requireAuthenticationBeforeSpawn?: boolean;
   /** Map an MSP turn error to a provider code (auth shapes). */
@@ -85,7 +86,7 @@ export interface MspSupport {
   /** Tests inject their own; idle session hosts follow its TTL. */
   warmPool?: WarmPool;
   /** Extra `serve` argv for this CLI's `--version` line. */
-  serveArgs?(version: string | null, wsl: boolean): string[];
+  serveArgs?(version: string | null, wsl: boolean, model?: string | null): string[];
   /** The engine exe and env to start a host with, skipping the CLI's launcher; null keeps the launcher. */
   directHost?(cli: string, env: Record<string, string | undefined>): { command: string; env: Record<string, string | undefined> } | null;
   /** One-shot text for summaries, outside any MSP session. */
@@ -409,7 +410,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           generation: captured.generation,
         };
       };
-      const handshakeFingerprint = () => JSON.stringify(["handshake", effectiveCli()]);
+      const serveArgs = (model?: string | null) => ["serve", ...(support.serveArgs?.(cliVersion, isWslCli(), model) ?? [])];
+      // A handshake host is spawned before the model is known; a model that needs other host args never adopts it.
+      const handshakeFingerprint = (model?: string | null) => JSON.stringify(["handshake", effectiveCli(), ...serveArgs(model)]);
       const sessionConfigFor = (integrations: SendTurnInput["integrations"]) => {
         // Session MCP rides in the `config` extension object, never at the
         // top level: SessionStartParams has no `mcpServers` member, and the
@@ -435,8 +438,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         })();
         return host.closed;
       };
-      const spawnHost = (cwd: string, env: Record<string, string | undefined>): Host => {
-        const args = ["serve", ...(support.serveArgs?.(cliVersion, isWslCli()) ?? [])];
+      // The host's posture is fixed at spawn, so a read-only turn gets a host of its own and never a warm one.
+      const spawnHost = (cwd: string, env: Record<string, string | undefined>, model?: string | null, readOnly = false): Host => {
+        const args = [...serveArgs(model), ...(readOnly ? ["--disable-write", "--disable-shell"] : [])];
         const launch = (command: string, childEnv: typeof env) =>
           spawnCli(command, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
         // A failed direct start throws (bad image) or has no pid (ENOENT, EACCES); the launcher still runs.
@@ -542,7 +546,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         }
       };
       /** One prepare per lease; a same-key prepare joins it and releases once if it fails. */
-      const prepareLease = async (lease: Lease, cwd: string, setup?: (host: Host, request: Request) => Promise<void>) => {
+      const prepareLease = async (lease: Lease, cwd: string, setup?: (host: Host, request: Request) => Promise<void>, model?: string | null) => {
         const joined = preparing.get(lease);
         if (joined) {
           if (!(await joined)) lease.release("prepare failed");
@@ -552,7 +556,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const run = (async () => {
           let host: Host;
           try {
-            host = spawnHost(cwd, childEnv());
+            host = spawnHost(cwd, childEnv(), model);
             if (lease.key.threadId === HANDSHAKE) setCliPriority(host.child, "low");
           } catch {
             lease.release("spawn failed");
@@ -605,7 +609,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           await request("orbit/ping", {}, 1_000).catch((err: unknown) => {
             if ((err as { code?: unknown })?.code !== -32601) throw err;
           });
-        });
+        }, shape.model);
       };
       const smallerPc = () => os.totalmem() < 8 * 1024 ** 3 || os.cpus().length <= 4;
 
@@ -652,7 +656,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         };
         active.set(threadId, { turnId, interrupt: earlyInterrupt, asks });
         try {
-          if (support.requireAuthenticationBeforeSpawn && !(await withWslProbeReason("turn", () => support.isAuthenticated(env, config)))) {
+          if (support.requireAuthenticationBeforeSpawn && await withWslProbeReason("turn", () => support.isAuthenticated(env, config)) === false) {
             emit({ ...base(threadId, turnId), type: "turn.started" });
             emit({ ...base(threadId, turnId), type: "runtime.error", message: support.loginNote, signIn: true });
             active.delete(threadId);
@@ -691,14 +695,16 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const sessionRoot = isWslCli() ? toWslPath(cwd) : cwd;
         const sessionConfig = sessionConfigFor(turn.integrations);
         const captured = capture();
-        const own = !cancelled && identity && checked === prepares
+        // the read-only host resumes this session elsewhere, so a kept host would continue stale history
+        if (turn.readOnly) pool.invalidate(keyFor(threadId), "read-only turn");
+        const own = !cancelled && !turn.readOnly && identity && checked === prepares
           ? pool.take(keyFor(threadId), warmFingerprint(eligibility(turn, captured)), captured, turn.resumeCursor)
           : "miss";
         if (own === "busy") {
           active.delete(threadId);
           throw new Error("a turn is already running on this thread");
         }
-        const taken = cancelled ? "miss" : own !== "miss" ? own : pool.take(keyFor(HANDSHAKE), handshakeFingerprint(), capture(""), undefined);
+        const taken = cancelled || turn.readOnly ? "miss" : own !== "miss" ? own : pool.take(keyFor(HANDSHAKE), handshakeFingerprint(turn.model), capture(""), undefined);
         claimed = typeof taken === "object" ? ("hit" in taken ? taken.hit : taken.pending) : null;
         let host: Host | null = typeof taken === "object" && "hit" in taken ? (hosts.get(taken.hit) ?? null) : null;
         if (host && !host.alive()) {
@@ -727,7 +733,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (pending.key.threadId === HANDSHAKE || smallerPc()) host = await adopt;
           else {
             // Adopt or race: a slow prepare never makes the turn later than cold.
-            racer = spawnHost(cwd, env);
+            racer = spawnHost(cwd, env, turn.model);
             racer.inUse = true;
             const cold = racer;
             const coldReady = (async () => {
@@ -768,7 +774,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           return { turnId };
         }
         const reused = !!host && !raced;
-        const turnHost = host ?? spawnHost(cwd, env);
+        const turnHost = host ?? spawnHost(cwd, env, turn.model, turn.readOnly === true);
         turnHost.inUse = true;
         setCliPriority(turnHost.child, "normal");
         // The turn owns its lease and offers it back; an adopted handshake
@@ -851,7 +857,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         /** Hands the host back with its session after a clean native completion. */
         const retain = (): boolean => {
           const sessionId = state.sessionId;
-          if (interrupted || recovered || disposed || !sessionId || !turnHost.alive() || !turnHost.identity) return false;
+          if (turn.readOnly || interrupted || recovered || disposed || !sessionId || !turnHost.alive() || !turnHost.identity) return false;
           const seen = readIdentity();
           remember(seen);
           const now = capture(seen);
@@ -1028,6 +1034,15 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           seenApprovals.add(approvalId);
           const tool = String(params?.toolName ?? "tool").slice(0, 80);
           const summary = String(params?.rawArgs ?? params?.toolName ?? tool).slice(0, 200);
+          if (turn.readOnly) {
+            // a read-only turn approves nothing, whatever the instance's Auto
+            void decideApproval({ approvalId, requirementId: params?.currentRequirementId, choices }, "deny").catch(
+              (err) => {
+                if (!isSettledApprovalError(err)) fail(err instanceof Error ? err.message : String(err));
+              },
+            );
+            return;
+          }
           if (config.fullAuto) {
             // No card: answer immediately with the allow choice, like the core.
             void decideApproval({ approvalId, requirementId: params?.currentRequirementId, choices }, "allow").catch(
@@ -1096,6 +1111,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             requestType: "permission",
             tool,
             summary,
+            ...guardInput(params),
             choices: choices.map((c: ApprovalChoice) => String(c?.label ?? "")).filter(Boolean),
           });
         };
@@ -1463,10 +1479,11 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             computerMcp: true,
             // Host control needs interactive approvals, same rule as ACP.
             localComputerMcp: !config.fullAuto,
+            readOnlyTurns: true,
           },
           sendTurn,
           // fullAuto answers every approval itself (openApproval); the rest reach Wink
-          access: (turn) => (config.fullAuto ? FREE_ACCESS : routedAccess(turn)),
+          access: (turn) => (config.fullAuto && !turn.readOnly ? FREE_ACCESS : routedAccess(turn)),
           interruptTurn: async (threadId) => {
             active.get(threadId)?.interrupt();
           },
@@ -1509,7 +1526,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           const round = ++prepares;
           const env = childEnv();
           try {
-            if (support.requireAuthenticationBeforeSpawn && !(await support.isAuthenticated(env, config))) {
+            if (support.requireAuthenticationBeforeSpawn && await support.isAuthenticated(env, config) === false) {
               lastCapture = null;
               pool.invalidate({ instanceId, incarnation }, "signed out");
               return;

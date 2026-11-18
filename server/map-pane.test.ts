@@ -339,9 +339,9 @@ it("opens with every live worker in its first snapshot instead of adding them on
   expect(first.workers.map(worker => [worker.nick, worker.files.length])).toEqual([["PANE-A", 1], ["PANE-B", 1], ["PANE-C", 1]]);
 });
 
-async function open(workers: MapPaneRecord[]) {
+async function open(workers: MapPaneRecord[], flows?: string) {
   let listener = () => {};
-  const feature = createMapPane({ panes: async () => workers, subscribe: (_bot, next) => { listener = next; return () => {}; } });
+  const feature = createMapPane({ panes: async () => workers, subscribe: (_bot, next) => { listener = next; return () => {}; }, flows });
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
     if (url.pathname === "/live") streams.push(res);
@@ -467,6 +467,22 @@ it("lists only the worker's own files and commits after it merges the trunk", as
   const flow = await fetch(`${map.url}/flow?worker=pane-a`).then(res => res.json());
   map.close();
   expect(flow).toMatchObject({ total: 2, commits: [{ subject: "Merge branch 'main' into work" }, { subject: "own work" }] });
+});
+
+it("hands a restarted Map the rows this checkout read last, and none before its first read", async () => {
+  const { root, base } = repo();
+  const dir = mkdtempSync(join(tmpdir(), "wink-map-last-"));
+  roots.push(dir);
+  const worker = { sessionId: "pane-a", cwd: root, label: "WORK", baseHead: base };
+  const first = await open([worker], join(dir, "map-flows.json"));
+  await first.until(() => true);
+  expect(await fetch(`${first.url}/flow?worker=pane-a&cached=1`).then(res => res.json())).toBeNull();
+  const read = await fetch(`${first.url}/flow?worker=pane-a`).then(res => res.json());
+  first.close();
+  const again = await open([worker], join(dir, "map-flows.json"));
+  await again.until(() => true);
+  expect(await fetch(`${again.url}/flow?worker=pane-a&cached=1`).then(res => res.json())).toEqual(read);
+  again.close();
 });
 
 it("keeps the launch commit for a worker on the trunk and for a branch that has not merged it", async () => {

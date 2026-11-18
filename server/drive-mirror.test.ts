@@ -99,6 +99,7 @@ describe("Drive mirror", () => {
     ["threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "once"], ["assets/a.png", "once"], ["pictures/a.png", "once"], ["workspace.json", "once"],
     ["threads/bot/thread.conflict-work-1.json", "once"], ["threads/bot/thread.deleted.json", "once"], ["memory/bot/.ancestry/MEMORY.md.json", "once"],
     ["board/device-home/p0123456789abcdef01234567.json", "own"], ["board/device-work/p0123456789abcdef01234567.json", "peer"],
+    ["board/device-home/deleted.json", "own"], ["board/device-work/deleted.json", "peer"],
     ["board/device-work/notes.json", "unknown"], ["board/p0123456789abcdef01234567.json", "unknown"],
     ["devices/device-home.json.1.tmp", "ignore"], ["notes.txt", "unknown"], ["memory-v2 (0)/bot/aaaaaaaaaaaa.json", "unknown"],
   ])("classifies %s as %s", (path, rule) => {
@@ -847,13 +848,16 @@ describe("Drive mirror", () => {
     expect(table(pcs[0]).binding.rootId).toBeNull();
   });
 
-  it("rejects bytes that no longer match the listed checksum", async () => {
+  it("rejects bytes that no longer match the listed checksum and still finishes the pass", async () => {
     const remote = seed("devices/device-work.json", "listed");
+    seed("devices/device-laptop.json", "laptop");
     const client = createDriveClient({ getAccessToken: async () => "test-access", fetch: drive.fetch });
-    const mirror = mirrorFor(pcs[0], { client: { ...client, downloadFile: async (id) => { drive.edit(remote.id, Buffer.from("changed")); return client.downloadFile(id); } } });
-    await expect(mirror.syncOnce()).rejects.toMatchObject({ problem: "content-changed" });
+    const mirror = mirrorFor(pcs[0], { client: { ...client, downloadFile: async (id, size) => { if (id === remote.id) drive.edit(remote.id, Buffer.from("changed")); return client.downloadFile(id, size); } } });
+    const summary = await mirror.syncOnce();
+    expect(summary.failed).toEqual(["devices/device-work.json"]);
+    expect(summary.downloaded).toEqual(["devices/device-laptop.json"]);
     expect(existsSync(join(pcs[0].folder, "devices/device-work.json"))).toBe(false);
-    expect(table(pcs[0]).files).toEqual({});
+    expect(Object.keys(table(pcs[0]).files)).toEqual(["devices/device-laptop.json"]);
   });
 
   it("preserves a write-once file that appears during download", async () => {

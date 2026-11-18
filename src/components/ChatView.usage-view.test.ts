@@ -41,15 +41,7 @@ let store: ReturnType<Mods["store"]["useStore"]>;
 let commits: { bot: string; quick: string[] }[];
 const matchMedia = window.matchMedia;
 
-// The chat's limit line, and so its quick view, shows only once a window runs low.
-function low(board: UsageBoard) {
-  for (const engine of board.engines) {
-    const [binding] = [...engine.accounts.find((account) => account.id === engine.mainId)?.windows ?? []].sort((a, b) => b.usedPercent - a.usedPercent);
-    if (binding) binding.usedPercent = Math.max(binding.usedPercent, 80);
-  }
-  return board;
-}
-const fresh = (): UsageBoard => low(structuredClone(usageBoardFixture));
+const fresh = (): UsageBoard => structuredClone(usageBoardFixture);
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const text = (node: Element | null | undefined) => {
   const clone = node?.cloneNode(true) as Element | undefined;
@@ -75,19 +67,12 @@ const poke = async (node: Element) => act(async () => {
 const whoLine = (row: Element) => [...row.querySelector("[data-account-who]")?.children ?? []].map((node) => text(node)).join(" ");
 const HIDDEN = '[data-usage-hero], [data-hero-left], [data-verdict], [data-projection], [data-usage-chart], [data-trace], [data-chart-fold], [data-today-normal], [data-details], [role="tablist"], [role="tab"], [data-usage-event]';
 const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
-const LOW_WEEK = { id: "seven_day", kind: "week", usedPercent: 80, resetsAt: usageBoardNow + 86_400_000, windowMinutes: 10080 } as const;
 const GLYPHS = /[\u2580-\u25FF]/u;
 const boxOf = (node: Element | null | undefined) => BOX.filter((name) => node?.classList.contains(name));
 const said = (root: Element | null | undefined) => [root?.textContent ?? "", ...[...root?.querySelectorAll("*") ?? []].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
 function unused(board: UsageBoard, ...ids: string[]) {
   for (const account of board.engines.flatMap((engine) => engine.accounts)) {
     if (ids.includes(account.id)) account.windows = [{ ...UNUSED }, ...account.windows.filter((window) => window.kind !== "session")];
-  }
-  return board;
-}
-function lowWeek(board: UsageBoard, ...ids: string[]) {
-  for (const account of board.engines.flatMap((engine) => engine.accounts)) {
-    if (ids.includes(account.id)) account.windows = [...account.windows.filter((window) => window.kind !== "week"), { ...LOW_WEEK }];
   }
   return board;
 }
@@ -307,25 +292,15 @@ describe("chat usage meter, quick view and wait card", () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
     expect(meter(), "meter before the board").not.toBeNull();
     expect(q("[data-meter-name]")).toBeNull();
-    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("15%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("29%");
     expect(text(meter()?.querySelectorAll("[data-window]")[1]?.querySelector("[data-left]"))).toBe("54%");
     const board = fresh();
     board.engines[0]!.accounts[0]!.windows[1]!.usedPercent = 90;
     await act(async () => read.resolve(board));
     await settle();
     expect(q("[data-meter-name]")).toBeNull();
-    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("20%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("34%");
     expect(text(meter()?.querySelectorAll("[data-window]")[1]?.querySelector("[data-left]"))).toBe("10%");
-  });
-
-  it("hides the line while every window has plenty left", async () => {
-    server.board = structuredClone(usageBoardFixture);
-    await mount(makeBot("bot-atlas", "Atlas", "claude"));
-    expect(meter(), "34% left at most used").toBeNull();
-    const press = new Event("orbit:usage-key", { cancelable: true });
-    await act(async () => { window.dispatchEvent(press); });
-    expect(press.defaultPrevented, "Alt+U falls through to all Usage").toBe(false);
-    expect(quick()).toBeNull();
   });
 
   it("keeps quick-view document listeners across clock ticks", async () => {
@@ -533,7 +508,7 @@ describe("chat usage meter, quick view and wait card", () => {
     seatMeter(viewport(phone ? 390 : 1280, phone ? 844 : 800));
     const say = (key: Parameters<Mods["i18n"]["translate"]>[1], vars?: Record<string, number>) => m.i18n.translate(locale, key, vars);
     const label = `${say("usage.limits.sessionShort")}: ${say("usage.desk.windowLeft", { percent: 100 })}`;
-    server.board = lowWeek(unused(fresh(), "claude", CLAUDE_2, "grok"), "claude", "grok");
+    server.board = unused(fresh(), "claude", CLAUDE_2, "grok");
     const bars: [string, string | null, string][] = [];
     for (const engine of server.board.engines) {
       await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone, locale });
@@ -556,7 +531,7 @@ describe("chat usage meter, quick view and wait card", () => {
 
   it.each([false, true])("draws every quick view bar as ten boxes, filled ones first, with no glyphs (phone=%s)", async (phone) => {
     seatMeter(viewport(phone ? 390 : 1280, phone ? 844 : 800));
-    server.board = lowWeek(unused(fresh(), "grok"), "grok");
+    server.board = unused(fresh(), "grok");
     const on: number[] = [];
     for (const engine of server.board.engines) {
       await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone });
@@ -567,7 +542,7 @@ describe("chat usage meter, quick view and wait card", () => {
       expect(said(quick()), engine.engine).not.toMatch(GLYPHS);
       await unmount();
     }
-    expect(on).toHaveLength(11);
+    expect(on).toHaveLength(10);
     expect([Math.min(...on), Math.max(...on)]).toEqual([0, 10]);
   });
 
@@ -727,7 +702,7 @@ describe("chat usage meter, quick view and wait card", () => {
     await show(makeBot("bot-kai", "Kai", "codex"));
     await settle();
     expect(q("[data-meter-name]")).toBeNull();
-    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("20%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("62%");
     expect(meter()?.querySelectorAll("[data-window]")).toHaveLength(1);
     await show(makeBot("bot-atlas", "Atlas", "claude"));
     await settle();
@@ -745,15 +720,14 @@ describe("chat usage meter, quick view and wait card", () => {
   it("follows the drain destination of a draining Main", async () => {
     const draining = (phase: "draining" | "failed") => instancesFor(server.board).map((instance) =>
       instance.instanceId === "claude" ? { ...instance, drain: { destinationId: CLAUDE_3, phase } } : instance);
-    server.board.engines[0]!.accounts[2]!.windows[0]!.usedPercent = 90;
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { instances: draining("draining") });
     expect(q("[data-meter-name]")).toBeNull();
-    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("10%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("40%");
     expect(text(meter()?.querySelectorAll("[data-window]")[1]?.querySelector("[data-left]"))).toBe("78%");
     await act(async () => store.dispatch({ type: "instances", instances: draining("failed") }));
     await settle();
     expect(q("[data-meter-name]")).toBeNull();
-    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("20%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("34%");
   });
 
   it("shares one pending Main request with Usage", async () => {

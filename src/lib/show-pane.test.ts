@@ -4,7 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, PANE_TAB_KEY, paneKind, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { paneKind } from "./open-file";
+import { autoShowStep, closeShow, PANE_TAB_KEY, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

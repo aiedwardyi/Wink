@@ -12,8 +12,8 @@ import { BANNER_MS, CURSOR_ARROW, VerifyWatchShow, tagSpot, type Part } from "@/
 import "./VerifyWatch.css";
 
 const copy = {
-  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone fit", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
-  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 맞춤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
+  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", unavailable: "Replay unavailable on this PC", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone fit", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
+  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", unavailable: "이 PC에서 다시보기를 사용할 수 없어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 맞춤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
 };
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
 const RED = "#f05d5d";
@@ -79,7 +79,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     const play = async (path: string) => {
       show.beginRun();
       const res = await fetch(path, { cache: "no-store", signal: abort.signal });
-      if (res.status === 404) { show.expire(); return false; }
+      if (res.status === 404) { show.unavailable(); return false; }
       if (!res.ok || !res.body) { show.fail(); return false; }
       let ended = false;
       for await (const chunk of readReplay(res.body)) {
@@ -267,7 +267,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));
   const rules = [...RULES, ...[...show.byChecker.keys()].filter(id => !RULES.includes(id))];
-  const banner = show.phase === "between" ? show.fixed ? c.fixed : c.waiting : show.phase === "expired" ? c.expired : show.phase === "failed" ? show.end?.status === "blocked" ? c.unfinished : c.failed : show.phase === "clean" ? c.clean : null;
+  const banner = show.phase === "between" ? show.fixed ? c.fixed : c.waiting : show.phase === "unavailable" ? c.unavailable : show.phase === "failed" ? show.end?.status === "blocked" ? c.unfinished : c.failed : show.phase === "clean" ? c.clean : null;
   const rerun = async () => {
     if (rerunning) return;
     setRerunning(true); setError(false);

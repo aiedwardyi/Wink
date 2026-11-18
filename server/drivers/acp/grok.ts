@@ -39,7 +39,7 @@ function grokHome(env: Record<string, string | undefined>): string {
 
 /** Probed at the same home the config is read from: on the real homedir a set
  *  GROK_HOME/HOME reads as signed in and the inline sign-in card never renders. */
-export function grokIsAuthenticated(env: Record<string, string | undefined>): boolean {
+export function grokIsAuthenticated(env: Record<string, string | undefined>): boolean | undefined {
   return storedSignIn(join(grokHome(env), "auth.json"), (text) => {
     const parsed = grokAuthSchema.safeParse(JSON.parse(text));
     return parsed.success && Object.values(parsed.data).some((entry) => Boolean(entry.key?.trim() || entry.refresh_token?.trim()));
@@ -607,7 +607,7 @@ export const grokSupport: AcpSupport = {
   // [models].default (grok-4.6) and oMLX never sees a request.
   spawnArgs: (config, turn) => [
     // Only a Wink setting overrides; otherwise the user's own grok config decides.
-    ...(config.fullAuto ? ["--permission-mode", "bypassPermissions"] : turn.approval === "ask" ? ["--permission-mode", "default"] : []),
+    ...(turn.readOnly ? ["--permission-mode", "plan"] : config.fullAuto ? ["--permission-mode", "bypassPermissions"] : turn.approval === "ask" ? ["--permission-mode", "default"] : []),
     "agent",
     ...(turn.model ? ["-m", turn.model] : []),
     // long form on purpose: `--effort` is documented as an alias, and an

@@ -10,7 +10,7 @@ const DOING_EN = /^(?:(?:okay|ok|sure|got it|alright|right|yes|yep|yeah)[,!.]?\s
 const EXPLAINS = "will|would|can|could|should|may|might|is|are|was|were|lets|helps|shows|gives|makes|means|takes|tells|works|saves";
 const SUBJECTS = "you|it|we|they|i|he|she|that|this|which";
 const EXPLAINED = new RegExp(`(?<!\\b(?:${SUBJECTS})\\s)\\b(?:${EXPLAINS})\\b`, "i");
-const ON_IT = /^(?:(?:okay|ok|sure|got it|alright|right)[,!.]?\s+)?(?:i'?m\s+)?on it\b/i;
+export const ON_IT = /^(?:(?:okay|ok|sure|got it|alright|right)[,!.]?\s+)?(?:i'?m\s+)?on it\b/i;
 const ACTION_KO = /확인해\s?(?:볼게|보겠|드릴게|드리겠)|확인했|알아\s?(?:볼게|보겠)|알아봤|찾아\s?(?:볼게|보겠)|찾았|열어\s?(?:볼게|드릴게|드리겠)|열었|추가했|추가해\s?(?:둘게|드릴게|놓을게)|바로\s?(?:확인|진행|처리)|진행할게|진행하겠|처리할게|처리하겠|보내\s?드릴게|보냈|물어\s?(?:볼게|보겠)|(?:확인|추가|시작|수정|예약|재시작|실행|머지|병합|배포|푸시|삭제|설치|업데이트|커밋|검색)\s?(?:할게|하겠|해\s?(?:볼게|둘게|놓을게|드릴게|보겠|드리겠))|(?:열|고칠|보낼|지울|만들|닫을|옮길|바꿀|돌릴|찾을|올릴)게|(?:고쳐|보내|지워|만들어|닫아|옮겨|바꿔|돌려|올려)\s?(?:볼게|둘게|놓을게|드릴게|줄게|보겠|드리겠)|(?:그렇게|바로|지금|당장)\s?(?:할게|하겠)/;
 const CANT = /\b(?:i can(?:not|'?t)|i'?m unable|i am unable|unable to|i (?:don'?t|do not) have access|no access)\b[^.!?]*\b(?:open|access|see|check|find|look|do|interact|reach|read|run)\b|(?:열|볼|접근할|확인할|찾을|실행할|읽을|들어갈) 수(?:가)? 없|권한이 없/i;
 const UNSURE = /\b(?:not (?:entirely |quite |really |completely )?sure|i (?:don'?t|do not) know|i (?:don'?t|do not) (?:report|provide|track)|i (?:don'?t|do not) have (?:that |this |any |the )?(?:info|information|data|details|access))\b|잘 모르|모르겠|알 수 없|정보가 없/i;
@@ -137,52 +137,7 @@ export function readsBack(heard: string): boolean {
   return READ_BACK.test(heard);
 }
 
-// Every clause of the line asks for quiet or says he is talking to someone else, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.
-const QUIET_EN = /(?:(?:be|stay|keep|remain) (?:quiet|quite|silent)|quiet down|keep it down|quiet|silence|stop (?:talking|responding|answering|speaking)|(?:don'?t|do not) (?:say anything|talk|respond|answer|reply|speak)|mute yourself|shut up|hush|shh+|zip it|(?:that'?s )?enough|no more (?:updates|talking)|pause|just listen|give me (?:a|one) (?:second|sec|minute|min|moment|bit))/.source;
-const QUIET_KO = /(?:가만히\s?(?:좀\s?)?있어|아무\s?말도\s?하지\s?마|대답\s?하지\s?마|말하지\s?말고\s?(?:가만히\s?)?있어|조용(?:해|히(?:\s?좀)?(?:\s?(?:해|하세요|있어))?)?|(?:말\s?)?그만(?:\s?(?:해|하세요|말해(?:도\s?(?:돼|되))?))?|말하지\s?마|닥쳐|쉿|시끄러(?:워)?|입\s?다물어)\s?(?:요|줘|봐|라|세요|주세요|줄래)?/.source;
-const PEOPLE = /(?:someone|somebody|a friend|my [a-z]+|him|her|them)(?: else)?/.source;
-const AWAY_EN = `(?:(?:while|because|cause|since|as) )?(?:(?:i'?m|i am|we'?re|we are) (?:talking|speaking) (?:to|with) ${PEOPLE}|(?:i'?m |i am )?not (?:talking|speaking) to you|(?:i|we)(?:'ll| need to| have to| gotta| want to| wanna)? (?:talk|speak) (?:to|with) ${PEOPLE}|(?:i'?m|i am|we'?re|we are) on (?:the|a|another) (?:phone|call))`;
-const AWAY_KO = /(?:나\s?)?(?:지금\s?)?(?:[가-힣]+(?:랑|하고)\s?)?(?:얘기|이야기|대화|통화)\s?(?:좀\s?)?(?:중|하는\s?중|하고\s?있어|할게|해야\s?(?:돼|해))(?:이야)?(?:요)?/.source;
-const SOFT = /please|just|ok(?:ay)?|now|wait|hold on|hang on|hey|(?:can|could|would|will) you|좀|이제|그만|잠깐(?:만)?|기다려(?:\s?봐)?|헤이/.source;
-const FOR_A_BIT = /for (?:a|one|a few|a couple(?: of)?|two|three|five|ten|\d+) (?:more )?(?:seconds?|secs?|minutes?|mins?|moments?|bit|while)/.source;
-
 const escaped = (name: string) => name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// How speech-to-text spells a shown voice name. A whole word only: "Jenkins" and "에디터" are not names.
-const SPELLED: Record<string, string> = {
-  Jenn: "Jen|Jennifer|젠|제니퍼", Eddie: "Eddy|에디",
-  Zephyr: "제퍼|제피르", Puck: "퍽", Charon: "카론|캐런", Kore: "코레", Fenrir: "펜리르|펜리어", Leda: "레다|리다", Orus: "오루스|오러스",
-  Callirrhoe: "칼리로에|칼리로", Autonoe: "오토노에|아우토노에", Enceladus: "엔셀라두스|엔켈라두스", Iapetus: "이아페투스|야페투스", Umbriel: "움브리엘|엄브리엘",
-  Algieba: "알기에바|알지에바", Despina: "데스피나", Algenib: "알게닙|알제닙", Rasalgethi: "라스알게티|라살게티", Laomedeia: "라오메데이아", Achernar: "아케르나르|아커나",
-  Schedar: "셰다르|쉐다르", Gacrux: "가크룩스", Pulcherrima: "풀케리마", Achird: "아키르드|아치르드", Zubenelgenubi: "주베넬게누비", Vindemiatrix: "빈데미아트릭스",
-  Sadachbia: "사닥비아|사다크비아", Sadaltager: "사달타게르|사달타거", Sulafat: "술라파트|술라팟",
-};
-const spelled = (aliases: readonly string[]) => aliases.flatMap((alias) => SPELLED[alias] ? [`(?:${SPELLED[alias]})(?:야|아)?(?![a-z0-9가-힣])`] : []);
-
-/** The person telling the voice to stop talking for now, which is not a no to a job. */
-export function asksForQuiet(heard: string, name = "", aliases: readonly string[] = []): boolean {
-  // The shown name may run on: "Jenn" is called "Jennifer" too.
-  const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`), ...spelled(aliases)].filter(Boolean).join("|");
-  const lead = `(?:(?:${SOFT}${own && `|(?:${own})(?:야|아)?`})[\\s,]*)*`;
-  const tail = `(?:[\\s,]+(?:please|now|for now|ok(?:ay)?|alright|${FOR_A_BIT}${own && `|${own}`}))*`;
-  const clause = `${lead}(?:${QUIET_EN}${tail}|${QUIET_KO}|${AWAY_EN}|${AWAY_KO})`;
-  return new RegExp(`^${clause}(?:[\\s,.;!?~…]+${clause})*[\\s~….,!?]*$`, "i").test(heard.trim());
-}
-
-const HELLO = /hey|hi|hello|ok(?:ay)?|alright|so|yo|헤이|저기/.source;
-const BACK = /are you (?:still )?there|you (?:still )?there|can you hear me|you can (?:talk|speak|go on|go ahead|continue)(?: again| now)*|go ahead|i'?m back|i'?m done|we'?re (?:back|done)|come back|wake up|talk to me|들려|거기 있어|있어|(?:이제\s?)?말해(?:도\s?(?:돼|되))?|다시\s?말해|나\s?왔어|돌아와|일어나/.source;
-
-/** Talking to the voice again: the whole line is its name, or the name the picker shows for its voice, with at most a hello or a "you there?", or it opens by calling the bot's own name ("Hey Nova, check the build"). A name inside other talk is talk. */
-export function callsVoice(heard: string, name: string, aliases: readonly string[] = []): boolean {
-  // A Korean particle may follow the name ("Nova야"); every other spelling is listed, so "Korean" never calls Kore.
-  const own = [escaped(name), ...aliases.map(escaped), ...aliases.flatMap((alias) => SPELLED[alias] ?? [])].filter(Boolean).join("|");
-  if (!own) return false;
-  const line = heard.trim();
-  if (new RegExp(`^(?:(?:${HELLO})[\\s,]*)*(?:(?:${BACK})[\\s,]+)?(?:${own})(?:야|아)?(?:[\\s,]+(?:${BACK}))?[\\s~….,!?]*$`, "i").test(line)) return true;
-  // Only the bot's own name leads a request: a voice's name is a person's too ("Eddie, dinner's ready").
-  // A comma or a 야 marks it as called, so "Nova is great" stays talk; "Nova, be quiet" stays quiet.
-  const rest = name.trim() ? new RegExp(`^(?:(?:${HELLO})[\\s,]+)*${escaped(name)}(?:(?:야|아)(?![가-힣])[\\s,]*|\\s*,\\s*)(\\S.*)$`, "i").exec(line)?.[1] : undefined;
-  return rest !== undefined && !asksForQuiet(rest, name, aliases);
-}
 
 // Letters English and Korean never use, and the words a mis-hear lands on ("¿Qué?", "Hola, aquí estoy.").
 const FOREIGN_SCRIPT = /[¿¡ñЀ-ۿऀ-๿぀-ヿ一-鿿]/iu;

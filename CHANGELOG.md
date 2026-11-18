@@ -2,6 +2,113 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.280] - 2026-11-18
+
+### Changed
+- Your chat lines stay out of the Forum, tapping the Forum icon again returns to your chat, and right-click or long-press on a post gives Copy, plus Delete on your own.
+- On a phone, bot replies can reach the full chat width.
+
+### Fixed
+- On a phone, going back to a bot shows the worker you left, or the chat if that worker closed.
+- Folding a section on the phone Memory page no longer flashes rows over the one above, and long sections show 10 rows, then Show all.
+- A document Live Verify replay missing on this PC says so instead of saying it expired.
+
+## [1.0.279] - 2026-11-18
+
+### Added
+- A Timeline tab in the side pane lists the open bot's picks by day, newest first, with search; a replaced pick folds under the newer one.
+
+### Changed
+- Question cards are back to their earlier behavior: they fold to one row, close with x, a tapped choice sends as your own message, and a closed or answered card stays greyed in the chat.
+- Files open the same way everywhere: pictures and clips in the viewer, audio in place, PDFs and text in the side pane, the rest downloads; a phone opens files from your PC and says when the PC is offline.
+- In Ask mode, Wink tools that spend, change the workspace or drive a device wait for the Ask card.
+- About You in Settings is now Import Memory, and its prompt sits in a box with a copy icon.
+- The Model Index chart shows each model as a provider logo with its name, and draws effort lines only for the model you pick or hover.
+- The update prompt says workers keep running.
+- Settings > Shortcuts no longer lists Toggle Picker Style or Cycle Model Index Tab; the keys still work.
+
+### Fixed
+- Newest pick wins across chats and sync; a typed answer beats an older card tap.
+- A changed option under the same letter replaces the old pick instead of being dropped.
+- Show me on a What's New tile opens the feature, and the 1.0.278 tile opens the workers list.
+- Unattended Auto checks a tool's full input and refuses when it can't, and delete limits follow real paths, including junctions.
+- A call takes "thanks, yes" as a yes, never says an order was sent before it was, and keeps speech markers out of the voice and transcript.
+- An auto-approved request no longer marks a routine's chat unread.
+- A Live Verify replay missing on this PC says so instead of saying it expired.
+
+## [1.0.278] - 2026-11-18
+
+### Added
+- Voice calls in team rooms: each person calls their own lead bot, the voice hears teammates' lines, and a finished voice order asks before posting in the room.
+- Bots keep a timeline of your decisions and work from only your current picks.
+- A line you type while the bot is working gets a short reply from the quick helper right under it.
+- Each alarm in Bot details has a trash icon that deletes it in one tap.
+
+### Changed
+- Workers live in the side pane as its first tab; the side pane button sits after the model picker and shows how many are running.
+- The call row is gear, mute and end; Captions is a switch on the call menu's Style row, on by default.
+- The call has no quiet mode; mute is the one way to stop the voice listening.
+- The call voice speaks only chat text, never worker screens or code, and every call style plays at the same volume.
+- Bot details no longer has a Voice chat section, and right-click or long-press on Call does nothing.
+- A bot call answered without a voice key rings again until the key is fixed.
+- Asks no longer carry due-time wakes.
+- The model picker styles are Dial, List and Chart, and the Theme look is now called Auto.
+- Room bot lists, the Add bot picker and the @ menu show each bot's current model.
+- Rooms a bot opens answer with everyone, like rooms you make.
+- Bots can make more than four bots in one turn.
+- The Map shows each checkout's Git rows at once, so it opens faster.
+- Wink stays responsive in its first minute after opening, even with very long chats.
+- Auto mode skips destructive commands and deletes outside the project in turns nobody started, like schedules and wakes.
+- Buttons press in slightly and hovers fade in smoothly.
+
+### Fixed
+- A phone call plays its voice from the first tap; if the phone blocks sound, one "Tap to hear" pill appears until it plays.
+- One tap on a question card sends one answer.
+- The limit bar shows at any usage level again.
+- Remote uploads send pictures right away, say why an upload stalls, and preview media.
+- Map folder boxes no longer overlap or spill past the tree.
+- The Forum shows "Loading posts…" instead of a blank page, and an empty Forum says what goes there.
+- An open Forum post has a "‹ Forum" back button, slides like a side panel, and closes with Esc.
+- The sidebar worker count no longer stops at 16 when viewing another PC.
+- A file another PC rewrites mid-download no longer stops sync.
+- Tapping a clip in Media plays it in the viewer.
+- Muse Ember bots reply when Muse contributor mode is on.
+- Group bots react to the line they answer.
+- A line typed while the bot works in a room goes to the quick helper instead of waiting.
+- Room bots see the host's "Can make bots work" switches as soon as they change.
+- The "Sign in to Claude" card follows the account the bot actually runs on.
+- On a phone, the menu button stays visible over moving themes.
+- Auto checks a whole desktop action, not just its card summary.
+- Remote browser access can no longer reach Wink's internal routes, and a bot's API calls run as that bot.
+
+## [1.0.277] - 2026-11-17
+
+### Added
+- The Forum sorts posts by Hot, New and Top, with flair chips, helped counts and replies threaded under each post.
+
+### Changed
+- A teammate without "Can make bots work" can chat with any bot; the bot answers read-only and never edits files or runs commands for them.
+- The model dial is on for everyone by default, and turning it off still sticks.
+- The Map pane has a cleaner look with no text under 11px, and fits a narrow phone.
+- The message box keeps one capped tray above it: the limit line shows only when a window runs low, and a question over a draft arrives as one row.
+- On a phone, the Model Index opens on a ranked list, and its chart names only the top 3.
+- Bots file a yes to their own proposal as an ask, so decided work shows up in the asks list.
+- Bots can give an ask a due time that wakes them once, and past-due asks come first.
+- Wake timer chips no longer sit above the message box; ask the bot to cancel a wake instead.
+- Bots use your accounts in your order (Main, then the Settings order), not the soonest reset first.
+- The Media scroll thumb is a standard size and easier to grab.
+
+### Fixed
+- In Night Rain, your own bubble is deep indigo, not teal.
+- The call settings gear is back in the message box call row and opens the small call menu.
+- The x and a sideways swipe on the question row dismiss the question.
+- Swiping a PDF in the Show pane turns the page.
+- Clicking a file link that is already showing pulses the Show pane.
+- Hovering a chat link shows its real address.
+- A resumed call keeps the voice you picked mid-call.
+- A folder link opens its files in the side pane, and its pictures step with the arrows and swipe.
+- Claude bots on a Wink account load the plugins and Chrome you turned on in your own Claude.
+
 ## [1.0.276] - 2026-11-17
 
 ### Added

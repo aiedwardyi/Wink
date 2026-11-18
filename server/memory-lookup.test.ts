@@ -135,6 +135,43 @@ describe("corpus", () => {
     expect(ask(lookup, botId, "parked llama")).toEqual([]);
   });
 
+  it("never finds a replaced pick in the decision timeline", async () => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "decisions.md", [
+      "# Decision timeline",
+      "",
+      "## 2026-11-17 10:00 | forum look | replaced by 2026-11-17 10:03",
+      "- Picked: ~~A - plain list~~",
+      '- Said: "amber quokka list please"',
+      "",
+      "## 2026-11-17 10:03 | forum look | current",
+      "- Picked: C - Reddit cards",
+      '- Said: "osprey trellis cards instead"',
+      "",
+    ].join("\n"));
+    const { lookup } = await lookupFor(FILLER, { botId });
+    expect(ask(lookup, botId, "amber quokka")).toEqual([]);
+    expect(ask(lookup, botId, "osprey trellis")[0]).toContain("memory/decisions.md");
+  });
+
+  it("finds every current pick, whatever date one of them names", async () => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "decisions.md", [
+      "# Decision timeline",
+      "",
+      "## 2026-11-17 10:00 | release day | current",
+      "- Picked: Release on 2099-12-01",
+      '- Said: "ship it that day"',
+      "",
+      "## 2026-11-17 10:03 | forum look | current",
+      "- Picked: C - osprey trellis cards",
+      '- Said: "c please"',
+      "",
+    ].join("\n"));
+    const { lookup } = await lookupFor(FILLER, { botId });
+    expect(ask(lookup, botId, "osprey trellis")[0]).toContain("memory/decisions.md");
+  });
+
   it("never reads another bot's files", async () => {
     const other = `bot-${randomUUID()}`;
     sideFile(other, "topic.md", "- SAFFRON BADGER: belongs to the other bot");

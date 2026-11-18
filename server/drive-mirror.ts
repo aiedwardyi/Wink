@@ -81,7 +81,7 @@ export function decodeDrivePath(name: string): string | null {
 }
 
 // Bump when a sync path kind or payload family becomes readable.
-export const DRIVE_READER_REVISION = 4;
+export const DRIVE_READER_REVISION = 5;
 
 export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
   if (!validPath(path)) return "unknown";
@@ -98,7 +98,7 @@ export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
     if (/^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(parts[4])) return "once";
     if (parts[4] === "head.json") return parts[3] === ids.writerId ? "own" : "peer";
   }
-  if (root === "board" && parts.length === 3 && /^p[0-9a-f]{24}\.json$/.test(parts[2])) return parts[1] === ids.profileDeviceId ? "own" : "peer";
+  if (root === "board" && parts.length === 3 && /^(?:p[0-9a-f]{24}|deleted)\.json$/.test(parts[2])) return parts[1] === ids.profileDeviceId ? "own" : "peer";
   return "unknown";
 }
 
@@ -703,7 +703,9 @@ export function createDriveMirror(options: Options) {
           uploads = false;
           return;
         }
-        if (!(error instanceof DriveClientError) || (error.status >= 200 && error.status < 300)) throw error;
+        // a peer rewrote the file after the listing; the next pass lists its new copy
+        const changed = error instanceof DriveMirrorError && error.problem === "content-changed";
+        if (!changed && (!(error instanceof DriveClientError) || (error.status >= 200 && error.status < 300))) throw error;
         summary.failed.push(path);
       }
     }

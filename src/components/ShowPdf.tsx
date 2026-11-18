@@ -43,7 +43,7 @@ export default function ShowPdf({ src, onReady, onFail }: { src: string; onReady
         await task.promise;
       }
       if (alive) done.current.onReady();
-    }).catch(() => {});
+    }).catch(() => { if (alive) done.current.onFail(); });
     return () => { alive = false; drawing?.cancel(); };
   }, [doc, page]);
 

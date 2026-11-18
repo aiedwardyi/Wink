@@ -6,7 +6,7 @@ import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { DaySeparator } from "./DaySeparator";
 import { JumpToLatest } from "./JumpToLatest";
-import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
   Check,
@@ -69,7 +69,7 @@ import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { ShowPaneButton } from "./ShowPaneButton";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
-import { WorkerRow, WorkerChip, useWorkerRows, type ShownRun } from "./WorkerRows";
+import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
@@ -78,10 +78,10 @@ import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
 import { ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
-import { CallButton, CallOverlay } from "./CallView";
+import { CallOverlay } from "./CallView";
+import { useCallControls } from "./CallControls";
 import { CallCard } from "./CallCard";
 import { ChatScene, sceneOf } from "./ChatScene";
-import { lazyView } from "@/lib/stale-build";
 import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { usePresence } from "@/lib/use-presence";
@@ -114,7 +114,6 @@ import {
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
-import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
@@ -122,8 +121,6 @@ import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
-import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
-import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
@@ -131,9 +128,7 @@ import { listedRuns, shownState, waitingOnScreen, workerRuns, type WorkerRun } f
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
-const LiveCallBar = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallBar })));
-const LiveCallBox = lazyView(() => import("./LiveCallBox").then((m) => ({ default: m.LiveCallBox })));
-export const warmCallViews = () => Promise.all([LiveCallBar.preload(), LiveCallBox.preload()]);
+export { warmCallViews } from "./CallControls";
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -516,7 +511,7 @@ export function useLivePanes(botId: string, enabled: boolean, paneKey: string, s
             rememberLabels(botId, body.panes);
             rememberChanges(botId, body.panes);
             const open = body.panes.filter((p: { main?: boolean; exited?: boolean }) => !p.main && !p.exited);
-            const labels = open.slice(0, 16).map((p: { label?: string | null }) => p.label ?? "");
+            const labels = open.map((p: { label?: string | null }) => p.label ?? "");
             wrote.current = paneLabelsKey(labels);
             dispatch?.({ type: "setBotTerminalPanes", botId, labels });
             save(new Set(open.map((p: { sessionId: string }) => p.sessionId)));
@@ -964,14 +959,13 @@ export function PinnedBanner({
   );
 }
 
-export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, findBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; findBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const preview = useChatPreview();
   const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
   const compactWindow = preview || phone;
   const { t } = useI18n();
   const { state, dispatch, turnOrigin } = useStore();
-  const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const sidebarOnRight = useSidebarSide() === "right";
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -991,19 +985,11 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
   const engine = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
   const shownEngine = usageAccount(state.instances, shownModelSelection(bot).instanceId);
+  // Turns run on the routed Main account, so the base row's sign-in says nothing about this bot.
+  const signInEngine = usageAccount(state.instances, bot.modelSelection.instanceId);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
-  const callAvailable =
-    capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
-  const liveCall = useActiveCall();
-  const callNote = useCallNote();
-  const onLiveCall = liveCall?.botId === bot.id;
-  useEffect(() => (onLiveCall && !hidden && !preview ? showCallChat() : undefined), [hidden, onLiveCall, preview]);
-  // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
-  const startCall = useCallback(() => {
-    const ctx = callAudio();
-    void ctx.resume();
-    placeCall(bot, ctx);
-  }, [bot]);
+  const calls = useCallControls(bot, hidden);
+  const onLiveCall = calls.on;
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
     activeRunForBot(state.routineRuns, bot.id),
@@ -1041,7 +1027,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if (focusComposerBlocked || preview) return;
+      if (findBlocked || preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1049,7 +1035,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind, focusComposerBlocked, preview]);
+  }, [find.openFind, findBlocked, preview]);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const accepted = state.acceptedSends[bot.threadId];
@@ -1630,7 +1616,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             </button>
           )}
           <VerifyWatchIcon messages={messages} threadId={bot.threadId} />
-          <WorkerChip name={bot.name} className="rounded-md hover:bg-control" runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button
             onClick={() => find.toggleFind()}
@@ -1645,9 +1630,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             <Search size={18} />
           </button>
           )}
-          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} />
-
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
+
+          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
           </ChatPeekPart>
         </div>
       </div>
@@ -1944,12 +1929,10 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
         <ChatPeekPart part="composer">
-        {onLiveCall
-          ? <Suspense fallback={null}><LiveCallBar bot={bot} /></Suspense>
-          : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
+        {calls.bar}
         {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-        {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
-          <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
+        {signInEngine && !bot.busy && needsSignIn(signInEngine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
+          <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}
         <TaskRecoveryCard
           key={`${bot.id}:${activeTask?.threadId ?? bot.threadId}`}
@@ -1983,9 +1966,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           onConsumeReply={consumeReply}
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
-          call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
-          onCall={!onLiveCall && callsSupported() ? startCall : undefined}
-          callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} helpAbove /> : undefined}
+          {...calls.composer}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden || preview} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
         </ChatPeekPart>

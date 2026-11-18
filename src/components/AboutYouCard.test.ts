@@ -44,16 +44,19 @@ describe("About You card", () => {
   });
 
   const render = () => act(async () => root.render(createElement(I18nProvider, null, createElement(AboutYouCard))));
-  const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label)!;
+  const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label || node.getAttribute("aria-label") === label)!;
   const click = (label: string) => act(async () => button(label).click());
 
   it("copies the prompt, then adds one paste for every bot with no bot to pick", async () => {
     await render();
-    expect(host.textContent).toContain("Bring what your other AI knows about you.");
+    expect(host.textContent).toContain("Bring what ChatGPT, Claude, Gemini, Grok or Muse knows about you.");
+    expect(host.textContent).not.toContain("Import Memory");
     expect(button("Add to Memory").disabled).toBe(true);
+    expect(host.textContent).toContain("I'm moving to a new AI assistant called Wink.");
+    expect(host.textContent).not.toContain("Copy Prompt");
     await click("Copy Prompt");
     expect(writeText).toHaveBeenCalledWith(en["aboutYou.prompt"]);
-    expect(button("Copied")).toBeDefined();
+    expect(button("Copied").querySelector("svg")).not.toBeNull();
 
     const box = host.querySelector("textarea")!;
     await act(async () => {
@@ -69,6 +72,16 @@ describe("About You card", () => {
     expect(host.querySelector("[data-about-you-source]")?.textContent).toContain("From ChatGPT2 facts");
     expect(host.querySelector("textarea")).toBeNull();
     expect(button("Add More")).toBeDefined();
+  });
+
+  it("keeps the copy tap area real and shows focus only for the keyboard", async () => {
+    await render();
+    const copy = button("Copy Prompt");
+    expect(copy.className).toContain("[@media(pointer:coarse)]:after:content-['']");
+    const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
+    expect(prompt.className).not.toMatch(/(^|\s)focus:outline-none/);
+    expect(prompt.className).toContain("focus-visible:outline-none");
+    expect(prompt.className).toContain("focus-visible:ring-2 focus-visible:ring-accent/50");
   });
 
   const type = (value: string) => act(async () => {
@@ -119,6 +132,6 @@ describe("About You card", () => {
     expect(host.textContent).toContain("From ChatGPT");
     await click("Remove");
     expect(request.mock.calls.some(([path, init]) => path === "/api/about-you/sources/ChatGPT" && init?.method === "DELETE")).toBe(true);
-    expect(host.textContent).toContain("Bring what your other AI knows about you.");
+    expect(host.textContent).toContain("Bring what ChatGPT, Claude, Gemini, Grok or Muse knows about you.");
   });
 });

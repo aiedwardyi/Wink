@@ -1439,9 +1439,8 @@ describe("context compaction e2e", () => {
     rmSync(claudeDumpPath, { force: true });
     const compacted = await turn(`${bot.name}: continue the release`);
     expect(compacted.prompt).toContain("history 120");
-    expect(compacted.prompt).toContain("[Wink asks list - 2 open.");
-    expect(compacted.prompt).toContain("1 stale (A1): no change in 6+ hours");
-    expect(compacted.prompt).toContain("- A1 waiting-for-user ");
+    expect(compacted.prompt).toContain("[Wink asks list - 2 open, 1 stale: no change in 6+ hours");
+    expect(compacted.prompt).toContain("- A1 waiting-for-user stale ");
     expect(compacted.prompt).toContain(": Review the model picker PR (PR #1348)");
     expect(compacted.prompt).toContain("- A3 building ");
     expect(compacted.prompt).not.toContain("Drop the old skin");
@@ -1449,7 +1448,7 @@ describe("context compaction e2e", () => {
     expect(compacted.tools).toContain("agents-proxy");
 
     const resumed = await turn(`${bot.name}: thanks`);
-    expect(resumed.prompt).toContain("1 stale (A1): no change in 6+ hours");
+    expect(resumed.prompt).toContain("- A1 waiting-for-user stale ");
 
     const closed = await botTaskState(bot.botId, bot.botThreadId, { asks: [{ id: "A1", status: "done" }] }, resumed.token);
     expect(closed.status).toBe(200);

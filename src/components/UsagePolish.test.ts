@@ -285,8 +285,6 @@ it("draws every bar as the one shared slanted shape, never glyphs or skewed boxe
 
 it("renders the shared bar in expanded, collapsed, quick view, chat and terminal skin", async () => {
   const sites: Record<string, string[][]> = {};
-  // The chat line shows only once a window runs low.
-  h.board!.engines[0]!.accounts[0]!.windows[0]!.usedPercent = 80;
   await mount();
   sites.expanded = bars(q("[data-account-bars]")!);
   await click("[data-fold-all]");

@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { holdReload } from "./reload-hold.ts";
+import { keepTrayMedia } from "./tray-media.ts";
 
 export type PasteAttachment = {
   kind: "paste";
@@ -556,7 +557,7 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   };
   // Finish each selected file in sequence so the chips retain the order in
   // which the user chose or dropped them.
-  for (const file of files) {
+  const take = async (file: T) => {
     const path = safeGetPath(file, getPath);
     if (isImageFile(file)) {
       // the original stays a file the bot can open; its smaller copy goes inline
@@ -577,7 +578,7 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
         attachments.push(chip);
         uploads.push({ id: chip.id, file });
       }
-      continue;
+      return;
     }
     if (path) {
       attachments.push(await onDisk(file, path));
@@ -594,6 +595,11 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
     } else {
       bigUpload(file);
     }
+  };
+  for (const file of files) {
+    const start = attachments.length;
+    await take(file);
+    if (file instanceof Blob) for (const attachment of attachments.slice(start)) keepTrayMedia(attachment.id, file);
   }
   return { attachments, uploads, notice: null };
 }

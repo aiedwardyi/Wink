@@ -10,6 +10,8 @@ const YES_ALONE_EN = /^(right|correct|please|uh-huh|mm-hmm|go)[.!]*$/i;
 const BUT_EN = /\b(no|not|don'?t|do not|wait|hold on|stop|cancel|later|but|want me to|shall i|should i)\b/i;
 const BUT_KO = /말고|근데|그런데|하지만|대신|잠깐|기다려/;
 const FILLER = /^(uh|um|er|hmm|mm)\b(?!-)[\s,.]*/i;
+const THANKS = /^(?:(?:thanks|thank you)\b[\s,.!]*)+/i;
+const lead = (said: string) => said.trim().replace(FILLER, "").replace(THANKS, "").replace(FILLER, "");
 const NO_EN = /^(no(?! problem| worries)|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
 // 됐어 and 괜찮아 can mean either, and 잠깐 is a hold, so they keep waiting.
 // 어 is a yes only with a yes after it, or alone: "어..." trails off.
@@ -60,16 +62,16 @@ function koWords(text: string): string[] {
 }
 
 export function consentOf(said: string): "yes" | "no" | null {
-  const text = said.trim().replace(FILLER, "");
+  const text = lead(said);
   const [first = "", second = ""] = koWords(text);
   // "아니면 내일 해줘" offers another way: neither a no nor a yes.
   if (/^아니(?:면|라)/.test(first)) return null;
   if (NO_EN.test(text) || [first, second].some((word) => NO_KO.some((no) => word.startsWith(no)))) return "no";
   // "Confirm?" asks, it does not answer.
   if (/[?？؟]\s*$/.test(text)) return null;
+  if (BUT_KO.test(text)) return null;
   if (YES_ALONE_EN.test(text)) return "yes";
   if (YES_EN.test(text)) return BUT_EN.test(text.replace(YES_EN, "")) ? null : "yes";
-  if (BUT_KO.test(text)) return null;
   if (first === "어") return second ? (consentOf(text.replace(/^어[\s,.!?~…]*/, "")) === "yes" ? "yes" : null) : (!/\.\.|…/.test(text) ? "yes" : null);
   if (YES_KO.includes(first) || STRONG_YES_KO.includes(second)) return "yes";
   return otherConsent(text);
@@ -77,7 +79,7 @@ export function consentOf(said: string): "yes" | "no" | null {
 
 /** What follows the yes words: "Okay, delete the logs" leaves "delete the logs". */
 export function afterYes(said: string): string {
-  let rest = said.trim().replace(FILLER, "");
+  let rest = lead(said);
   while (YES_LEAD_EN.test(rest)) rest = rest.replace(YES_LEAD_EN, "");
   return rest;
 }
@@ -85,8 +87,21 @@ export function afterYes(said: string): string {
 /** A yes and nothing more: "Okay, delete the logs" asks, it does not answer. */
 export function bareYes(said: string): boolean {
   if (consentOf(said) !== "yes") return false;
-  if (otherConsent(said) === "yes") return true;
+  if (otherConsent(lead(said)) === "yes") return true;
   return afterYes(said).split(/[\s,.!~…]+/).filter(Boolean).every((word) => ["어", "은", "음", ...YES_KO].includes(koWords(word)[0]!));
+}
+
+// What a yes to a room post may add and still only answer it: "Yes, post it", "응, 올려줘".
+const POST_WORDS = new Set("post share put send it that this there here in on to the room chat go ahead do please now 올려 올려줘 공유 공유해 공유해줘 거기 거기에 방 방에 그거".split(" "));
+
+/** A yes to posting and nothing more: "Okay, check Firefox too" asks for new work. */
+export function yesToPost(said: string): boolean {
+  if (bareYes(said)) return true;
+  if (consentOf(said) !== "yes") return false;
+  return afterYes(said).split(/[\s,.!~…]+/).filter(Boolean).every((word) => {
+    const ko = koWords(word)[0]!.toLowerCase();
+    return ["어", "은", "음", ...YES_KO].includes(ko) || POST_WORDS.has(ko);
+  });
 }
 
 const DONE_EN = /\b(it'?s|is|all|i'?m|i'?ve|we'?re) (done|finished|fixed|complete|merged|pushed|live)\b/i;

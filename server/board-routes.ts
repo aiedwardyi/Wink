@@ -4,10 +4,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, BOARD_USER, boardLine, ROOM_REF, type Board } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, type Board } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
-export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply" } as const;
+export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply", remove: "/api/board/delete" } as const;
 
 const searchSchema = z.object({ query: z.string().trim().min(1).max(200), project_id: z.string().trim().max(160).optional() }).strict();
 const postSchema = z.object({
@@ -18,6 +18,7 @@ const postSchema = z.object({
   helped: z.boolean().optional(),
 }).strict();
 const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000) }).strict();
+const removeSchema = z.object({ id: z.string().trim().min(1).max(64) }).strict();
 
 export interface BoardRouteDeps {
   board: Board;
@@ -83,9 +84,19 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         body: body.data.body,
         parent_id: parent.id,
         project_id: parent.project_id,
-        source_ref: `reply:${randomUUID()}`,
+        source_ref: `${REPLY_REF}${randomUUID()}`,
       });
       return json(res, 200, { post });
+    },
+    /** The user deletes only what they typed in the Forum's reply box. */
+    async remove(req: IncomingMessage, res: ServerResponse) {
+      const body = removeSchema.safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "a delete needs id" });
+      const post = deps.board.get(body.data.id);
+      if (!post) return json(res, 404, { error: `no Board post ${body.data.id}` });
+      if (!ownReply(post)) return json(res, 403, { error: "only your own replies can be deleted" });
+      deps.board.remove(post.id);
+      return json(res, 200, { id: post.id });
     },
   };
 }

@@ -125,7 +125,8 @@ vi.mock("@/state/store", async () => {
     api: vi.fn(),
   };
 });
-import { TerminalWorkspace, folderBasename, lastViewedPanes, pickInitialPane } from "./TerminalWorkspace";
+import { lastViewedPanes } from "@/lib/terminal-panes";
+import { TerminalWorkspace, folderBasename, pickInitialPane } from "./TerminalWorkspace";
 import { ProviderMark } from "./ProviderIcons";
 import { applyTerminalMatch } from "@/lib/terminal-appearance";
 import { api, type Message } from "@/state/store";
@@ -1164,6 +1165,20 @@ it("copies the selection on Ctrl+C and sends nothing to the PTY", async () => {
     expect(write).not.toHaveBeenCalled();
   } finally {
     restore();
+  }
+});
+
+it.each([[true, false], [false, true]])("keeps Ctrl+F from the shell with docked=%s", async (docked, handled) => {
+  await mountLiveSession(`session-find-${docked}`, `bot-find-${docked}`, vi.fn(async () => {}));
+  if (docked) host.setAttribute("data-side", "");
+  expect(await act(async () => terminal.__emitKey(copyKeyEvent("keydown", { key: "f", ctrlKey: true, keyCode: 70 })))).toBe(handled);
+  const reached = vi.fn();
+  window.addEventListener("keydown", reached);
+  try {
+    await act(async () => host.querySelector("[data-orbit-terminal]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })));
+    expect(reached).toHaveBeenCalledTimes(docked ? 1 : 0);
+  } finally {
+    window.removeEventListener("keydown", reached);
   }
 });
 

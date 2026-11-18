@@ -3,8 +3,6 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import typedPastRows from "../../test/fixtures/ask-typed-past.json?raw";
-import { openQuestion } from "@/lib/open-question";
 import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
 import { ConnectionError } from "@/lib/error-text";
@@ -64,10 +62,12 @@ async function mount(
   bots: Bot[] = [bot],
   groups: Group[] = [group],
   snapshot: object = {},
+  cardPatch?: () => Promise<Response>,
 ) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {}, ...snapshot });
+    if (init?.method === "PATCH" && path.includes("/cards/") && cardPatch) return cardPatch();
     if (init?.method === "POST" && (path.endsWith("/messages") || path.endsWith("/respond"))) return post(init);
     const page = path.match(/^\/api\/threads\/([\w-]+)\/messages\?/);
     if (page) return threadPage(page[1]!, init);
@@ -103,6 +103,35 @@ const sends = [
 const messagesOf = (threadId: string) =>
   store.state.bots.find((b) => b.threadId === threadId)?.messages ??
   store.state.groups.find((g) => g.threadId === threadId)?.messages;
+
+it("captures a tap before card persistence can delay its message", async () => {
+  const ask = { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: "Swap?", options: ["Yes, swap"], askUser: true } } as Message;
+  let release!: (response: Response) => void;
+  const saving = new Promise<Response>((resolve) => { release = resolve; });
+  const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: bot.threadId }));
+  await mount(() => Response.json({ messages: [], hasMore: false }), post, [{ ...bot, messages: [ask] }], [], {}, () => saving);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: ask.id, answer: "Yes, swap" }));
+  expect(post).not.toHaveBeenCalled();
+  clock.mockReturnValue(3_000);
+  await act(async () => { release(Response.json({})); await saving; });
+  await vi.waitFor(() => expect(post).toHaveBeenCalled());
+  expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_000, cardId: ask.id });
+});
+
+it("keeps a room tap's action time while its card save waits", async () => {
+  const ask = { id: "ask", at: 1, role: "bot", kind: "options", from: { botId: bot.id, name: "Bot", color: "green" }, card: { title: "Q", subtitle: "Swap?", options: ["Yes, swap"], askUser: true } } as Message;
+  let release!: (response: Response) => void;
+  const saving = new Promise<Response>((resolve) => { release = resolve; });
+  const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: group.threadId }));
+  await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...group, messages: [ask] }], {}, () => saving);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  await act(async () => store.dispatch({ type: "answerGroupCard", groupId: group.id, messageId: ask.id, answer: "Yes, swap" }));
+  clock.mockReturnValue(3_000);
+  await act(async () => { release(Response.json({})); await saving; });
+  await vi.waitFor(() => expect(post).toHaveBeenCalled());
+  expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_000, cardId: ask.id });
+});
 
 describe("send reject after the server accepted", () => {
   it("consumes a promoted receipt when accepted-send recovery finds its message", async () => {
@@ -269,7 +298,6 @@ describe("a group line nobody answers", () => {
     await act(async () => store.dispatch({ type: "answerGroupCard", groupId: idle.id, messageId: ask.id, answer: "Yes" }));
     await vi.waitFor(() => expect(post).toHaveBeenCalled());
     expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ text: "Yes", cardId: ask.id });
-    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ text: "Yes", answersCard: ask.id })]);
   });
 
   it("sends a held line when its room settles with the room closed", async () => {
@@ -434,16 +462,6 @@ describe("update reload during a send", () => {
     await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-old", answer: "Yes" }));
     const posted = fetch.mock.calls.find(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST");
     expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({ text: "Re: “Ship it?”\nYes", threadId: "t-bot" });
-  });
-
-  it("names the card a tapped question answers, so its line stays off screen", async () => {
-    const card: OptionCardData = { title: "Q", subtitle: "Dinner?", options: ["Can't tonight", "Sure"], askUser: true, staysOpen: true };
-    const asking: Bot = { ...bot, messages: [{ id: "m-card", at: 1, role: "bot", kind: "options", card }] };
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true }), [asking]);
-    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Can't tonight" }));
-    await vi.waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST")).toBe(true));
-    const posted = fetch.mock.calls.find(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST");
-    expect(JSON.parse(String(posted?.[1]?.body))).toEqual({ text: "Can't tonight", threadId: "t-bot", cardId: "m-card" });
   });
 
   it.each([
@@ -679,162 +697,5 @@ describe("room folder lock on the event stream", () => {
     await mountPinned();
     await groupFrame({ pinnedCwd: "C:/new" });
     expect(pinnedNow()).toBe("C:/new");
-  });
-});
-
-describe("typing while a question is open", () => {
-  const card = (options: string[]): OptionCardData => ({ title: "Q", subtitle: "Dinner?", options, askUser: true, staysOpen: true });
-  const ask = (options: string[]): Message => ({ id: "m-card", at: 1, role: "bot", kind: "options", card: card(options) });
-  const patches = (fetch: ReturnType<typeof vi.fn>) =>
-    fetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH").map(([url, init]) => [url, JSON.parse(String((init as RequestInit).body))]);
-  const typedPast: Message[] = JSON.parse(typedPastRows);
-
-  it("keeps a card with choices open when the person types something else", async () => {
-    const [before, line] = [typedPast.slice(0, 5), typedPast[5]!];
-    const asked = before.find((message) => message.card?.askUser)!;
-    const idle: Bot = { ...bot, busy: false, activity: "idle", messages: before };
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: idle.threadId, message: line }), [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: line.text!, threadId: idle.threadId, sendId: line.sendId }));
-    await vi.waitFor(() => expect(store.state.bots[0]!.messages.some((message) => message.id === line.id)).toBe(true));
-    expect(store.state.bots[0]!.messages.find((message) => message.id === asked.id)?.card?.answered).toBeUndefined();
-    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe(asked.id);
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("folds a 1:1 question without choices at once, before any bot turn", async () => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask([])] } as Bot;
-    let accept!: (response: Response) => void;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>((resolve) => { accept = resolve; }), [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("maybe at 8");
-    await act(async () => accept(Response.json({ ok: true, threadId: idle.threadId })));
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a busy bot's question with choices stays open through a steered line", async () => {
-    const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, steered: true, threadId: busy.threadId }), [busy]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "What happens to the existing data?", threadId: busy.threadId }));
-    await act(async () => {});
-    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-card");
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it.each([
-    { name: "steered into a busy bot", busy: true, receipt: { ok: true, steered: true } },
-    { name: "started on an idle bot", busy: false, receipt: { ok: true } },
-  ])("a typed answer to a question without choices, $name, is settled by its line alone", async ({ busy, receipt }) => {
-    const chat = { ...bot, busy, activity: busy ? "working" : "idle", messages: [ask([])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ...receipt, threadId: chat.threadId }), [chat]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "Polaris", threadId: chat.threadId }));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Polaris");
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a tap after typing past a busy bot's choices still answers the card", async () => {
-    const busy = { ...bot, busy: true, activity: "working", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: busy.threadId }));
-    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Sure" }));
-    await act(async () => {});
-    const posts = fetch.mock.calls.filter(([url, init]) => url === "/api/bots/b1/messages" && (init as RequestInit | undefined)?.method === "POST");
-    expect(posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).text)).toEqual(["maybe at 8", "Sure"]);
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Sure");
-  });
-
-  it("a queued typed answer saves its question, since its line is not in the transcript yet", async () => {
-    const busy = { ...bot, busy: true, activity: "working", messages: [ask([])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, queueId: "q1", threadId: busy.threadId }), [busy]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "Polaris", threadId: busy.threadId }));
-    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Polaris" }]]));
-  });
-
-  it("answers only the newest open question", async () => {
-    const folder = { ...ask([]), id: "m-folder", card: { ...card([]), subtitle: "Which folder?" } };
-    const branch = { ...ask([]), id: "m-branch", at: 2, card: { ...card([]), subtitle: "Which branch?" } };
-    const idle = { ...bot, busy: false, activity: "idle", messages: [folder, branch] } as Bot;
-    const line: Message = { id: "u-main", at: 3, role: "user", kind: "text", text: "main" };
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: idle.threadId, message: line }), [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "main", threadId: idle.threadId }));
-    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-folder");
-    expect(store.state.bots[0]!.messages.map((message) => message.card?.answered)).toEqual([undefined, "main", undefined]);
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a room question with choices stays open when the person types something else", async () => {
-    const room = { ...group, busyBotId: undefined, messages: [{ ...ask(["Can't tonight", "Sure"]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
-    let accept!: (response: Response) => void;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>((resolve) => { accept = resolve; }), [bot], [room]);
-    await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "maybe at 8", threadId: room.threadId }));
-    expect(store.state.groups[0]?.messages[0]?.card?.answered).toBeUndefined();
-    await act(async () => accept(Response.json({ ok: true, threadId: room.threadId })));
-    expect(openQuestion(store.state.groups[0]!.messages)?.id).toBe("m-card");
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a room question without choices is settled by the typed line alone", async () => {
-    const room = { ...group, busyBotId: undefined, messages: [{ ...ask([]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
-    const line: Message = { id: "u1", at: 2, role: "user", kind: "text", text: "Polaris" };
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: room.threadId, message: line }), [bot], [room]);
-    await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "Polaris", threadId: room.threadId }));
-    expect(store.state.groups[0]?.messages[0]?.card?.answered).toBe("Polaris");
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a second typed reply answers the older question with its own words", async () => {
-    const folder = { ...ask([]), id: "m-folder", card: { ...card([]), subtitle: "Which folder?" } };
-    const branch = { ...ask([]), id: "m-branch", at: 2, card: { ...card([]), subtitle: "Which branch?" } };
-    const idle = { ...bot, busy: false, activity: "idle", messages: [folder, branch] } as Bot;
-    await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>(() => {}), [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "main", threadId: idle.threadId }));
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "docs", threadId: idle.threadId }));
-    expect(store.state.bots[0]!.messages.map((message) => message.card?.answered)).toEqual(["docs", "main"]);
-  });
-
-  it("a lost response the transcript recovers leaves a question with choices open", async () => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
-    const line: Message = { id: "u1", at: 2, role: "user", kind: "text", text: "maybe at 8", sendId: "s1" };
-    const fetch = await mount(() => Response.json({ messages: [line], hasMore: false }), undefined, [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId, sendId: "s1" }));
-    await vi.waitFor(() => expect(store.state.bots[0]!.messages.some((message) => message.id === "u1")).toBe(true));
-    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-card");
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a rejected typed reply reopens its 1:1 question and saves nothing", async () => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask([])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, cancelled: true, threadId: idle.threadId }), [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
-    await vi.waitFor(() => expect(store.state.bots[0]?.messages[0]?.card?.answered).toBeUndefined());
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("a reply held for sync keeps its question answered", async () => {
-    const idle = { ...bot, busy: false, activity: "idle", messages: [ask([])] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, reason: "sync", queueId: "q1", threadId: idle.threadId }), [idle]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
-    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "maybe at 8" }]]));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("maybe at 8");
-  });
-
-  it("a room saves a typed reply only once the room took it, and reopens on rejection", async () => {
-    const room = { ...group, busyBotId: undefined, messages: [{ ...ask([]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
-    let patchedBeforePost: unknown[] | undefined;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => {
-      patchedBeforePost = patches(fetch);
-      return Response.json({ ok: true, cancelled: true, threadId: room.threadId });
-    }, [bot], [room]);
-    await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "maybe at 8", threadId: room.threadId }));
-    expect(patchedBeforePost).toEqual([]);
-    await vi.waitFor(() => expect(store.state.groups[0]?.messages[0]?.card?.answered).toBeUndefined());
-    expect(patches(fetch)).toEqual([]);
-  });
-
-  it("leaves a settled question alone", async () => {
-    const settled = { ...bot, busy: false, activity: "idle", messages: [{ ...ask(["Sure"]), card: { ...card(["Sure"]), answered: "Sure" } }] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>(() => {}), [settled]);
-    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "thanks", threadId: settled.threadId }));
-    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Sure");
-    expect(patches(fetch)).toEqual([]);
   });
 });

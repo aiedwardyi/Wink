@@ -15,8 +15,8 @@ import { DOC_ROLE, docCopy } from "./VerifyDocCard";
 import "./VerifyWatch.css";
 
 const copy = {
-  en: { live: "Live", expired: "Replay expired", failed: "Could not load the check", loading: "Opening the document", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", page: (n: number) => `p.${n}` },
-  ko: { live: "실시간", expired: "다시보기가 만료됐어요", failed: "확인 과정을 불러오지 못했어요", loading: "문서를 여는 중", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", page: (n: number) => `${n}쪽` },
+  en: { live: "Live", expired: "Replay expired", unavailable: "Replay unavailable on this PC", failed: "Could not load the check", loading: "Opening the document", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", page: (n: number) => `p.${n}` },
+  ko: { live: "실시간", expired: "다시보기가 만료됐어요", unavailable: "이 PC에서 다시보기를 사용할 수 없어요", failed: "확인 과정을 불러오지 못했어요", loading: "문서를 여는 중", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", page: (n: number) => `${n}쪽` },
 };
 const FADE_MS = 180;
 const EASE = Array.from({ length: 9 }, (_, i) => glideEase(i / 8));
@@ -165,7 +165,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const phone = useIsPhone();
   const gate = verifyLiveGate(!closing, hidden, useVisibility());
   const [show, setShow] = useState(EMPTY);
-  const [phase, setPhase] = useState<"loading" | "play" | "done" | "failed" | "expired">("loading");
+  const [phase, setPhase] = useState<"loading" | "play" | "done" | "failed" | "expired" | "unavailable">("loading");
   const [round, setRound] = useState(0);
   const [maximized, setMaximized] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -208,7 +208,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     setShow(EMPTY); setPhase("loading"); follow.current = true;
     void (async () => {
       const res = await fetch(route(live ? VERIFY_ROUTES.live : VERIFY_ROUTES.replay, runId), { cache: "no-store", signal: abort.signal });
-      if (res.status === 404) { setPhase("expired"); return; }
+      if (res.status === 404) { setPhase("unavailable"); return; }
       if (!res.ok || !res.body) { setPhase("failed"); return; }
       const marks: VerifyReplayMark[] = [];
       let total = 0, blocked = false;
@@ -272,7 +272,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const pageOf = (line: number) => Math.max(1, pages.findLastIndex(page => page.start < line) + 1);
   const counts = new Map<VerifyDocKind, number>();
   for (const f of show.findings) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
-  const status = phase === "expired" ? c.expired : phase === "failed" ? c.failed
+  const status = phase === "expired" ? c.expired : phase === "unavailable" ? c.unavailable : phase === "failed" ? c.failed
     : show.ended ? show.blocked ? d.failed : show.findings.length ? d.problems(show.findings.length) : d.clean
     : lead ? d.checking(pageOf(lead.from), pages.length) : show.bands.length ? d.comparing : c.loading;
   const seconds = Math.round((live && phase === "play" && card.startedAt ? now - card.startedAt : show.ms) / 1000);

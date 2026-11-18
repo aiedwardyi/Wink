@@ -17,12 +17,14 @@ vi.mock("@/state/store", async () => {
 
 import { I18nProvider } from "@/lib/i18n";
 import { ConnectionError } from "@/lib/error-text";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { RemoteTerminalView, snapshotText } from "./RemoteTerminalView";
 import { ProviderMark } from "./ProviderIcons";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "App.tsx"), "utf8");
 
 afterEach(() => {
+  lastViewedPanes.clear();
   store.api.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -897,6 +899,60 @@ describe("RemoteTerminalView", () => {
     await pickPane(host, "build");
     await act(async () => {});
     expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal");
+    await act(async () => root.unmount());
+  });
+
+  it("reopens the remembered worker and closes to the chat only when it is gone on return", async () => {
+    let panes = [{ sessionId: "main", label: null, main: true }, { sessionId: "worker", label: "build", main: false }];
+    store.api.mockImplementation(async (path: string) => {
+      const id = new URL(path, "http://localhost").searchParams.get("sessionId") ?? "main";
+      if (!panes.some((pane) => pane.sessionId === id)) throw new Error("Unknown terminal");
+      return { screenText: id, sessionId: id, generation: 1, panes };
+    });
+    lastViewedPanes.set("bot-1", "worker");
+    const first = await renderView();
+    expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal?sessionId=worker");
+    expect(title(first.host)).toBe("Terminal / build");
+    panes = panes.slice(0, 1);
+    await act(async () => click(button(first.host, "Refresh")));
+    await vi.waitFor(() => expect(title(first.host)).toBe("Terminal / Ada"));
+    expect(first.onClose).not.toHaveBeenCalled();
+    await act(async () => first.root.unmount());
+    lastViewedPanes.set("bot-1", "worker");
+    const second = await renderView();
+    expect(second.onClose).toHaveBeenCalledOnce();
+    expect(lastViewedPanes.get("bot-1")).toBeNull();
+    await act(async () => second.root.unmount());
+  });
+
+  it("forgets a gone remembered worker even when the close unmounts the view", async () => {
+    store.api.mockImplementation(async (path: string) => {
+      if (path.includes("sessionId=")) throw new Error("Unknown terminal");
+      return { screenText: "main", sessionId: "main", generation: 1, panes: [{ sessionId: "main", label: null, main: true }] };
+    });
+    lastViewedPanes.set("bot-1", "worker");
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onClose = vi.fn(() => root.unmount());
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose }))));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(lastViewedPanes.get("bot-1")).toBeNull();
+  });
+
+  it("opens a requested worker instead of closing when the remembered one is gone", async () => {
+    const panes = [{ sessionId: "main", label: null, main: true }, { sessionId: "other", label: "Other", main: false }];
+    store.api.mockImplementation(async (path: string) => {
+      const id = new URL(path, "http://localhost").searchParams.get("sessionId") ?? "main";
+      if (!panes.some((pane) => pane.sessionId === id)) throw new Error("Unknown terminal");
+      return { screenText: id, sessionId: id, generation: 1, panes };
+    });
+    lastViewedPanes.set("bot-1", "worker");
+    const onClose = vi.fn();
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose, paneFocus: { sessionId: "other" } }))));
+    await vi.waitFor(() => expect(title(host)).toBe("Terminal / Other"));
+    expect(onClose).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
 

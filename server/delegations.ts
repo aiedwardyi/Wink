@@ -9,7 +9,6 @@ import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { release, type Reservation } from "./comms-root.ts";
 import { findDelegationReceipt, loadDelegationReceipts, recordDelegationReceipt, receiptSnapshot, resetDelegationReceipts } from "./delegation-ledger.ts";
 import { terminalMailState, type MailDestination, type MailState } from "./mail-types.ts";
-import { recoverHandedMail } from "./mail-index.ts";
 import { publishPeerReply, replyDestinations, wakeForPeerReply } from "./peer-reply-publication.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import {
@@ -503,7 +502,6 @@ export function discardOrphanedDelegations(bus: CommsBus): number {
   }
   pendingDelegations.clear();
   savePending();
-  recoverHandedMail(bus.store);
   return threads.length;
 }
 

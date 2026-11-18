@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
-import { closeShow, useMapThread } from "@/lib/show-pane";
+import { closeShow, useMapThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
 import type { SceneModule } from "@/scenes/scene-host";
 
@@ -87,6 +87,10 @@ describe("whats new card", () => {
         observer.see([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
       }
     });
+  const seeAll = () =>
+    act(() => {
+      for (const observer of observers) observer.see([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
+    });
   const button = (name: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === name || b.getAttribute("aria-label") === name)!;
 
   it("renders nothing and records nothing for a release with no entry", () => {
@@ -153,6 +157,18 @@ describe("whats new card", () => {
     expect(tile.textContent).toBe(text);
   });
 
+  it("opens this chat's side pane on the workers list from its Show me", () => {
+    const { tile, text } = showMe("1.0.278", "Workers live in the side pane");
+    let listed: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((listed = useWorkersThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(listed).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("opens the model picker from the Gemini tile's Show me", () => {
     const opened = vi.fn();
     window.addEventListener("orbit:open-model-picker", opened);
@@ -173,6 +189,32 @@ describe("whats new card", () => {
   it.each(["1.0.273", "1.0.276"])("plays the themes tile in %s as a moving clip", (release) => {
     const clip = WHATS_NEW[release].tiles[0].clip;
     expect(readFileSync(join(".", clip)).includes("ANMF"), `${clip} is a still: the tile shows the themes moving`).toBe(true);
+  });
+
+  const clipsOf = (tile: (typeof WHATS_NEW)[string]["tiles"][number]) => [tile.clip, tile.lightClip].filter((clip): clip is string => Boolean(clip));
+  const moves = (clip: string) => readFileSync(join(".", clip)).includes("ANMF");
+
+  it("ships every tile as a moving clip unless it says it is a still", () => {
+    for (const [release, entry] of Object.entries(WHATS_NEW)) {
+      for (const tile of entry.tiles) {
+        for (const clip of clipsOf(tile)) {
+          expect(moves(clip) || tile.still === true, `${release} "${tile.title.en}" ships a still (${clip}): record a moving clip, or mark the tile still`).toBe(true);
+          expect(!moves(clip) || tile.still !== true, `${release} "${tile.title.en}" is marked still but ${clip} moves`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("plays every tile's clip while motion is allowed and the card is on screen", () => {
+    for (const [release, entry] of Object.entries(WHATS_NEW)) {
+      render(release);
+      seeAll();
+      const frames = [...host.querySelectorAll(".whats-new-frame")].map((frame) => frame.firstElementChild?.tagName);
+      expect(frames, release).toEqual(entry.tiles.map(() => "IMG"));
+      act(() => root.unmount());
+      root = createRoot(host);
+      observers = [];
+    }
   });
 
   it("plays the light clip on a light skin", () => {
@@ -400,10 +442,6 @@ describe("whats new card", () => {
   });
 
   it("holds a still frame while the app is idle or motion is reduced", async () => {
-    const seeAll = () =>
-      act(() => {
-        for (const observer of observers) observer.see([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
-      });
     const frames = () => [...host.querySelectorAll(".whats-new-frame")].map((frame) => frame.firstElementChild?.tagName);
     render(RELEASE);
     seeAll();

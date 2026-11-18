@@ -20,13 +20,19 @@ export const CALL_STYLES = ["calm", "normal", "lively"] as const;
 export type CallStyle = (typeof CALL_STYLES)[number];
 export const CALL_SPEED = { min: 0.7, max: 1.3, step: 0.1 } as const;
 export type CallPrefs = { voice?: LiveVoice; speed?: number; style?: CallStyle; language?: "en" | "ko" };
-// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps.
+// Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps. Every style plays at this one level.
 export const OUTPUT_GAIN = 0.7;
-// Calm plays 4.4 dB under normal; lively 1 dB over, still under -3 dBTP.
-export const STYLE_GAIN: Record<CallStyle, number> = { calm: 0.6, normal: 1, lively: 1.12 };
-export const STYLE_LINES: Partial<Record<CallStyle, string>> = {
-  calm: "VOICE: Speak softly and gently, low-key and unhurried, like a quiet late-night talk. Never loud or excited.",
-  lively: "VOICE: Speak with bright, upbeat energy.",
+// Live has no rate, pitch or energy field, so a style is how the voice is told to speak, at its own pitch-kept pace; volume is the device's own slider.
+// Told "slowly" or "quickly", Live keeps its pace (day-1117 clips: 256 vs 237 wpm), so the pace is played, not asked for.
+export const STYLE_PACE: Record<CallStyle, number> = { calm: 0.88, normal: 1, lively: 1.1 };
+export function callPace(prefs: Pick<CallPrefs, "speed" | "style">): number {
+  const pace = (prefs.speed ?? 1) * STYLE_PACE[prefs.style ?? "normal"];
+  return Math.round(Math.min(CALL_SPEED.max, Math.max(CALL_SPEED.min, pace)) * 100) / 100;
+}
+export const STYLE_LINES: Record<CallStyle, string> = {
+  calm: "VOICE: Calm. Speak slowly and evenly, low in your range, with relaxed pauses between thoughts, at a normal speaking volume, never a whisper. Fewest words: one short sentence. Never excited.",
+  normal: "VOICE: Natural. Speak at an everyday pace and pitch, friendly and clear.",
+  lively: "VOICE: Lively. Speak quickly with bright, upbeat energy, a lifted pitch and lots of expression, at a normal speaking volume, never shouting. Two quick sentences are fine, and an exclamation now and then.",
 };
 // Live has no accent field, so the accent rides the system instruction.
 export const LIVE_ACCENTS: Partial<Record<LiveVoice, string>> = { Erinome: "When you speak English, use a natural British accent." };
@@ -38,8 +44,20 @@ export const LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.ge
 export const CALL_ID = /^c-[0-9a-f]{12}$/;
 
 /** `voice` marks the voice's speech, `notice` the app's own line in the voice's place (never sent to the bot), `order` a confirmed work order, `ask` a quick ask. A call's first row gets `ms` on hang-up, and `summary` when one came back. */
-export type CallTag = { id: string; voice?: true; notice?: true; order?: true; ask?: true; ms?: number; summary?: string };
-export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number };
+export type CallTag = { id: string; voice?: true; notice?: true; unheard?: true; order?: true; ask?: true; ms?: number; summary?: string };
+export type CallRoom = { id: string; kind: "host" | "joined" };
+/** `unheard`: a voice line the phone would not sound. */
+export type CallLine = { who: "user" | "voice" | "notice"; text: string; at?: number; unheard?: true };
+const OPEN_MARKERS = ["no speech", "pause", "silence", "noise", "instruction"];
+
+/** Model markers are never speech, including a marker left open at the end of a chunk. */
+export function spokenText(text: string): string {
+  const clean = text.replace(/<(?![\s\d])[^<>]*>|\{[^}]*\}?/g, " ").replace(/<([^\s<>][^<>]*)$/g, (whole, tail: string) => {
+    const marker = tail.toLowerCase().trim();
+    return marker.length >= 2 && OPEN_MARKERS.some((name) => name.startsWith(marker) || marker.startsWith(`${name}:`)) ? " " : whole;
+  }).replace(/\s+/g, " ").trim();
+  return /[\p{L}\p{N}]/u.test(clean) ? clean : "";
+}
 
 // Korean trails off mid-thought (음, 그러니까...), so both ends are LOW and the pause is long.
 export const LIVE_VAD = {
@@ -73,10 +91,6 @@ export const LIVE_TOOLS = [
       required: ["question"],
     },
   },
-  {
-    name: "hush",
-    description: "They asked you to be quiet or said they are talking to someone else, in any words. Call it and say nothing: you stay silent until they say your name.",
-  },
 ];
 
 /** Said on the call: never a turn's input, reply or unread. Orders and asks are real sends. */
@@ -86,3 +100,4 @@ export function isVoiceLine(row: { call?: CallTag }): boolean {
 
 /** Leads a voice line wherever it is replayed to a model: the voice checked nothing. */
 export const VOICE_SAID = "[said on a call, unverified]";
+export const VOICE_UNHEARD = "[said on a call, not heard]";

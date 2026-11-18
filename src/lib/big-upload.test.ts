@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { forgetUpload, queueUpload, startUpload, uploadJobs, UploadError, uploadErrorKey } from "./big-upload";
+import { dropUpload, forgetUpload, queueUpload, startUpload, uploadJobs, UploadError, uploadErrorKey } from "./big-upload";
 
 const ID = "0f0e0d0c-0b0a-4000-8000-000000000001";
 
@@ -48,7 +48,8 @@ describe("startUpload", () => {
     expect(chunks.map((chunk) => chunk.size)).toEqual([4, 4, 4]);
     expect(fetcher).toHaveBeenCalledWith(`/api/uploads/${ID}`, expect.anything());
     expect(phases).toEqual(["resuming", "uploading"]);
-    expect(arrayBuffer).not.toHaveBeenCalled();
+    // only a 1-byte probe after the network error; chunks stream as slices
+    expect(arrayBuffer.mock.contexts.every((blob) => blob instanceof Blob && blob.size <= 1)).toBe(true);
   });
 
   it("deletes the session when aborted", async () => {
@@ -153,5 +154,47 @@ describe("queueUpload", () => {
     await vi.waitFor(() => expect(uploadJobs().get("chip")?.phase).toBe("done"));
     expect(save).toHaveBeenCalledWith({ path: "/Downloads/Wink/big.png", name: "big.png", size: 10, type: "image/png", preview: "/data/attachments/small.webp" }, ID);
     forgetUpload("chip");
+  });
+});
+
+describe("upload lanes and unreadable files", () => {
+  it("sends a picture while a big upload in another chat is still going", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/uploads") return Promise.resolve(Response.json({ id: ID, offset: 0, chunkBytes: 4 }, { status: 201 }));
+      return new Promise<Response>(() => {});
+    }));
+    const video = new AbortController();
+    queueUpload("video", file(), undefined, undefined, false);
+    const picture = vi.fn(async () => ({ path: "/data/attachments/a.png", name: "image.png", size: 3, type: "image/png" }));
+    queueUpload("picture", new File([new Uint8Array(3)], "image.png", { type: "image/png" }), undefined, undefined, false, picture);
+    await vi.waitFor(() => expect(uploadJobs().get("picture")?.phase).toBe("done"));
+    expect(picture).toHaveBeenCalledTimes(1);
+    expect(uploadJobs().get("video")?.phase).toBe("uploading");
+    video.abort();
+    dropUpload("video");
+    forgetUpload("picture");
+  });
+
+  it("stops at once and says why when the file changed after it was picked", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const changed = new DOMException("The requested file could not be read", "NotReadableError");
+    class Stale extends Blob {
+      override arrayBuffer(): Promise<ArrayBuffer> {
+        return Promise.reject(changed);
+      }
+    }
+    const stale = { name: "showreel.mp4", type: "video/mp4", lastModified: 7, size: 10, slice: () => new Stale([]) };
+    let chunks = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "/api/uploads") return Response.json({ id: ID, offset: 0, chunkBytes: 4 }, { status: 201 });
+      if (url === `/api/uploads/${ID}`) return Response.json({ offset: 0, size: 10, done: false });
+      chunks++;
+      throw new TypeError("Failed to fetch");
+    }));
+    const run = startUpload(stale);
+    const settled = expect(run).rejects.toMatchObject({ key: "composer.uploadFileChanged" });
+    await vi.runAllTimersAsync();
+    await settled;
+    expect(chunks).toBe(1);
   });
 });

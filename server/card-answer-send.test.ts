@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { lineSettles } from "../shared/open-question.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { planCompaction } from "./context-compaction.ts";
 import { SendSequencer } from "./send-idempotency.ts";
@@ -44,6 +43,27 @@ it("an idle tap starts the same turn and marks the line with its card", async ()
   await h.send({ text: "Can't tonight", cardId: "not-a-card" });
   expect(h.startTurn.mock.calls[0]).toEqual([h.bot.id, "Can't tonight", expect.objectContaining({ answersCard: h.card.id })]);
   expect(h.startTurn.mock.calls[1]![2]).not.toHaveProperty("answersCard", expect.anything());
+});
+
+it("keeps the click time through idle, steering and queued delivery", async () => {
+  const actedAt = Date.now() - 10_000;
+  const idle = harness();
+  await idle.send({ text: "Sure", cardId: idle.card.id, actedAt });
+  expect(idle.startTurn.mock.calls[0]![2]).toMatchObject({ actedAt });
+  const busy = harness();
+  busy.busy();
+  await busy.send({ text: "Sure", cardId: busy.card.id, actedAt });
+  expect(busy.last()).toMatchObject({ actedAt });
+  await busy.send({ text: "Sure", cardId: busy.card.id, deliver: "after", actedAt });
+  busy.store.setActivity(busy.bot.id, "idle");
+  drainSteeredMessages(busy.store, vi.fn());
+  expect(busy.last()).toMatchObject({ actedAt });
+});
+
+it.each([-1, "yesterday", null])("ignores an invalid client action time: %s", async (actedAt) => {
+  const h = harness();
+  await h.send({ text: "Sure", cardId: h.card.id, actedAt });
+  expect(h.startTurn.mock.calls[0]![2]).toMatchObject({ actedAt: undefined });
 });
 
 it("a tap marks only a card on the active path", async () => {
@@ -91,16 +111,14 @@ it("the model still reads a tapped answer on replay", async () => {
 });
 
 it.each([
-  { name: "without choices", card: { options: [], staysOpen: true as const }, text: "Polaris", saves: false },
-  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Polaris", saves: true },
-  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] }, text: "Polaris", saves: false },
-  { name: "with choices that stays open, typed as a choice", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Can't tonight", saves: false },
-])("the client saves a typed answer only when its line leaves a question $name open", async ({ card, text, saves }) => {
+  { name: "without choices", card: { options: [], staysOpen: true as const }, text: "Polaris", settles: true },
+  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Polaris", settles: false },
+  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] }, text: "Polaris", settles: true },
+  { name: "with choices that stays open, typed as a choice", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Can't tonight", settles: true },
+])("a typed line that settles a question $name takes no second answer", async ({ card, text, settles }) => {
   const h = harness();
   const asked = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Which star?", askUser: true, ...card } });
-  const byLine = lineSettles(h.store.activePath(h.bot.threadId), asked, text);
-  expect(byLine).toBe(!saves);
   h.busy();
   expect((await h.send({ text })).steered).toBe(true);
-  expect(await h.patchCard(asked.id, { answered: text })).toBe(byLine ? 409 : 200);
+  expect(await h.patchCard(asked.id, { answered: text })).toBe(settles ? 409 : 200);
 });

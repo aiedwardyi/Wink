@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { isVoiceLine } from "../shared/live-call.ts";
-import { isOpenRequest, scanQuestion, typedReply } from "../shared/open-question.ts";
+import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
@@ -27,7 +27,7 @@ const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
 // engines that passed the real-engine accuracy bar
 const QUICK_ENGINES: ReadonlySet<string> = new Set(["claudeAgent"]);
 
-export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
+export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string; ack?: boolean }) => Promise<QuickResult>;
 
 export interface QuickGate {
   bot: BotRecord;
@@ -44,18 +44,24 @@ export interface QuickGate {
 }
 
 /** Gate 0, then the rules. Any doubt goes to the bot. */
-export function routesQuick(gate: QuickGate): boolean {
+function route(gate: QuickGate): ReturnType<typeof nominate> {
   const { bot, threadId } = gate;
-  if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
-  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return false;
-  if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
-  if (!gate.instance.fork && !gate.instance.generateText) return false;
-  // typing answers the pinned card, unless it only types past its choices
-  const question = scanQuestion(gate.messages);
-  if (question && typedReply(question, gate.text) !== null) return false;
-  if (gate.messages.some(isOpenRequest)) return false;
-  return nominate(gate.text) === "quick";
+  if (!bot.busy || bot.threadId !== threadId) return "main";
+  if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.answersCard || gate.room || !gate.accountReady) return "main";
+  if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return "main";
+  if (!gate.instance.fork && !gate.instance.generateText) return "main";
+  // typing answers a pinned card without choices, or a tapped choice's text
+  const question = scanQuestion(gate.messages)?.card;
+  if (question && (!question.staysOpen || !question.options.length || question.options.includes(gate.text.trim()))) return "main";
+  if (gate.messages.some(isOpenRequest)) return "main";
+  // a turn in another thread (a room hand-off, a routine) cannot take the line, so the helper answers or hands off any of it
+  if ((bot.activeThreadId ?? threadId) !== threadId) return "quick";
+  return nominate(gate.text);
 }
+
+export const routesQuick = (gate: QuickGate) => route(gate) === "quick";
+/** Steered to the bot as the person's own words, with one short helper reply beside it. */
+export const routesAck = (gate: QuickGate) => route(gate) === "ack";
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
 const carried = new Map<string, string[]>();
@@ -96,7 +102,7 @@ export function quickAnswersTaken(store: Pick<Store, "messagesFor" | "patchMessa
 }
 
 export interface QuickDeps {
-  store: Pick<Store, "bot" | "activePath" | "messagesFor" | "appendMessage" | "patchMessage">;
+  store: Pick<Store, "bot" | "activePath" | "messagesFor" | "appendMessage" | "patchMessage" | "patchRow">;
   instance(bot: BotRecord, threadId: string): ProviderInstance | null | undefined;
   ask: QuickAsk;
   userName: string;
@@ -106,7 +112,7 @@ export interface QuickDeps {
   usage?: { start(botId: string, threadId: string, id: string): void; settle(id: string): void };
 }
 
-type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage">;
+type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage" | "patchRow">;
 
 /** Still on the active path with its text and not yet handed to the bot; an edit or rewind drops it on purpose. */
 export const pending = (store: Pick<Store, "activePath">, threadId: string, ask: Message) =>
@@ -116,9 +122,9 @@ export const pending = (store: Pick<Store, "activePath">, threadId: string, ask:
 function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
   try {
     const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
-    store.patchMessage(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
+    store.patchRow(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
   } catch (error) {
-    store.patchMessage(threadId, ask.id, { quick: undefined });
+    store.patchRow(threadId, ask.id, { quick: undefined });
     const name = `error: queued message could not start - ${error instanceof Error ? error.message : String(error)}`;
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name, ok: false } });
   }
@@ -206,21 +212,51 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
   }
 }
 
-/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
-  // the open chats plus the threads of asks still running at shutdown; no other thread is read
+/** The open chats plus the threads of asks still running at shutdown; no other thread can hold a recovered ask. */
+export function quickAskThreads(store: Pick<Store, "bots" | "taskByThread">): Map<string, string> {
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
-  for (const [threadId, id] of threads) {
-    // Loading every open chat here held the server for ~30 s on a big messages.db.
-    if (!store.hasUnansweredQuickAsk(threadId)) continue;
-    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
-    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
-  }
-  saveRunning();
+  return threads;
 }
 
-async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message): Promise<QuickResult> {
+const recovering = new Map<string, Promise<void>>();
+
+/** A send to this chat waits here first, so a recovered ask still queues ahead of it. */
+export const quickAskRecovery = (threadId: string): Promise<void> | undefined => recovering.get(threadId);
+
+/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. `asks` come from boot-reads.ts. */
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByThread" | "activePathBack">, asks: Promise<Array<{ threadId: string; id: string; at: number }>>): Promise<void> {
+  const threads = quickAskThreads(store);
+  const done = asks.then((found) => {
+    for (const [threadId, botId] of threads) {
+      const ids = new Map(found.filter((ask) => ask.threadId === threadId).map((ask) => [ask.id, ask.at]));
+      if (!ids.size) continue;
+      const path: Message[] = [];
+      // newest first by key, and only until every ask is seen: timestamps need not fall along the path
+      let left = ids.size;
+      // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
+      const answered = new Set<string>();
+      for (const row of store.activePathBack(threadId)) {
+        if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
+        if (ids.has(row.id)) {
+          left--;
+          if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
+        }
+        if (!left) break;
+      }
+      for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
+    }
+    saveRunning();
+  }).finally(() => {
+    for (const threadId of threads.keys()) if (recovering.get(threadId) === done) recovering.delete(threadId);
+  });
+  for (const threadId of threads.keys()) recovering.set(threadId, done);
+  return done;
+}
+
+type HelperDeps = Omit<QuickDeps, "handoff" | "drain">;
+
+async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message, ack?: boolean): Promise<QuickResult> {
   const usageId = `quick:${ask.id}`;
   let result: QuickResult = { route: "handoff", ms: 0 };
   deps.usage?.start(botId, threadId, usageId);
@@ -228,10 +264,10 @@ async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: str
     const messages = deps.store.activePath(threadId).filter((message) => message.id !== ask.id);
     const calls = ask.call ? callLinesSinceLastUserTurn(messages, new Set()) : [];
     const notes = [...quickAnswersSinceLastUserTurn(messages, new Set()), ...calls].join("\n\n");
-    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes });
+    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes, ack });
   } catch {}
   deps.usage?.settle(usageId);
-  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ...result.usage })}`);
+  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ack, ...result.usage })}`);
   return result;
 }
 
@@ -259,19 +295,42 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const path = store.activePath(threadId);
   // the bot's own reply already stands under the ask; a late answer could contradict it
-  const asked = path.findIndex((row) => row.id === ask.id);
-  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim())) {
+  if (!current.busy && !stopped.has(ask.id) && repliedUnder(store.activePath(threadId), ask)) {
     queueAsk(store, botId, threadId, ask);
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
+  await land(store, instance, current, threadId, ask, result.text);
+}
+
+const repliedUnder = (path: Message[], ask: Message) => {
+  const asked = path.findIndex((row) => row.id === ask.id);
+  return asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim());
+};
+
+/** The helper's reply as a row under the ask, then a note to the bot while it still works there. */
+async function land(store: QuickDeps["store"], instance: ProviderInstance | null | undefined, current: BotRecord, threadId: string, ask: Message, text: string): Promise<void> {
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
-  const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
+  const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {
     const row = store.messagesFor(threadId).find((message) => message.id === answer.id);
     if (row?.quick) store.patchMessage(threadId, answer.id, { quick: { ...row.quick, noted: true } });
   })?.catch(() => false);
+}
+
+/** One short helper reply under a send the bot already took as the person's own words; none when the helper has none. */
+export async function ackQuick(deps: HelperDeps, botId: string, threadId: string, sent: Message): Promise<void> {
+  const { store } = deps;
+  const bot = store.bot(botId);
+  const instance = bot ? deps.instance(bot, threadId) : null;
+  if (!instance) return;
+  const result = await askHelper(deps, instance, botId, threadId, sent, true);
+  const current = store.bot(botId);
+  if (!current || result.route === "handoff" || !result.text) return;
+  const path = store.activePath(threadId);
+  // an edit or rewind dropped the send, or the finished turn already replied to it
+  if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
+  await land(store, instance, current, threadId, sent, result.text);
 }

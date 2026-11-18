@@ -541,6 +541,22 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(await sandboxOf("thread/resume", "codex-thread-9")).toBe(fresh);
   });
 
+  it.each([false, true])("runs a read-only turn in the read-only sandbox, every escalation sent to Wink (fullAuto %s)", async (fullAuto) => {
+    await create({ mode: "resume", fullAuto });
+    const policyOf = async (method: string, resumeCursor?: string) => {
+      const dump = join(scratch, `read-only-${method.replace("/", "-")}-${fullAuto}.json`);
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId: `t-read-only-${method}`, text: "write it", resumeCursor, approval: "auto", readOnly: true });
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === `t-read-only-${method}`);
+      const { sandbox, approvalPolicy, approvalsReviewer } = JSON.parse(readFileSync(dump, "utf8")).calls.find((c: { method: string }) => c.method === method).params;
+      return { sandbox, approvalPolicy, approvalsReviewer };
+    };
+    const locked = { sandbox: "read-only", approvalPolicy: "untrusted", approvalsReviewer: "user" };
+    expect(await policyOf("thread/start")).toEqual(locked);
+    expect(await policyOf("thread/resume", "codex-thread-9")).toEqual(locked);
+    expect(instance.adapter.access!({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
+  });
+
   it("offers the approval chip unless fullAuto means nothing ever asks", async () => {
     await create();
     expect(instance.adapter.capabilities.askApproval).toBe(true);
@@ -1119,19 +1135,19 @@ describe("CodexDriver turns (fake app-server)", () => {
       composio: stdio,
       computer: { boxId: "box-1", token: "box-token" },
     };
-    const elicit = async (target: string, extra: object = {}) => {
+    const elicit = async (target: string, extra: object = {}, approval: "ask" | "auto" = "ask") => {
       await create({ mode: "mcp-elicitation" });
       const dump = join(scratch, "elicit.json");
       process.env.FAKE_CODEX_DUMP = dump;
       process.env.FAKE_CODEX_ELICIT = target;
-      await instance.adapter.sendTurn({ threadId: "t-owned", text: "go", approval: "ask", integrations: { ...integrations, ...extra } });
+      await instance.adapter.sendTurn({ threadId: "t-owned", text: "go", approval, integrations: { ...integrations, ...extra } });
       return dump;
     };
 
     it.each([
       ["agents/update_task_state", {}],
-      ["openmausbot_phone/phone_tap", {}],
-      ["browser/browser_navigate", {}],
+      ["agents/list_bots", {}],
+      ["openmausbot_phone/read_screen", {}],
       ["computer/click", {}],
       ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32" } }],
       ["terminal/terminal_read", {}],
@@ -1158,6 +1174,28 @@ describe("CodexDriver turns (fake app-server)", () => {
       await instance.adapter.respondToRequest("t-owned", opened.requestId!, { behavior: "deny" });
       await recorder.until((e) => e.type === "turn.completed");
     });
+
+    it.each(["agents/generate_image", "agents/call_api", "agents/create_bot", "openmausbot_phone/tap", "browser/browser_click"])(
+      "holds %s for the Ask card and declines it on a deny",
+      async (target) => {
+        const dump = await elicit(target);
+        const first = await recorder.until((e) => e.type === "request.opened" || e.type === "turn.completed");
+        expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool: target.split("/")[1] });
+        await instance.adapter.respondToRequest("t-owned", first.requestId!, { behavior: "deny" });
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "decline" });
+      },
+    );
+
+    it.each(["agents/generate_image", "agents/create_bot", "openmausbot_phone/tap", "browser/browser_click"])(
+      "Auto still accepts %s with no card",
+      async (target) => {
+        const dump = await elicit(target, {}, "auto");
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+        expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "accept", content: {} });
+      },
+    );
   });
 
   it("stamps approvalScope on cards only when the turn controls this Mac", async () => {
@@ -1201,6 +1239,19 @@ describe("CodexDriver turns (fake app-server)", () => {
 
     expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
     expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ decision: "approved" });
+  });
+
+  it("sends a read-only turn's escalation to Wink instead of auto-approving it on a full-auto instance", async () => {
+    await create({ mode: "approval", fullAuto: true });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-read-only-escalate", text: "clean up", approval: "auto", readOnly: true });
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    await instance.adapter.respondToRequest("t-read-only-escalate", opened.requestId!, { behavior: "deny" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ decision: "denied" });
   });
 
   it("rejects a second turn while one is in flight", async () => {

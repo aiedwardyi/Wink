@@ -138,8 +138,14 @@ export type RuntimeEvent = RuntimeEventBase &
         inputDigest?: string;
         choices?: string[];
         approvalScope?: "local-computer";
+        /** the whole tool call the guard judges; `summary` is cut for display */
+        action?: string;
+        /** why a tool call carries no `action` */
+        actionRefused?: "too-large" | "unreadable";
         /** asked by background work after its turn settled; nobody is there to see a card */
         background?: boolean;
+        /** asked by an Auto turn nobody started, or by work such a turn left running */
+        unattended?: boolean;
       }
     | {
         type: "request.resolved";
@@ -337,6 +343,8 @@ export interface ProviderAdapter {
     steerConsumed?: boolean;
     /** True when the driver honours SendTurnInput.readOnly. */
     readOnlyTurns?: boolean;
+    /** True when a busy bot can answer a room on a second, read-only lane beside its 1:1. */
+    laneTurns?: boolean;
     /** True only when local MCP calls can reach the human approval channel.
      * Full-auto/bypass provider instances must leave this false. */
     localComputerMcp?: boolean;

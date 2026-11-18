@@ -11,8 +11,10 @@ import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_RESERVE_PX } from "@/lib/phone-header";
 import { SIDEBAR_SIDE_KEY } from "@/lib/sidebar-preferences";
+import { closeShow, useWorkersThread } from "@/lib/show-pane";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
+import { ShowPane } from "./ShowPane";
 import type { TurnStreamState } from "@/lib/turn-stage";
 
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
@@ -28,6 +30,19 @@ vi.mock("@/lib/transcript-window", async (importOriginal) => {
 });
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+function WorkersPane() {
+  const thread = useWorkersThread();
+  return thread ? createElement(ShowPane, { workers: true, source: { threadId: thread, messages: [] }, hidden: false }) : null;
+}
+
+const paneLabel = (host: HTMLElement) => host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label");
+const workerList = () => document.body.querySelector("[data-side-panel] [data-worker-list]");
+const paneList = () => vi.waitFor(() => {
+  const list = workerList();
+  if (!list) throw new Error("no workers list in the side pane");
+  return list;
+});
 
 class FakeEventSource {
   onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
@@ -177,8 +192,8 @@ describe("ChatView worker rows", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot, onOpenTerminalPane }))));
-    return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
+    await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot, onOpenTerminalPane }), createElement(WorkersPane))));
+    return { host, unmount: async () => { await act(async () => { root.unmount(); closeShow(); }); host.remove(); } };
   };
   const rows = (host: HTMLElement) => Array.from(host.querySelectorAll<HTMLElement>("[data-worker-run] > button"));
   const states = (host: HTMLElement) => Array.from(host.querySelectorAll("[data-worker-run] [data-worker-state]")).map((el) => el.getAttribute("data-worker-state"));
@@ -297,7 +312,7 @@ describe("ChatView worker rows", () => {
       const shown = host.querySelector("[data-orbit-worker]")?.textContent ?? "";
       expect(shown).toBe("Ran in C:\\repoFailedfirst try brokeFinishedAll green.");
       for (const machine of ["Session", "Label", "branch=", "sha=", "dirty=", done]) expect(shown).not.toContain(machine);
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(paneLabel(host)).toBe("Show and media");
     } finally {
       await unmount();
     }
@@ -341,7 +356,7 @@ describe("ChatView worker rows", () => {
     const { host, unmount } = await mountChat(current);
     try {
       expect(states(host)).toEqual(["ended", "ended", "done", "failed"]);
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(paneLabel(host)).toBe("Show and media");
     } finally {
       await unmount();
     }
@@ -371,14 +386,14 @@ describe("ChatView worker rows", () => {
         exit({ id: panes[2]!.sessionId, exitCode: 0 });
       });
       expect(states(host)).toEqual(["ended", "ended", "done"]);
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(paneLabel(host)).toBe("Show and media");
     } finally {
       await unmount();
     }
     expect(offExit).toHaveBeenCalledOnce();
   });
 
-  it("shows a strip for live runs that opens the list, urgent first", async () => {
+  it("badges the pane button for live runs and opens the list, urgent first", async () => {
     stubDom();
     const [a, b, c, d] = ["aaaaaaaa-1", "bbbbbbbb-1", "cccccccc-1", "dddddddd-1"];
     // SAFETY: botA is a full Bot fixture; only messages is replaced, with valid Messages.
@@ -395,42 +410,36 @@ describe("ChatView worker rows", () => {
     const { host, unmount } = await mountChat(current);
     try {
       expect(states(host)).toEqual(["working", "waiting", "done", "failed"]);
-      const strip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
-      expect(strip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(host.querySelector("[data-orbit-composer]")?.closest("[class*='z-[2]']")?.querySelector("[data-worker-strip]") ?? null).toBeNull();
-      expect(strip.getAttribute("aria-label")).toBe("1 working, 1 waiting, 0 failed, 0 done. Show workers");
-      const desktop = strip.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.textContent).toBe("2 workers");
-      expect(desktop.querySelector(".bg-warning")).not.toBeNull();
-      expect(desktop.querySelectorAll(".lucide-bot")).toHaveLength(1);
-      await act(async () => { strip.click(); });
-      const list = document.body.querySelector("[data-worker-list]")!;
-      expect(list.getAttribute("role")).toBe("dialog");
+      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      const button = host.querySelector<HTMLButtonElement>("[data-show-pane-button]")!;
+      expect(button.closest("[class*='@container/chathead']")).not.toBeNull();
+      expect(button.getAttribute("aria-label")).toBe("1 working, 1 waiting, 0 failed, 0 done. Show workers");
+      const badge = button.querySelector("[data-worker-badge]")!;
+      expect(badge.textContent).toBe("2");
+      expect(badge.classList.contains("bg-warning")).toBe(true);
+      await act(async () => { button.click(); });
+      const list = await paneList();
       expect(list.querySelector("h2")?.textContent).toBe("A's workers");
       expect(Array.from(list.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
         "GUIDEOpus 5.5 · HighWaiting", "BUILDGPT-6 Astra · HighWorking",
       ]);
       await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect(workerList()).toBeNull();
     } finally {
       await unmount();
     }
   });
 
-  it("labels all workers and shows the compact count", async () => {
+  it("counts all working workers on the pane button", async () => {
     stubDom();
     // SAFETY: botA is a full Bot fixture; only messages is replaced, with valid Messages.
     const current = { ...botA, messages: [userMsg("ua", "go"), ...Array.from({ length: 7 }, (_, i) => launch(`${i}0000000-1`, `W${i} | Opus 5.5 | high`, i + 1))] } as Bot;
     const { host, unmount } = await mountChat(current);
     try {
-      const strip = host.querySelector("[data-worker-strip]")!;
-      const desktop = strip.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.querySelectorAll(".lucide-bot")).toHaveLength(1);
-      expect(desktop.textContent).toBe("7 workers");
-      const phone = strip.querySelector("[data-worker-chip-phone]")!;
-      expect(phone.querySelectorAll(".lucide-bot")).toHaveLength(1);
-      expect(phone.textContent).toBe("7");
-      expect(strip.getAttribute("aria-label")).toBe("7 working, 0 waiting, 0 failed, 0 done. Show workers");
+      const badge = host.querySelector("[data-show-pane-button] [data-worker-badge]")!;
+      expect(badge.textContent).toBe("7");
+      expect(badge.classList.contains("bg-accent")).toBe(true);
+      expect(paneLabel(host)).toBe("7 working, 0 waiting, 0 failed, 0 done. Show workers");
     } finally {
       await unmount();
     }
@@ -455,18 +464,15 @@ describe("ChatView worker rows", () => {
     const onOpen = vi.fn();
     const { host, unmount } = await mountChat(current, onOpen);
     try {
-      await vi.waitFor(() => expect(host.querySelector("[data-worker-chip-desktop] .bg-success")).not.toBeNull());
-      const chip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
-      expect(chip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(host.querySelector("[data-orbit-composer]")?.closest("[class*='z-[2]']")?.querySelector("[data-worker-strip]") ?? null).toBeNull();
-      expect(chip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("1 worker");
-      await act(async () => chip.click());
-      const entry = document.body.querySelector<HTMLButtonElement>("[data-worker-list] li button")!;
+      await vi.waitFor(() => expect(paneLabel(host)).toBe("0 working, 0 waiting, 0 failed, 1 done. Show workers"));
+      expect(host.querySelector("[data-worker-badge]")).toBeNull();
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-show-pane-button]")!.click());
+      const entry = (await paneList()).querySelector<HTMLButtonElement>("li button")!;
       expect(entry.textContent).toContain("COPY");
       expect(entry.textContent).not.toContain("WORK");
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith(liveDone);
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect(workerList()).toBeNull();
     } finally {
       await unmount();
     }
@@ -512,7 +518,7 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["working", "ended", "working"]);
-        expect(host.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("2 workers");
+        expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("2");
         expect(calls).toEqual([`GET ${terminalPath}`]);
       } finally {
         await unmount();
@@ -530,7 +536,7 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["ended", "done", "failed"]);
-        expect(host.querySelector("[data-worker-strip]")).toBeNull();
+        expect(paneLabel(host)).toBe("Show and media");
       } finally {
         await unmount();
       }
@@ -614,7 +620,8 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["ended", "ended", "ended"]);
-        expect(host.querySelector("[data-worker-strip]")).toBeNull();
+        expect(paneLabel(host)).toBe("Show and media");
+        expect(host.querySelector("[data-worker-badge]")).toBeNull();
         expect(calls).toHaveLength(1);
       } finally {
         await unmount();
@@ -633,7 +640,7 @@ describe("ChatView worker rows", () => {
         await settle();
         expect(calls).toEqual([`GET ${terminalPath}`]);
         expect(states(host)).toEqual(["working", "working", "working"]);
-        expect(host.querySelector("[data-worker-strip]")).not.toBeNull();
+        expect(paneLabel(host)).toBe("3 working, 0 waiting, 0 failed, 0 done. Show workers");
       } finally {
         await unmount();
       }
@@ -757,22 +764,21 @@ describe("ChatView worker rows", () => {
     document.body.append(host);
     const root = createRoot(host);
     try {
-      await act(async () => root.render(createElement(StoreProvider, null, createElement(GroupView, { group }))));
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(GroupView, { group }), createElement(WorkersPane))));
       expect(rows(host).map((b) => b.textContent)).toEqual(["REVIEWGPT-6.1 Sol · HighWorking", "CHECKOpus 5.5 · HighDone"]);
       expect(host.textContent).not.toContain("Green.");
-      const chip = host.querySelector("[data-worker-strip]");
-      const bell = host.querySelector("[data-room-bell]")!;
-      if (!chip) throw new Error("chip missing");
-      expect(chip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(chip.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-      expect(chip?.getAttribute("aria-label")).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers");
-      await act(async () => chip?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-      const list = document.querySelector("[data-worker-list]");
+      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      const button = host.querySelector("[data-show-pane-button]")!;
+      expect(button.closest("[class*='@container/chathead']")).not.toBeNull();
+      expect(button.querySelector("[data-worker-badge]")?.textContent).toBe("1");
+      expect(button.getAttribute("aria-label")).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers");
+      await act(async () => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      const list = await paneList();
       expect(list).not.toBeNull();
       expect(list?.querySelectorAll("li")).toHaveLength(1);
       expect(list?.querySelector("button")).toBeNull();
     } finally {
-      await act(async () => root.unmount());
+      await act(async () => { root.unmount(); closeShow(); });
       host.remove();
     }
   });

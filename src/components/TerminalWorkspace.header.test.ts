@@ -32,7 +32,8 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Header checks do not need link detection.
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class { dispose() {} } }));
 
-import { TerminalWorkspace, lastViewedPanes } from "./TerminalWorkspace";
+import { lastViewedPanes } from "@/lib/terminal-panes";
+import { TerminalWorkspace } from "./TerminalWorkspace";
 
 let root: ReturnType<typeof createRoot>;
 let host: HTMLElement;
@@ -44,6 +45,7 @@ afterEach(async () => {
   lastViewedPanes.clear();
   applyLocale("en");
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -151,4 +153,18 @@ it("gives all four header controls the same hover classes", async () => {
   expect(controls).toHaveLength(4);
   const treatment = (control: HTMLElement) => [...control.classList].filter((value) => /^(hover:|transition-)/.test(value)).sort();
   for (const control of [...mainControls, ...controls]) expect(treatment(control)).toEqual(["hover:bg-raised", "hover:text-ink"]);
+});
+
+it.each([
+  ["en", false, "Close"],
+  ["ko-KR", false, "닫기"],
+  ["en", true, "Chat"],
+  ["ko-KR", true, "대화"],
+])("labels the leave button in %s with phone=%s", async (locale, phone, label) => {
+  applyLocale(detectLocale(locale));
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.assign(new EventTarget(), { matches: phone && query.includes("max-width"), media: query, onchange: null, addListener() {}, removeListener() {} }));
+  await mount();
+  const leave = host.querySelector<HTMLButtonElement>("header button")!;
+  expect(leave.textContent!.replace(leave.querySelector("kbd")!.textContent!, "").trim()).toBe(label);
+  expect(Boolean(leave.querySelector("svg"))).toBe(phone);
 });

@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
 import { applyLocale } from "@/lib/i18n";
-import { answerCall } from "@/lib/live-call/active";
 import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
@@ -14,7 +13,7 @@ import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, played: undefined as boolean | undefined, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -34,7 +33,8 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
+    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; return fakes.played; }
+    async heal() { return true; }
     stopMic() {}
     play() {}
     endTurn() {}
@@ -130,6 +130,7 @@ afterEach(() => {
   fakes.token = undefined;
   fakes.messages = undefined;
   fakes.key = false;
+  fakes.played = undefined;
   fakes.sse = undefined;
   Reflect.deleteProperty(window, "ogb");
   Reflect.deleteProperty(navigator, "mediaDevices");
@@ -203,16 +204,14 @@ describe("call button in the message box", () => {
     }
   });
 
-  it("opens call settings on a right-click on Call and still calls on a left-click", async () => {
+  it("opens nothing on a right-click on Call and still calls on a left-click", async () => {
     const { host, unmount } = await mount();
     try {
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      expect(document.querySelector("[data-call-settings-menu] [data-call-settings]")).not.toBeNull();
+      expect(right.defaultPrevented).toBe(false);
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       expect(tokens()).toBe(0);
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       await connect(host);
       expect(tokens()).toBe(1);
     } finally {
@@ -240,7 +239,15 @@ describe("live call in the message box", () => {
       await connect(host);
       const box = frame(host).querySelector<HTMLElement>("[data-call-box]")!;
       expect(box.className).toContain("row-start-3");
-      for (const label of ["Captions", "Mute", "End"]) expect(button(box, label)).not.toBeNull();
+      const row = [...box.querySelectorAll("button")];
+      expect(row.map((b) => b.getAttribute("aria-label"))).toEqual(["Call settings", "Mute", "End"]);
+      expect(new Set(row.map((b) => b.className.match(/\bsize-\d+\b/)![0])).size).toBe(1);
+      expect(row.every((b) => b.className.includes("rounded-full"))).toBe(true);
+      expect(row.some((b) => b.className.includes("accent"))).toBe(false);
+      expect(row.filter((b) => b.className.includes("bg-danger"))).toEqual([button(box, "End")]);
+      expect(frame(host).querySelectorAll('[aria-label="End"]')).toHaveLength(1);
+      expect(button(box, "End")!.hasAttribute("title")).toBe(false);
+      expect([...frame(host).querySelectorAll("*")].some((el) => el.children.length === 0 && el.textContent === "End")).toBe(false);
       expect(host.querySelector("[data-live-call]")?.querySelector("button")).toBeNull();
       expect(button(box, "End")!.className).toContain("bg-danger");
       expect(host.textContent).toContain("Free Gemini");
@@ -254,12 +261,25 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("has no gear: a right-click on End opens the small call menu and a click still ends", async () => {
+  it("shows the call settings gear that opens the small menu, and a right-click on End still does", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      expect(button(frame(host), "Call settings")).toBeNull();
       expect(frame(host).querySelector("[data-call-settings]")).toBeNull();
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.title).toBe("Call settings");
+      expect(gear.compareDocumentPosition(button(frame(host), "End")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      await act(async () => gear.click());
+      const small = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
+      expect(small.querySelector('input[aria-label="Speed"]')).not.toBeNull();
+      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
+      await act(async () => small.click());
+      expect(document.querySelector("[data-call-settings-menu]:not([data-closing])")).not.toBeNull();
+      await act(async () => {
+        gear.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        gear.click();
+      });
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
       await act(async () => button(frame(host), "End")!.dispatchEvent(right));
       expect(right.defaultPrevented).toBe(true);
@@ -299,15 +319,12 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("keeps captions above typing and remembers the toggle", async () => {
+  it("shows captions by default, above typing, and the menu switch turns them off for good", async () => {
     const first = await mount();
     try {
       const engine = await connect(first.host);
+      expect(button(frame(first.host), "Captions")).toBeNull();
       await act(async () => engine.events.heard("Can you fix the login bug?"));
-      expect(first.host.querySelector("[data-call-caption]")).toBeNull();
-      const toggle = button(frame(first.host), "Captions")!;
-      expect(toggle.getAttribute("aria-pressed")).toBe("false");
-      await act(async () => toggle.click());
       const caption = frame(first.host).querySelector("[data-call-caption]");
       expect(caption?.textContent).toBe("YouCan you fix the login bug?");
       expect(frame(first.host).querySelector("[data-call-caption] ~ textarea")).not.toBeNull();
@@ -316,14 +333,23 @@ describe("live call in the message box", () => {
       await type(first.host, "also check the reset email");
       expect(frame(first.host).querySelector("[data-call-caption]")?.textContent).toBe("AtlasThe one where sign-in loops back?");
       expect(first.host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")?.value).toBe("also check the reset email");
+      await act(async () => button(frame(first.host), "Call settings")!.click());
+      const toggle = button(document.body, "Captions")!;
+      expect(toggle.getAttribute("role")).toBe("switch");
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      expect(frame(first.host).querySelector("[data-call-caption]")).toBeNull();
     } finally {
       await first.unmount();
     }
+    expect(localStorage.getItem("wink.liveCall.captions")).toBe("0");
     const second = await mount();
     try {
       await type(second.host, "");
-      await connect(second.host);
-      expect(button(frame(second.host), "Captions")!.getAttribute("aria-pressed")).toBe("true");
+      const engine = await connect(second.host);
+      await act(async () => engine.events.heard("Still off"));
+      expect(frame(second.host).querySelector("[data-call-caption]")).toBeNull();
     } finally {
       await second.unmount();
     }
@@ -416,7 +442,6 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       const engine = await connect(host);
-      await act(async () => button(frame(host), "Captions")!.click());
       await act(async () => engine.events.said("I am ready to help"));
       const text = frame(host).querySelector("[data-call-caption]")!.children[1] as HTMLElement;
       Object.defineProperty(text, "scrollHeight", { value: 144 });
@@ -515,24 +540,24 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("an answered bot call with no key opens the chat with no call and no token request", async () => {
+  it.each([["en", "Tap to hear Atlas"], ["ko", "Atlas 목소리 듣기"]])("puts one %s sound pill in the call row when the phone won't play, gone after the tap", async (locale, label) => {
+    applyLocale(locale as "en" | "ko");
+    fakes.played = false;
     const { host, unmount } = await mount();
     try {
-      expect(answerCall(atlas, "Sign in to Claude on Home.")).not.toBeNull();
-      await act(() => new Promise((done) => setTimeout(done, 300)));
-      expect(tokens()).toBe(0);
-      expect(host.querySelector("[data-live-call]")).toBeNull();
+      await act(async () => corner(host).click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      await act(async () => fakes.engines[0]!.events.ready());
+      const pills = () => [...document.querySelectorAll<HTMLButtonElement>("[data-live-call-sound]")];
+      await vi.waitFor(() => expect(pills()).toHaveLength(1));
+      expect(frame(host).contains(pills()[0]!)).toBe(true);
+      expect(pills()[0]!.textContent).toBe(label);
+      expect(document.querySelector("[data-live-call-resume]")).toBeNull();
+      await act(async () => pills()[0]!.click());
+      await vi.waitFor(() => expect(pills()).toHaveLength(0));
+      expect(document.querySelector("[data-live-call-resume]")).toBeNull();
     } finally {
-      await unmount();
-    }
-  });
-
-  it("an answered bot call with a key still opens the call", async () => {
-    const { unmount } = await mount(true);
-    try {
-      await act(async () => void answerCall(atlas, "Sign in to Claude on Home."));
-      await vi.waitFor(() => expect(intro()).not.toBeNull());
-    } finally {
+      applyLocale("en");
       await unmount();
     }
   });
