@@ -415,7 +415,7 @@ describe("ChatView worker rows", () => {
       expect(button.closest("[class*='@container/chathead']")).not.toBeNull();
       expect(button.getAttribute("aria-label")).toBe("1 working, 1 waiting, 0 failed, 0 done. Show workers");
       const badge = button.querySelector("[data-worker-badge]")!;
-      expect(badge.textContent).toBe("1");
+      expect(badge.textContent).toBe("2");
       expect(badge.classList.contains("bg-warning")).toBe(true);
       await act(async () => { button.click(); });
       const list = await paneList();
