@@ -6,7 +6,7 @@ import { baseInstances } from "@/lib/cross-model-picker";
 import { usageAccount } from "@/lib/accounts";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
-import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
+import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy, type InstallLaunch } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 import { trackOnboard } from "@/lib/usage-stats";
@@ -21,11 +21,11 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   footer?: { back: () => void; open: () => void; label?: MessageKey; disabled?: boolean; skip?: () => void };
 }) {
   const { t } = useI18n();
-  const canInstall = Boolean(window.ogb?.openEngineInstall);
+  const canInstall = Boolean(window.ogb?.openEngineInstall || window.ogb?.openInstallTerminal);
   const commandsId = useId();
   const [commands, setCommands] = useState(!canInstall);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
-  const [opened, setOpened] = useState<Record<string, boolean>>({});
+  const [launches, setLaunches] = useState<Record<string, InstallLaunch>>({});
   const { attempts, begin, fail } = useEngineInstall(instances, onRefresh, recheckOnFocus);
   const engines = firstLaunchConnectInstances(baseInstances(instances)).map((instance) => instance.pickerSnapshot
     ? { ...instance, snapshot: { ...instance.snapshot, authenticated: instance.pickerSnapshot.state === "available" && instance.pickerSnapshot.authenticated !== false } }
@@ -40,22 +40,21 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginCapture: main.loginCapture } : instance;
   };
 
+  const installStarted = (id: string, result: InstallLaunch) => {
+    begin(id);
+    setLaunches((current) => ({ ...current, [id]: result }));
+    if (result !== "running") setCommands(true);
+  };
+
   const install = async (instance: InstanceInfo) => {
     const id = instance.instanceId;
     if (busy[id]) return;
     const command = installCommandFor(instance.install);
     if (!canInstall || !command) { trackOnboard("commands"); setCommands(true); return; }
     trackOnboard("installing", instance.driverKind);
-    begin(id);
-    setOpened((current) => ({ ...current, [id]: false }));
     setBusy((current) => ({ ...current, [id]: true }));
     try {
-      const result = await openEngineInstallOrCopy(id, command);
-      if (result === "copied") fail(id);
-      if (result === "opened") {
-        setOpened((current) => ({ ...current, [id]: true }));
-        setCommands(true);
-      }
+      installStarted(id, await openEngineInstallOrCopy(id, command));
     } catch { fail(id); }
     finally { setBusy((current) => ({ ...current, [id]: false })); }
   };
@@ -68,10 +67,11 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     const attempt = attempts[instance.instanceId];
     const working = !installed && attempt && !attempt.failed;
     const failed = !installed && attempt?.failed;
-    const paste = working && opened[instance.instanceId];
+    const launch = launches[instance.instanceId];
+    const paste = working && (launch === "opened" || launch === "copied");
     const label = checking ? t("engines.checking") : ready ? t("engineConnect.ready", { name: instance.displayName })
       : installed ? t("engineConnect.signIn", { name: instance.displayName })
-        : working ? t("engineConnect.openAgain")
+        : working ? t(launch === "copied" ? "engineConnect.tryAgain" : "engineConnect.openAgain")
           : failed ? t("engineConnect.tryAgain")
             : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
@@ -109,7 +109,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       <div>{others.map((instance) => row(instance))}</div>
       <Fold open={commands}>
         <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
-          {engines.filter((instance) => !engineChecking(instance)).map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
+          {engines.filter((instance) => !engineChecking(instance)).map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" onInstallStarted={installStarted} />)}
         </div>
       </Fold>
     </div>

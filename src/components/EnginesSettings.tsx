@@ -4,11 +4,12 @@ import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/st
 import { EngineMark } from "./EngineMark";
 import { AccountConnections, AccountHead, ConnectionRow, SignInRow } from "./AccountConnections";
 import { ROW_BUTTON } from "./SettingsPrimitives";
-import { groupAccounts } from "@/lib/accounts";
+import { accountReady, groupAccounts } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
-import { engineChecking, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
+import { engineChecking, installCommandFor, installSignsIn, openEngineInstallOrCopy, type InstallLaunch } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
+import { useEngineInstall } from "@/lib/use-engine-install";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { Fold } from "./Fold";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
@@ -17,14 +18,14 @@ export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boo
   return instance.snapshot.state === "available" && instance.snapshot.authenticated === true;
 }
 
-export function EngineRow({ instance, onConnected, onUpdated }: { instance: InstanceInfo; onConnected?: () => void; onUpdated?: (instance: InstanceInfo) => void }) {
+export function EngineRow({ instance, onConnected, onUpdated, onInstallStarted }: { instance: InstanceInfo; onConnected?: () => void; onUpdated?: (instance: InstanceInfo) => void; onInstallStarted?: (id: string, result: InstallLaunch) => void }) {
   const { t } = useI18n();
   const dispatch = useOptionalStoreDispatch();
   const terminal = isTerminalSkin(useSkin());
   const [current, setCurrent] = useState(instance);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
-  const [installStatus, setInstallStatus] = useState<"running" | "opened" | "copied" | "failed" | null>(null);
+  const [installStatus, setInstallStatus] = useState<InstallLaunch | "failed" | null>(null);
   useEffect(() => { setCurrent(instance); }, [instance]);
   const signOut = async () => {
     if (busy) return;
@@ -46,7 +47,9 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
     setBusy(true);
     setInstallStatus(null);
     try {
-      setInstallStatus(await openEngineInstallOrCopy(current.instanceId, installCommand));
+      const result = await openEngineInstallOrCopy(current.instanceId, installCommand);
+      setInstallStatus(result);
+      onInstallStarted?.(current.instanceId, result);
     } catch { setInstallStatus("failed"); }
     finally { setBusy(false); }
   };
@@ -65,7 +68,7 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
               className={cn(ROW_BUTTON, "text-ink")}>{t("engines.install")}</button>
               : current.install?.docsUrl && <a href={current.install.docsUrl} target="_blank" rel="noreferrer"
               className={cn(ROW_BUTTON, "text-ink")}>{t("engines.install")}</a>}
-            {(installStatus === "opened" || installStatus === "running") && (
+            {(installStatus === "opened" || installStatus === "running" || installStatus === "copied") && (
               <p className="w-full text-right text-[11px] leading-[14px] text-ink-secondary/70">{t(installStatus !== "running" ? "engine.pasteAndEnter" : installSignsIn(current.install) ? "engine.followSignIn" : "engine.installRunning")}</p>
             )}
             {current.install?.needsNode && installCommand?.includes("npm") && !(window.ogb?.openEngineInstall && window.ogb.platform === "win32") && (
@@ -97,6 +100,7 @@ export function EnginesSettings() {
   const { state, refreshInstances } = useStore();
   const groups = groupAccounts(state.instances);
   const reload = refreshInstances;
+  const { begin: installStarted } = useEngineInstall(state.instances, () => reload("passive"), false);
   const [showAll, setShowAll] = useState(false);
   // Same guard as the store's focus probe: a rescan can flash a window that
   // steals focus, so only a real trip away (a terminal sign-in) rescans.
@@ -128,8 +132,8 @@ export function EnginesSettings() {
     };
   }, [refreshInstances]);
   const rows = orderFriendsEngines(groups.map((accounts) => accounts[0]!).filter(isFriendsCliEngine));
-  const installed = rows.filter((row) => row.snapshot.state !== "unavailable");
-  const missing = rows.filter((row) => row.snapshot.state === "unavailable");
+  const installed = rows.filter((row) => row.snapshot.state !== "unavailable" || groups.find((group) => group[0] === row)?.some(accountReady));
+  const missing = rows.filter((row) => !installed.includes(row));
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {/* No instances yet means the first scan has not answered, not that nothing is installed. */}
@@ -138,7 +142,7 @@ export function EnginesSettings() {
         : rows.length === 0 && <p className="text-[13px] text-ink-secondary">{t("engines.none")}</p>}
       {installed.map((instance) => {
         const accounts = groups.find((group) => group[0] === instance)!;
-        return ["claudeAgent", "codex", "grokAgent"].includes(instance.driverKind) && !engineChecking(instance) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />
+        return ["claudeAgent", "codex", "grokAgent"].includes(instance.driverKind) && (!engineChecking(instance) || accounts.some(accountReady)) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />
           : <EngineRow key={instance.instanceId} instance={instance} />;
       })}
       {missing.length > 0 && <>
@@ -146,7 +150,7 @@ export function EnginesSettings() {
           className={cn(ROW_BUTTON, "self-start")}>{t("engines.moreEngines")}</button>
         <Fold open={showAll}>
           <div className="flex min-w-0 flex-col gap-4">
-            {missing.map((instance) => <EngineRow key={instance.instanceId} instance={instance} />)}
+            {missing.map((instance) => <EngineRow key={instance.instanceId} instance={instance} onInstallStarted={installStarted} />)}
           </div>
         </Fold>
       </>}

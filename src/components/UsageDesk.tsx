@@ -533,7 +533,8 @@ export function UsageDesk() {
     trackFeature("usage.refresh");
     setRefreshFailed(false);
     setMuseAuthFailed(false);
-    const outcome = await refreshUsage(store.instances, board, dispatch);
+    const recheck = store.instances.some((row) => row.accountOf === row.instanceId && row.snapshot.authenticated !== true);
+    const [outcome] = await Promise.all([refreshUsage(store.instances, board, dispatch), recheck && refreshInstances("passive")]);
     setMuseAuthFailed(outcome.museAuthFailed);
     setRefreshFailed(outcome.failed);
   };

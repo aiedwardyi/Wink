@@ -44,7 +44,7 @@ type ModelPickerProps = {
 type PickerStore = {
   state: Pick<ReturnType<typeof useStore>["state"], "instances" | "selectedId"> & Partial<Pick<ReturnType<typeof useStore>["state"], "pendingQueued">>;
   dispatch: ReturnType<typeof useStore>["dispatch"];
-  refreshInstances: () => Promise<void>;
+  refreshInstances: ReturnType<typeof useStore>["refreshInstances"];
 };
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -346,7 +346,7 @@ export function ModelPickerControl({
   );
 
   const setup = <>
-    {blocked && instance && !engineChecking(instance) && <EngineSetup instance={instance} intent={isCustom ? "inject" : "cloud"} />}
+    {blocked && instance && !engineChecking(instance) && <EngineSetup instance={instance} intent={isCustom ? "inject" : "cloud"} onRefresh={() => refreshInstances("passive")} />}
     {custom.length > 0 && <button type="button" className="text-xs text-ink-secondary hover:text-ink" aria-expanded={customOpen} onClick={() => setCustomOpen(!customOpen)}>{t("model.useLocalCount", { count: custom.length })}</button>}
     {customOpen && instance && <div className="model-cross-custom">
       <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("model.searchLocal")} placeholder={t("model.searchLocal")} className="w-full rounded-lg bg-inset px-3 py-2 text-base sm:text-sm text-ink" />

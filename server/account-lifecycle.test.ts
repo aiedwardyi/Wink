@@ -88,6 +88,20 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
 }
 
 describe("account lifecycle", () => {
+  it.each(["claude", "codex"])("recognizes a %s base sign-in outside Wink on the next refresh", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.registry.describe();
+    await f.controller.remove(base, added.id);
+
+    f.statuses.set(base, { state: "available", authenticated: true, account: "external@example.test" });
+    const rows = await f.registry.describe({ refresh: true });
+    expect(rows.find((row) => row.instanceId === base)?.snapshot).toMatchObject({ state: "available", authenticated: true, account: "external@example.test" });
+    expect(f.registry.accountAvailable(base)).toBe(true);
+    expect(f.accounts.defaultFor(base)).toBe(added.id);
+    expect(f.accounts.get(added.id)?.state).toBe("ready");
+  });
+
   it("clears a base account's promo mark after sign-in completes", async () => {
     const f = await fixture();
     const home = join(f.dir, "base-codex");

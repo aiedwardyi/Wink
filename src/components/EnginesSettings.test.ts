@@ -561,7 +561,8 @@ describe("EnginesSettings friends Connections list", () => {
       expect(copy).toHaveBeenCalledTimes(mode === "copied" ? 0 : 1);
       if (mode !== "copied") expect(copy).toHaveBeenCalledWith("install-cli");
       expect(host.textContent?.includes("Command copied")).toBe(mode !== "blocked");
-      expect(host.textContent).not.toMatch(/Terminal opened|Paste the command/);
+      expect(host.textContent).not.toContain("Terminal opened");
+      expect(host.textContent?.includes("Paste the command in Terminal and press Enter.")).toBe(mode !== "blocked");
     } finally {
       await act(async () => root.unmount());
       copy.mockRestore();
@@ -609,6 +610,37 @@ describe("EnginesSettings friends Connections list", () => {
     } finally {
       await act(async () => root.unmount());
       restore();
+      window.ogb = previous;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["running", "copied"] as const)("checks the Windows installer while Connections stays open after %s", async (result) => {
+    const previous = window.ogb;
+    const openEngineInstall = vi.fn(async () => result);
+    const copy = vi.spyOn(navigator.clipboard, "writeText");
+    Object.assign(window, { ogb: { platform: "win32", openEngineInstall } });
+    const restore = stage("claude", { snapshot: { state: "unavailable" },
+      install: { command: { win32: "install-claude" }, login: { args: ["auth", "login"] } } });
+    vi.useFakeTimers();
+    const { host, root, row } = await renderList();
+    try {
+      await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "More Engines")!.click());
+      await act(async () => row("claude").querySelector("button")!.click());
+      expect(openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
+      expect(copy).not.toHaveBeenCalled();
+      expect(row("claude").textContent?.includes("Command copied")).toBe(result === "copied");
+      expect(row("claude").textContent).toContain(result === "copied" ? "Paste the command in Terminal and press Enter." : "Installing in Terminal.");
+      refreshInstances.mockImplementationOnce(async () => {
+        mockInstances.find((row) => row.instanceId === "claude")!.snapshot = { state: "available", authenticated: false };
+        root.render(createElement(I18nProvider, null, createElement(EnginesSettings)));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(row("claude").textContent).toBe("ClaudeSigned out.Sign In");
+    } finally {
+      await act(async () => root.unmount());
+      restore();
+      copy.mockRestore();
       window.ogb = previous;
       vi.useRealTimers();
     }

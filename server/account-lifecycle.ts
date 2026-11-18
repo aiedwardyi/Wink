@@ -309,7 +309,7 @@ export class AccountLifecycle {
     this.clearRetry(id);
     this.hooks.invalidate(id);
     await this.hooks.reload();
-    this.registry.blockAccount(id, !added);
+    if (added) this.registry.blockAccount(id, false);
     return { state: "removed", destinationId: drain.destinationId };
   }
 

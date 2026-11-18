@@ -102,6 +102,7 @@ export class ProviderRegistry {
   private signingOut = new Set<string>();
   private accounts = new Map<string, AccountContext>();
   private blockedAccounts = new Set<string>();
+  private signedOutBases = new Set<string>();
   private accountIdentity?: (id: string, snapshot: ProviderSnapshot) => Promise<void>;
   private environmentByInstance = new Map<InstanceId, Record<string, string>>();
   private byId = new Map<InstanceId, RegistryEntry>();
@@ -271,6 +272,7 @@ export class ProviderRegistry {
 
   onAccountIdentity(listener: (id: string, snapshot: ProviderSnapshot) => Promise<void>) { this.accountIdentity = listener; }
   blockAccount(id: string, blocked: boolean) {
+    if (this.signedOutBases.delete(id) && blocked) this.probing.delete(id);
     if (blocked) this.blockedAccounts.add(id);
     else this.blockedAccounts.delete(id);
     this.get(id)?.setAccountBlocked?.(blocked);
@@ -286,7 +288,13 @@ export class ProviderRegistry {
     return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
   }
   accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
-  invalidateAccount(id: string) { this.holdIdentity(id, "account"); this.get(id)?.invalidateAccount?.(); this.forget(id); }
+  invalidateAccount(id: string) {
+    this.holdIdentity(id, "account");
+    this.get(id)?.invalidateAccount?.();
+    this.forget(id);
+    // A confirmed base sign-out keeps routing blocked but still allows probes to detect an external sign-in.
+    if (this.accountBlocked(id) && this.get(id) && !this.accounts.has(id)) this.signedOutBases.add(id);
+  }
 
   /** Warm helpers for this instance stay unadoptable until a later probe settles who is signed in. */
   private holdIdentity(id: InstanceId, reason: string) {
@@ -445,6 +453,7 @@ export class ProviderRegistry {
     this.environmentByInstance.delete(instanceId);
     this.accounts.delete(instanceId);
     this.blockedAccounts.delete(instanceId);
+    this.signedOutBases.delete(instanceId);
     this.modelRefreshAt.delete(instanceId);
     this.modelRefreshInFlight.delete(instanceId);
     this.forget(instanceId);
@@ -490,7 +499,7 @@ export class ProviderRegistry {
     await this.refreshLogins();
     // A blocked account never probes, so it reads as startProbe() answers it.
     const rows = this.entries().map((entry) => this.row(entry, this.probed.get(entry.instanceId)
-      ?? (this.accountBlocked(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
+      ?? (this.probeBlocked(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
     this.saveProbes();
     return this.currentAccountRows(rows);
   }
@@ -573,9 +582,10 @@ export class ProviderRegistry {
   ): Promise<Probe> {
     const id = entry.instanceId;
     const since = this.holdSeq;
-    if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
+    if (this.probeBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? BLOCKED);
     const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
+        if (this.signedOutBases.has(id) && probe.snapshot.authenticated === true) this.blockAccount(id, false);
         this.probed.set(id, probe);
         // Identity observation must not count its own completed probe as live work.
         this.probing.delete(id);
@@ -591,13 +601,17 @@ export class ProviderRegistry {
             return failed;
           }
         }
-        if (probe.snapshot.state === "available" && !this.signingOut.has(id)) this.settleIdentity(id, since);
+        if (probe.snapshot.state === "available" && !this.signedOutBases.has(id) && !this.signingOut.has(id)) this.settleIdentity(id, since);
       }
       return probe;
     });
     this.probing.set(id, pending);
     void pending.then(() => { for (const listener of this.probedListeners) listener(id); });
     return pending;
+  }
+
+  private probeBlocked(id: string) {
+    return this.accountBlocked(id) && !this.signedOutBases.has(id);
   }
 
   private forget(instanceId: InstanceId) {
@@ -738,6 +752,7 @@ export class ProviderRegistry {
     this.modelRefreshInFlight.clear();
     this.probed.clear();
     this.probing.clear();
+    this.signedOutBases.clear();
     this.cacheKeys.clear();
   }
 }

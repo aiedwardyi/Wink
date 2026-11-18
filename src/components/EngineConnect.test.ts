@@ -309,7 +309,7 @@ describe("first engine connection", () => {
     expect(host.textContent).toContain("Try Again");
   });
 
-  it("opens commands by default in a browser and copies the install command", async () => {
+  it("opens commands by default in a browser and checks after copying the install command", async () => {
     Object.assign(window, { ogb: undefined });
     const copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     await connect();
@@ -317,8 +317,11 @@ describe("first engine connection", () => {
     expect(host.textContent).toContain("Copy Command");
     await click("Copy Command");
     expect(copy).toHaveBeenCalledWith("install-claude");
-    await advance(30000);
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/instances", "/api/bots?messages=0"]);
+    expect(host.textContent).toContain("Paste the command in Terminal and press Enter.");
+    instances[0]!.snapshot = { state: "available", authenticated: false };
+    await advance(5000);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain("/api/instances?refresh=1");
+    expect(host.textContent).toContain("Sign in to Claude");
   });
 
   it("shares EngineConnect when an engine was installed before opening", async () => {
@@ -399,6 +402,22 @@ describe("first engine connection", () => {
     await advance(25000);
     expect(fetchMock).toHaveBeenCalledTimes(120);
     expect(row.textContent).toContain("Didn't finish?");
+  });
+
+  it.each(["onboarding", "commands", "no-engines"] as const)("guides and detects a copied Windows install from %s", async (surface) => {
+    const openEngineInstall = vi.fn(async () => "copied" as const);
+    Object.assign(window.ogb!, { openEngineInstall });
+    if (surface === "no-engines") await render(createElement(NoEngines));
+    else await connect();
+    if (surface === "commands") await click("Show Commands");
+    await click(surface === "commands" ? "Open Install in Terminal" : "Install Claude");
+    expect(openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
+    await advance(2300);
+    expect(host.textContent).toContain("Paste the command in Terminal and press Enter.");
+    instances = instances.map((row) => row.instanceId === "claude" ? { ...row, snapshot: { state: "available", authenticated: false } } : row);
+    if (surface === "no-engines") refreshInstances.mockImplementationOnce(async () => { await render(createElement(NoEngines)); });
+    await advance(2700);
+    expect(host.textContent).toContain("Sign in to Claude");
   });
 
   it.each(["claudeAgent", "codex"])("signs in the configured %s instance through the server", async (kind) => {
