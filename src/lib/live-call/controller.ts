@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf, yesToPost } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksToRepeat, backchannel, backs, claimOf, echoOf, looksUp, misheard, offLanguage, ON_IT, asksForLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksToRepeat, backchannel, backs, claimOf, echoOf, looksUp, misheard, offLanguage, ON_IT, asksForLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates, asksIfShipped, statesWork, touches } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -84,7 +84,8 @@ const TOOLS: Record<string, ToolRun> = {
 };
 
 /** One thing the person said: a request until something real accounts for it. */
-type Request = { text: string; accounted: boolean; accepted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>>; asked: string[]; misheard: boolean; overclaimed: boolean; read: boolean };
+// `informed`: a chat reply reached the voice since this line, so it may say what shipped. `recorded`: the task record did, so it may say what is done.
+type Request = { text: string; accounted: boolean; accepted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>>; asked: string[]; misheard: boolean; overclaimed: boolean; read: boolean; informed: boolean; recorded: boolean };
 /** A [Wink] line waiting for the voice to be quiet. */
 // `fix` corrects the voice's own last turn, so it skips the quiet gap.
 // `kept` is context it leaves behind when dropped as no longer valid.
@@ -131,6 +132,7 @@ const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
 const CARRY_MS = 10 * 60_000;
 const MISSED = "[Wink] The chat line above landed after your last answer. Say ONE short line: \"Update: that just changed,\" then its fact in one clause. Nothing else.";
 const IN_CHAT = "[Wink] In chat, already on screen. Context only, do not read it out.\n";
+const unchecked = (botName: string) => `[Wink] Cut: what shipped, merged, works or is live is never known from memory, notes or old chat. If a ${botName} chat line that came with this answers it, tell them that in one or two short sentences. Otherwise say only "Let me check." and call ask with their question.`;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 // A spoken line's words in order, a number keeping its sign and percent: "-5%" is not "5%".
@@ -151,7 +153,7 @@ const SCREEN_CONFIRM = /\b(?:approve|confirm|tap|click)\b[^.!?]*\b(?:screen|prom
 // The voice told a bare "expired" says they declined.
 const UNANSWERED: Record<string, string> = { expired: "expired: no answer came in time. They did not decline." };
 const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /, "");
-const request = (text: string, offTongue = false): Request => ({ text, accounted: false, accepted: false, nudged: false, failed: false, told: false, asks: new Map(), asked: [], misheard: offTongue, overclaimed: false, read: false });
+const request = (text: string, offTongue = false): Request => ({ text, accounted: false, accepted: false, nudged: false, failed: false, told: false, asks: new Map(), asked: [], misheard: offTongue, overclaimed: false, read: false, informed: false, recorded: false });
 const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should i)\s+/i;
 // The brief's short confirm of a clear instruction: "Opening it, okay?"
 const CONFIRM_EN = /,\s*(?:okay|ok|alright|all right)\s*\?\s*$/i;
@@ -300,6 +302,7 @@ export class LiveCall {
   private turnHadAudio = false;
   // Voice played this turn while the phone would not sound it.
   private turnUnheard = false;
+  private cuts = 0;
   // One greeting per call: a reconnect re-sends an unfinished line, never a hello they already heard.
   private greeted = false;
   private held: Held[] = [];
@@ -308,14 +311,17 @@ export class LiveCall {
   private roomSeen?: Set<string>;
   // Handed to the engine, which sends it with its next text or tool result; a socket that drops first never did.
   private riding: string[] = [];
-  // A reply the voice has as context only, not yet on the wire.
+  // A reply the voice has as context only, not yet on the wire, and its text.
   private missed = false;
+  private parked = "";
+  // His line asks about the work: the turn is held until its first sentence shows it states nothing unchecked.
+  private factHold = false;
   private letters = { hangul: 0, all: 0 };
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, repeats: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
     orders: { proposed: 0, confirmed: 0, declined: 0, expired: 0, replaced: 0, cancelled: 0, dropped: 0, failed: 0, retried: 0 },
     asks: { sent: 0, retried: 0, answered: 0 },
-    guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0 },
+    guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0, unchecked: 0 },
     hidden: { spans: 0, ms: 0 }, closeCodes: [] as number[], ttfa: [] as number[], usage: 0,
   };
   private hiddenAt = 0;
@@ -676,7 +682,8 @@ export class LiveCall {
         if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
         const ask = this.checkAsk && !offerFirst(words) ? reasks(words, this.closed) : "no";
         if (ask === "yes") return this.drop(this.askedLine());
-        if (this.echo && words && ((!this.pending && !this.sends.size) || /[.!?]\s*$/.test(words)) && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
+        if (this.uncheckedState(words)) return;
+        if (this.echo && words && ((!this.pending && !this.sends.size && !this.factHold) || /[.!?]\s*$/.test(words)) && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
         if (!this.echo) this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && !this.doneTold && claimsDone(this.saidBuf)) {
           this.doneTold = true;
@@ -696,7 +703,8 @@ export class LiveCall {
         this.dropping = this.readNext || (this.reack && !this.ackEcho);
         this.readNext = false;
         this.checkAsk = this.checkAsk && this.closed.length > 0;
-        this.echo = this.pending || this.sends.size || this.ackEcho || this.lastLine || this.offTongue || this.checkAsk ? [] : undefined;
+        this.factHold = !this.guarded && !this.req.informed && asksIfShipped(this.req.text);
+        this.echo = this.pending || this.sends.size || this.ackEcho || this.lastLine || this.offTongue || this.checkAsk || this.factHold ? [] : undefined;
         this.replyTo = this.stats.userLines;
         if (this.cutHold === "heard") this.cutHold = "answering";
       },
@@ -704,6 +712,7 @@ export class LiveCall {
         if (!mine()) return;
         this.stats.turns += 1;
         this.rejectWork(spokenText(this.saidBuf), true);
+        this.uncheckedState(spokenText(this.saidBuf), true);
         if (this.echo && this.checkAsk && !offerFirst(spokenText(this.saidBuf)) && reasks(spokenText(this.saidBuf), this.closed, true) === "yes") this.drop(this.askedLine());
         if (this.echo) {
           const repeat = lineKey(spokenText(this.saidBuf)) === this.lastLine;
@@ -713,7 +722,7 @@ export class LiveCall {
           if (!repeat && !this.ackEcho) this.caption("voice", this.saidBuf);
         }
         this.deps.audio.endTurn();
-        this.dropping = this.offTongue = this.checkAsk = false;
+        this.dropping = this.offTongue = this.checkAsk = this.factHold = false;
         const said = spokenText(this.saidBuf);
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
         // "I'm here. I'm here." is a repeat inside one turn.
@@ -741,7 +750,7 @@ export class LiveCall {
             this.offerCard();
           }
           // A plain answer about the work, given before a reply reached the voice, gets one short correction; the reply rides that line.
-          if (this.replyTo && this.missed && !this.held.length && !this.pending && !this.playing && asksAboutWork(this.req.text, this.deps.botName)) {
+          if (this.replyTo && this.missed && !this.held.length && !this.pending && !this.playing && (asksAboutWork(this.req.text, this.deps.botName) || touches(said, this.parked))) {
             this.missed = false;
             this.held.push({ text: MISSED, fix: true });
           }
@@ -836,9 +845,15 @@ export class LiveCall {
 
   private async readTaskContext(id: string) {
     const engine = this.engine;
+    const req = this.req;
     const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/task-context`, {}).catch(() => null);
     if (!engine || this.ended || engine !== this.engine || this.cancelled.has(id)) return;
     const text = posted?.status === 200 ? posted.data.taskContext : undefined;
+    this.carry();
+    this.riding = [];
+    if (this.missed) req.informed = true;
+    this.missed = false;
+    if (typeof text === "string") req.recorded = true;
     engine.sendToolResult([id], "task_context", typeof text === "string" ? text : "TASK RECORD: unavailable.");
   }
 
@@ -855,7 +870,8 @@ export class LiveCall {
     if (live.length) {
       this.carry();
       this.riding = [];
-    this.missed = false;
+      if (this.missed) this.req.informed = true;
+      this.missed = false;
       return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     }
     const line = `[Wink] ${told(heard, subject)}`;
@@ -964,9 +980,11 @@ export class LiveCall {
     // Tapped too: a yes said as it is tapped, heard late, must not get a second ack.
     this.acked = "armed";
     const said = this.stats.voiceLines;
+    const cuts = this.cuts;
     // An answer heard on the silence timer has no voice turn: its blocking tool call waits on this result to speak.
     const turn = this.generating;
-    const hush = () => spoken && (turn || !this.liveTools(pending.toolIds).length);
+    // A turn cut unheard (an "On it" before the receipt) answered nothing.
+    const hush = () => spoken && ((turn && this.cuts === cuts) || !this.liveTools(pending.toolIds).length);
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
@@ -1144,6 +1162,18 @@ export class LiveCall {
       return true;
     }
     return false;
+  }
+
+  /** What shipped, merged, works or is live, said outside a relayed line and with no reply seen since his line, is cut for a check. */
+  private uncheckedState(text: string, ended = false): boolean {
+    const said = ended ? text : /^.*[.!?](?=\s|$)/s.exec(text)?.[0] ?? "";
+    const state = statesWork(said);
+    if (!state || this.guarded || this.req.informed || this.req.read) return false;
+    // A done claim while this call's work runs gets the Not done yet line instead.
+    if (state === "done" && (this.req.recorded || (this.awaiting && claimsDone(said)))) return false;
+    this.stats.guard.unchecked += 1;
+    this.drop(unchecked(this.deps.botName));
+    return true;
   }
 
   /** A promise of work with nothing behind it gets one nudge per request, then a line saying it was not sent. */
@@ -1578,6 +1608,7 @@ export class LiveCall {
 
   private remember(reply: string) {
     this.missed = true;
+    this.parked = reply;
     this.context.push(`${IN_CHAT}${this.deps.botName}: ${reply.trim()}`.slice(0, REPORT_CHARS));
     this.release();
   }
@@ -1596,6 +1627,7 @@ export class LiveCall {
     this.guarded = !item.nudge;
     this.playing = { item, ended: false };
     this.riding = [];
+    if (this.missed) this.req.informed = true;
     this.missed = false;
     this.readNext = false;
     this.engine?.sendText(item.text);
@@ -1647,6 +1679,7 @@ export class LiveCall {
   }
 
   private discard() {
+    this.cuts += 1;
     if (this.echo) this.unhold(false);
     else this.deps.audio.flush();
     this.cutPlaying();

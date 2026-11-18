@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
-import { asksAboutWork, claimOf, ordersChange } from "./guard";
+import { asksAboutWork, claimOf, ordersChange, statesWork, touches } from "./guard";
 import { answersCard } from "./manners";
 
 const CALL = "c-0123456789ab";
@@ -452,4 +452,97 @@ describe("review: a hold word that is an option still picks it", () => {
   it("Wait. picks Wait", () => expect(answersCard("Wait.", ["Ship it", "Wait"])).toBe(true));
   it("다음 picks 다음", () => expect(answersCard("다음", ["다음", "이전"])).toBe(true));
   it("Wait. alone answers nothing", () => expect(answersCard("Wait.", [])).toBe(false));
+});
+
+describe("11-19 dogfood call c-f6ef121d7308: what shipped is checked, and the chat's answer reaches the voice", () => {
+  const ANSWER = "Voice is locked. Marketing's shipped check: both features are already in the public app. I checked the code myself: it calls when it's blocked, a bot that needs you to sign in rings your phone, in since 1.0.272. It knows its current work on a call, in since 1.0.281.";
+  // His words, the voice's words and their times from the call's rows, from "Can I dog food this?" at 14:40:26.162Z.
+  const LANDED = 4_528;
+  const EXCHANGE: Array<[heard: number, done: number, his: string, voice: string]> = [
+    [0, 7_627, "Can I dog food this?", "Not quite yet, as the feature where the bot calls when blocked isn't live in the public app yet. I'll let you know the moment those features ship for you to test."],
+    [16_448, 19_170, "Wait, what? Let me see. Hold on. Let me read this first.", "Take your time reading it. I'll be right here when you're ready."],
+    [42_438, 48_314, "That's kind of that kind of sucks cuz you did call me one time.", "I hear you, and while calls work, the bot doesn't yet call proactively when it gets blocked in the public app."],
+    [62_679, 68_321, "y de todo because you were working and you were on agentic mode and I asked you to call me and you called me.", "Direct calls on request work great, but the bot's proactive call feature when blocked isn't live yet."],
+  ];
+  const typed = { id: "u0", role: "user", kind: "text", text: "Marketing's shipped check: is calling when blocked in the public app?", at: -20_000 };
+
+  async function replay() {
+    const s = await live();
+    const start = 5_000;
+    let at = 0;
+    let reached: number | undefined;
+    const to = async (ms: number) => {
+      await s.wait(ms - at);
+      at = ms;
+    };
+    const look = () => { reached ??= s.engine().wire.some((frame) => frame.includes("1.0.272")) ? at : undefined; };
+    for (const [index, [heard, done, his, voice]] of EXCHANGE.entries()) {
+      await to(heard);
+      s.engine().events.heard(his);
+      await to(heard + 1_000);
+      s.engine().events.answering();
+      if (index === 0) {
+        await to(LANDED);
+        s.call.observe({ busy: false, messages: [typed, reply("r1", ANSWER, start + LANDED)] as never });
+        look();
+      }
+      await to(done);
+      const texts = s.engine().texts.length;
+      s.engine().events.said(voice);
+      s.engine().events.turnDone();
+      look();
+      // The model answers whatever line went out.
+      if (s.engine().texts.length > texts) turn(s.engine(), "", "It's live: a bot that needs you rings your phone, since 1.0.272.");
+    }
+    return { ...s, reached };
+  }
+
+  it("the stale answer is never heard, before or after his pushback", async () => {
+    const { posts } = await replay();
+    expect(lines(posts)).not.toContain(EXCHANGE[0]![3]);
+    expect(lines(posts)).not.toContain(EXCHANGE[3]![3]);
+    expect(lines(posts)).toContain("It's live: a bot that needs you rings your phone, since 1.0.272.");
+  });
+
+  it("the chat's answer reaches the voice with its first answer, not a minute later", async () => {
+    const { reached } = await replay();
+    expect(reached).toBeDefined();
+    expect(reached! - LANDED).toBeLessThanOrEqual(4_000);
+  });
+
+  it("with nothing in chat yet, a status answer from memory becomes a check", async () => {
+    const { engine, posts, tick } = await live();
+    turn(engine(), "Is the bot calling feature live yet?", "No, it isn't live yet.");
+    expect(lines(posts)).not.toContain("No, it isn't live yet.");
+    expect(engine().texts.at(-1)).toContain("call ask");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "a1", name: "ask", args: { question: "Is the bot calling feature live yet?" } }]);
+    await tick(10);
+    expect(sent(posts)).toEqual(["Is the bot calling feature live yet?"]);
+  });
+
+  it("a reply the voice's answer talks about corrects it, whatever words he used", async () => {
+    const { call, engine, wait } = await live();
+    call.observe({ busy: false, messages: [typed, reply("r1", "A bot that needs you to sign in calls your phone, since 1.0.272.", 9_000)] as never });
+    turn(engine(), "Hmm, what about the phone thing?", "Phone calls from a bot only happen when you ask it to call you.");
+    await wait(3_000);
+    expect(updates(engine())).toHaveLength(1);
+    expect(updates(engine())[0]).toContain("since 1.0.272");
+  });
+
+  it("what the voice says is a state of the work only a check knows", () => {
+    const states = ["It isn't live in the public app yet.", "Both voice features are fully shipped.", "That PR was merged.", "It's out.", "It's already in the public app.", "Direct calls on request work great.", "It doesn't work yet.", "The fix is done.", "아직 배포 안 됐어요.", "출시됐어요."];
+    expect(states.filter((said) => !statesWork(said))).toEqual([]);
+    const talk = ["I'll be right here when you're ready.", "Let me check.", "Here's how it works: it rings your phone.", "That works for me.", "Is it live?", "If it's merged, you can test it.", "Nova is working on it.", "I'm on a live call with you.", "확인해 볼게요."];
+    expect(talk.filter((said) => statesWork(said))).toEqual([]);
+  });
+
+  it("a status question is about the work", () => {
+    expect(["Can I dog food this?", "Is it live?", "Did it ship?", "Was that merged?", "Can I try it now?", "배포됐어?"].filter((line) => !asksAboutWork(line, "Nova"))).toEqual([]);
+  });
+
+  it("the voice's answer talks about the reply, or it does not", () => {
+    expect(touches("Phone calls from a bot only happen when you ask it to call you.", "A bot that needs you to sign in calls your phone, since 1.0.272.")).toBe(true);
+    expect(touches("Maybe Miso.", "The deploy finished.")).toBe(false);
+  });
 });

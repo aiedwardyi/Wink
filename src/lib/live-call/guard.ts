@@ -117,12 +117,35 @@ export function asksAboutDone(request: string): boolean {
 
 const WORK = /\b(?:status|updates?|progress|news|done|finish(?:ed)?|ready|repl(?:y|ied)|answer(?:ed)?|working|running)\b|\bhow(?:'s| is| are| did)\b[^.!?]*\b(?:going|go|look(?:ing)?|doing)\b|\b(?:did|has|have|is|are) (?:it|that|the|my|our)\b|상태|진행|끝났|다 됐|어떻게 (?:됐|돼|되)|하고 있|소식|결과|답(?:장|변)|뭐래/i;
 
+const SHIPPED = /\b(?:live|ship(?:ped|s)?|merged?|released?|deployed?|launched|available|dog ?food(?:ing)?)\b|\b(?:can|could) (?:i|we) (?:use|try|test)\b|배포|출시|머지|라이브/i;
+
+/** A question about what shipped, merged or is live, which only a check answers. */
+export function asksIfShipped(heard: string): boolean {
+  return SHIPPED.test(heard);
+}
+
 /** A question about the bot or its work, so a reply the voice had not seen may have changed the answer. */
 export function asksAboutWork(heard: string, name = ""): boolean {
-  return asksAboutDone(heard) || WORK.test(heard) || Boolean(name.trim()) && heard.toLowerCase().includes(name.trim().toLowerCase());
+  return asksAboutDone(heard) || WORK.test(heard) || SHIPPED.test(heard) || Boolean(name.trim()) && heard.toLowerCase().includes(name.trim().toLowerCase());
 }
 
 const AGAIN = /\bwhat(?:'s| is| was)\s+(?:the|that|their|his|her|its)\s+question\b|\bwhat (?:did|does) (?:\w+ )?(?:ask|want)\b|\b(?:say|read) (?:that|it|the question) again\b|\brepeat (?:that|it|the question)\b|\bcome again\b|^\s*(?:sorry|pardon|what|huh)\s*[?!.]*\s*$|질문이?\s*뭐|뭐라고|뭘 물어|뭐 물어|다시 (?:말해|말씀|읽어|한 ?번)|못 들었/i;
+
+// A state of the work only a check knows. Not "ready" or "working": "when you're ready", "Nova is working on it".
+const STATE = "(?:\\b(?:is|isn't|is not|(?<!\\byou\\s)are|aren't|are not|was|wasn't|were|weren't|has|hasn't|has not|have|haven't|have not|been)|(?<!\\byou)['’]re|['’]s)\\s+(?:(?:not|yet|already|now|fully|all|both|still|really|actually|officially|definitely|totally|completely|been|also|just)\\s+)*";
+const SHIPPED_EN = new RegExp(`${STATE}(?:live|shipped|merged|released|deployed|launched|available|out|in (?:the|your) (?:public )?app)\\b`, "i");
+const DONE_EN = new RegExp(`${STATE}(?:done|finished|fixed)\\b`, "i");
+const WORKS_EN = /\bwork(?:s|ing)?\s+(?:great|fine|well|perfectly)\b|\b(?:doesn't|does not|don't|do not|isn't|is not|aren't|are not)\s+(?:yet\s+|really\s+|actually\s+)?work(?:ing)?\b|(?<!\bhow\s)\b(?:it|this|that)\s+(?:already\s+|now\s+|still\s+)?works\b(?!\s+(?:for|with|like|out)\b)/i;
+const SHIPPED_KO = /(?:배포|출시|머지|병합|반영|적용|릴리스)(?:가|는|이|은)?\s?(?:아직\s?)?(?:됐|되었|돼\s?있|되어\s?있|안\s?됐|안\s?돼|되지\s?않)|라이브(?:야|예요|입니다|가 아니|는 아니)|작동(?:해요|합니다|하고\s?있|돼|됩니다|하지\s?않|안\s?해)/;
+const DONE_KO = /(?:완료|끝났)(?:어|어요|습니다|됐)/;
+
+/** The voice saying what shipped, merged, works or is live, or that work is done: only a check knows. A question or an "if" says nothing. */
+export function statesWork(said: string): "shipped" | "done" | undefined {
+  const claims = sentences(said).filter((sentence) => !/\?\s*$|\bif\b|으면|시면/i.test(sentence));
+  if (claims.some((sentence) => SHIPPED_EN.test(sentence) || WORKS_EN.test(sentence) || SHIPPED_KO.test(sentence))) return "shipped";
+  if (claims.some((sentence) => DONE_EN.test(sentence) || DONE_KO.test(sentence))) return "done";
+  return undefined;
+}
 
 /** The person asking to hear the question again, which is not its answer. */
 export function asksToRepeat(heard: string): boolean {
@@ -210,6 +233,12 @@ export function reasks(said: string, asked: readonly string[], whole = false): "
   if (!ASK_LEAD.test(first) && !first.includes("?")) return "no";
   if (!whole && !/[.!?…]\s*$/.test(first)) return "wait";
   return covered(first, asked) ? "yes" : "no";
+}
+
+/** The voice's answer talks about what a reply says: three of its words are in it. */
+export function touches(said: string, reply: string): boolean {
+  const known = contentWords(reply);
+  return new Set(contentWords(said).filter((word) => known.some((was) => sameWord(word, was)))).size >= 3;
 }
 
 /** A promise the questions sent this turn stand behind: "Let me check whether you finished it", not "your watch history". */

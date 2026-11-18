@@ -515,7 +515,8 @@ describe("his 11-15 calls, replayed: a turn he did not prompt never says his las
     e.events.heard("Yeah.");
     speak(e, "On it.");
     await tick(10);
-    expect(e.results).toEqual([{ id: "p1", result: "sent. They already heard you answer: say nothing more." }]);
+    // That On it came before the receipt and was cut, so the result lets the voice say it.
+    expect(e.results).toEqual([{ id: "p1", result: "sent" }]);
     e.events.answering();
     e.events.said("{instruction:none");
     e.events.turnDone();
@@ -536,9 +537,13 @@ describe("his 11-15 calls, replayed: a turn he did not prompt never says his las
     ["The fix is not merged yet.", "The fix is merged."],
     ["The change is -5%.", "The change is 5%."],
   ])("a new fact that only looks like the last line is still said: %s -> %s", async (first, second) => {
-    const { audio, engine, posts, tick } = await live();
+    const { audio, call, engine, posts, tick } = await live();
     const play = vi.spyOn(audio, "play");
     engine().events.heard("How is it going?");
+    // What merged or is done is said once a check reached the voice.
+    call.observe({ busy: false, messages: [{ id: "r1", role: "bot", kind: "text", text: second, at: 9_000 }] as never });
+    engine().events.toolCall([{ id: "tc", name: "task_context", args: {} }]);
+    await tick(0);
     speak(engine(), first);
     speak(engine(), second);
     await tick(0);

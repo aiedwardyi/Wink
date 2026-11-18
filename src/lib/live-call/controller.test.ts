@@ -181,6 +181,25 @@ describe("CALL-YES", () => {
     await flush();
   });
 
+it("a spoken yes whose On it was cut before the receipt gets its ack from the result, not dead air", async () => {
+    let receipt!: (posted: Posted) => void;
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { engine } = await started({ "/messages": () => new Promise<Posted>((resolve) => { receipt = resolve; }) }, audio);
+    engine().events.toolCall([{ id: "p1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    engine().events.said("On it.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    receipt({ status: 200, data: {} });
+    await flush();
+    await flush();
+    expect(play).not.toHaveBeenCalled();
+    expect(engine().results).toEqual([{ id: "p1", result: "sent" }]);
+  });
+
   it("c-93117b5a76ea a reply that lands after End is never spoken", async () => {
     const audio = fakeAudio();
     const play = vi.spyOn(audio, "play");
@@ -1237,9 +1256,9 @@ describe("VOICE-SNAGS", () => {
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix it." } }]);
     engine().events.heard("Yes.");
     engine().events.answering();
+    await flush();
     engine().events.said("On it.");
     engine().events.turnDone();
-    await flush();
     expect(call.state().pending).toBeUndefined();
     expect(engine().results).toEqual([{ id: "t1", result: "sent. They already heard you answer: say nothing more." }]);
   });
@@ -2089,7 +2108,7 @@ describe("VOICE-KNOWS: answers and stats", () => {
     engine().events.closed(1000, "");
     await flush();
     const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
-    expect(stats.guard).toEqual({ nudges: 3, failLines: 0, promise: 1, cant: 1, unsure: 1 });
+    expect(stats.guard).toEqual({ nudges: 3, failLines: 0, promise: 1, cant: 1, unsure: 1, unchecked: 0 });
     expect(stats.ttfaMs).toEqual({ p50: 0, p90: 0 });
     expect(stats.ackMs).toEqual({ p50: 0, p90: 0 });
   });
