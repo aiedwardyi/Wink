@@ -40,16 +40,19 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-async function mount(target: { bot?: Bot; group?: Group }) {
+async function mount(target: { bot?: Bot; group?: Group }, request?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined) {
   const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path === "/api/bots?messages=200") {
-      return Response.json({ bots: [bot], groups: target.group ? [target.group] : [], computerControl: {} });
+      return Response.json({ bots: [target.bot ?? bot], groups: target.group ? [target.group] : [], computerControl: {} });
     }
     if (path === "/api/instances") return Response.json({ instances: [{ instanceId: "waits", capabilities: {} }] });
+    const response = request?.(path, init);
+    if (response) return response;
     if (init?.method !== "POST") return Response.json({ error: "not in this test" }, { status: 404 });
     const body = init.body ? JSON.parse(String(init.body)) : {};
     posts.push({ path, body });
@@ -69,7 +72,7 @@ async function mount(target: { bot?: Bot; group?: Group }) {
   let store!: ReturnType<typeof useStore>;
   function Probe() {
     store = useStore();
-    return createElement(Composer, target.group ? { group: target.group, members: [bot] } : { bot });
+    return createElement(Composer, target.group ? { group: target.group, members: [bot] } : { bot: store.state.bots[0] ?? target.bot ?? bot });
   }
   const host = document.createElement("div");
   document.body.append(host);
@@ -105,6 +108,41 @@ async function mount(target: { bot?: Bot; group?: Group }) {
 }
 
 describe("stop with queued sends", () => {
+  it.each(["cancelled", "queued", "late queue", "returned", "landed"])("handles a posting send that Stop finds %s", async (outcome) => {
+    const pasted = pasteAttachment("long log");
+    const draftId = `bot:${bot.id}:${bot.threadId}`;
+    setDraftAttachments(localStorage, draftId, [pasted]);
+    let finish!: (receipt: Response) => void;
+    const posting = new Promise<Response>((resolve) => { finish = resolve; });
+    let sendId = "";
+    const queued = { threadId: bot.threadId, queueId: "q1", get sendId() { return sendId; }, text: "first" };
+    const ui = await mount({ bot: { ...bot, busy: false, activity: "idle" } }, (path, init) => {
+      if (path.endsWith("/messages") && init?.method === "POST") {
+        sendId = JSON.parse(String(init.body)).sendId;
+        return posting;
+      }
+      if (init?.method === "DELETE" && path.includes("/queue/")) {
+        if (path.endsWith("/q1")) return outcome === "late queue"
+          ? Response.json({ cancelled: true, send: queued }) : Response.json({}, { status: 404 });
+        return Response.json({ cancelled: outcome !== "landed", ...(outcome === "queued" ? { send: queued } : {}) });
+      }
+      if (path.endsWith("/interrupt")) return Response.json({ returned: outcome === "returned" ? [queued] : [] });
+    });
+    await ui.send("first");
+    expect(sendId).toBeTruthy();
+    expect(ui.box.value).toBe("");
+    await ui.type("    still typing");
+    await ui.stop();
+    await act(async () => finish(Response.json({
+      threadId: bot.threadId,
+      ...(outcome === "cancelled" ? { cancelled: true }
+        : outcome === "landed" ? { message: { id: "u1", role: "user", kind: "text", at: 1, text: "first", sendId } }
+        : { queued: true, queueId: "q1" }),
+    })));
+    expect(ui.box.value).toBe(outcome === "landed" ? "    still typing" : "first\n\n    still typing");
+    expect(getDraftAttachments(localStorage, draftId)).toEqual(outcome === "landed" ? [] : [pasted]);
+  });
+
   it("hands queued 1:1 sends back to the composer in order, chips included", async () => {
     const pasted = pasteAttachment("long log");
     setDraftAttachments(localStorage, `bot:${bot.id}:${bot.threadId}`, [pasted]);

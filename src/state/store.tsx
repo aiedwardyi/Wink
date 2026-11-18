@@ -1132,6 +1132,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   useMascotMotionExpiry(state.mascotMotion?.nonce, rawDispatch);
   const cancelledSendsRef = useRef(new Set<string>());
+  const postingBotSends = useRef(new Map<string, { stop?: Promise<{ removed: boolean; returned: boolean }> }>());
   const reorderGeneration = useRef(0);
   const groupReorderGeneration = useRef(0);
   const groupPatchGeneration = useRef(new Map<string, number>());
@@ -1225,6 +1226,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const noteStreamTail = (threadId: string, messageId?: string) => {
     if (!threadId || !messageId) return;
     streamTails.current = rememberStreamTail(streamTails.current, threadId, messageId);
+  };
+  const appendStreamRow = (threadId: string, message: Message) => {
+    const carriesStream = message.kind === "launch" || message.quick?.state === "answer" ||
+      (message.role === "user" && (message.steered || message.quick?.state === "asked"));
+    const fromTail = carriesStream ? lastMessageIdFor(threadId) : undefined;
+    rawDispatch({ type: "messageAdded", threadId, message });
+    noteStreamTail(threadId, message.id);
+    if (fromTail !== undefined && fromTail !== message.id) retargetStream(threadId, fromTail, message.id);
   };
   // With a frame time, live text types out; without one (turn end, a window
   // shown again, history, replays) everything buffered lands at once.
@@ -1381,16 +1390,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.onFailure?.();
         return;
       }
-      if (action.type === "interrupt") {
-        const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
-        for (const entry of bot ? (stateRef.current.acceptedSends[bot.threadId] ?? []) : []) {
-          if (entry.kind !== "thinking") continue;
-          cancelledSendsRef.current.add(entry.sendId);
-          // The interrupt can land before this send does, or after it queued
-          // behind a turn still starting; only a sendId cancel catches both.
-          void api(`/api/bots/${action.botId}/queue/${entry.sendId}`, { method: "DELETE" }).catch(() => {});
-        }
-      }
       if (action.type === "interruptGroup") {
         const group = stateRef.current.groups.find((candidate) => candidate.id === action.groupId);
         for (const entry of group ? (stateRef.current.acceptedSends[group.threadId] ?? []) : []) {
@@ -1449,6 +1448,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
+          const pending: { stop?: Promise<{ removed: boolean; returned: boolean }> } = {};
+          postingBotSends.current.set(sendId, pending);
+          const restoreStopped = async (cancelled: boolean) => {
+            if (!pending.stop || typeof threadId !== "string") return false;
+            const { removed, returned } = await pending.stop;
+            if (returned) return true;
+            if (!removed && !cancelled) return false;
+            returnSendsToComposer(botDraftId(action.botId, threadId), [takeQueuedDraft(sendId) ?? { text: action.text, attachments: [] }]);
+            return true;
+          };
           const post = () =>
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1462,40 +1471,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 actedAt,
               }),
             });
-          const settle = (body: any) => {
+          const settle = async (body: any) => {
+            if (body?.message && !body.message.quick) takeQueuedDraft(sendId);
             if (action.queueId && !body?.queued && typeof threadId === "string") {
               rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
             }
-            if (receiptRejectsAcceptedSend(body)) {
-              cancelledSendsRef.current.delete(sendId);
+            if (receiptRejectsAcceptedSend(body) || pending.stop) {
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
               }
               if (body?.message && typeof body.threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
-              }
-              return;
-            }
-            if (cancelledSendsRef.current.has(sendId)) {
-              cancelledSendsRef.current.delete(sendId);
-              if (typeof threadId === "string") {
-                rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
-              }
-              if (body?.queued && typeof body.queueId === "string") {
-                void api(`/api/bots/${action.botId}/queue/${body.queueId}`, { method: "DELETE" }).catch(
-                  () => {},
-                );
-                return;
-              }
-              if (body?.message && typeof body.threadId === "string") {
-                rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
+              } else if (pending.stop) {
+                const deleted = body?.queued && typeof body.queueId === "string" &&
+                  await api(`/api/bots/${action.botId}/queue/${body.queueId}`, { method: "DELETE" }).catch(() => null);
+                await restoreStopped(body?.cancelled === true || Boolean(deleted?.send));
               }
               return;
             }
             const settledThread =
               typeof body?.threadId === "string" ? body.threadId : threadId;
             if (body?.message && typeof body.threadId === "string") {
-              rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
+              if (body.message.quick?.state === "asked" && lastMessageIdFor(body.threadId) === (body.message.parentId ?? "")) {
+                appendStreamRow(body.threadId, body.message);
+              } else {
+                rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
+              }
             }
             if (
               body?.queued &&
@@ -1527,7 +1528,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const accepted =
                 typeof threadId === "string" ? await acceptedSend(stateRef.current, threadId, sendId, action.text) : null;
               if (accepted && typeof threadId === "string") {
-                cancelledSendsRef.current.delete(sendId);
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
@@ -1536,14 +1536,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               // A queued send stays off the transcript until drain; the same
               // sendId is idempotent, so a re-POST returns its receipt.
               const receipt =
-                error instanceof TypeError && !cancelledSendsRef.current.has(sendId) ? await post().catch(() => null) : null;
+                error instanceof TypeError && !pending.stop ? await post().catch(() => null) : null;
               if (receipt) return settle(receipt);
-              cancelledSendsRef.current.delete(sendId);
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
               }
+              if (await restoreStopped(false)) return;
               showError(error);
               action.onError?.();
+            })
+            .finally(() => {
+              if (postingBotSends.current.get(sendId) === pending) postingBotSends.current.delete(sendId);
             });
           void holdReload(sending);
           break;
@@ -1897,10 +1900,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "interrupt": {
           // Like the server's Stop: the bot's chat, the thread it is working on and a room it is busy in.
           const stopped = stateRef.current.bots.find((bot) => bot.id === action.botId);
+          const sends = stopped ? stateRef.current.acceptedSends[stopped.threadId] ?? [] : [];
+          const cancellations = sends.flatMap(({ sendId, kind }) => {
+            if (kind !== "thinking") return [];
+            // A sendId cancel also catches a POST that reaches the server after Stop.
+            const deletion = api(`/api/bots/${action.botId}/queue/${sendId}`, { method: "DELETE" }).catch(() => null);
+            return [{ sendId, deletion }];
+          });
           landTyping([stopped?.threadId, stopped?.workingThreadId, ...stateRef.current.groups.filter((group) => group.busyBotId === action.botId).map((group) => group.threadId)]);
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
-          api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
+          const interrupting = api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
             .then((body) => {
               const returned: Array<{ threadId: string; queueId: string; sendId?: string; text: string }> =
                 Array.isArray(body?.returned) ? body.returned : [];
@@ -1916,13 +1926,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }
               if (action.switchThreadId && body.stopped !== true) release();
               action.onStopped?.({ stopped: body.stopped === true, returned });
+              return returned;
             })
             .catch((error) => {
               if (action.onFailure) action.onFailure();
               else showError(error);
               release();
+              return [];
             })
             .finally(() => action.onSettled?.());
+          for (const { sendId, deletion } of cancellations) {
+            const pending = postingBotSends.current.get(sendId);
+            if (!pending) continue;
+            pending.stop = Promise.all([deletion, interrupting]).then(([deleted, returned]) => ({
+              removed: Boolean(deleted?.send),
+              returned: returned.some((send) => send.sendId === sendId),
+            }));
+          }
           break;
         }
         case "resumeTask": {
@@ -2220,8 +2240,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // At most STREAM_PACE_MS: the tail types out, then the settled reply takes over.
       if (
         frame.kind === "message" &&
-        frame.message?.role === "bot" &&
-        frame.message.kind === "text" &&
+        frame.message?.role === "bot" && frame.message.kind === "text" && frame.message.quick?.state !== "answer" &&
         deltaBuffer.current.get(frame.threadId)?.ramps?.length &&
         document.visibilityState === "visible" &&
         !reducedMotion()
@@ -2249,13 +2268,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         case "message": {
-          const needsRetarget = frame.message?.kind === "launch" || (frame.message?.role === "user" && frame.message.steered);
-          const launchFrom = needsRetarget ? lastMessageIdFor(frame.threadId) : undefined;
           viewedReplies.current.note(stateRef.current, frame.threadId, frame.message, document.visibilityState === "visible" && document.hasFocus());
-          rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
-          noteStreamTail(frame.threadId, frame.message?.id);
-          if (frame.message) updateOrigin({ threadId: frame.threadId, event: { type: "row", row: frame.message, now } });
-          if (launchFrom !== undefined && frame.message?.id) retargetStream(frame.threadId, launchFrom, frame.message.id);
+          if (frame.message) {
+            appendStreamRow(frame.threadId, frame.message);
+            updateOrigin({ threadId: frame.threadId, event: { type: "row", row: frame.message, now } });
+          }
           // the sidebar's one-shot arrival glow; per-chat, store state untouched
           const arrivalId = arrivalChatForFrame(frame, stateRef.current);
           if (arrivalId) noteArrival(arrivalId);
@@ -2267,11 +2284,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             });
           }
           // a settled assistant bubble replaces the in-flight stream
-          if (frame.message && streamResetFor(frame.message) === "reasoning") {
-            clearReasoning(frame.threadId);
-          }
+          const reset = frame.message && streamResetFor(frame.message);
+          if (reset === "reasoning") clearReasoning(frame.threadId);
+          if (reset === "stream") clearStream(frame.threadId);
           if (frame.message?.role === "bot" && frame.message?.kind === "text" && !isVoiceLine(frame.message)) {
-            clearStream(frame.threadId);
             buzzOnReply(frame, stateRef.current, document.visibilityState === "visible");
             // Auto-speak lives HERE rather than in the chat view so a bot
             // you switched away from still reads its answer out — which is

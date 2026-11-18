@@ -98,7 +98,7 @@ import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -1390,8 +1390,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     pinFrame.current = 0;
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
-    el.scrollTo({ top: el.scrollHeight });
-    previousScrollTop.current = el.scrollTop;
+    previousScrollTop.current = scrollToFollowBottom(el);
   }, []);
   useLayoutEffect(() => {
     if (transcriptWindow.size !== undefined) pinBottom();
@@ -1759,7 +1758,8 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         }}
         onTouchEnd={() => (reaching.current = false)}
         onTouchCancel={() => (reaching.current = false)}
-        onScroll={() => {
+        onScroll={(e) => {
+          isBottomFollowScroll(e.nativeEvent);
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;

@@ -869,7 +869,7 @@ export function Composer({
         onError: () => restoreDraft(sentDraft),
       });
     } else if (bot) {
-      if (busy) rememberQueuedDraft(sentDraft.sendId, { text: liveText, attachments: sentDraft.attachments });
+      rememberQueuedDraft(sentDraft.sendId, { text: liveText, attachments: sentDraft.attachments });
       dispatch({
         type: "send",
         botId: bot.id,

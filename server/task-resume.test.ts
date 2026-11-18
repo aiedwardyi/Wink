@@ -413,10 +413,12 @@ describe("task resume during cancelled preparation", () => {
       store: { bot: () => f.bot }, cancelSteeredMessage, broadcast: (frame: unknown) => frames.push(frame),
       json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     });
-    expect(await cancel({}, ["", f.bot.id, queued.id])).toMatchObject({ status: 200, body: { cancelled: true } });
+    const send = { threadId: f.bot.threadId, queueId: queued.id, sendId: "send_1234567890123456", text: "from phone" };
+    expect(await cancel({}, ["", f.bot.id, send.sendId])).toMatchObject({ status: 200, body: { cancelled: true, send } });
+    expect(await cancel({}, ["", f.bot.id, "send_not_yet_posted"])).toMatchObject({ status: 200, body: { cancelled: true, send: undefined } });
     expect(frames).toEqual([{
       kind: "queue.cancelled", botId: f.bot.id,
-      sends: [{ threadId: f.bot.threadId, queueId: queued.id, sendId: "send_1234567890123456", text: "from phone" }],
+      sends: [send],
     }]);
   });
 
