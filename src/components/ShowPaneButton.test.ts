@@ -3,10 +3,15 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { applyLocale } from "@/lib/i18n";
+import { translate } from "@/lib/i18n";
+import { sidebarWorkerStatus } from "@/lib/worker-status";
+import { workerRuns } from "@/lib/worker-runs";
+import type { Message } from "@/state/store";
 import { saveSidebarSide } from "@/lib/sidebar-preferences";
 import { closeShow, showItem, useMediaThread, useShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPaneButton } from "./ShowPaneButton";
+import type { WorkerSource } from "./WorkerRows";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -14,16 +19,18 @@ let root: Root;
 let host: HTMLElement;
 let state: unknown[] = [];
 
+let workers: WorkerSource | undefined;
+
 function Probe({ threadId }: { threadId: string }) {
   state = [useShowItem()?.path ?? null, useMediaThread(), Boolean(useVerifyWatch())];
-  return createElement(ShowPaneButton, { threadId });
+  return createElement(ShowPaneButton, { threadId, workers });
 }
 
 beforeEach(() => {
   host = document.createElement("div");
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); act(() => { closeShow(); closeVerifyWatch(); }); applyLocale("en"); saveSidebarSide("left"); });
+afterEach(() => { workers = undefined; act(() => root.unmount()); act(() => { closeShow(); closeVerifyWatch(); }); applyLocale("en"); saveSidebarSide("left"); });
 
 const render = (threadId: string) => act(async () => root.render(createElement(Probe, { threadId })));
 const press = () => act(async () => host.querySelector("button")!.click());
@@ -69,4 +76,18 @@ it("speaks Korean", async () => {
   applyLocale("ko");
   await render("b4");
   expect(host.querySelector("button")!.title).toBe("보기와 미디어");
+});
+
+it("badge number is every open worker, the same number the sidebar line says", async () => {
+  const pane = (i: number) => String(i).padStart(8, "0");
+  const launch = (i: number): Message => ({ id: `l${i}`, at: i * 2 + 1, role: "bot", kind: "launch", text: `Launched W${i} | Opus 5.5 | high\nSession: ${pane(i)}-1` });
+  const done = (i: number): Message => ({ id: `d${i}`, at: i * 2 + 2, role: "bot", kind: "note", text: `[pane ${pane(i)}] [W${i} | Opus 5.5 | high] from Ada (ada): DONE W${i} branch=x sha=y dirty=no` });
+  const messages = Array.from({ length: 27 }, (_, i) => (i >= 19 ? [launch(i), done(i)] : [launch(i)])).flat();
+  const runs = workerRuns(messages).map((run) => ({ run, state: run.state }));
+  expect(runs.filter(({ state }) => state === "working")).toHaveLength(19);
+  workers = { name: "Ada", runs, livePanes: new Set(runs.map(({ run }) => run.sessionId!)) };
+  await render("b5");
+  const labels = Array.from({ length: 27 }, (_, i) => `W${i} | Opus 5.5 | high`);
+  expect(sidebarWorkerStatus(messages, labels, (key, vars) => translate("en", key, vars))).toBe("27 workers");
+  expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("27");
 });
