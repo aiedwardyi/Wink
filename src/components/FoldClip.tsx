@@ -32,7 +32,7 @@ export function FoldClip({ children, className, ...rest }: HTMLAttributes<HTMLDi
   }, [expanded]);
   return (
     <>
-      <div ref={ref} data-fold="" className={cn(!expanded && "max-h-[3lh] overflow-hidden", !expanded && cut && FOLD_FADE, className)} {...rest}>
+      <div ref={ref} data-fold-clip="" className={cn(!expanded && "max-h-[3lh] overflow-hidden", !expanded && cut && FOLD_FADE, className)} {...rest}>
         <div ref={content}>{children}</div>
       </div>
       {(cut || expanded) && <FoldToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />}
