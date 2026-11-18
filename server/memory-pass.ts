@@ -543,7 +543,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       // the same short answer can sit on two questions; the one whose question names the pick says how and when it was chosen
       const asked = own.filter(({ context }) => contentWords(line).some((stem) => contentWords(context ?? "").some((word) => sameStem(stem, word))));
       const source = asked.length ? asked : own;
-      const files = [...new Set(own.flatMap(({ files }) => files ?? []))];
+      const files = source.at(-1)?.files ?? [];
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
       keys.add(pickKey(thing));

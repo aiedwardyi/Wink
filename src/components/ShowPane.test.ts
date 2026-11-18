@@ -464,74 +464,145 @@ it("pulses the pane once when its file is clicked again, and not when a click on
 
 const timeline = readFileSync("test/fixtures/decision-timeline/decisions.md", "utf8");
 const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url).endsWith("/memory/topics/decisions.md") ? reply() : new Response(null, { status: 404 })));
-// each test names its own bot: a pick's fold is kept for the session, per bot
+// each test names its own bot: a replaced pick's fold, the search and the view are kept for the session, per bot
 const openTimeline = (botId = "b1") => render({ timeline: true, profileName: "Edward", botId, source: { threadId: "t1", messages: [] }, hidden: false });
-const rows = () => [...host.querySelectorAll("[data-timeline-row]")];
+const picked = () => [...host.querySelectorAll<HTMLElement>("[data-timeline-pick]:not([data-old])")];
+const named = (key: string) => picked().find((pick) => pick.querySelector(".timeline-key")?.textContent === key)!;
+const strokes = (kind: string) => host.querySelectorAll(`.timeline-ink path[data-ink="${kind}"]`).length;
+const pickList = () => picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
+const type = (input: HTMLInputElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+});
 
-it("lists the bot's picks on the Timeline tab, newest day first, with a replaced pick folded under the newer one", async () => {
-  picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
-  await openTimeline();
+it("draws the bot's picks on the Timeline canvas, newest day first, each pick circled and the rest struck, a replaced pick folded under the newer one", async () => {
+  pickList();
+  await openTimeline("b-canvas");
   const tab = [...host.querySelectorAll(".show-pane-tabs [role=tab]")].find((each) => each.textContent === "Timeline");
   expect(tab?.getAttribute("aria-selected")).toBe("true");
-  await until(() => rows().length > 0);
+  await until(() => picked().length > 0);
   expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
-  expect(rows().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Timeline place", "Model Index on phone", "Forum look", "Map on phone", "Speed board look"]);
-  const forum = rows()[2]!;
-  expect(forum.querySelector(".timeline-pick")?.textContent).toBe("Reddit-style list (mock 2)");
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Timeline place", "Model Index on phone", "Forum look", "Map on phone", "Speed board look"]);
+  const forum = named("Forum look");
+  expect(forum.querySelector("[data-won] .timeline-caption")?.textContent).toBe("Reddit-style list (mock 2)");
+  expect([...forum.querySelectorAll("[data-timeline-out]")].map((out) => out.textContent)).toEqual(["A - Needs you header", "B - Needs you chip"]);
+  expect(named("Timeline place").querySelector("[data-won] .timeline-pic")?.textContent).toBe("Tab in the side pane");
+  const outs = host.querySelectorAll("[data-timeline-out]").length;
+  expect(outs).toBe(10);
+  expect(strokes("ring")).toBe(2 * 5);
+  expect(strokes("strike")).toBe(2 * outs);
+  expect(strokes("link")).toBe(4);
+  expect(strokes("replaced")).toBe(0);
   const fold = forum.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!;
   expect(fold.textContent).toBe("Replaced pick · 11:05 · Bot to bot, like Reddit");
-  expect(fold.querySelector("s")?.textContent).toBe("Bot to bot, like Reddit");
   expect(host.textContent).not.toContain("i thot this is bot to bot forum");
   await act(async () => fold.click());
-  expect(forum.textContent).toContain("i thot this is bot to bot forum, not me?");
-  expect(forum.querySelector(".timeline-said span")?.textContent).toMatch(/^Edward · /);
+  const old = host.querySelector<HTMLElement>("[data-timeline-pick][data-old]")!;
+  expect(old.querySelector(".timeline-key")?.textContent).toBe("Bot to bot, like Reddit");
+  expect(old.textContent).toContain("i thot this is bot to bot forum, not me?");
+  expect(old.querySelector(".timeline-said span")?.textContent).toMatch(/^Edward · /);
+  expect(strokes("replaced")).toBe(1);
+  expect(strokes("route")).toBe(1);
   expect([...forum.querySelectorAll(".timeline-tweaks q")].map((tweak) => tweak.textContent)).toEqual(["im wondering if it should have a small title up top so ppl know what it is", "humans can reply too if they want, but its made for the bots"]);
-  expect([...forum.querySelectorAll("[data-timeline-out]")].map((out) => out.textContent)).toEqual(["A - Needs you header", "B - Needs you chip", "A - Needs you header", "B - Needs you chip"]);
+  expect(host.querySelector(".timeline-hint")?.textContent).toMatch(/^Scroll to move · Ctrl\+scroll to zoom\d+%$/);
   const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
   expect(search.placeholder).toBe("Search picks and your words");
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "reddit");
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  expect(rows().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Forum look"]);
+  await type(search, "reddit");
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Forum look"]);
 });
 
 it("pairs a crossed picture by its caption, and an uncaptioned one only with the option left over", async () => {
   const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Over: A - no title; B - small title\n- Over pictures: C:\\Users\\me\\.orbit\\attachments\\b.png (B - small title); C:\\Users\\me\\.orbit\\attachments\\a.png\n";
   picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
-  await openTimeline();
-  await until(() => rows().length > 0);
-  expect([...rows()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
+  await openTimeline("b-pair");
+  await until(() => picked().length > 0);
+  expect([...picked()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
 });
 
-const mapRow = () => rows().find((row) => row.querySelector(".timeline-key")?.textContent === "Map on phone")!;
-const pickList = () => picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
-
-it("opens every pick, and keeps a pick the user closed closed after a tab switch and back", async () => {
+it("keeps the search text and an open replaced pick after a tab switch and back", async () => {
   pickList();
-  await openTimeline("b-folds");
-  await until(() => rows().length > 0);
-  expect(rows().map((row) => row.querySelector("[data-timeline-head]")?.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true", "true"]);
-  expect(rows().every((row) => row.querySelector(".timeline-detail"))).toBe(true);
-  await act(async () => mapRow().querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
-  await until(() => !mapRow().querySelector(".timeline-detail"));
-  expect(mapRow().querySelector(".timeline-detail")).toBeNull();
+  await openTimeline("b-switch");
+  await until(() => host.querySelector(".timeline-search input") !== null);
+  await type(host.querySelector<HTMLInputElement>(".timeline-search input")!, "forum");
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!.click());
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   expect(host.querySelector(".timeline-pane")).toBeNull();
-  await openTimeline("b-folds");
-  await until(() => rows().length > 0);
-  expect(mapRow().querySelector("[data-timeline-head]")?.getAttribute("aria-expanded")).toBe("false");
-  expect(mapRow().querySelector(".timeline-detail")).toBeNull();
-  expect(rows().filter((row) => row !== mapRow()).every((row) => row.querySelector(".timeline-detail"))).toBe(true);
+  await openTimeline("b-switch");
+  await until(() => host.querySelector(".timeline-search input") !== null);
+  expect(host.querySelector<HTMLInputElement>(".timeline-search input")!.value).toBe("forum");
+  expect(host.querySelector("[data-timeline-replaced]")?.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {
+  pickList();
+  await openTimeline("b-move");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = () => host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform;
+  const zoom = () => host.querySelector(".timeline-hint b")?.textContent;
+  expect(sheet()).toBe("translate(4px, 44px) scale(0.86)");
+  expect(zoom()).toBe("86%");
+  // happy-dom's WheelEvent drops its modifier keys and point
+  const wheel = (init: WheelEventInit) => act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init }), { ctrlKey: { value: init.ctrlKey ?? false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  await wheel({ deltaY: 100 });
+  expect(sheet()).toBe("translate(4px, -56px) scale(0.86)");
+  await wheel({ deltaY: -100, ctrlKey: true });
+  expect(zoom()).toBe("110%");
+  const pointer = (kind: string, x: number, y: number, pointerId = 1) => canvas.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, pointerId, pointerType: "touch" }));
+  const scale = () => Number(/scale\(([\d.]+)\)/.exec(sheet())![1]);
+  const before = scale();
+  await act(async () => { pointer("pointerdown", 100, 100); pointer("pointermove", 102, 101); });
+  expect(scale()).toBe(before);
+  const still = sheet();
+  await act(async () => { pointer("pointermove", 160, 140); pointer("pointerup", 160, 140); });
+  expect(sheet()).not.toBe(still);
+  await act(async () => { pointer("pointerdown", 100, 200, 1); pointer("pointerdown", 200, 200, 2); pointer("pointermove", 50, 200, 1); pointer("pointermove", 250, 200, 2); pointer("pointerup", 50, 200, 1); pointer("pointerup", 250, 200, 2); });
+  expect(scale()).toBeGreaterThan(before * 1.5);
+  const open = named("Map on phone").querySelector<HTMLButtonElement>("[data-won] button")!;
+  await act(async () => { pointer("pointerdown", 10, 10); pointer("pointermove", 80, 80); pointer("pointerup", 80, 80); open.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+  expect(document.querySelector("[data-media-viewer]")).toBeNull();
+});
+
+it("draws the newest picks first and the rest a batch a frame", async () => {
+  const many = "# Decision timeline\n\n" + Array.from({ length: 40 }, (_, i) => `## 2026-10-${String(1 + (i % 28)).padStart(2, "0")} ${10 + Math.floor(i / 28)}:00 | Question ${i} | current\n- Picked: A${i}\n- Over: B${i}\n`).join("\n");
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text: many, entries: parseTimeline(many).entries }), { status: 200 }));
+  const frames: FrameRequestCallback[] = [];
+  const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => frames.push(frame));
+  await openTimeline("b-many");
+  await until(() => picked().length > 0);
+  expect(picked().length).toBe(8);
+  expect(picked()[0].querySelector(".timeline-key")?.textContent).toBe("Question 27");
+  while (frames.length) await act(async () => frames.shift()!(0));
+  expect(picked().length).toBe(40);
+  raf.mockRestore();
+});
+
+it("stops a fling at the sheet's edges", async () => {
+  pickList();
+  await openTimeline("b-edge");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  Object.defineProperties(canvas, { clientWidth: { value: 300 }, clientHeight: { value: 600 } });
+  Object.defineProperties(sheet, { offsetWidth: { value: 500 }, offsetHeight: { value: 1000 } });
+  const wheel = (deltaY: number) => act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  await wheel(5000);
+  expect(sheet.style.transform).toBe("translate(4px, -260px) scale(0.86)");
+  await wheel(-9000);
+  expect(sheet.style.transform).toBe("translate(4px, 44px) scale(0.86)");
 });
 
 it("opens a screenshot, or a picked or crossed picture, in the viewer on one click", async () => {
   pickList();
   await openTimeline("b-viewer");
-  await until(() => rows().length > 0);
-  const opener = (selector: string) => mapRow().querySelector<HTMLButtonElement>(selector)!;
+  await until(() => picked().length > 0);
+  const opener = (selector: string) => named("Map on phone").querySelector<HTMLButtonElement>(selector)!;
   expect(document.querySelector("[data-media-viewer]")).toBeNull();
-  for (const [selector, name] of [[".timeline-shots button", "map-shot1.png"], [".timeline-won button", "map-pick.png"], ["[data-timeline-out] button", "map-a2.png"]] as const) {
+  for (const [selector, name] of [[".timeline-shots button", "map-shot1.png"], ["[data-won] button", "map-pick.png"], ["[data-timeline-out] button", "map-a2.png"]] as const) {
     expect(opener(selector).getAttribute("aria-label")).toBe(`Open Image ${name}`);
     await act(async () => opener(selector).click());
     expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toContain(name);
@@ -544,8 +615,8 @@ it("opens a screenshot, or a picked or crossed picture, in the viewer on one cli
 it("leaves right-click on a picture to the image's own menu, with nothing drawn over it", async () => {
   pickList();
   await openTimeline("b-menu");
-  await until(() => rows().length > 0);
-  const images = [...mapRow().querySelectorAll("img")];
+  await until(() => picked().length > 0);
+  const images = [...named("Map on phone").querySelectorAll("img")];
   expect(images.length).toBeGreaterThan(5);
   for (const img of images) {
     const click = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -553,8 +624,8 @@ it("leaves right-click on a picture to the image's own menu, with nothing drawn 
     expect(click.defaultPrevented).toBe(false);
   }
   const css = readFileSync("src/components/TimelinePane.css", "utf8");
-  expect(css).toMatch(/\.timeline-strike \{[^}]*pointer-events: none/);
-  expect(css).toMatch(/\.timeline-won:not\(\[data-text\]\) > \.timeline-badge \{[^}]*pointer-events: none/);
+  expect(css).toMatch(/\.timeline-ink \{[^}]*pointer-events: none/);
+  expect(css).not.toMatch(/\.timeline-canvas\[data-grabbing\] \{/);
 });
 
 it("says so in one line when the bot has no picks yet", async () => {

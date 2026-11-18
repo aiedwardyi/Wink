@@ -1,5 +1,5 @@
-import { createContext, memo, useContext, useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, History, Paperclip, Pencil, Search, TextQuote, X } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { ChevronRight, History, Paperclip, Pencil, Search } from "lucide-react";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
@@ -8,7 +8,7 @@ import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
 import { openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
-import { Fold } from "./Fold";
+import { wheelZoomFactor } from "./image-zoom";
 import { MediaViewer } from "./MediaViewer";
 import "./TimelinePane.css";
 
@@ -39,14 +39,14 @@ const when = (stamp: string, now: Date) => (stamp.startsWith(`${now.getFullYear(
 const pictureSrc = (threadId: string, path: string) => (/[\\/]attachments[\\/][^\\/]+$/.test(path) && attachmentImageUrl(path)) || linkedFileSrc(threadId, path);
 const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-// A tab switch unmounts the pane, so each pick's fold lives here for the session.
+// A tab switch unmounts the pane, so each replaced pick's fold, the search and the view live here for the session.
 const folds = new Map<string, boolean>();
-function useFold(key: string, initial: boolean) {
-  const [open, setOpen] = useState(() => folds.get(key) ?? initial);
-  return [open, () => { const next = !(folds.get(key) ?? initial); folds.set(key, next); setOpen(next); }] as const;
-}
+const queries = new Map<string, string>();
+type View = { x: number; y: number; scale: number };
+const views = new Map<string, View>();
 
 const ViewPicture = createContext<(path: string, threadId: string, opener: HTMLElement) => void>(() => {});
+const Redraw = createContext<() => void>(() => {});
 
 // Captions name their option; uncaptioned pictures pair in order with the options left over, only when the counts match.
 function crossedOf({ over, overPictures }: Entry): { label: string; picture?: Picture }[] {
@@ -94,6 +94,142 @@ function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale
   return ago === 0 ? [t("chat.today"), `${weekday} ${shown}`] : ago === 1 ? [t("chat.yesterday"), `${weekday} ${shown}`] : [weekday, shown];
 }
 
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 2.5;
+const SLOP = 4;
+// Hundreds of picks mount in one task too slowly, so the newest draw first and the rest follow a batch a frame.
+const FIRST = 8;
+const BATCH = 24;
+// The sheet stops at its own edges, so a fling never leaves an empty canvas.
+const START = { x: 4, y: 44 };
+const edge = (size: number, room: number, at: number, start: number) => Math.min(start, Math.max(Math.min(start, room - size), at));
+const LINE = "color-mix(in srgb, var(--color-ink-secondary) 80%, transparent)";
+const WON = "var(--color-success)";
+const OUT = "var(--color-danger)";
+
+function seeded(text: string) {
+  let seed = [...text].reduce((hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16_777_619), 2_166_136_261);
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+function smooth(points: [number, number][]) {
+  const f = (n: number) => n.toFixed(1);
+  let d = `M${f(points[0]![0])} ${f(points[0]![1])}`;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const [p0, p1, p2] = [points[i - 1] ?? points[i]!, points[i]!, points[i + 1]!];
+    const p3 = points[i + 2] ?? p2;
+    d += ` C${f(p1[0] + (p2[0] - p0[0]) / 6)} ${f(p1[1] + (p2[1] - p0[1]) / 6)} ${f(p2[0] - (p3[0] - p1[0]) / 6)} ${f(p2[1] - (p3[1] - p1[1]) / 6)} ${f(p2[0])} ${f(p2[1])}`;
+  }
+  return d;
+}
+
+function penCurve(r: () => number, x1: number, y1: number, x2: number, y2: number, amp = 1.3) {
+  const points: [number, number][] = [];
+  const dy = y2 - y1;
+  for (let i = 0; i <= 10; i += 1) {
+    const t = i / 10;
+    const u = 1 - t;
+    const x = u * u * u * x1 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x2;
+    const y = u * u * u * y1 + 3 * u * u * t * (y1 + dy * 0.55) + 3 * u * t * t * (y2 - dy * 0.55) + t * t * t * y2;
+    const jitter = i === 0 || i === 10 ? 0.6 : amp;
+    points.push([x + (r() - 0.5) * 2 * jitter, y + (r() - 0.5) * jitter]);
+  }
+  return smooth(points);
+}
+
+function penLine(r: () => number, x1: number, y1: number, x2: number, y2: number, amp = 1.4) {
+  const points: [number, number][] = [];
+  const bow = (r() - 0.5) * 5;
+  const length = Math.hypot(y2 - y1, x2 - x1) || 1;
+  for (let i = 0; i <= 5; i += 1) {
+    const t = i / 5;
+    const b = Math.sin(Math.PI * t) * bow;
+    points.push([x1 + (x2 - x1) * t - ((y2 - y1) / length) * b + (r() - 0.5) * amp, y1 + (y2 - y1) * t + ((x2 - x1) / length) * b + (r() - 0.5) * amp]);
+  }
+  return smooth(points);
+}
+
+function penLoop(r: () => number, cx: number, cy: number, rx: number, ry: number) {
+  const points: [number, number][] = [];
+  const from = -2.3 + r() * 0.4;
+  let wobble = 0;
+  for (let i = 0; i <= 30; i += 1) {
+    const t = i / 30;
+    const a = from + (Math.PI * 2 + 0.55) * t;
+    wobble = (wobble + (r() - 0.5) * 0.03) * 0.9;
+    const k = 1 + wobble + t * 0.07;
+    points.push([cx + Math.cos(a) * rx * k, cy + Math.sin(a) * ry * k * (1 - t * 0.03)]);
+  }
+  return smooth(points);
+}
+
+// Pen strokes over the laid-out sheet: branches from each question, the pick circled, the rest struck, and a line down to the next pick.
+function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
+  const box = (el: HTMLElement) => {
+    let x = 0;
+    let y = 0;
+    for (let node: HTMLElement | null = el; node && node !== sheet; node = node.offsetParent as HTMLElement | null) {
+      x += node.offsetLeft;
+      y += node.offsetTop;
+    }
+    return { x, y, w: el.offsetWidth, h: el.offsetHeight };
+  };
+  const paths: string[] = [];
+  let above: { x: number; y: number } | null = null;
+  for (const pick of sheet.querySelectorAll<HTMLElement>("[data-timeline-pick]")) {
+    const r = seeded(pick.dataset.timelinePick!);
+    const add = (kind: string, d: string, color: string, width: number, extra = "") => paths.push(`<path data-ink="${kind}" d="${d}" stroke="${color}" stroke-width="${width}"${extra}/>`);
+    const old = pick.hasAttribute("data-old");
+    const label = box(pick.querySelector<HTMLElement>("[data-label]")!);
+    const lx = label.x + label.w / 2;
+    const ly = label.y + label.h;
+    const won = box(pick.querySelector<HTMLElement>("[data-won] > .timeline-pic")!);
+    const wx = won.x + won.w / 2;
+    if (above && !old) add("link", penCurve(r, above.x, above.y, lx, label.y - 2, 1.2), LINE, 1.5);
+    for (const el of pick.querySelectorAll<HTMLElement>("[data-timeline-out] > .timeline-pic")) {
+      const out = box(el);
+      const ox = out.x + out.w / 2;
+      add("branch", penCurve(r, lx, ly + 2, ox, out.y - 4), LINE, 1.4);
+      add("branch", penCurve(r, lx + 0.8, ly + 2, ox + 0.6, out.y - 4, 0.7), LINE, 0.7);
+      add("tick", penLine(r, ox - 8, out.y - 9, ox + 8, out.y - 6, 1), OUT, 1.6);
+      add("strike", penLine(r, out.x + 4, out.y + 6, out.x + out.w - 4, out.y + out.h - 6), OUT, 2.2, ' opacity=".9"');
+      add("strike", penLine(r, out.x + out.w - 6, out.y + 8, out.x + 6, out.y + out.h - 10), OUT, 2.2, ' opacity=".9"');
+    }
+    const color = old ? LINE : WON;
+    const rx = won.w / 2 + 13;
+    const ry = won.h / 2 + 14;
+    add("branch", penCurve(r, lx, ly + 2, wx, won.y - 14), color, 2.2);
+    add("branch", penCurve(r, lx - 0.7, ly + 2, wx + 0.5, won.y - 14, 0.8), color, 1);
+    add(old ? "replaced" : "ring", penLoop(r, wx, won.y + won.h / 2, rx, ry), color, 2.6, old ? ' stroke-dasharray="5 5"' : "");
+    if (!old) add("ring", penLoop(r, wx + 1, won.y + won.h / 2 - 1, rx - 2, ry - 1), color, 1.1, ' opacity=".6"');
+    const note = pick.querySelector<HTMLElement>(".timeline-note");
+    if (note) {
+      const n = box(note);
+      add("note", penLine(r, wx + rx - 2, won.y + won.h / 2 - 10, n.x - 4, n.y + 18, 1), LINE, 1.2, ' stroke-dasharray="4 5"');
+    }
+    if (old) continue;
+    const caption = pick.querySelector<HTMLElement>("[data-won] > .timeline-caption");
+    above = { x: wx, y: Math.max(won.y + won.h / 2 + ry + 2, caption ? box(caption).y + box(caption).h + 6 : 0) };
+    // each open replaced pick hangs below its newer one on a dashed line
+    const left = Math.min(...[...pick.querySelectorAll<HTMLElement>(".timeline-option")].map((el) => box(el).x)) - 22;
+    const my = label.y + label.h / 2;
+    for (let next = pick.nextElementSibling; next?.classList.contains("timeline-old"); next = next.nextElementSibling) {
+      const to = box(next.querySelector<HTMLElement>("[data-label]")!);
+      const route: [number, number][] = [[label.x, my], [left + 6, my + 8], [left, my + 60], [left - 2, to.y - 40], [left + 8, to.y + to.h / 2 - 4], [to.x - 2, to.y + to.h / 2]];
+      add("route", smooth(route.map(([x, y], i) => (i && i < route.length - 1 ? [x + (r() - 0.5) * 2, y + (r() - 0.5) * 2] : [x, y]))), LINE, 1.3, ' stroke-dasharray="6 6"');
+    }
+  }
+  ink.setAttribute("width", String(sheet.offsetWidth));
+  ink.setAttribute("height", String(sheet.offsetHeight));
+  // only numbers and token names go in, never the user's words
+  ink.innerHTML = paths.join("");
+}
+
 type PaneProps = { botId: string; threadId: string; maximized: boolean; profileName?: string };
 
 export function TimelinePane(props: PaneProps) {
@@ -111,10 +247,14 @@ export function TimelinePane(props: PaneProps) {
 }
 
 function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setTyped] = useState(() => queries.get(botId) ?? "");
+  const setQuery = (next: string) => {
+    queries.set(botId, next);
+    setTyped(next);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -136,8 +276,7 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
 
   const days = useMemo(() => timelineDays(entries ?? []), [entries]);
   const needle = query.trim().toLowerCase();
-  const shown = needle ? days.map((day) => ({ ...day, rows: day.rows.filter((row) => row.hay.includes(needle)) })).filter((day) => day.rows.length > 0) : days;
-  const now = new Date();
+  const shown = useMemo(() => (needle ? days.map((day) => ({ ...day, rows: day.rows.filter((row) => row.hay.includes(needle)) })).filter((day) => day.rows.length > 0) : days), [days, needle]);
   const you = profileName || t("chrome.you");
 
   return (
@@ -162,92 +301,270 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
                   aria-label={t("timeline.search")}
                 />
               </label>
-              <div className="show-media-scroll">
-                {shown.length === 0 && <p className="show-media-empty">{t("find.noResults")}</p>}
-                {shown.map(({ day, rows }) => {
-                  const [name, date] = dayLabel(day, now, t, locale);
-                  return (
-                    <section key={day}>
-                      <h3 data-timeline-day={day} className="show-media-month"><b>{name}</b> · {date}</h3>
-                      {rows.map((row) => <TimelineRow key={row.id} row={row} botId={botId} threadId={threadId} you={you} />)}
-                    </section>
-                  );
-                })}
-              </div>
+              {shown.length === 0
+                ? <p className="show-media-empty">{t("find.noResults")}</p>
+                : <Canvas days={shown} needle={needle} botId={botId} threadId={threadId} you={you} />}
             </>
           )}
     </div>
   );
 }
 
-const TimelineRow = memo(function TimelineRow({ row, botId, threadId, you }: { row: Row; botId: string; threadId: string; you: string }) {
-  const { t } = useI18n();
-  const [open, toggle] = useFold(`${botId}:${row.id}`, true);
-  const crossed = crossedOf(row).length;
-  const counts = [
-    ...(crossed ? [t("timeline.crossed", { count: crossed })] : []),
-    ...(row.tweaks.length ? [t(row.tweaks.length === 1 ? "timeline.tweakOne" : "timeline.tweakMany", { count: row.tweaks.length })] : []),
-  ].join(" · ");
-  const time = timeOf(row.id);
+function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; rows: Row[] }[]; needle: string; botId: string; threadId: string; you: string }) {
+  const { t, locale } = useI18n();
+  const frame = useRef<HTMLDivElement>(null);
+  const sheet = useRef<HTMLDivElement>(null);
+  const ink = useRef<SVGSVGElement>(null);
+  const zoom = useRef<HTMLElement>(null);
+  const view = useRef<View | null>(views.get(botId) ?? null);
+  const searched = useRef(needle);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const dragged = useRef(false);
+  const [touch] = useState(() => window.matchMedia?.("(pointer: coarse)").matches ?? false);
+  const [opened, setOpened] = useState(() => new Set([...folds].filter(([key, open]) => open && key.startsWith(`${botId}:`)).map(([key]) => key.slice(botId.length + 1))));
+  const toggle = useCallback((id: string) => setOpened((now) => {
+    const next = new Set(now);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    folds.set(`${botId}:${id}`, next.has(id));
+    return next;
+  }), [botId]);
+  const [grow, setGrow] = useState(() => ({ needle, limit: FIRST }));
+  if (grow.needle !== needle) setGrow({ needle, limit: FIRST });
+  const total = days.reduce((sum, day) => sum + day.rows.length, 0);
+  const drawn = useMemo(() => {
+    let left = grow.limit;
+    return days.flatMap((day) => {
+      const rows = day.rows.slice(0, Math.max(0, left));
+      left -= rows.length;
+      return rows.length ? [{ ...day, rows }] : [];
+    });
+  }, [days, grow.limit]);
+  useEffect(() => {
+    if (grow.limit >= total) return;
+    const id = requestAnimationFrame(() => setGrow((at) => ({ ...at, limit: at.limit + BATCH })));
+    return () => cancelAnimationFrame(id);
+  }, [grow, total]);
+  const now = new Date();
+
+  const show = useCallback((next: View, free = false) => {
+    if (![next.x, next.y, next.scale].every(Number.isFinite)) return;
+    const box = frame.current!;
+    const width = sheet.current!.offsetWidth * next.scale;
+    const height = sheet.current!.offsetHeight * next.scale;
+    const kept = box.clientWidth && !free
+      ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, START.x), y: edge(height, box.clientHeight, next.y, START.y) }
+      : next;
+    view.current = kept;
+    views.set(botId, kept);
+    sheet.current!.style.transform = `translate(${kept.x}px, ${kept.y}px) scale(${kept.scale})`;
+    zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
+  }, [botId]);
+
+  const zoomAt = useCallback((x: number, y: number, factor: number) => {
+    const at = view.current!;
+    const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, at.scale * factor));
+    const ratio = scale / at.scale;
+    show({ scale, x: x - (x - at.x) * ratio, y: y - (y - at.y) * ratio });
+  }, [show]);
+
+  const redraw = useCallback(() => drawInk(sheet.current!, ink.current!), []);
+
+  useLayoutEffect(() => {
+    redraw();
+    const box = frame.current!;
+    const width = sheet.current!.offsetWidth;
+    // the newest picks sit under the search box at the top left
+    const top = START;
+    // a kept view may sit below picks that have not mounted yet, so only gestures clamp
+    if (!view.current) show({ ...top, scale: Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1)) }, true);
+    else show(searched.current === needle ? view.current : { ...top, scale: view.current.scale }, true);
+    searched.current = needle;
+  }, [drawn, needle, opened, redraw, show]);
+
+  useEffect(() => {
+    const box = frame.current!;
+    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(redraw);
+    resized?.observe(sheet.current!);
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? box.clientHeight : 1;
+      const rect = box.getBoundingClientRect();
+      if (event.ctrlKey || event.metaKey) return zoomAt(event.clientX - rect.left, event.clientY - rect.top, wheelZoomFactor(event.deltaY * unit));
+      const sideways = event.shiftKey && !event.deltaX;
+      const at = view.current!;
+      show({ ...at, x: at.x - (sideways ? event.deltaY : event.deltaX) * unit, y: at.y - (sideways ? 0 : event.deltaY) * unit });
+    };
+    const prevent = (event: Event) => event.preventDefault();
+    box.addEventListener("wheel", onWheel, { passive: false });
+    box.addEventListener("gesturestart", prevent);
+    box.addEventListener("gesturechange", prevent);
+    return () => {
+      resized?.disconnect();
+      box.removeEventListener("wheel", onWheel);
+      box.removeEventListener("gesturestart", prevent);
+      box.removeEventListener("gesturechange", prevent);
+    };
+  }, [redraw, show, zoomAt]);
+
+  const spot = (event: ReactPointerEvent) => {
+    const rect = frame.current!.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (!pointers.current.size) dragged.current = false;
+    pointers.current.set(event.pointerId, spot(event));
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const last = pointers.current.get(event.pointerId);
+    if (!last) return;
+    const point = spot(event);
+    const at = view.current!;
+    if (pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()] as [typeof point, typeof point];
+      pointers.current.set(event.pointerId, point);
+      const [c, d] = [...pointers.current.values()] as [typeof point, typeof point];
+      if (!dragged.current) {
+        dragged.current = true;
+        frame.current!.setPointerCapture?.(event.pointerId);
+      }
+      const mid = { x: (c.x + d.x) / 2, y: (c.y + d.y) / 2 };
+      show({ ...at, x: at.x + mid.x - (a.x + b.x) / 2, y: at.y + mid.y - (a.y + b.y) / 2 });
+      zoomAt(mid.x, mid.y, Math.hypot(c.x - d.x, c.y - d.y) / (Math.hypot(a.x - b.x, a.y - b.y) || 1));
+      return;
+    }
+    if (!dragged.current) {
+      if (Math.hypot(point.x - last.x, point.y - last.y) < SLOP) return;
+      dragged.current = true;
+      frame.current!.setPointerCapture?.(event.pointerId);
+      frame.current!.dataset.grabbing = "";
+    }
+    pointers.current.set(event.pointerId, point);
+    show({ ...at, x: at.x + point.x - last.x, y: at.y + point.y - last.y });
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    pointers.current.delete(event.pointerId);
+    if (!pointers.current.size) delete frame.current!.dataset.grabbing;
+  };
+
   return (
-    <div data-timeline-row={row.id} className="timeline-row">
-      <button type="button" data-timeline-head aria-expanded={open} onClick={toggle} className="timeline-head hover:bg-raised/50">
-        <Thumb picture={row.picture} threadId={threadId} />
-        <span className="timeline-main">
-          <span className="timeline-key">{row.key}</span>
-          <span className="timeline-sub"><Check size={12} aria-hidden="true" /><span className="timeline-pick">{row.picked}</span></span>
-        </span>
-        <span className="timeline-meta">{time}{time && counts && <br />}{counts}</span>
-        <ChevronRight size={16} aria-hidden="true" className="timeline-chevron" />
-      </button>
-      <Fold open={open}><Detail entry={row} threadId={threadId} you={you} /></Fold>
-      {row.older.map((each) => <Replaced key={each.id} entry={each} newer={row} botId={botId} threadId={threadId} you={you} />)}
+    <div
+      ref={frame}
+      className="timeline-canvas"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDragStart={(event) => event.preventDefault()}
+      // a drag that ends on a picture is not a click on it; a key press is
+      onClickCapture={(event) => {
+        if (!dragged.current || event.detail === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onFocus={(event) => {
+        if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible")) return;
+        const to = event.target.getBoundingClientRect();
+        const box = frame.current!.getBoundingClientRect();
+        if (to.top >= box.top + START.y && to.bottom <= box.bottom && to.left >= box.left && to.right <= box.right) return;
+        const at = view.current!;
+        show({ ...at, x: at.x + box.left + box.width / 2 - (to.left + to.width / 2), y: at.y + box.top + box.height / 2 - (to.top + to.height / 2) });
+      }}
+    >
+      <Redraw.Provider value={redraw}>
+        <div ref={sheet} className="timeline-sheet">
+          <svg ref={ink} className="timeline-ink" aria-hidden="true" />
+          {drawn.map(({ day, rows }) => {
+            const [name, date] = dayLabel(day, now, t, locale);
+            return (
+              <section key={day}>
+                <h3 data-timeline-day={day} className="timeline-day"><b>{name}</b> · {date}</h3>
+                {rows.map((row) => <Decision key={row.id} row={row} opened={opened} toggle={toggle} threadId={threadId} you={you} />)}
+              </section>
+            );
+          })}
+        </div>
+      </Redraw.Provider>
+      <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>
     </div>
   );
-});
+}
 
-function Replaced({ entry, newer, botId, threadId, you }: { entry: Entry; newer: Entry; botId: string; threadId: string; you: string }) {
+function Decision({ row, opened, toggle, threadId, you }: { row: Row; opened: ReadonlySet<string>; toggle: (id: string) => void; threadId: string; you: string }) {
   const { t } = useI18n();
-  const [open, toggle] = useFold(`${botId}:${entry.id}`, false);
-  const time = timeOf(entry.id);
-  const at = time && dayOf(entry.id) === dayOf(newer.id) ? time : when(stampOf(entry.id), new Date());
+  const chips = row.older.length > 0 && (
+    <span className="timeline-chips">
+      {row.older.map((each) => {
+        const time = timeOf(each.id);
+        const at = time && dayOf(each.id) === dayOf(row.id) ? time : when(stampOf(each.id), new Date());
+        return (
+          <button key={each.id} type="button" data-timeline-replaced aria-expanded={opened.has(each.id)} onClick={() => toggle(each.id)} className="timeline-replaced hover:bg-raised-hover">
+            <History size={13} aria-hidden="true" />
+            <span>{t("timeline.replaced", { when: at })} · <s>{each.picked}</s></span>
+            <ChevronRight size={14} aria-hidden="true" className="timeline-chevron" />
+          </button>
+        );
+      })}
+    </span>
+  );
   return (
     <>
-      <button type="button" data-timeline-replaced aria-expanded={open} onClick={toggle} className="timeline-replaced hover:bg-raised/50">
-        <History size={13} aria-hidden="true" />
-        <span>{t("timeline.replaced", { when: at })} · <s>{entry.picked}</s></span>
-        <ChevronRight size={14} aria-hidden="true" className="timeline-chevron" />
-      </button>
-      <Fold open={open}><Detail entry={entry} threadId={threadId} you={you} old /></Fold>
+      <Pick entry={row} threadId={threadId} you={you} chips={chips} />
+      {row.older.filter((each) => opened.has(each.id)).map((each) => <div key={each.id} className="timeline-old"><Pick entry={each} threadId={threadId} you={you} old /></div>)}
     </>
   );
 }
 
-function Detail({ entry, threadId, you, old = false }: { entry: Entry; threadId: string; you: string; old?: boolean }) {
+function Pick({ entry, threadId, you, chips, old = false }: { entry: Entry; threadId: string; you: string; chips?: ReactNode; old?: boolean }) {
   const { t } = useI18n();
   const now = new Date();
   const at = when(stampOf(entry.id), now);
+  const options = crossedOf(entry).map((each, n) => <Option key={n} label={each.label} picture={each.picture} threadId={threadId} />);
+  // the pick sits among its options, second from the left, the way it was picked from a row
+  options.splice(Math.min(1, options.length), 0, <Option key="won" label={entry.picked} picture={entry.picture} threadId={threadId} won />);
   return (
-    <div className="timeline-detail" data-old={old || undefined}>
-      <div className="timeline-pics">
-        <Won entry={entry} threadId={threadId} />
-        {crossedOf(entry).map((each, n) => <Crossed key={n} label={each.label} picture={each.picture} threadId={threadId} />)}
+    <div className="timeline-detail" data-timeline-pick={entry.id} data-old={old || undefined}>
+      <div className="timeline-left">
+        <div className="timeline-label" data-label>
+          <span className="timeline-key">{old ? entry.picked : entry.key}</span>
+          <time>{old ? t("timeline.replacedAt", { when: at }) : at}</time>
+          {chips}
+        </div>
+        <div className="timeline-options">{options}</div>
       </div>
-      {entry.said !== undefined && <p className="timeline-said"><q>{entry.said}</q><span>{you} · {at}</span></p>}
-      {entry.tweaks.length > 0 && (
-        <>
-          <p className="timeline-section"><Pencil size={12} aria-hidden="true" />{t("timeline.tweaks")}</p>
-          <ol className="timeline-tweaks">
-            {entry.tweaks.map((tweak, n) => <li key={n}><span>{n + 1}</span><q>{tweak.said}</q><time>{dayOf(tweak.at) === dayOf(entry.id) && timeOf(tweak.at) ? timeOf(tweak.at) : when(stampOf(tweak.at), now)}</time></li>)}
-          </ol>
-        </>
-      )}
-      {entry.files.length > 0 && (
-        <>
-          <p className="timeline-section"><Paperclip size={12} aria-hidden="true" />{t("timeline.screenshots", { when: at })}</p>
-          <div className="timeline-shots">{entry.files.map((path) => <span key={path} className="timeline-pic"><Img path={path} threadId={threadId} viewable /></span>)}</div>
-        </>
-      )}
+      <div className="timeline-notes">
+        {entry.said !== undefined && <div className="timeline-note"><p className="timeline-said"><q>{entry.said}</q><span>{you} · {at}</span></p></div>}
+        {entry.tweaks.length > 0 && (
+          <div className="timeline-note">
+            <p className="timeline-section"><Pencil size={12} aria-hidden="true" />{t("timeline.tweaks")}</p>
+            <ol className="timeline-tweaks">
+              {entry.tweaks.map((tweak, n) => <li key={n}><span>{n + 1}</span><q>{tweak.said}</q><time>{dayOf(tweak.at) === dayOf(entry.id) && timeOf(tweak.at) ? timeOf(tweak.at) : when(stampOf(tweak.at), now)}</time></li>)}
+            </ol>
+          </div>
+        )}
+        {entry.files.length > 0 && (
+          <div className="timeline-note">
+            <p className="timeline-section"><Paperclip size={12} aria-hidden="true" />{t("timeline.screenshots", { when: at })}</p>
+            <div className="timeline-shots">{entry.files.map((path) => <span key={path} className="timeline-pic"><Img path={path} threadId={threadId} viewable /></span>)}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Option({ label, picture, threadId, won = false }: { label: string; picture?: Picture; threadId: string; won?: boolean }) {
+  const redraw = useContext(Redraw);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { if (failed) redraw(); }, [failed, redraw]);
+  const shown = picture && !failed;
+  return (
+    <div className="timeline-option" data-won={won || undefined} data-timeline-out={won ? undefined : ""}>
+      {shown
+        ? <span className="timeline-pic"><Img path={picture.path} threadId={threadId} onFail={() => setFailed(true)} viewable /></span>
+        : <span className="timeline-pic" data-text>{won ? label : <s>{label}</s>}</span>}
+      {shown && <span className="timeline-caption">{won ? label : <s>{label}</s>}</span>}
     </div>
   );
 }
@@ -261,34 +578,4 @@ function Img({ path, threadId, onFail, viewable = false }: { path: string; threa
   return viewable
     ? <button type="button" className="timeline-open" aria-label={t("viewer.open", { name: showName(path) })} onClick={(event) => view(path, threadId, event.currentTarget)}>{img}</button>
     : img;
-}
-
-function Thumb({ picture, threadId }: { picture?: Picture; threadId: string }) {
-  const [failed, setFailed] = useState(false);
-  return picture && !failed
-    ? <span className="timeline-pic timeline-thumb"><Img path={picture.path} threadId={threadId} onFail={() => setFailed(true)} /></span>
-    : <span className="timeline-pic timeline-thumb" data-text><TextQuote size={16} aria-hidden="true" /></span>;
-}
-
-function Won({ entry, threadId }: { entry: Entry; threadId: string }) {
-  const { t } = useI18n();
-  const [failed, setFailed] = useState(false);
-  const badge = <span className="timeline-badge"><Check size={11} aria-hidden="true" />{t("timeline.picked")}</span>;
-  return entry.picture && !failed
-    ? <span className="timeline-pic timeline-won"><Img path={entry.picture.path} threadId={threadId} onFail={() => setFailed(true)} viewable />{badge}</span>
-    : <span className="timeline-pic timeline-won" data-text>{badge}<span>{entry.picked}</span></span>;
-}
-
-function Crossed({ label, picture, threadId }: { label: string; picture?: Picture; threadId: string }) {
-  const [failed, setFailed] = useState(false);
-  if (!picture || failed) return <span data-timeline-out className="timeline-out" data-word><X size={12} aria-hidden="true" /><s>{label}</s></span>;
-  return (
-    <span data-timeline-out className="timeline-out">
-      <span className="timeline-pic">
-        <Img path={picture.path} threadId={threadId} onFail={() => setFailed(true)} viewable />
-        <svg className="timeline-strike" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="14" y1="14" x2="86" y2="86" /><line x1="86" y1="14" x2="14" y2="86" /></svg>
-      </span>
-      <span>{label}</span>
-    </span>
-  );
 }

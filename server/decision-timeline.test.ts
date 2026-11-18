@@ -155,6 +155,16 @@ describe("decision timeline", () => {
     expect(currentPicks(timeline())[0]?.files).toEqual(["/real/a&b.png"]);
   });
 
+  it("keeps only the screenshots sent with the pick's own message", async () => {
+    bot("The settings page is done.");
+    say('the Reddit cards on the settings page look off\n\n<attached-image path="/shots/settings.png"/>');
+    bot("Forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say('Reddit cards\n\n<attached-image path="/shots/forum.png"/>');
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "Reddit cards" });
+    await settle();
+    expect(currentPicks(timeline())[0]?.files).toEqual(["/shots/forum.png"]);
+  });
+
   it("keeps image paths whose folders contain ordinary sensitive words", () => {
     expect(attachedImages('<attached-image path="/mock/secret/menu.png"/>')).toEqual(["/mock/secret/menu.png"]);
   });
