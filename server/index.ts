@@ -449,6 +449,7 @@ import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-st
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
+import { linkedRows } from "./linked-rows.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -1107,6 +1108,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const linkedMessages = linkedRows(store);
 const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
@@ -4484,6 +4486,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // channel that only ever shows requests is half a record. Mirror the
       // reply on success; mirror a failed/stopped terminal chip otherwise.
       finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? "");
+      store.trimThreadCache();
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
@@ -5002,6 +5005,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
+store.holdThreads(() => dispatchedThreads.values());
 const roomLanes = createRoomLanes();
 const laneHandoffs = createLaneHandoffs();
 
@@ -5014,6 +5018,7 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
   if (owned === undefined || owned === threadId) return false;
   if (threadHasLiveTurn(owned)) return true;
   dispatchedThreads.delete(botId);
+  store.trimThreadCache();
   return false;
 }
 
@@ -8703,17 +8708,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
       if ((!bot && !group) || linkedFilesClosed(group, threadId)) return json(res, 404, { error: "no such conversation" });
-      const messages = store.messagesFor(threadId).map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        fromBotId: message.from?.botId,
-      }));
       return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         holder: phone?.id,
         threadId,
-        messages,
+        messages: (target) => linkedMessages(threadId, target),
         deviceId: profileSyncSettings.deviceId,
         own: ownChat(threadId, Boolean(group?.hosted), joinedRoomThreads),
         writerDeviceId: (messageId) => threadSyncGate.enabled ? threadSyncV2?.messageWriter(threadId, messageId) ?? null : messageWriter(DATA_DIR, threadId, messageId),

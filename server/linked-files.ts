@@ -61,7 +61,8 @@ export interface ServeLinkedFileOptions {
   /** The phone a page's grant is minted for; this PC when unset. */
   holder?: string;
   threadId: string;
-  messages: readonly LinkedMessage[];
+  /** Every message that may link `target`; more is fine, the text is checked here. */
+  messages(target: string): Iterable<LinkedMessage>;
   deviceId: string;
   writerDeviceId(messageId: string): string | null;
   rootsFor(message: LinkedMessage): readonly string[];
@@ -280,7 +281,7 @@ function linkingMessages(options: ServeLinkedFileOptions, target: string, folder
   const forms = nameForms(target);
   const hits: { id: string; roots: readonly string[] }[] = [];
   const attached = !folder && (options.own || mediaType(target)?.startsWith("image/"));
-  for (const message of options.messages) {
+  for (const message of options.messages(target)) {
     // A picture the user attached by path shows on its own file chip.
     if (attached && message.role === "user" && attachedFiles(message.text ?? "").some((path) => samePath(path, target))) {
       hits.push({ id: message.id, roots: [] });
