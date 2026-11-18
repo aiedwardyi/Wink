@@ -657,9 +657,9 @@ export function createDriveMirror(options: Options) {
         check();
         if (!hasContent(updated) || updated.id !== file.id || !matches(updated, bytes) || updated.trashed) throw new DriveMirrorError("invalid-remote");
         summary.uploaded.push(path);
-        // Two PCs with a cloned memory ID can keep restoring the same bytes over each other.
+        // Cloned owners can keep restoring the same bytes over each other.
         const previous = table!.files[path];
-        if (!previous || !/^memory-v2(?: \([1-9]\d*\))?\//.test(path) || !same(updated, previous)) summary.uploadedForPeers = true;
+        if (!previous || !same(updated, previous)) summary.uploadedForPeers = true;
         track(path, updated);
       } else {
         const downloaded = await client.downloadFile(file.id, file.size).catch((error) => {

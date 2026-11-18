@@ -313,8 +313,9 @@ export function createGoogleSync(options: Options) {
     const due = at + ms;
     if (poll) pollDue ??= { at: at + passMs, quiet: !catching };
     const tick = !rateLimited && pollDue && pollDue.at <= due ? pollDue : undefined;
-    const next = tick?.at ?? due;
-    soon = next <= at;
+    // A poll can come due while a pass or rate-limit wait owns the timer.
+    const next = Math.max(at, tick?.at ?? due);
+    soon = next === at;
     timer = setTimeout(() => {
       timer = undefined;
       soon = false;
@@ -324,7 +325,7 @@ export function createGoogleSync(options: Options) {
         behind = null;
       }
       void run(Boolean(tick?.quiet && !chatFirst && options.kindsReady?.()));
-    }, Math.max(0, next - at));
+    }, next - at);
     timer.unref?.();
   }
 

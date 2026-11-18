@@ -685,6 +685,44 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(readFileSync(join(workspace(work, work.bots[0]), "MEMORY.md"), "utf8")).toBe(work.bots[0].memory);
   });
 
+  it.each([
+    "devices/device-home.json",
+    `board/device-home/p${"a".repeat(24)}.json`,
+    "threads-v2/bot/thread/writer-home/head.json",
+  ])("stops after one poke when a clone restores %s", async (path) => {
+    const home = makePC("home");
+    const work = makePC("work");
+    work.deviceId = home.deviceId;
+    work.writerId = home.writerId;
+    await startOn(home);
+    write(home.folder!, path, "home record");
+    await settle(home);
+    await startOn(work);
+    write(work.folder!, path, "work record");
+    await settle(work);
+
+    const queue: PC[] = [];
+    for (const [pc, peer] of [[home, work], [work, home]] as const) {
+      pc.sync.stop();
+      pc.sync = boot(pc, { uploaded: () => { queue.push(peer); } });
+    }
+    const remote = () => driveFiles(driveA()).find((file) => file.path === path)?.bytes;
+    write(home.folder!, path, "new home record");
+    await settle(home);
+    expect(remote()).toBe("new home record");
+    expect(queue.map((pc) => pc.name)).toEqual(["work"]);
+    let delivered = 0;
+    while (queue.length && delivered < 8) {
+      const peer = queue.shift()!;
+      peer.sync.poked();
+      await peer.sync.idle();
+      delivered++;
+    }
+    expect(delivered).toBe(1);
+    expect(queue).toHaveLength(0);
+    expect(remote()).toBe("work record");
+  });
+
   it("leaves a rate-limit wait standing when poked", async () => {
     const home = makePC("home");
     await startOn(home);

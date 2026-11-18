@@ -11,6 +11,7 @@ import { createDriveClient } from "./drive-client.ts";
 import { createDriveMirror, decodeDrivePath, DRIVE_READER_REVISION, drivePathHash, drivePathRule, encodeDrivePath } from "./drive-mirror.ts";
 import { GoogleAccount } from "./google-account.ts";
 import { createGoogleSync, GOOGLE_TABLE_FILE, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
+import { soonAfterWake } from "./pc-wake.ts";
 import { applySyncOperations, createSyncOperation, emptyProfileSyncState, loadOrCreateSyncWorkspace, loadProfileSyncSettings, readSyncOperations, remoteFieldsToApply, saveProfileSyncSettings, syncValueHash, writeSyncOperation } from "./profile-sync.ts";
 import { syncHold } from "./sync-hold.ts";
 import { createStartupTiming } from "./startup-timing.ts";
@@ -262,6 +263,54 @@ describe("Google reader kind recovery", () => {
     expect(drive.downloads).toHaveLength(1);
     expect(readSyncOperations(join(dataDir, "google-drive")).operations).toEqual([operation]);
     expect(applySyncOperations(emptyProfileSyncState(), [operation]).bots["bot-1"]).toEqual({ id: "bot-1", trashed: true });
+  });
+
+  it.each(["slow Drive call", "rate-limit wait"])("keeps an overdue poll quiet after a poked pass with a %s", async (delay) => {
+    const limited = delay === "rate-limit wait";
+    vi.setSystemTime(Date.UTC(2040, 0, limited ? 2 : 1));
+    const dataDir = await joined();
+    const path = await skipStyle(dataDir);
+    const fetch = drive.fetch;
+    const requests = vi.spyOn(drive, "fetch");
+    const openThread = vi.fn(() => "thread");
+    const prepare = vi.fn(() => ({
+      wake: soonAfterWake(Date.now(), 600_000),
+      catchingUp: sync.catchingUp("thread"),
+      deviceKnown: sync.deviceKnown("peer"),
+    }));
+    const sync = boot(dataDir, () => true, { openThread, prepare });
+    await settle(sync);
+    openThread.mockClear();
+    await vi.advanceTimersByTimeAsync(20_000);
+    if (limited) {
+      requests.mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "90" } }));
+      sync.poked();
+      await sync.idle();
+      prepare.mockClear();
+      await vi.advanceTimersByTimeAsync(89_999);
+      expect(prepare).not.toHaveBeenCalled();
+    } else {
+      const slow = gate();
+      requests.mockImplementationOnce(async (input, init) => {
+        slow.entered();
+        await slow.held;
+        return fetch(input, init);
+      });
+      sync.poked();
+      await slow.started;
+      try {
+        await vi.advanceTimersByTimeAsync(75_000);
+        prepare.mockClear();
+      } finally {
+        slow.release();
+      }
+    }
+    const passes = limited ? 2 : 1;
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(passes));
+    await sync.idle();
+    expect(prepare.mock.results[passes - 1].value).toEqual({ wake: false, catchingUp: false, deviceKnown: true });
+    expect(openThread).not.toHaveBeenCalled();
+    expect(existsSync(join(dataDir, "google-drive", path))).toBe(true);
   });
 
   it("never lets the 1.0.213 mirror download or delete a trash mark", async () => {
@@ -707,10 +756,12 @@ describe("Google reader kind recovery", () => {
   });
 
   it("defers recovery through republishing, direct kicks and wake catch-up", async () => {
+    vi.setSystemTime(Date.UTC(2040, 0, 3));
     const dataDir = await joined();
     await skipStyle(dataDir);
     let busy = true;
-    const sync = boot(dataDir, () => true, { republishing: () => busy });
+    const openThread = vi.fn(() => "thread");
+    const sync = boot(dataDir, () => true, { republishing: () => busy, openThread });
     window();
     await sync.kick();
     expect(starts()).toHaveLength(0);
@@ -720,10 +771,13 @@ describe("Google reader kind recovery", () => {
     busy = false;
     await sync.kick();
     expect(starts()).toHaveLength(0);
+    openThread.mockClear();
     vi.setSystemTime(Date.now() + 120_000);
     await vi.advanceTimersByTimeAsync(30_000);
     await sync.idle();
     expect(starts()).toHaveLength(0);
+    expect(soonAfterWake(Date.now(), 600_000)).toBe(true);
+    expect(openThread).toHaveBeenCalledOnce();
     expect(sync.catchingUp("thread")).toBe(false);
     await vi.advanceTimersByTimeAsync(30_000);
     await sync.idle();
