@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,7 @@ const PANE = "4f9c2a1e-0000-4000-8000-000000000001";
 const DONE = "DONE VW-T branch=feat/x sha=abc1234 dirty=0\nbuilt the page";
 
 function site(files: Record<string, string>, at = Date.now()) {
-  const root = mkdtempSync(join(process.env.ORBIT_SCRATCH || tmpdir(), "vw-"));
+  const root = realpathSync.native(mkdtempSync(join(process.env.ORBIT_SCRATCH || tmpdir(), "vw-")));
   folders.push(root);
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(join(root, path, ".."), { recursive: true });
@@ -124,7 +124,7 @@ describe("Live Verify on a worker's DONE report", () => {
   it("checks a cwd written as an 8.3 short name and refuses a junction root", async () => {
     const root = site({ "long folder name/index.html": "<h1>Hi</h1>" });
     const long = join(root, "long folder name");
-    const short = process.platform === "win32" ? execSync(`for %I in ("${long}") do @echo %~sI`, { encoding: "utf8", shell: "cmd.exe" }).trim() : long;
+    const short = process.platform === "win32" ? execSync(`for %I in ("${long}") do @echo %~sI`, { encoding: "utf8", shell: "cmd.exe", windowsHide: true }).trim() : long;
     expect(short).not.toBe(long);
     const t = await fixture(short);
     await t.post(DONE);
