@@ -5021,6 +5021,37 @@ describe("ConPTY start", () => {
     late.children[0].data("\x1b[c");
     assert.deepEqual(late.children[0].writes, []);
   });
+
+  test("keeps the device query it answered from the panel, whole or split", async (t) => {
+    const shown = (f) => f.events.filter(([channel]) => channel === "terminal:data").map(([, event]) => event.data).join("");
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[1t");
+    f.children[0].data("\x1b[c\x1b[?1004h");
+    assert.equal(shown(f), "\x1b[1t\x1b[?1004h");
+    const split = winFixture(t);
+    await split.host.open(split.event, split.input);
+    split.children[0].data("\x1b[1t\x1b[");
+    split.children[0].data("c\x1b[?1004h");
+    assert.equal(shown(split), "\x1b[1t\x1b[?1004h");
+  });
+
+  test("answers a replacement shell's device query sent before it is ready", async (t) => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-conpty-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const f = slowRespawnFixture({ platform: "win32", env: { ProgramFiles: programFiles } });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "AGENT", command: "codex go" });
+    f.children[0].exit({ exitCode: DLL_INIT_FAILED });
+    await f.settle();
+    f.children[1].data("\x1b[c");
+    f.release();
+    await f.settle();
+    assert.deepEqual(f.children[1].writes, ["\x1b[?1;2c", "codex go\r"]);
+    assert.equal(f.host.readBot("bot-1", { sessionId: pane.sessionId }).exited, false);
+  });
 });
 
 describe("remote panes", () => {
