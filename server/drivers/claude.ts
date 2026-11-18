@@ -69,7 +69,7 @@ import { forkClaude, type ClaudeSpawn } from "./claude-fork.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
-import { accountLabel, cachedSignIn } from "./auth-status.ts";
+import { accountLabel, cachedSignIn, SIGN_IN_CACHE_MS } from "./auth-status.ts";
 import { isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
@@ -77,7 +77,7 @@ import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts"
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 // Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
-const authChecks = new Map<string, Promise<string>>();
+const authChecks = new Map<string, { output: Promise<string>; reuseUntil: number }>();
 
 /** Whether `claude` is signed in, and as whom.
  *
@@ -94,28 +94,32 @@ export function claudeAuthStatus(
   deadlineMs = 3000,
 ): Promise<{ signedIn?: boolean; account?: string; identity?: string; engineSignedIn?: boolean }> {
   const key = `${cli}\n${account?.home ?? claudeConfigDir(env)}`;
-  const check = authChecks.get(key) ?? new Promise<string>((resolve) => {
-    run(cli, ["auth", "status", "--json"], { env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => resolve(stdout));
-  });
-  if (!authChecks.has(key)) {
-    authChecks.set(key, check);
-    void check.finally(() => authChecks.delete(key)).catch(() => {});
-  }
-  return new Promise((resolve) => {
-    const deadline = setTimeout(() => resolve({}), deadlineMs);
-    check.finally(() => clearTimeout(deadline)).then((stdout) => {
-      try {
-        const parsed = claudeAuthSchema.safeParse(JSON.parse(stdout));
-        if (!parsed.success) resolve({});
-        else {
-          const status = parsed.data;
-          const admission = claudeAccountAdmission(status, account);
-          resolve({ ...admission, account: admission.signedIn ? accountLabel(status.email, status.orgName) : undefined });
-        }
-      } catch {
-        resolve({});
-      }
+  let check = authChecks.get(key);
+  if (!check || Date.now() >= check.reuseUntil) {
+    const output = new Promise<string>((resolve) => {
+      run(cli, ["auth", "status", "--json"], { env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => resolve(stdout));
     });
+    const current = { output, reuseUntil: Infinity };
+    authChecks.set(key, current);
+    void output.then(() => { current.reuseUntil = Date.now() + SIGN_IN_CACHE_MS; }, () => { authChecks.delete(key); });
+    check = current;
+  }
+  const current = check;
+  return new Promise<string | undefined>((resolve) => {
+    const deadline = setTimeout(() => resolve(undefined), deadlineMs);
+    void current.output.finally(() => clearTimeout(deadline)).then(resolve, () => resolve(undefined));
+  }).then((stdout) => {
+    if (stdout === undefined) return {};
+    if (authChecks.get(key) === current) authChecks.delete(key);
+    try {
+      const parsed = claudeAuthSchema.safeParse(JSON.parse(stdout));
+      if (!parsed.success) return {};
+      const status = parsed.data;
+      const admission = claudeAccountAdmission(status, account);
+      return { ...admission, account: admission.signedIn ? accountLabel(status.email, status.orgName) : undefined };
+    } catch {
+      return {};
+    }
   });
 }
 
