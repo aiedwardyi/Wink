@@ -40,6 +40,14 @@ export function foldQuestion(id: string) {
   mark(rowQuestions, id, true);
 }
 
+/** Gives `to` the fold `from` has, so paging between questions keeps the card as it was left. */
+export function carryQuestionFold(from: string, to: string) {
+  glowedQuestions.add(to);
+  if (shrunkQuestions.has(from)) shrunkQuestions.add(to);
+  else shrunkQuestions.delete(to);
+  mark(rowQuestions, to, rowQuestions.has(from));
+}
+
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
 let stepFocus = 0;
 
