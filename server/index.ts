@@ -73,7 +73,7 @@ import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door
 import { roomById } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { roomCode } from "./rooms/invites.ts";
-import { joinedRooms, myRoomBotThreads, roomTaskThreads } from "./rooms/joined.ts";
+import { joinedRoom, joinedRooms, myRoomBotThreads, roomTaskThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -3597,6 +3597,7 @@ const roomSyncHost = (): RoomSyncHost => ({
     return `wkr1:${relayHost}:${code.id}.${code.secret}`;
   },
   join: (code) => guestClient.join(code),
+  joined: (roomId) => joinedRoom(roomId) !== null,
 });
 
 function publishRoomsSafely(folder: string): number {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, join as join_ } from "node:path";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,7 @@ import {
   writeSyncOperation, type ProfileSyncSettings,
 } from "./profile-sync.ts";
 import { importRooms, joinTeamRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
-import { closeJoinedDb, saveJoined } from "./rooms/joined.ts";
+import { closeJoinedDb, endJoined, joinedRoom, saveJoined } from "./rooms/joined.ts";
 import { Store, type GroupRecord } from "./store.ts";
 import { drivePathRule as oldDrivePathRule } from "./testing/drive-mirror-1.0.213.ts";
 
@@ -288,25 +288,25 @@ describe("room records over profile sync", () => {
 describe("team rooms on the user's other PCs", () => {
   const code = (n: number) => `wkr1:abc.wink.test:code-${n}.wki_${"a".repeat(43)}`;
   const invites = new Map<string, string>();
-  let join: ReturnType<typeof vi.fn<NonNullable<RoomSyncHost["join"]>>>;
-  const teamHost = (): RoomSyncHost => ({ ...host(), invite: vi.fn((roomId: string) => invites.get(roomId) ?? null), join });
+  let joinSeat: ReturnType<typeof vi.fn<NonNullable<RoomSyncHost["join"]>>>;
+  const teamHost = (): RoomSyncHost => ({ ...host(), invite: vi.fn((roomId: string) => invites.get(roomId) ?? null), join: joinSeat, joined: (roomId) => joinedRoom(roomId) !== null });
   const pass = () => {
     const pc = teamHost();
     importRooms(pc, state(), folder);
     joinTeamRooms(pc);
     return publishRooms(pc, folder);
   };
-  const joins = () => JSON.parse(readFileSync(join_(DATA_DIR, "room-sync.json"), "utf8")).joins;
+  const joins = () => JSON.parse(readFileSync(join(DATA_DIR, "room-sync.json"), "utf8")).joins;
   const pointers = () => readSyncOperations(folder).operations.filter((operation) => operation.changes?.hosted === true);
 
   beforeEach(() => {
     invites.clear();
-    join = vi.fn<NonNullable<RoomSyncHost["join"]>>(async () => ({ ok: true }));
+    joinSeat = vi.fn<NonNullable<RoomSyncHost["join"]>>(async () => ({ ok: true }));
   });
 
   afterEach(() => {
     closeJoinedDb();
-    rmSync(join_(DATA_DIR, "joined.db"), { force: true });
+    rmSync(join(DATA_DIR, "joined.db"), { force: true });
   });
 
   it("sends each hosted room's code, people-only too, again only when it changes, and never a room joined here", () => {
@@ -331,7 +331,7 @@ describe("team rooms on the user's other PCs", () => {
     pass();
     pass();
     await vi.waitFor(() => expect(store.groups[0]!.hosted).toEqual({ roomId: "hosted-1" }));
-    expect(join).not.toHaveBeenCalled();
+    expect(joinSeat).not.toHaveBeenCalled();
     expect(joins()).toEqual({});
   });
 
@@ -339,31 +339,41 @@ describe("team rooms on the user's other PCs", () => {
     remote("room-tk", { hosted: true, invite: code(1) }, T0);
     pass();
     await vi.waitFor(() => expect(joins()["room-tk"]).toEqual({ code: code(1), state: "joined" }));
-    expect(join).toHaveBeenCalledTimes(1);
-    expect(join).toHaveBeenCalledWith(code(1));
+    expect(joinSeat).toHaveBeenCalledTimes(1);
+    expect(joinSeat).toHaveBeenCalledWith(code(1));
     store = new Store(() => ({ instanceId: "fake", model: "m" }));
     pass();
     remote("room-tk", { hosted: true, invite: code(2) }, T0 + 1_000);
     pass();
     pass();
-    expect(join).toHaveBeenCalledTimes(1);
+    expect(joinSeat).toHaveBeenCalledTimes(1);
   });
 
   it("tries again while the host is off and never a refused code twice", async () => {
-    join.mockResolvedValueOnce({ ok: false, status: 503, error: "unavailable" }).mockResolvedValueOnce({ ok: false, status: 404, error: "no-invite" });
+    joinSeat.mockResolvedValueOnce({ ok: false, status: 503, error: "unavailable" }).mockResolvedValueOnce({ ok: false, status: 404, error: "no-invite" });
     remote("room-tk", { hosted: true, invite: code(1) }, T0);
     pass();
-    await vi.waitFor(() => expect(join).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(joinSeat).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => {
       pass();
       expect(joins()["room-tk"]!.state).toBe("refused");
     });
     pass();
-    expect(join).toHaveBeenCalledTimes(2);
+    expect(joinSeat).toHaveBeenCalledTimes(2);
     remote("room-tk", { hosted: true, invite: code(2) }, T0 + 1_000);
     pass();
     await vi.waitFor(() => expect(joins()["room-tk"]).toEqual({ code: code(2), state: "joined" }));
-    expect(join).toHaveBeenLastCalledWith(code(2));
+    expect(joinSeat).toHaveBeenLastCalledWith(code(2));
+  });
+
+  it("never takes a seat this PC already has or left", async () => {
+    saveJoined("room-1", "abc.wink.test", { id: "me", name: "Edward" }, `wkg_${"b".repeat(43)}`, code(1));
+    endJoined("room-1", "left");
+    remote("room-tk", { hosted: true, invite: code(1), room: "room-1" }, T0);
+    pass();
+    await vi.waitFor(() => expect(joins()["room-tk"]).toMatchObject({ state: "joined" }));
+    expect(joinSeat).not.toHaveBeenCalled();
+    expect(joinedRoom("room-1")!.status).toBe("left");
   });
 
   it("never writes rooms.db, a room or a hosted mark on the other PC, nor a room op after leaving", async () => {
@@ -375,8 +385,8 @@ describe("team rooms on the user's other PCs", () => {
     for (let i = 0; i < 3; i++) expect(pass()).toBe(0);
     expect(pc.invite).not.toHaveBeenCalled();
     expect(store.groups).toEqual([]);
-    expect(existsSync(join_(DATA_DIR, "rooms.db"))).toBe(false);
+    expect(existsSync(join(DATA_DIR, "rooms.db"))).toBe(false);
     expect(readSyncOperations(folder).operations.map((operation) => operation.entityId)).toEqual(["room-tk"]);
-    expect(join).toHaveBeenCalledTimes(1);
+    expect(joinSeat).toHaveBeenCalledTimes(1);
   });
 });

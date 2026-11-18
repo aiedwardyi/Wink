@@ -32,6 +32,8 @@ export interface RoomSyncHost {
   invite?(roomId: string): string | null;
   /** Joins a team room as a guest seat. */
   join?(code: string): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
+  /** Whether this PC has a guest seat in the room, left or removed too. */
+  joined?(roomId: string): boolean;
 }
 
 const MEMBER = "member.";
@@ -56,7 +58,7 @@ const fileSchema = z.object({
   /** The code each team room hosted here last sent. */
   invites: z.record(z.string(), z.string()).catch({}),
   /** Team rooms hosted on another PC: once `joined` never again, a `refused` code is not tried twice. Kept across folders. */
-  joins: z.record(z.string(), z.object({ code: z.string(), state: z.enum(["waiting", "joined", "refused"]) })).catch({}),
+  joins: z.record(z.string(), z.object({ code: z.string(), room: z.string().optional(), state: z.enum(["waiting", "joined", "refused"]) })).catch({}),
 });
 type RoomSyncFile = z.infer<typeof fileSchema>;
 
@@ -209,7 +211,7 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
     if (!group.hosted) continue;
     const invite = host.invite?.(group.hosted.roomId) ?? null;
     const sent = invite === null || file.invites[group.id] === invite;
-    const changes = invite ? { hosted: true, invite } : { hosted: true };
+    const changes = invite ? { hosted: true, invite, room: group.hosted.roomId } : { hosted: true };
     // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow
     if ((!marked.has(group.id) && sent) || !write(group.id, changes, host.now())) continue;
     forget(file, marked, group.id);
@@ -295,7 +297,8 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
       forget(file, marked, id);
       const join = file.joins[id];
       const invite = z.string().optional().catch(undefined).parse(remote.invite);
-      if (invite && join?.state !== "joined" && join?.code !== invite) file.joins[id] = { code: invite, state: "waiting" };
+      const room = z.string().optional().catch(undefined).parse(remote.room);
+      if (invite && join?.state !== "joined" && join?.code !== invite) file.joins[id] = { code: invite, room, state: "waiting" };
       continue;
     }
     if (!group) {
@@ -368,17 +371,26 @@ const joining = new Set<string>();
 export function joinTeamRooms(host: RoomSyncHost): void {
   const { join } = host;
   if (!join) return;
-  for (const [groupId, { code, state }] of Object.entries(load(host).joins)) {
+  const file = load(host);
+  for (const [groupId, entry] of Object.entries(file.joins)) {
+    const { code, room, state } = entry;
     const key = `${host.dataDir}\n${groupId}`;
     if (state !== "waiting" || joining.has(key)) continue;
+    // a seat taken or left by hand stays as the user left it; a join would reset it
+    if (room && host.joined?.(room)) {
+      entry.state = "joined";
+      save(host, file);
+      continue;
+    }
     joining.add(key);
     void join(code).then((result) => {
+      // 400 is bad-code: this PC's relay is not set up yet, so it cannot read the host's code
       const later = !result.ok && (result.status >= 500 || result.status === 429 || result.status === 400 || result.error === "room is busy");
-      const file = load(host);
-      const entry = file.joins[groupId];
-      if (later || entry?.code !== code || entry.state !== "waiting") return;
-      entry.state = result.ok ? "joined" : "refused";
-      save(host, file);
+      const latest = load(host);
+      const current = latest.joins[groupId];
+      if (later || current?.code !== code || current.state !== "waiting") return;
+      current.state = result.ok ? "joined" : "refused";
+      save(host, latest);
     }).catch((error) => console.warn(`room sync: join of room ${groupId} failed`, error)).finally(() => joining.delete(key));
   }
 }
