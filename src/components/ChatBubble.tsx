@@ -383,7 +383,7 @@ const Bubble = memo(function Bubble({
       <div
         data-orbit-message-body
         data-strip={hasReactions || dockShown ? "" : undefined}
-        className="relative w-fit max-w-[min(42rem,78%)] pb-8"
+        className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !user && "max-sm:max-w-full")}
         style={dock?.wrap && !hasReactions ? { paddingBottom: "2.5rem" } : undefined}
       >
         {!user && <div className="orbit-message-speaker hidden">{botName}</div>}
