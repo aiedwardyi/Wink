@@ -287,17 +287,17 @@ describe("sharableLocalFile", () => {
 describe("show-image route", () => {
   const indexSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8").replace(/\r\n/g, "\n");
   const internalSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "internal-routes.ts"), "utf8");
-  const route = internalSource.slice(internalSource.indexOf("showImage: async ("));
+  const route = internalSource.slice(internalSource.indexOf("showImage: async ("), internalSource.indexOf("generateImage: async ("));
 
   it("publishes into the sender's own thread as a screen message", () => {
     expect(route).toContain("connectorThread(from.id, fromThreadId)");
     expect(route).toContain("importLocalImage(String(body.path ?? \"\"), roots)");
     expect(route).toContain("workspaceDir(from.id)");
     expect(route).toContain('kind: "screen"');
-    expect(route).toContain("image: saved.name,");
+    expect(route).toMatch(/shared \? \{[^}]*roomFiles: shared\.roomFiles[^}]*\} : \{ image: saved\.name \}/);
     expect(route).toContain("shown: true");
-    expect(route.slice(0, route.indexOf("return json(res, 201"))).not.toContain("png:");
-    expect(route).toContain("url: `/api/attachments/${saved.name}`");
+    expect(route).not.toContain("png:");
+    expect(route).toContain("url: shared?.url ?? `/api/attachments/${saved.name}`");
   });
 
   it("tells bots about show_image only when the agents integration is mounted", () => {

@@ -15,6 +15,7 @@ import { markRelaySocket } from "../phone-relay/via.ts";
 import { SendSequencer } from "../send-idempotency.ts";
 import { Store, type BotRecord, type Message } from "../store.ts";
 import { createThreadRoutes } from "../thread-routes.ts";
+import { turnUnread } from "../turn-reply.ts";
 import { askById, closeAsksDb, configureRoomAsks, startAsk, type HostedGroup } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { hostFileRoute } from "./file-routes.ts";
@@ -220,6 +221,13 @@ describe("a host bot's picture in a room with people", () => {
     publishTurnAnswer(store, group, group.threadId, bot, since, ask!.id);
     expect(askById(ask!.id)?.state).toBe("done");
     expect(recentRoomEntries(group.hosted.roomId, 10).map((each) => each.text)).not.toContain("Wink couldn't finish this.");
+  });
+
+  it("marks a picture-only host answer unread when its turn settles", async () => {
+    const unread = turnUnread();
+    unread.start(group.threadId, "turn-1", store.messagesFor(group.threadId));
+    expect((await showCat("")).status).toBe(201);
+    expect(unread.settle(group.threadId, "turn-1", store.messagesFor(group.threadId))).toBe(true);
   });
 
   it("links a picture-only answer to the ask in the room log", async () => {

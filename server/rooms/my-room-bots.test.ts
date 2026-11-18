@@ -630,6 +630,28 @@ describe("a room bot's @ to this PC's bot", () => {
       expect(deps.client.botPicture).toHaveBeenCalledWith(ROOM, PETE.id, "A cat", ask.id, "cat.png", expect.any(Buffer), expect.any(AbortSignal));
     });
 
+    it("shows a local picture in the room task after the room turn settles", async () => {
+      const { turns } = await start();
+      await turns.settled("task-1", true);
+      const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
+      const appendMessage = vi.fn((_threadId: string, _message: Partial<Message>) => ({ id: "message" }));
+      const routes = createInternalRoutes({
+        cfg: {},
+        store: { bot: () => bot, taskByThread: () => undefined, appendMessage },
+        connectorThread: () => ({}),
+        captureRoomPicture: (_bot: BotRecord, task: string) => turns.capturePicture(task),
+      } as unknown as Parameters<typeof createInternalRoutes>[0]);
+      const body = { fromBotId: bot.id, fromThreadId: "task-1", path: picture() };
+      const req = Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage;
+      const res = { writeHead: vi.fn(), end: vi.fn() };
+      await routes.showImage(req, res as unknown as ServerResponse);
+      expect(res.writeHead).toHaveBeenCalledWith(201, expect.any(Object));
+      expect(appendMessage).toHaveBeenCalledWith("task-1", expect.objectContaining({ kind: "screen", image: expect.any(String), shown: true }));
+      const image = appendMessage.mock.calls[0]![1].image;
+      expect(JSON.parse(res.end.mock.calls[0]![0])).toEqual({ messageId: "message", url: `/api/attachments/${image}` });
+      expect(deps.client.botPicture).not.toHaveBeenCalled();
+    });
+
     it("keeps an answered ask out of the next prompt after a picture-only turn", async () => {
       deps.client.botPicture.mockImplementationOnce(async () => ({ ok: true, value: line({ kind: "bot", ...PETE }, "", { files: [FILE] }) }));
       deps.hasTask = (_botId, threadId) => threadId === "task-1";

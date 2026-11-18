@@ -7,7 +7,7 @@ import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLa
 import { roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
-import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, roomTaskThreads, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
+import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
 import { collabLine, REACH_LINE } from "./multiplayer.ts";
 import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 
@@ -282,9 +282,9 @@ export class MyRoomBotTurns {
 
   capturePicture(threadId: string) {
     const run = this.running.get(threadId);
-    if (!run && !roomTaskThreads().has(threadId)) return null;
+    if (!run) return null;
     return async (path: string, name: string, caption: string) => {
-      if (!run || this.running.get(threadId) !== run || run.pictureAbort.signal.aborted) throw refused(409, "the turn was stopped");
+      if (this.running.get(threadId) !== run || run.pictureAbort.signal.aborted) throw refused(409, "the turn was stopped");
       const bytes = await readFile(path);
       if (this.running.get(threadId) !== run || run.pictureAbort.signal.aborted) throw refused(409, "the turn was stopped");
       const posted = await this.deps.client.botPicture(run.roomId, run.id, caption, run.entry.id, name, bytes, run.pictureAbort.signal);
