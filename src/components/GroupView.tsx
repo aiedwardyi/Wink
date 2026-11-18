@@ -92,7 +92,7 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
-import { turnPresenceWaiting } from "@/lib/send-accept";
+import { turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { useI18n } from "@/lib/i18n";
 import { useRoomTurnStage } from "@/lib/room-turn";
@@ -500,6 +500,7 @@ export const Transcript = memo(function Transcript({
                     <CopyButton text={copyText} className="opacity-100" />
                     <button
                       type="button"
+                      disabled={Boolean(m.placeholder)}
                       onClick={() => onReply(m)}
                       aria-label={t("chat.replyToMessage")}
                       title={t("chat.replyToMessage")}
@@ -1071,14 +1072,17 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   // its thread) changes. Working dots below stay on the FULL list's tail.
   const transcriptKey = `${group.id}:${group.threadId}`;
   // an old jump shows its own window; the live pages below keep taking arrivals
+  const accepted = state.acceptedSends[group.threadId];
+  // a sent line shows at once, as in a 1:1 chat, while the server still holds it
+  const messages = useMemo(() => withAcceptedMessages(group.messages, accepted), [group.messages, accepted]);
   const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots, state.focusMessage);
-  const shown = jump.messages ?? group.messages;
+  const shown = jump.messages ?? messages;
   // rooms have no pane liveness, so a run without a report stays Working
   const workers = useMemo(() => workerRuns(group.messages).map((run) => ({ run, state: shownState(run, null) })), [group.messages]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(group.messages, jump.messages).map((run) => ({ run, state: shownState(run, null) })) : workers, [group.messages, jump.messages, workers]);
   const renders = useCallback(
-    (index: number) => messageVisible(group.messages[index], showToolCalls, showActivities),
-    [group.messages, showToolCalls, showActivities],
+    (index: number) => messageVisible(messages[index], showToolCalls, showActivities),
+    [messages, showToolCalls, showActivities],
   );
   const [transcriptWindow, setTranscriptWindow] = useState<{
     key: string;
@@ -1088,14 +1092,14 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     size?: number;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(group.messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders),
+    start: tailWindowStart(messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders),
     end: null,
     size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
   }));
   const windowSize = transcriptWindow.size ?? TRANSCRIPT_WINDOW_SIZE;
   const tailSize = transcriptWindow.size ?? TRANSCRIPT_TAIL_SIZE;
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders), end: null, size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, renders), end: null, size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined });
   }
   if (!compactWindow && windowSize < TRANSCRIPT_WINDOW_SIZE) setTranscriptWindow((w) => ({ ...w, size: TRANSCRIPT_WINDOW_SIZE }));
   const [windowTerminal, setWindowTerminal] = useState(terminal);
@@ -1216,11 +1220,11 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     !shown.some((message) => message.id === state.focusMessage?.messageId);
   useFocusMessage(group.threadId, !preview && shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
   useEffect(() => {
-    if (!follow || jump.messages || followedWindow(transcriptWindow, group.messages.length, windowSize, renders) === transcriptWindow) return;
-    setTranscriptWindow((w) => followedWindow(w, group.messages.length, windowSize, renders));
-  }, [follow, jump.messages, group.messages.length, renders, transcriptWindow, windowSize]);
+    if (!follow || jump.messages || followedWindow(transcriptWindow, messages.length, windowSize, renders) === transcriptWindow) return;
+    setTranscriptWindow((w) => followedWindow(w, messages.length, windowSize, renders));
+  }, [follow, jump.messages, messages.length, renders, transcriptWindow, windowSize]);
   // A plain tail holds at least the newest window of visible rows - see ChatView.
-  const tailStart = useMemo(() => tailWindowStart(group.messages.length, tailSize, renders), [group.messages.length, renders, tailSize]);
+  const tailStart = useMemo(() => tailWindowStart(messages.length, tailSize, renders), [messages.length, renders, tailSize]);
 
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
@@ -1236,7 +1240,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
-  }, [group.id, group.messages.length, streaming, group.busyBotId, composerDock.pad]);
+  }, [group.id, messages.length, streaming, group.busyBotId, composerDock.pad]);
 
   // Late layout, images and viewport changes fire no scroll event, so the pill and fill read geometry here too.
   const [newestBelow, setNewestBelow] = useState(false);
@@ -1270,8 +1274,8 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     const el = scrollRef.current;
     if (!peekSettled || windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
     const size = Math.min(TRANSCRIPT_WINDOW_SIZE, windowSize * 2);
-    setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(group.messages.length, size, renders) }));
-  }, [peekSettled, windowSize, startIndex, group.messages.length, renders, jump.messages, transcriptWindow, underfilled]);
+    setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(messages.length, size, renders) }));
+  }, [peekSettled, windowSize, startIndex, messages.length, renders, jump.messages, transcriptWindow, underfilled]);
   const fillPaging =
     Boolean(group.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart && (windowSize >= TRANSCRIPT_WINDOW_SIZE || startIndex === 0);
   useEffect(() => {
@@ -1346,7 +1350,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     closeJump();
     setBottomFollow(true);
     cancelEarlier();
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_TAIL_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     });
@@ -1469,7 +1473,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           setMenu({ kind: "selection", x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" });
         }}
       >
-        {preview && group.messages.length === 0 ? null : setupPending ? (
+        {preview && messages.length === 0 ? null : setupPending ? (
           <div
             className="flex min-h-full w-full items-center px-5 py-8"
             style={{ paddingBottom: TRANSCRIPT_GAP }}
@@ -1485,7 +1489,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           aria-live="polite"
           aria-label={t("chat.roomAria", { name: group.name })}
         >
-          {group.messages.length === 0 && (
+          {messages.length === 0 && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
               <div data-no-swipe className="flex -space-x-2">
                 {members.slice(0, 3).map((b) => (
@@ -1506,7 +1510,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
               </div>
             </div>
           )}
-          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (!preview || group.messages.length > 0) && (
+          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (!preview || messages.length > 0) && (
             <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}

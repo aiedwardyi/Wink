@@ -138,3 +138,21 @@ describe("a scene's second texture", () => {
     expect(units(upload, calls.length)[0]).toBe("activeTexture(TEXTURE0)");
   });
 });
+
+describe("the painted marker", () => {
+  beforeEach(() => void (scenes = samuraiInk));
+
+  it("sits on the chat only while WebGL paints the scene", () => {
+    const scene = start();
+    expect(layer.parentElement?.hasAttribute("data-scene-painted")).toBe(true);
+    scene.dispose();
+    expect(layer.parentElement?.hasAttribute("data-scene-painted")).toBe(false);
+  });
+
+  it("stays off on the gradient fallback", () => {
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: () => null });
+    const scene = start();
+    expect(layer.parentElement?.hasAttribute("data-scene-painted")).toBe(false);
+    scene.dispose();
+  });
+});
