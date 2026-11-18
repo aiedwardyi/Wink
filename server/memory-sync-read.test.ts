@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { memorySyncDir, memorySyncUnchanged, readMemorySnapshots, saveMemorySyncLedgerIfChanged, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { markTalked, memorySyncDir, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedgerIfChanged, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
 
 vi.mock("node:fs", async (original) => {
@@ -21,6 +23,72 @@ afterEach(() => {
 });
 
 describe("memory reads", () => {
+  it("keeps both edits when a turn starts during the peer snapshot read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-turn-"));
+    roots.push(root);
+    const home = { folder: join(root, "home-drive"), workspace: join(root, "home"), ledger: { bots: {}, device: "aaaaaaaaaaaa" } };
+    const work = { folder: join(root, "work-drive"), workspace: join(root, "work"), ledger: { bots: {}, device: "bbbbbbbbbbbb" } };
+    const sync = (pc: typeof home) => syncBotMemory(pc.folder, "bot", pc.workspace, pc.ledger);
+    const deliver = (from: typeof home, to: typeof work) => {
+      const dir = memorySyncDir(to.folder, "bot");
+      const name = `${from.ledger.device}.json`;
+      mkdirSync(dir, { recursive: true });
+      copyFileSync(join(memorySyncDir(from.folder, "bot"), name), join(dir, name));
+    };
+    for (const pc of [home, work]) mkdirSync(pc.workspace);
+    const base = "- Shared note\n";
+    const peerNote = "- Home learned the verdict\n";
+    const turnEdit = "- Shared note\n- Work learned the date\n";
+    writeFileSync(join(home.workspace, "MEMORY.md"), base);
+    sync(home);
+    deliver(home, work);
+    sync(work);
+    markTalked(home.ledger, "bot", Date.now() - 1000);
+    writeFileSync(join(home.workspace, "MEMORY.md"), peerNote);
+    sync(home);
+    deliver(home, work);
+
+    let busy = false;
+    let release!: () => void;
+    let started!: () => void;
+    const held = new Promise<void>((done) => { release = done; });
+    const reading = new Promise<void>((done) => { started = done; });
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const queue = source.slice(source.indexOf("const memorySyncs ="), source.indexOf("function noteTalked("));
+    // SAFETY: The evaluated expression returns the two queue functions used by this test.
+    const { syncMemory, pending } = runInNewContext(stripTypeScriptTypes(`${queue}\n({ syncMemory, pending: () => memorySyncs.get("work-bot") });`), {
+      DATA_DIR: root, store: { bot: () => ({}) }, profileSyncSettings: { folder: work.folder }, chatSyncBotId: () => "bot", existsSync,
+      workspaceDir: () => work.workspace, memorySyncLedger: work.ledger, legacyMemoryLedger: {}, memoryHealthCheck: { refresh: () => {} },
+      botHasActiveTurn: () => busy, memorySyncUnchanged, syncBotMemory, saveMemorySyncLedgerIfChanged, savedMemoryLedger: "",
+      readMemorySnapshots: async () => { started(); await held; return readMemorySnapshots(work.folder, "bot"); },
+    }) as { syncMemory(botId: string): void; pending(): Promise<void> | undefined };
+    peerMemoryLanded("bot", { "work-bot": "bot" }, () => busy, syncMemory);
+    const inFlight = pending();
+    expect(inFlight).toBeDefined();
+    await reading;
+    busy = true;
+    const turnBase = readFileSync(join(work.workspace, "MEMORY.md"), "utf8");
+    expect(turnBase).toBe(base);
+    markTalked(work.ledger, "bot");
+    release();
+    await inFlight;
+    const midTurn = readFileSync(join(work.workspace, "MEMORY.md"), "utf8");
+    writeFileSync(join(work.workspace, "MEMORY.md"), turnEdit);
+    busy = false;
+    syncMemory("work-bot");
+    await pending();
+    deliver(work, home);
+    sync(home);
+
+    expect.soft(midTurn).toBe(base);
+    for (const pc of [home, work]) {
+      expect(readFileSync(join(pc.workspace, "MEMORY.md"), "utf8")).toBe(turnEdit);
+      const dir = join(pc.workspace, "memory");
+      const copies = existsSync(dir) ? readdirSync(dir).filter((file) => file.includes(".conflict-")) : [];
+      expect.soft(copies.map((file) => readFileSync(join(dir, file), "utf8").split("\n").slice(1).join("\n"))).toContain(peerNote);
+    }
+  });
+
   it.each(["EACCES", "EPERM", "EIO", "ENOENT", "ENOTDIR"])("handles %s without losing the last readable snapshot", async (code) => {
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     const root = mkdtempSync(join(tmpdir(), "memory-read-"));

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listDevices, writeDeviceRecord } from "./device-sync.ts";
@@ -9,7 +10,14 @@ import { decodeDrivePath } from "./drive-mirror.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
 import { GOOGLE_BINDING_FILE, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
 import { ensureMemorySyncDevice, peerMemoryLanded, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { PhoneAccess } from "./phone-access.ts";
 import { requestCredentials } from "./phone-auth.ts";
+import { RelayClient } from "./phone-relay/client.ts";
+import { createPhoneRelay } from "./phone-relay/runtime.ts";
+import { readIdentity, readTicket, writeAccount } from "./phone-relay/store.ts";
+import { FakeClock } from "./phone-relay/testing/fake-clock.ts";
+import { FakeGoogle, WEB_CLIENT } from "./phone-relay/testing/google-issuer.ts";
+import { StatusLog, enroll, rig, type Rig } from "./phone-relay/testing/harness.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 
@@ -643,6 +651,78 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(workPasses).toBe(2);
   });
 
+  it("does not keep poking when cloned memory devices replace each other's snapshot", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work", { bots: [bot("Clerk", { syncId: home.bots[0].syncId })] });
+    ensureMemorySyncDevice(work.ledger);
+    work.ledger.device = ensureMemorySyncDevice(home.ledger);
+    await startOn(home);
+    await startOn(work);
+    const queue: PC[] = [];
+    for (const [pc, peer] of [[home, work], [work, home]] as const) {
+      pc.sync.stop();
+      pc.sync = boot(pc, { uploaded: () => { queue.push(peer); } });
+    }
+    await settle(home);
+    await settle(work);
+    queue.length = 0;
+    const item = home.bots[0];
+    const note = "Counsel learned the verdict.\n";
+    writeFileSync(join(workspace(home, item), "MEMORY.md"), note);
+    syncBotMemory(home.folder!, item.syncId, workspace(home, item), home.ledger);
+    await settle(home);
+    expect(queue.map((pc) => pc.name)).toEqual(["work"]);
+    const snapshot = `memory-v2/${item.syncId}/${home.ledger.device}.json`;
+    expect(driveFiles(driveA()).find((file) => file.path === snapshot)?.bytes).toContain(note.trim());
+    for (let delivered = 0; delivered < 8 && queue.length; delivered++) {
+      const peer = queue.shift()!;
+      peer.sync.poked();
+      await peer.sync.idle();
+    }
+    expect(queue).toHaveLength(0);
+    expect(driveFiles(driveA()).find((file) => file.path === snapshot)?.bytes).toContain("Clerk remembers the case.");
+    expect(readFileSync(join(workspace(home, item), "MEMORY.md"), "utf8")).toBe(note);
+    expect(readFileSync(join(workspace(work, work.bots[0]), "MEMORY.md"), "utf8")).toBe(work.bots[0].memory);
+  });
+
+  it.each([
+    "devices/device-home.json",
+    `board/device-home/p${"a".repeat(24)}.json`,
+    "threads-v2/bot/thread/writer-home/head.json",
+  ])("stops after one poke when a clone restores %s", async (path) => {
+    const home = makePC("home");
+    const work = makePC("work");
+    work.deviceId = home.deviceId;
+    work.writerId = home.writerId;
+    await startOn(home);
+    write(home.folder!, path, "home record");
+    await settle(home);
+    await startOn(work);
+    write(work.folder!, path, "work record");
+    await settle(work);
+
+    const queue: PC[] = [];
+    for (const [pc, peer] of [[home, work], [work, home]] as const) {
+      pc.sync.stop();
+      pc.sync = boot(pc, { uploaded: () => { queue.push(peer); } });
+    }
+    const remote = () => driveFiles(driveA()).find((file) => file.path === path)?.bytes;
+    write(home.folder!, path, "new home record");
+    await settle(home);
+    expect(remote()).toBe("new home record");
+    expect(queue.map((pc) => pc.name)).toEqual(["work"]);
+    let delivered = 0;
+    while (queue.length && delivered < 8) {
+      const peer = queue.shift()!;
+      peer.sync.poked();
+      await peer.sync.idle();
+      delivered++;
+    }
+    expect(delivered).toBe(1);
+    expect(queue).toHaveLength(0);
+    expect(remote()).toBe("work record");
+  });
+
   it("leaves a rate-limit wait standing when poked", async () => {
     const home = makePC("home");
     await startOn(home);
@@ -734,6 +814,183 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     await home.sync.idle();
     expect(driveA().uploads.slice(uploads).map((upload) => decodeDrivePath(upload.name) ?? upload.id)).toEqual(["pictures/new.png"]);
     expect(home.sync.status().state).toBe("up-to-date");
+  });
+});
+
+describe("Google sync pokes through the relay", { timeout: 60_000 }, () => {
+  let r: Rig;
+  const accesses: PhoneAccess[] = [];
+
+  beforeEach(async () => {
+    r = await rig({ enroll: false });
+    r.relay.offerPokes = true;
+  });
+
+  afterEach(async () => {
+    for (const access of accesses.splice(0)) await access.stop();
+    await r.close();
+  });
+
+  /** index.ts wiring: relay pokes kick this PC's sync, and a pass that uploaded pokes the relay. */
+  async function linked(pc: PC, extra: Partial<Parameters<typeof createGoogleSync>[0]> = {}, sub = A.sub) {
+    await enroll(pc.dataDir, r.relay, r.config);
+    const identity = readIdentity(pc.dataDir);
+    if (identity.kind !== "ok") throw new Error(`${pc.name} has no relay identity`);
+    writeAccount(pc.dataDir, r.relay.accountFor(identity.value.label, sub));
+    const statuses = new StatusLog();
+    const access: PhoneAccess = new PhoneAccess({
+      dataDir: pc.dataDir, env: {}, staticDir: null, config: () => r.config, saveEnabled: () => {},
+      onChange: () => statuses.push(access.status()),
+      onPoked: () => pc.sync.poked(),
+      start: (options) => createPhoneRelay(options, { clock: new FakeClock(), env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
+      google: { webClientId: WEB_CLIENT, sub: () => sub, idToken: () => null, freshIdToken: async () => null, name: () => pc.name, keys: new FakeGoogle().keys },
+    });
+    accesses.push(access);
+    pc.sync.stop();
+    pc.sync = boot(pc, { uploaded: () => access.poke(), ...extra });
+    await access.start((_req, res) => res.end());
+    await statuses.until((status) => status.state === "certifying" || status.state === "connected");
+    return { access, statuses, label: identity.value.label };
+  }
+
+  const replyOn = (pc: PC) => {
+    const head = `threads-v2/${pc.bots[0].syncId}/thread-Counsel/${pc.writerId}/head.json`;
+    const reply = JSON.stringify({ thread: "thread-Counsel", cut: 2 });
+    write(pc.folder!, head, reply);
+    return { head, reply };
+  };
+
+  it("a reply on one PC pokes the other through the relay, which starts its pull within a second", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const starts: number[] = [];
+    let armed = false;
+    await linked(home);
+    await linked(work, { prepare: () => { if (armed) starts.push(performance.now()); ensureMemorySyncDevice(work.ledger); } });
+    await settle(home);
+    await settle(work);
+    expect(r.relay.pokes).toEqual([]);
+
+    armed = true;
+    const { head, reply } = replyOn(home);
+    await home.sync.kick();
+    const uploadedAt = performance.now();
+    await home.sync.idle();
+    await vi.waitFor(() => expect(starts.length).toBeGreaterThan(0), { timeout: 5_000 });
+    expect(starts[0]! - uploadedAt).toBeLessThan(1_000);
+    await vi.waitFor(() => expect(readFileSync(join(work.folder!, ...head.split("/")), "utf8")).toBe(reply), { timeout: 5_000 });
+    await work.sync.idle();
+    // The download-only pass on work sends none back.
+    expect(r.relay.pokes).toEqual([{ type: "poke" }]);
+    expect(r.relay.count("poked")).toBe(1);
+  });
+
+  it("runs one pass plus one trailing pass for a burst of relay pokes", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    let passes = 0;
+    let release = () => {};
+    const gate = new Promise<void>((done) => (release = done));
+    const { label } = await linked(home, {
+      prepare: () => { passes++; ensureMemorySyncDevice(home.ledger); },
+      fetch: async (input, init) => { await gate; return driveA().fetch(input, init); },
+    });
+    const poked = vi.spyOn(home.sync, "poked");
+    for (let poke = 0; poke < 5; poke++) r.relay.send(label, { type: "poked" });
+    await vi.waitFor(() => expect(poked).toHaveBeenCalledTimes(5));
+    release();
+    await home.sync.idle();
+    expect(passes).toBe(2);
+  });
+
+  it("forwards no poke to a control on another account", async () => {
+    const home = await linked(makePC("home"));
+    const work = await linked(makePC("work"), {}, B.sub);
+    await r.relay.until(() => r.relay.hasControl(home.label) && r.relay.hasControl(work.label));
+    home.access.poke();
+    await r.relay.until(() => r.relay.count("poke") === 1);
+    expect(r.relay.count("poked")).toBe(0);
+  });
+
+  it("rejects a control using another label's account ticket", async () => {
+    const home = await linked(makePC("home"));
+    const work = makePC("work");
+    await enroll(work.dataDir, r.relay, r.config);
+    const identity = readIdentity(work.dataDir);
+    const ticket = readTicket(work.dataDir);
+    if (identity.kind !== "ok" || ticket.kind !== "ok") throw new Error("missing work identity");
+    let ready!: (state: string) => void;
+    const handshake = new Promise<string>((done) => { ready = done; });
+    const client = new RelayClient({
+      relayHost: `relay.${r.config.base}`, identity: identity.value, ticket: ticket.value, connector: r.relay.connector(), clock: new FakeClock(),
+      account: () => ({ account: r.relay.accountFor(home.label, A.sub), name: "work" }),
+      onGo: () => {}, onTicket: () => false, onPoked: () => {},
+      onChange: () => {
+        const { state } = client.snapshot();
+        if (state === "connected" || state === "backoff") ready(state);
+      },
+    });
+    try {
+      client.start();
+      expect(await handshake).toBe("backoff");
+      expect(r.relay.hasControl(identity.value.label)).toBe(false);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("sends no poke to a relay whose ready lacks pokes, and stays connected", async () => {
+    r.relay.offerPokes = false;
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const { label } = await linked(home);
+    await settle(home);
+    const { head, reply } = replyOn(home);
+    await settle(home);
+    expect(driveFiles(driveA()).find((file) => file.path === head)?.bytes).toBe(reply);
+    expect(home.logs).toEqual([]);
+    expect(r.relay.pokes).toEqual([]);
+    expect(r.relay.hasControl(label)).toBe(true);
+  });
+
+  it("keeps the timer passes when the relay is down", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const link = await linked(home);
+    await linked(work, { passMs: 200 });
+    await settle(home);
+    await settle(work);
+    const down = link.statuses.next((status) => status.state === "reconnecting");
+    await r.relay.close();
+    await down;
+    const { head, reply } = replyOn(home);
+    await settle(home);
+    expect(home.logs).toEqual([]);
+    await vi.waitFor(() => expect(readFileSync(join(work.folder!, ...head.split("/")), "utf8")).toBe(reply), { timeout: 5_000 });
+    expect(r.relay.pokes).toEqual([]);
+  });
+
+  it("is wired in index.ts both ways", () => {
+    const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+    const declarations = source.statements.filter(ts.isVariableStatement).flatMap((node) => node.declarationList.declarations);
+    const option = (variable: string, name: string, scope: { phoneAccess: { poke(): void } } | { googleSync: { poked(): void } }) => {
+      const init = declarations.find((node) => node.name.getText(source) === variable)?.initializer;
+      const options = init && (ts.isCallExpression(init) || ts.isNewExpression(init)) ? init.arguments?.[0] : undefined;
+      if (!options || !ts.isObjectLiteralExpression(options)) throw new Error(`${variable} has no options`);
+      const property = options.properties.filter(ts.isPropertyAssignment).find((node) => node.name.getText(source) === name);
+      if (!property) throw new Error(`${variable} passes no ${name}`);
+      return new Function("scope", `with (scope) { return (${property.initializer.getText(source)}); }`)(scope);
+    };
+    const poke = vi.fn();
+    const poked = vi.fn();
+    option("googleSync", "uploaded", { phoneAccess: { poke } })();
+    option("phoneAccess", "onPoked", { googleSync: { poked } })();
+    expect(poke).toHaveBeenCalledOnce();
+    expect(poked).toHaveBeenCalledOnce();
   });
 });
 

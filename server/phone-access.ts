@@ -90,6 +90,8 @@ export interface PhoneAccessOptions {
   saveSetup?(base: string): void;
   /** The relay status changed. */
   onChange?(): void;
+  /** Another PC of this Google account uploaded a change. */
+  onPoked?(): void;
   clock?: Clock;
   start?(options: PhoneRelayOptions): PhoneRelay;
   enroll?(options: PhoneRelayEnrollOptions): Promise<void>;
@@ -273,6 +275,7 @@ export class PhoneAccess {
         onStatus: () => {
           if (this.relay === relay) this.options.onChange?.();
         },
+        onPoked: this.options.onPoked,
       };
       const google = this.options.google;
       if (this.google && google) {
@@ -321,6 +324,11 @@ export class PhoneAccess {
 
   sendActive(): void {
     this.relay?.sendActive?.();
+  }
+
+  /** This PC uploaded a change. */
+  poke(): void {
+    this.relay?.poke?.();
   }
 
   /** The name phones see changed, so the relay authenticates again. */

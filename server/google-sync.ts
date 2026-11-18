@@ -168,8 +168,13 @@ export function createGoogleSync(options: Options) {
   let running: Promise<void> | null = null;
   // A kick that lands mid-pass may have written after that pass looked, so one more pass follows it, after any rate-limit wait.
   let again = false;
+  // A kick restarts the poll pace; a poke alone keeps the poll its pass would have armed.
+  let kicked = false;
   let rateLimited = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let pollDue: { at: number; quiet: boolean } | undefined;
+  // The armed timer's deadline, so a pass that preempts it still sees a wake.
+  let armed: { at: number; ms: number } | undefined;
   let soon = false;
   let stopped = false;
   let chatFirst = true;
@@ -300,22 +305,38 @@ export function createGoogleSync(options: Options) {
     return account.owner()?.sub === binding.binding.owner.sub ? binding.binding : null;
   }
 
-  function schedule(ms: number): void {
+  function woke(): void {
+    if (armed && lateTick(armed.at, armed.ms, now())) {
+      chatFirst = true;
+      behind = null;
+    }
+    armed = undefined;
+  }
+
+  function schedule(ms: number, poll = false): void {
     clearTimeout(timer);
     timer = undefined;
+    armed = undefined;
     soon = false;
-    if (!runnable()) return;
-    soon = ms === 0;
-    const due = now() + ms;
+    if (!runnable()) {
+      pollDue = undefined;
+      return;
+    }
+    const at = now();
+    const due = at + ms;
+    if (poll) pollDue ??= { at: at + passMs, quiet: !catching };
+    const tick = !rateLimited && pollDue && pollDue.at <= due ? pollDue : undefined;
+    // A poll can come due while a pass or rate-limit wait owns the timer.
+    const next = Math.max(at, tick?.at ?? due);
+    soon = next === at;
+    armed = { at: next, ms: tick ? passMs : ms };
     timer = setTimeout(() => {
       timer = undefined;
       soon = false;
-      if (lateTick(due, ms, now())) {
-        chatFirst = true;
-        behind = null;
-      }
-      void run(ms === passMs && !chatFirst && !catching && (options.kindsReady?.() ?? false));
-    }, ms);
+      if (tick) pollDue = undefined;
+      woke();
+      void run(Boolean(tick?.quiet && !chatFirst && options.kindsReady?.()));
+    }, next - at);
     timer.unref?.();
   }
 
@@ -421,7 +442,7 @@ export function createGoogleSync(options: Options) {
     }
     problem = null;
     lastSyncAt = now();
-    if (summary.uploaded.length) options.uploaded?.();
+    if (summary.uploadedForPeers) options.uploaded?.();
     if (bound.phase === "ready" && summary.retryAfterMs === null && !summary.failed.some((path) => path.startsWith("threads-v2"))) chatFirst = false;
     if (!summary.driveFull) {
       fullStrikes = 0;
@@ -448,9 +469,15 @@ export function createGoogleSync(options: Options) {
     return !maintenance && moved > 0 ? 0 : republishing ? REPUBLISH_MS : passMs;
   }
 
-  const kick = () => {
+  const requestPass = () => {
     if (running) again = true;
     return run(false);
+  };
+
+  const kick = () => {
+    if (!running) pollDue = undefined;
+    else kicked = true;
+    return requestPass();
   };
 
   function run(quiet: boolean): Promise<void> {
@@ -461,6 +488,7 @@ export function createGoogleSync(options: Options) {
       schedule(0);
       return Promise.resolve();
     }
+    woke();
     clearTimeout(timer);
     timer = undefined;
     soon = false;
@@ -474,8 +502,10 @@ export function createGoogleSync(options: Options) {
         log(`[google-sync] pass failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       running = null;
-      schedule(again && !rateLimited ? 0 : delay);
+      const next = again && !rateLimited ? 0 : delay;
+      schedule(next, !rateLimited && (next === passMs || (delay === passMs && !kicked)));
       again = false;
+      kicked = false;
     })();
     return running;
   }
@@ -525,7 +555,7 @@ export function createGoogleSync(options: Options) {
     /** Another PC uploaded: one pass now, or one more after the running one. A rate-limit wait stands. */
     poked(): void {
       if (rateLimited) return;
-      void kick();
+      void requestPass();
     },
     /** Settles once no pass is running or due right away. */
     idle: async () => { while (running || soon) await (running ?? new Promise((done) => setTimeout(done, 1))); },

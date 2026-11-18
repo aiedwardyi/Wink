@@ -63,6 +63,7 @@ export function createPhoneRelay(options: PhoneRelayOptions, deps: PhoneRelayDep
     sendSnag: (snag) => runtime.sendSnag(snag),
     sendActive: () => runtime.sendActive(),
     mintRoomCode: () => runtime.mintRoomCode(),
+    poke: () => runtime.poke(),
   };
 }
 
@@ -187,6 +188,7 @@ class RelayRuntime {
       },
       account: () => this.authAccount(),
       onAccount: (next) => this.refreshAccount(next),
+      onPoked: this.options.onPoked,
       onChange: () => this.update(),
     });
     this.syncAccount();
@@ -225,6 +227,10 @@ class RelayRuntime {
 
   sendActive(): void {
     this.client?.sendActive();
+  }
+
+  poke(): void {
+    this.client?.poke();
   }
 
   reauth(): void {
