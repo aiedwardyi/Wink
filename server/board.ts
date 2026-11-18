@@ -292,10 +292,6 @@ export function createBoard(options: BoardOptions) {
     search(input: BoardSearch): BoardPost[] {
       return searchBoard(board.list(), input, wordsOf);
     },
-    /** Reads every post and builds its words now, so the first search waits on neither. */
-    warm(): void {
-      for (const post of readable().values()) wordsOf(post);
-    },
     /**
      * Drive sync. Each PC writes only its own folder, so two PCs posting at once never
      * write one file; bot ids cross as sync ids.

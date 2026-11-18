@@ -9568,7 +9568,6 @@ startupTiming.measure("sync", syncAllThreads);
 limitWaits.reconcile();
 setImmediate(() => void limitWaits.tick().catch((error) => console.error("limit-waits: startup failed", error)));
 setImmediate(drainQueuedSends);
-setImmediate(() => board.warm());
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
