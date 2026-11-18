@@ -5,7 +5,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 ## [1.0.281] - 2026-11-18
 
 ### Added
-- GPT-6.2 Sol and GPT-6.2 Astra are here: bots on GPT-6.1 Sol move to GPT-6.2 Sol and bots on GPT-6 Astra move to GPT-6.2 Astra, with one line in the chat saying so, and ChatGPT sign-in through the Codex CLI can pick 6.2. Both are in the Model Index.
+- GPT-6.2 Sol and GPT-6.2 Astra are here: bots on GPT-6.1 Sol move to GPT-6.2 Sol and bots on GPT-6 Astra move to GPT-6.2 Astra, and ChatGPT sign-in through the Codex CLI can pick 6.2. Both are in the Model Index.
 
 ### Changed
 - On a desktop, the terminal opens beside the chat instead of over it, and Ctrl+F still searches the chat while it is open.
