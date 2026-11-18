@@ -220,6 +220,28 @@ describe("call button in the message box", () => {
     }
   });
 
+  it("puts the call settings gear before Call, opens the menu, and hides it while typing", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.title).toBe("Call settings");
+      expect(gear.compareDocumentPosition(button(frame(host), "Call Atlas")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      await act(async () => gear.click());
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
+      expect(tokens()).toBe(0);
+      await act(async () => gear.click());
+      await type(host, "hi");
+      expect(button(host, "Call settings")).toBeNull();
+      await type(host, "");
+      expect(button(host, "Call settings")).not.toBeNull();
+      await connect(host);
+      expect(tokens()).toBe(1);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("labels Call in Korean", async () => {
     applyLocale("ko");
     const { host, unmount } = await mount();
