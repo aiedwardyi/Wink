@@ -23,7 +23,7 @@ import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { BackButton } from "./BackButton";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { MessageMenu, messageMenuProps, SelectionMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { MessageBoundary } from "./TurnPresence";
 
 const TONE = {
@@ -309,7 +309,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
                         className="absolute"
                         style={{ left: offset + EMPTY_RING_RADIUS * Math.cos(angle), top: offset + EMPTY_RING_RADIUS * Math.sin(angle) }}
                       >
-                        <ProviderMark driverKind={kind} size={EMPTY_MARK_SIZE} />
+                        <ProviderBrandMark driverKind={kind} size={EMPTY_MARK_SIZE} />
                       </span>
                     );
                   })}
