@@ -4,6 +4,7 @@ import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { chartProvider, effortRank, fitLogTicks, formatCost, linearTicks, logTicks, type ChartProvider, type ModelIndexPoint } from "@/lib/model-index";
+import { botAvatarAssetPath, type BotAvatarId } from "../../shared/bot-avatar";
 import { ProviderMark } from "./ProviderIcons";
 import { edgeFade } from "./Segmented";
 
@@ -22,6 +23,14 @@ const DRIVER = {
   xai: "grokAgent",
   meta: "museAgent",
 } satisfies Record<Exclude<ChartProvider, "other">, string>;
+
+const AVATAR = {
+  anthropic: "icon-45",
+  openai: "icon-46",
+  google: "icon-47",
+  xai: "icon-48",
+  meta: "icon-49",
+} satisfies Record<Exclude<ChartProvider, "other">, BotAvatarId>;
 
 // Best value looks only at the top of the list, so a cheap low scorer never takes it.
 const VALUE_POOL = 9;
@@ -71,11 +80,10 @@ export function bestValue(rows: readonly PhoneModel[]): string | undefined {
 }
 
 function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
+  const id = provider === "other" ? undefined : AVATAR[provider];
   const radius = size > 20 ? "rounded-lg" : "rounded-[4px]";
-  return provider !== "other" ? (
-    <span className={cn("flex shrink-0 items-center justify-center", radius)} style={{ width: size, height: size }}>
-      <ProviderMark driverKind={DRIVER[provider]} size={size * 0.75} />
-    </span>
+  return id ? (
+    <img src={botAvatarAssetPath(id)} alt="" width={size} height={size} draggable={false} className={cn("block shrink-0", radius)} style={{ width: size, height: size }} />
   ) : (
     <span aria-hidden className={cn("block shrink-0", radius)} style={{ width: size, height: size, background: color(provider) }} />
   );
