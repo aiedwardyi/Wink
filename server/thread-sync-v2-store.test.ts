@@ -1951,4 +1951,26 @@ describe("copied installs", { timeout: 180_000 }, () => {
     expect(readdirSync(dir)).toEqual(["head.json"]);
     expect(JSON.parse(readFileSync(join(dir, "head.json"), "utf8")).versions.length).toBeLessThan(8);
   });
+
+  it("publishes an edit a copy moved when Drive brings the other install's head", async () => {
+    const [home, work] = [temp(), temp()];
+    const a = pc(home, "a", true, false, false, LOW);
+    const base = await a.call<Message>("append", { text: "base" });
+    await a.call("flush");
+    const b = await copy(a, work, "a");
+    cpSync(home, work, { recursive: true });
+    await a.call("append", { text: "from A" });
+    await a.call("flush");
+    await b.call("clock");
+    await b.call("patch", { id: base.id, patch: { text: "edited on B" } });
+    await b.call("tick", { at: 3_000 });
+    const head = ["threads-v2", "bot", "thread", LOW, "head.json"];
+    writeFileSync(join(work, ...head), readFileSync(join(home, ...head)));
+    await b.call("pull");
+    await b.call("tick", { at: 3_000 });
+    cpSync(work, home, { recursive: true });
+    await a.call("pull");
+    expect(await texts(a)).toEqual(["edited on B", "from A"]);
+    expect(await texts(b)).toEqual(["edited on B", "from A"]);
+  });
 });

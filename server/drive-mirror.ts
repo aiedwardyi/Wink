@@ -285,9 +285,12 @@ export function createDriveMirror(options: Options) {
     assertSafePath(path);
     const target = join(mirrorPath, ...path.split("/"));
     const resolved = canonicalPath(target);
-    const at = relative(mirrorPath, resolved).split(sep).join("/");
-    if (own ? !samePath(at, path) : drivePathRule(at, ids) === "own") throw new DriveMirrorError("path-alias");
-    if (own) return;
+    if (own) {
+      // mirrorPath can keep an 8.3 short name that realpathSync.native expands.
+      if (!samePath(resolved, join(canonicalPath(mirrorPath), ...path.split("/")))) throw new DriveMirrorError("path-alias");
+      return;
+    }
+    if (drivePathRule(relative(mirrorPath, resolved).split(sep).join("/"), ids) === "own") throw new DriveMirrorError("path-alias");
     const identity = fileIdentity(target);
     const candidate = ownTargetPath(path);
     for (const own of candidate ? [...ownPaths, candidate] : ownPaths) {

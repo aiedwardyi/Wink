@@ -91,6 +91,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   const engine = createSyncEngine(options);
   // A copied install moves to a new writer id once its sync worker finds the copy.
   const writer = () => String(withMessageTransaction((db) => db.prepare("SELECT writer FROM sync_v2_identity WHERE id = 1").get()!.writer));
+  let followed = writer();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const retry = new Set<string>();
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -445,6 +446,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       withMessageTransaction((db) => db.prepare("DELETE FROM sync_v2_pictures WHERE thread = ? AND id <= ?").run(threadId, pictures.at(-1)!.id));
     }
     const { bytesWritten } = await transport.flush(task, undefined, through ?? engine.seen(task.threadId)[writer()] ?? 0);
+    followWriter();
     bytesPublished += bytesWritten;
     if (wake && (bytesWritten || pictured)) host.published?.();
     return "written";
@@ -464,6 +466,15 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       retry.add(threadId);
       return "skipped" as const;
     });
+  }
+
+  /** A split moves versions the other install's head hid onto the new writer id; nothing else publishes them before this PC's next edit. */
+  function followWriter(): void {
+    const current = writer();
+    if (current === followed) return;
+    followed = current;
+    const threads = withMessageTransaction((db) => z.array(z.object({ thread: z.string() })).parse(db.prepare("SELECT thread FROM sync_v2_threads WHERE next_seq > 1").all()));
+    for (const { thread } of threads) schedule(thread);
   }
 
   function schedule(threadId: string): void {
@@ -520,6 +531,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     const transport = await client();
     if (!transport || host.running(threadId)) return;
     const pulled = await transport.pull(task);
+    followWriter();
     if (!host.enabled() || host.folder() !== workerFolder || host.running(threadId)) return;
     const cursor = task.cursor;
     const own = ownHead(threadId);
