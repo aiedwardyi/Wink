@@ -66,7 +66,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
+import { carryQuestionFold, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -1247,7 +1247,7 @@ export function Composer({
             onStep={(step) => {
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;
-              foldQuestion(next.id);
+              carryQuestionFold(question.id, next.id);
               setQuestionPick({ id: next.id, newest: pinned.id });
             }}
             typed={text}

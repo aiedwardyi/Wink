@@ -400,6 +400,42 @@ describe("pinned ask_user question", () => {
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
+  it("keeps the card open when the arrows page between questions, and the row a row", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which team?", options: ["Core", "Apps"], staysOpen: true });
+    await mount({ bot: bot([first, second, third]) });
+    const arrow = (name: string) => act(async () => card()!.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!.click());
+    expect(card()!.textContent).toContain("Which team?");
+    await arrow("Previous question");
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which plan?");
+    await arrow("Previous question");
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    await arrow("Next question");
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which plan?");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await act(async () => rowButton("Next question").click());
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which team?");
+    await act(async () => rowButton("Previous question").click());
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which plan?");
+    await expand();
+    await arrow("Previous question");
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+  });
+
   it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
