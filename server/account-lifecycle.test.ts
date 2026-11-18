@@ -13,6 +13,7 @@ import type { ProviderSnapshot } from "./contracts.ts";
 import type { MainChange } from "./account-lifecycle.ts";
 import { Store } from "./store.ts";
 import { createUsageRefresh } from "./usage-refresh.ts";
+import { createInstanceChecks } from "./instance-checks.ts";
 
 const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
@@ -80,7 +81,7 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
     referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers,
+  return { dir, accounts, registry, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
     add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
@@ -530,7 +531,41 @@ describe("account lifecycle", () => {
     expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)?.state).toBe("ready");
     answer({ state: "available", authenticated: false, accountAuthenticated: false });
     await restored;
-    expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)?.state).toBe("stopped");
+    expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)).toMatchObject({
+      state: "stopped", snapshot: { state: "available", authenticated: false },
+    });
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+  });
+
+  it.each([true, false])("keeps a cached read from verifying an account ahead of restore (deferred at boot: %s)", async (deferAccountAuth) => {
+    const f = await fixture();
+    const account = await f.add();
+    await f.registry.load(f.configs(), { deferAccountAuth });
+    let resolveStale!: (snapshot: ProviderSnapshot) => void;
+    let resolveFresh!: (snapshot: ProviderSnapshot) => void;
+    const stale = new Promise<ProviderSnapshot>((resolve) => { resolveStale = resolve; });
+    const fresh = new Promise<ProviderSnapshot>((resolve) => { resolveFresh = resolve; });
+    const snapshot = vi.spyOn(f.registry.get(account.id)!, "snapshot").mockImplementation(
+      (opts) => opts?.refresh ? fresh : stale,
+    );
+    const publish = vi.fn();
+    const checks = createInstanceChecks(f.registry, publish);
+    await checks.describe();
+    await new Promise(setImmediate);
+    const early = snapshot.mock.calls.length;
+    const restore = f.controller.restore();
+    try {
+      resolveStale({ state: "available", authenticated: true, accountIdentity: account.identity, account: "old@example.test" });
+      await new Promise(setImmediate);
+      expect((await checks.describe()).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "checking" });
+      expect(f.registry.accountAvailable(account.id)).toBe(false);
+      expect(early).toBe(deferAccountAuth ? 0 : 1);
+    } finally {
+      resolveFresh({ state: "available", authenticated: true, accountIdentity: account.identity, account: "current@example.test" });
+      await restore;
+    }
+    expect(snapshot).toHaveBeenCalledTimes(deferAccountAuth ? 1 : 2);
+    expect((await checks.describe()).find((row) => row.instanceId === account.id)?.snapshot.account).toBe("current@example.test");
   });
 
   it("publishes a restore check's answer at once and never shows an earlier probe while checking", async () => {
@@ -562,6 +597,18 @@ describe("account lifecycle", () => {
     expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("checking");
   });
 
+  it.each([{ refresh: true }, { rescan: true }])("keeps a failed restore checking during an explicit %j", async (options) => {
+    const f = await fixture();
+    const account = await f.add();
+    f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity, account: "old@example.test" });
+    expect((await f.registry.describeCached()).find((row) => row.instanceId === account.id)?.snapshot.account).toBe("old@example.test");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture CLI crashed"));
+    await f.controller.restore();
+    expect((await f.registry.describe(options)).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "checking" });
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+  });
+
   it("retries a thrown restore probe without changing the account", async () => {
     const f = await fixture();
     const account = await f.add();
@@ -573,6 +620,20 @@ describe("account lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(f.registry.accountAvailable(account.id)).toBe(true);
     expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a sign-out confirmed by a restore retry visible after reloading the stopped account", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture timeout"));
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    await f.controller.restore();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)).toMatchObject({
+      state: "stopped", snapshot: { state: "available", authenticated: false },
+    });
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
   });
 
   it("keeps the prior identity when a re-login probe is unknown", async () => {

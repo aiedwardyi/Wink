@@ -112,6 +112,7 @@ export class ProviderRegistry {
   private modelRefreshAt = new Map<InstanceId, number>();
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
   private probed = new Map<InstanceId, Probe>();
+  private signedOutChecks = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
   private probedListeners = new Set<(instanceId: InstanceId) => void>();
   private helperWork = new Map<InstanceId, number>();
@@ -137,7 +138,7 @@ export class ProviderRegistry {
     this.warmPool = options.warmPool ?? sharedWarmPool;
   }
 
-  async load(configs: InstanceConfigMap) {
+  async load(configs: InstanceConfigMap, options?: { deferAccountAuth?: boolean }) {
     let saved: Record<string, unknown> = {};
     if (this.cacheDir) {
       try { saved = JSON.parse(readFileSync(join(this.cacheDir, "provider-probes.json"), "utf8")); } catch {}
@@ -146,6 +147,7 @@ export class ProviderRegistry {
       this.environmentByInstance.set(instanceId, entry.environment ?? {});
       if (entry.account) this.accounts.set(instanceId, entry.account);
       else this.accounts.delete(instanceId);
+      if (entry.account && options?.deferAccountAuth) this.checkAccount(instanceId);
       const driver = this.driversByKind.get(entry.driver);
       if (!driver) {
         return {
@@ -177,6 +179,7 @@ export class ProviderRegistry {
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
+          ...(entry.account && options?.deferAccountAuth ? { deferAccountAuth: true } : {}),
         });
         return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
@@ -274,27 +277,35 @@ export class ProviderRegistry {
   blockAccount(id: string, blocked: boolean) {
     this.checkingAccounts.delete(id);
     if (blocked) this.blockedAccounts.add(id);
-    else this.blockedAccounts.delete(id);
+    else {
+      this.blockedAccounts.delete(id);
+      this.signedOutChecks.delete(id);
+    }
     this.get(id)?.setAccountBlocked?.(blocked);
   }
   accountBlocked(id: string) { return this.blockedAccounts.has(id); }
   /** Blocked like blockAccount until its check answers, but reads as checking: the saved sign-in is not known to be gone. */
   checkAccount(id: string) {
+    this.probing.delete(id);
+    this.signedOutChecks.delete(id);
     this.blockAccount(id, true);
     this.checkingAccounts.add(id);
   }
   /** Blocked for a reason that shows as signed out; an account whose check is still running is not. */
   accountStopped(id: string) { return this.blockedAccounts.has(id) && !this.checkingAccounts.has(id); }
   accountChecking(id: string) { return this.checkingAccounts.has(id); }
-  /** A confirmed check stands as the account's probe, so its row settles without waiting for the startup refresh. */
   recordAccountCheck(id: string, snapshot: ProviderSnapshot) {
-    if (!this.accounts.has(id) || this.probing.has(id) || this.accountBlocked(id)) return;
-    this.probed.set(id, { snapshot, cliCandidates: [] });
+    if (!this.accounts.has(id) || this.probing.has(id)) return;
+    const probe = { snapshot, cliCandidates: [] };
+    // A restore-confirmed sign-out only describes the blocked account's row.
+    if (snapshot.authenticated === false && this.accountStopped(id)) this.signedOutChecks.set(id, probe);
+    else if (snapshot.authenticated === true && !this.accountBlocked(id)) this.probed.set(id, probe);
+    else return;
     this.probeVersion += 1;
     for (const listener of this.probedListeners) listener(id);
   }
   // An account under a check never shows an earlier probe: its sign-in may have changed since.
-  private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.probed.get(id); }
+  private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.signedOutChecks.get(id) ?? this.probed.get(id); }
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
@@ -464,6 +475,7 @@ export class ProviderRegistry {
     this.environmentByInstance.delete(instanceId);
     this.accounts.delete(instanceId);
     this.blockedAccounts.delete(instanceId);
+    this.checkingAccounts.delete(instanceId);
     this.modelRefreshAt.delete(instanceId);
     this.modelRefreshInFlight.delete(instanceId);
     this.forget(instanceId);
@@ -481,7 +493,7 @@ export class ProviderRegistry {
         pending.push(this.startProbe(entry, candidatesFor, opts).then((probe) => ({ entry, probe })));
       }
       const completed = await Promise.all(pending);
-      const rows = completed.map(({ entry, probe }) => this.row(entry, this.probed.get(entry.instanceId) ?? probe));
+      const rows = completed.map(({ entry, probe }) => this.row(entry, this.known(entry.instanceId) ?? probe));
       this.saveProbes();
       return this.currentAccountRows(rows);
     };
@@ -494,8 +506,7 @@ export class ProviderRegistry {
     const read = async () => {
       const candidatesFor = this.candidateScan();
       const rows = await Promise.all(
-        this.entries().map(async (entry) => this.row(entry, this.known(entry.instanceId) ??
-          await (this.probing.get(entry.instanceId) ?? this.startProbe(entry, candidatesFor)))),
+        this.entries().map(async (entry) => this.row(entry, await this.cachedProbe(entry, candidatesFor))),
       );
       this.saveProbes();
       return this.currentAccountRows(rows);
@@ -523,7 +534,8 @@ export class ProviderRegistry {
   /** describe() rows for instances with a saved probe; probes nothing. */
   describeSaved() {
     return this.entries().flatMap((entry) => {
-      const probe = this.probed.get(entry.instanceId);
+      const probe = this.known(entry.instanceId);
+      if (probe === CHECKING) return [];
       return probe ? [this.row(entry, probe)] : [];
     });
   }
@@ -533,8 +545,7 @@ export class ProviderRegistry {
       for (let attempt = 0; "accountGeneration" in row && row.accountGeneration !== undefined && this.accounts.get(row.instanceId)?.generation !== row.accountGeneration; attempt++) {
         const entry = this.byId.get(row.instanceId);
         if (!entry || attempt > 0 || entry.live?.account?.generation !== this.accounts.get(row.instanceId)?.generation) return [];
-        const probe = this.probed.get(row.instanceId) ?? await (this.probing.get(row.instanceId) ?? this.startProbe(entry, this.candidateScan()));
-        row = this.row(entry, probe);
+        row = this.row(entry, await this.cachedProbe(entry, this.candidateScan()));
       }
       return [row];
     }));
@@ -584,6 +595,14 @@ export class ProviderRegistry {
     };
   }
 
+  private async cachedProbe(entry: RegistryEntry, candidatesFor: ReturnType<ProviderRegistry["candidateScan"]>) {
+    const id = entry.instanceId;
+    const known = this.known(id);
+    if (known) return known;
+    const probe = await (this.probing.get(id) ?? this.startProbe(entry, candidatesFor));
+    return this.known(id) ?? probe;
+  }
+
   private startProbe(
     entry: RegistryEntry,
     candidatesFor: (driver: AnyProviderDriver | undefined) => string[],
@@ -621,6 +640,7 @@ export class ProviderRegistry {
 
   private forget(instanceId: InstanceId) {
     this.probed.delete(instanceId);
+    this.signedOutChecks.delete(instanceId);
     this.probing.delete(instanceId);
     this.cacheKeys.delete(instanceId);
     this.probeVersion += 1;
@@ -756,6 +776,7 @@ export class ProviderRegistry {
     this.modelRefreshAt.clear();
     this.modelRefreshInFlight.clear();
     this.probed.clear();
+    this.signedOutChecks.clear();
     this.probing.clear();
     this.cacheKeys.clear();
   }

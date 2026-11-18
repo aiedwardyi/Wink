@@ -2352,7 +2352,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
-    if (input.account) admitted = (await authStatus(true)).signedIn === true;
+    if (input.account && !input.deferAccountAuth) admitted = (await authStatus(true)).signedIn === true;
     return {
       instanceId,
       ...(input.account ? { account: input.account } : {}),

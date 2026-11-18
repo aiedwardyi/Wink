@@ -42,7 +42,7 @@ export class AccountLifecycle {
     this.hooks = hooks;
     this.bots = bots;
     registry.onAccountIdentity((id, snapshot) => this.observe(id, snapshot));
-    for (const account of accounts.snapshot) registry.blockAccount(account.id, account.state !== "ready");
+    for (const account of accounts.snapshot) if (account.state !== "ready") registry.blockAccount(account.id, true);
     for (const id of Object.keys(accounts.drains)) registry.blockAccount(id, true);
   }
 
@@ -65,7 +65,7 @@ export class AccountLifecycle {
     }
     const accounts = this.accounts.snapshot.filter((account) => !this.accounts.drains[account.id]);
     for (const account of accounts) if (account.state === "pending") await this.discard(account.id);
-    const ready = new Map(accounts.filter((account) => account.state === "ready").map((account) => [account.id, this.restoreAccount(account.id)]));
+    const ready = new Map(accounts.filter((account) => account.state === "ready").map((account) => [account.id, this.restoreAccount(account)]));
     if (!Object.values(this.accounts.drains).some((drain) => drain.phase !== "failed")) this.restoring = ready;
     await Promise.all(ready.values());
     await this.resumeDrains().catch(() => {
@@ -74,13 +74,18 @@ export class AccountLifecycle {
     });
   }
 
-  private async restoreAccount(id: string) {
+  private async restoreAccount({ id, generation }: AccountRecord) {
     this.registry.checkAccount(id);
     const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
-    await this.observe(id, snapshot ?? { state: "unavailable" }).catch(() => {
+    if (!this.registry.accountChecking(id) || this.accounts.get(id)?.generation !== generation) return;
+    try {
+      await this.observe(id, snapshot ?? { state: "unavailable" }, generation);
+      if (snapshot?.authenticated === true && this.accounts.get(id)?.identity === snapshot.accountIdentity) {
+        this.registry.recordAccountCheck(id, snapshot);
+      }
+    } catch {
       console.error("Account restoration is waiting for recovery");
-    });
-    if (snapshot) this.registry.recordAccountCheck(id, snapshot);
+    }
   }
 
   dispose() {
@@ -273,11 +278,9 @@ export class AccountLifecycle {
     return this.exclusive(async () => {
       const current = this.accounts.get(id);
       if (!current || current.generation !== account.generation) return;
-      if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) {
-        await this.accounts.stop(id);
-        return;
-      }
-      await this.accept(current, snapshot);
+      if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) await this.accounts.stop(id);
+      else await this.accept(current, snapshot);
+      if (snapshot.authenticated === false) this.registry.recordAccountCheck(id, snapshot);
     }, false).catch((error) => {
       this.retry(account);
       throw error;

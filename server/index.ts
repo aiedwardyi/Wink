@@ -543,7 +543,7 @@ if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { cacheDir: DATA_DIR });
-await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot)));
+await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot), { deferAccountAuth: true }));
 const bundledSkills = loadBundledSkills();
 const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DATA_DIR, "skills")));
 

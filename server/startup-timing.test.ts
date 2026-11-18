@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +9,51 @@ import { foldPeerQueuedSends } from "./peer-user-reply.ts";
 import { isSendCancelled, queueMark, queueSteeredMessage, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { currentTurnTrace, traceClaimedTurn } from "./turn-timing.ts";
+import { DATA_DIR } from "./config.ts";
+import { ClaudeDriver } from "./drivers/claude.ts";
+import { ProviderRegistry } from "./harness/registry.ts";
+import * as procs from "./procs.ts";
 
 afterEach(() => vi.useRealTimers());
 
 describe("startup timing", () => {
+  it("finishes boot registry loading before four saved Claude accounts answer auth", async () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const load = source.slice(source.indexOf('await startupTiming.track("registry"'), source.indexOf("const bundledSkills"));
+    const registry = new ProviderRegistry([ClaudeDriver]);
+    const configs = Object.fromEntries(Array.from({ length: 4 }, (_, index) => {
+      const id = `startup-test-${index}`;
+      return [id, { driver: ClaudeDriver.driverKind, account: { id, of: "claude", home: join(DATA_DIR, id), generation: 1 } }];
+    }));
+    const answers: Array<() => void> = [];
+    const auth = vi.spyOn(procs, "execCli").mockImplementation((_cli, _args, options, callback) => {
+      answers.push(() => callback(null, JSON.stringify({ loggedIn: true, email: "startup@example.test", authMethod: "claude.ai", configDirectory: options.account?.home })));
+    });
+    const version = vi.spyOn(procs, "cliVersion").mockImplementation((_cli, _options, callback) => callback("1.0.0"));
+    const serving = vi.fn();
+    const loaded = (runInNewContext(`(async () => { ${load} })()`, {
+      startupTiming: createStartupTiming({ write: () => {} }), registry, instanceConfigs: () => configs, cfg: {}, accounts: { snapshot: [] },
+    }) as Promise<void>).then(serving);
+    try {
+      await new Promise(setImmediate);
+      expect(serving).toHaveBeenCalledOnce();
+      expect(auth).not.toHaveBeenCalled();
+      expect(Object.keys(configs).every((id) => !registry.accountAvailable(id))).toBe(true);
+      const snapshots = Promise.all(registry.instances().map((instance) => instance.snapshot({ refresh: true })));
+      expect(auth).not.toHaveBeenCalled();
+      await new Promise(setImmediate);
+      expect(auth).toHaveBeenCalledTimes(4);
+      answers.splice(0).forEach((answer) => answer());
+      expect((await snapshots).map((snapshot) => snapshot.authenticated)).toEqual([true, true, true, true]);
+    } finally {
+      answers.splice(0).forEach((answer) => answer());
+      await loaded;
+      await registry.disposeAll();
+      auth.mockRestore();
+      version.mockRestore();
+    }
+  });
+
   it("holds background work until paint and logs once after it settles", async () => {
     let now = 0;
     let finish!: () => void;
