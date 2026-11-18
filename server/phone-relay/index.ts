@@ -46,6 +46,8 @@ export interface PhoneRelayOptions {
   onStatus: (status: PhoneRelayStatus) => void;
   /** Without it the relay never hears of a Google account. */
   account?: RelayAccountSource;
+  /** Another PC of this Google account uploaded a change. */
+  onPoked?: () => void;
 }
 
 export interface PhoneRelay {
@@ -63,6 +65,8 @@ export interface PhoneRelay {
   sendActive?(): void;
   /** A short room code pointing at this PC, or null. */
   mintRoomCode?(): Promise<{ code: string; exp: number } | null>;
+  /** This PC uploaded a change. */
+  poke?(): void;
 }
 
 export interface PhoneRelayEnrollOptions {

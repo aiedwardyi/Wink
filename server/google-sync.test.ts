@@ -9,7 +9,13 @@ import { decodeDrivePath } from "./drive-mirror.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
 import { GOOGLE_BINDING_FILE, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
 import { ensureMemorySyncDevice, peerMemoryLanded, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { PhoneAccess } from "./phone-access.ts";
 import { requestCredentials } from "./phone-auth.ts";
+import { createPhoneRelay } from "./phone-relay/runtime.ts";
+import { readIdentity, writeAccount } from "./phone-relay/store.ts";
+import { FakeClock } from "./phone-relay/testing/fake-clock.ts";
+import { FakeGoogle, WEB_CLIENT } from "./phone-relay/testing/google-issuer.ts";
+import { StatusLog, enroll, rig, type Rig } from "./phone-relay/testing/harness.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 
@@ -734,6 +740,145 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     await home.sync.idle();
     expect(driveA().uploads.slice(uploads).map((upload) => decodeDrivePath(upload.name) ?? upload.id)).toEqual(["pictures/new.png"]);
     expect(home.sync.status().state).toBe("up-to-date");
+  });
+});
+
+describe("Google sync pokes through the relay", { timeout: 60_000 }, () => {
+  let r: Rig;
+  const accesses: PhoneAccess[] = [];
+
+  beforeEach(async () => {
+    r = await rig({ enroll: false });
+    r.relay.offerPokes = true;
+  });
+
+  afterEach(async () => {
+    for (const access of accesses.splice(0)) await access.stop();
+    await r.close();
+  });
+
+  /** index.ts wiring: relay pokes kick this PC's sync, and a pass that uploaded pokes the relay. */
+  async function linked(pc: PC, extra: Partial<Parameters<typeof createGoogleSync>[0]> = {}) {
+    await enroll(pc.dataDir, r.relay, r.config);
+    const identity = readIdentity(pc.dataDir);
+    if (identity.kind !== "ok") throw new Error(`${pc.name} has no relay identity`);
+    writeAccount(pc.dataDir, r.relay.accountFor(identity.value.label, A.sub));
+    const statuses = new StatusLog();
+    const access: PhoneAccess = new PhoneAccess({
+      dataDir: pc.dataDir, env: {}, staticDir: null, config: () => r.config, saveEnabled: () => {},
+      onChange: () => statuses.push(access.status()),
+      onPoked: () => pc.sync.poked(),
+      start: (options) => createPhoneRelay(options, { clock: new FakeClock(), env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
+      google: { webClientId: WEB_CLIENT, sub: () => A.sub, idToken: () => null, freshIdToken: async () => null, name: () => pc.name, keys: new FakeGoogle().keys },
+    });
+    accesses.push(access);
+    pc.sync.stop();
+    pc.sync = boot(pc, { uploaded: () => access.poke(), ...extra });
+    await access.start((_req, res) => res.end());
+    await statuses.until((status) => status.state === "certifying" || status.state === "connected");
+    return { access, statuses, label: identity.value.label };
+  }
+
+  const replyOn = (pc: PC) => {
+    const head = `threads-v2/${pc.bots[0].syncId}/thread-Counsel/${pc.writerId}/head.json`;
+    const reply = JSON.stringify({ thread: "thread-Counsel", cut: 2 });
+    write(pc.folder!, head, reply);
+    return { head, reply };
+  };
+
+  it("a reply on one PC pokes the other through the relay, which starts its pull within a second", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const starts: number[] = [];
+    let armed = false;
+    await linked(home);
+    await linked(work, { prepare: () => { if (armed) starts.push(performance.now()); ensureMemorySyncDevice(work.ledger); } });
+    await settle(home);
+    await settle(work);
+    expect(r.relay.pokes).toEqual([]);
+
+    armed = true;
+    const { head, reply } = replyOn(home);
+    await home.sync.kick();
+    const uploadedAt = performance.now();
+    await home.sync.idle();
+    await vi.waitFor(() => expect(starts.length).toBeGreaterThan(0), { timeout: 5_000 });
+    expect(starts[0]! - uploadedAt).toBeLessThan(1_000);
+    await vi.waitFor(() => expect(readFileSync(join(work.folder!, ...head.split("/")), "utf8")).toBe(reply), { timeout: 5_000 });
+    await work.sync.idle();
+    // The download-only pass on work sends none back.
+    expect(r.relay.pokes).toEqual([{ type: "poke" }]);
+    expect(r.relay.count("poked")).toBe(1);
+  });
+
+  it("runs one pass plus one trailing pass for a burst of relay pokes", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    let passes = 0;
+    let release = () => {};
+    const gate = new Promise<void>((done) => (release = done));
+    const { label } = await linked(home, {
+      prepare: () => { passes++; ensureMemorySyncDevice(home.ledger); },
+      fetch: async (input, init) => { await gate; return driveA().fetch(input, init); },
+    });
+    const poked = vi.spyOn(home.sync, "poked");
+    for (let poke = 0; poke < 5; poke++) r.relay.send(label, { type: "poked" });
+    await vi.waitFor(() => expect(poked).toHaveBeenCalledTimes(5));
+    release();
+    await home.sync.idle();
+    expect(passes).toBe(2);
+  });
+
+  it("sends no poke to a relay whose ready lacks pokes, and stays connected", async () => {
+    r.relay.offerPokes = false;
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const { label } = await linked(home);
+    await settle(home);
+    const { head, reply } = replyOn(home);
+    await settle(home);
+    expect(driveFiles(driveA()).find((file) => file.path === head)?.bytes).toBe(reply);
+    expect(home.logs).toEqual([]);
+    expect(r.relay.pokes).toEqual([]);
+    expect(r.relay.hasControl(label)).toBe(true);
+  });
+
+  it("keeps the timer passes when the relay is down", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const link = await linked(home);
+    await linked(work, { passMs: 200 });
+    await settle(home);
+    await settle(work);
+    const down = link.statuses.next((status) => status.state === "reconnecting");
+    await r.relay.close();
+    await down;
+    const { head, reply } = replyOn(home);
+    await settle(home);
+    expect(home.logs).toEqual([]);
+    await vi.waitFor(() => expect(readFileSync(join(work.folder!, ...head.split("/")), "utf8")).toBe(reply), { timeout: 5_000 });
+    expect(r.relay.pokes).toEqual([]);
+  });
+
+  it("is wired in index.ts both ways", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const option = (call: string, name: string, scope: { phoneAccess: { poke(): void } } | { googleSync: { poked(): void } }) => {
+      const start = source.indexOf(call);
+      const line = source.slice(start, source.indexOf("\n});\n", start)).split("\n").find((text) => text.startsWith(`  ${name}: `));
+      expect(line, `${call} passes no ${name}`).toBeDefined();
+      const built = new Function("scope", `with (scope) { return { ${line} }; }`)(scope);
+      return built[name];
+    };
+    const poke = vi.fn();
+    const poked = vi.fn();
+    option("const googleSync = createGoogleSync({", "uploaded", { phoneAccess: { poke } })();
+    option("const phoneAccess: PhoneAccess = new PhoneAccess({", "onPoked", { googleSync: { poked } })();
+    expect(poke).toHaveBeenCalledOnce();
+    expect(poked).toHaveBeenCalledOnce();
   });
 });
 

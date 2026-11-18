@@ -630,6 +630,7 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
   },
   teamBase: teamRelayBase(googleEnv.teamRelay),
   room: handleRoomDoor,
+  onPoked: () => googleSync.poked(),
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
     const host = phoneAccess.presenceHost();
@@ -2565,6 +2566,7 @@ const googleSync = createGoogleSync({
   pull: pullSyncedThread,
   picture: (name) => broadcast({ kind: "picture", name }),
   memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
+  uploaded: () => phoneAccess.poke(),
   openThread: () => threadRoutes.openThread(),
 });
 const uploadCloudRoots = cloudSyncRoots();

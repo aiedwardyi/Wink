@@ -25,6 +25,7 @@ import {
   verifyAuth,
   verifyInvite,
   verifyTicket,
+  verifyAccountTicket,
   type AuthMessage,
   type ReadyMessage,
   type RelayMessage,
@@ -46,6 +47,8 @@ interface Control {
   session: string;
   poolToken: string;
   socket: TLSSocket;
+  pokes: boolean;
+  subHash: string | null;
 }
 
 export interface EnrollAnswer {
@@ -309,7 +312,8 @@ export class FakeRelay extends EventEmitter {
             this.record("control:bad-auth");
             return socket.destroy();
           }
-          control = { label: msg.label, session: newNonce(), poolToken: newNonce(), socket };
+          const account = msg.account ? verifyAccountTicket(msg.account, this.operatorKey) : null;
+          control = { label: msg.label, session: newNonce(), poolToken: newNonce(), socket, pokes: msg.pokes === true, subHash: account?.ok ? account.value.subHash : null };
           const old = this.controls.get(msg.label);
           this.controls.set(msg.label, control);
           if (old) old.socket.write(encodeFrame({ type: "notice", code: "superseded" }));
@@ -340,6 +344,7 @@ export class FakeRelay extends EventEmitter {
           this.pokes.push(msg);
           this.record("poke");
           if (!this.offerPokes) socket.destroy();
+          else if (control) this.forwardPoke(control);
         }
       }
     });
@@ -351,6 +356,15 @@ export class FakeRelay extends EventEmitter {
       }
       this.record("control:close");
     });
+  }
+
+  /** As the relay hub does, minus its rate limit: to the sender's account's other PCs that asked for pokes. */
+  private forwardPoke(sender: Control): void {
+    for (const peer of this.controls.values()) {
+      if (peer === sender || !peer.pokes || !sender.subHash || peer.subHash !== sender.subHash) continue;
+      peer.socket.write(encodeFrame({ type: "poked" }));
+      this.record("poked");
+    }
   }
 
   private onData(socket: TLSSocket): void {
