@@ -6,7 +6,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 
 ### Changed
 - Memory use stays bounded on long runs, and pictures in very long chats open at once.
-- The first open after an update is as fast as any open, and accounts show Signed in or Signed out instead of loading.
+- The first open after an update is as fast as any open, and Connections no longer sits on loading.
 - Live replies and sends never wait on slow side requests.
 
 ### Fixed
