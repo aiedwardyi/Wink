@@ -166,3 +166,45 @@ it("moves the code view line with the arrow keys without touching the tree", asy
   expect(share(el(".map-pane"), "--map-rows")).toBe("14.6%");
   expect(localStorage.getItem("omb-map-split")).toBe(null);
 });
+
+it("moves the tree from either line when the Git rows hold one row and have no give", async () => {
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 36, clientHeight: 36 });
+  await drag(codeLine(), 500, 600);
+  expect([share(el(".map-top"), "--map-split"), share(el(".map-flow-rows"), "--map-rows")]).toEqual(["300px", ""]);
+  await drop(codeLine());
+  expect([localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["30.0", null]);
+  await drag(codeLine(), 600, -300);
+  expect(share(el(".map-top"), "--map-split")).toBe("96px");
+  await drop(codeLine());
+  await drag(rowsLine(), 100, 200);
+  expect(share(el(".map-top"), "--map-split")).toBe("300px");
+  await drop(rowsLine());
+  await drag(rowsLine(), 200, -300);
+  expect(share(el(".map-top"), "--map-split")).toBe("96px");
+  expect(localStorage.getItem("omb-map-rows")).toBe(null);
+});
+
+it("lets the top line shrink the tree when all the Git rows already show", async () => {
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 158, clientHeight: 158 });
+  await drag(rowsLine(), 100, -300);
+  expect([share(el(".map-top"), "--map-split"), share(el(".map-flow-rows"), "--map-rows")]).toEqual(["96px", ""]);
+});
+
+it("saves nothing for an arrow key on a line that cannot move", async () => {
+  await mount();
+  size(el(".map-code"), { clientHeight: 100 });
+  await key(codeLine(), "ArrowDown");
+  expect([localStorage.getItem("omb-map-rows"), localStorage.getItem("omb-map-split")]).toEqual([null, null]);
+  expect(share(el(".map-pane"), "--map-rows")).toBe("");
+});
+
+it("does not remember the filled height of Git rows that have no code view below", async () => {
+  await mount();
+  el(".map-code").remove();
+  codeLine().remove();
+  await drag(rowsLine(), 100, 150);
+  await drop(rowsLine());
+  expect([localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["25.0", null]);
+});
