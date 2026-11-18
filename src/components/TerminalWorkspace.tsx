@@ -10,6 +10,7 @@ import { readTerminalMatch, terminalTheme, TERMINAL_APPEARANCE_EVENT } from "@/l
 import { createTerminalLineTracker } from "@/lib/terminal-input";
 import { loadWebTerminalFonts, webTerminalFonts, type LiveOutput, type TerminalBridge } from "@/lib/web-terminal-bridge";
 import { workerPaneOrder } from "@/lib/terminal-hotkeys";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
@@ -34,8 +35,6 @@ function samePath(a: string | null | undefined, b: string | null | undefined): b
   return norm(a) === norm(b);
 }
 
-// Per bot, in memory: last picked pane, or null for Main.
-export const lastViewedPanes = new Map<string, string | null>();
 // Live output queues of mounted overlays (read by tests).
 export const terminalLiveQueues: { id: string; data: string; seq: number }[][] = [];
 

@@ -125,7 +125,8 @@ vi.mock("@/state/store", async () => {
     api: vi.fn(),
   };
 });
-import { TerminalWorkspace, folderBasename, lastViewedPanes, pickInitialPane } from "./TerminalWorkspace";
+import { lastViewedPanes } from "@/lib/terminal-panes";
+import { TerminalWorkspace, folderBasename, pickInitialPane } from "./TerminalWorkspace";
 import { ProviderMark } from "./ProviderIcons";
 import { applyTerminalMatch } from "@/lib/terminal-appearance";
 import { api, type Message } from "@/state/store";

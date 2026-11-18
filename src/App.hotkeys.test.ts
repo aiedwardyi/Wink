@@ -15,6 +15,7 @@ import {
 } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_GAP, PHONE_MENU_BUTTON_PX } from "@/lib/phone-header";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_IDS, nextSkin, type SkinId } from "@/lib/skins";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "App.tsx"), "utf8");
@@ -433,6 +434,7 @@ describe("split number shortcuts", () => {
       unmount: async () => {
         await act(async () => root.unmount());
         host.remove();
+        lastViewedPanes.clear();
         vi.unstubAllGlobals();
         localStorage.clear();
       },

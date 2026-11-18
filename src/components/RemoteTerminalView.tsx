@@ -7,6 +7,7 @@ import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
 import { workerPaneOrder } from "@/lib/terminal-hotkeys";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
@@ -108,7 +109,7 @@ export function RemoteTerminalView({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [selectedPane, setSelectedPane] = useState<string | null>(null);
+  const [selectedPane, setSelectedPane] = useState<string | null>(() => lastViewedPanes.get(bot.id) ?? null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -121,6 +122,10 @@ export function RemoteTerminalView({
   const pinnedRef = useRef(true);
   const mainRef = useRef<HTMLElement>(null);
   const [paint, setPaint] = useState(() => runPaint(() => ""));
+  // A remembered worker that closed while this bot was away opens the chat, not Main.
+  const restoringRef = useRef(selectedPane === MAIN_TAB ? null : selectedPane);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   const panes = snapshot?.panes ?? [];
   const mainPane = panes.find((pane) => pane.main);
@@ -144,6 +149,7 @@ export function RemoteTerminalView({
       const next = await api(`${path}${qs}`);
       if (request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
+      restoringRef.current = null;
       setSnapshot(next);
       setError(null);
       setActionError(null);
@@ -153,6 +159,12 @@ export function RemoteTerminalView({
       const message = cause instanceof Error ? cause.message : String(cause);
       if (targetPane && /unknown terminal/i.test(message)) {
         setSelectedPane(null);
+        if (targetPane === restoringRef.current) {
+          restoringRef.current = null;
+          lastViewedPanes.set(bot.id, null);
+          closeRef.current();
+          return;
+        }
         // The roster still lists the closed pane, so re-read it or the fallback keeps targeting it.
         try {
           const roster = await api(path);
@@ -186,6 +198,7 @@ export function RemoteTerminalView({
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
+    restoringRef.current = null;
     if (paneFocus.sessionId === null) {
       focusedRef.current = paneFocus;
       setSelectedPane(mainPane ? null : MAIN_TAB);
@@ -196,6 +209,10 @@ export function RemoteTerminalView({
     focusedRef.current = paneFocus;
     setSelectedPane(match.main ? null : match.sessionId);
   }, [paneFocus, panes]);
+
+  useEffect(() => {
+    lastViewedPanes.set(bot.id, selectedPane);
+  }, [bot.id, selectedPane]);
 
   useEffect(() => {
     if (!visible) return;
