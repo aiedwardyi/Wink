@@ -2997,7 +2997,7 @@ const summaryBuild = createSummaryBuild({
     if (!bot || !task) return null;
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
-    if (!instance) return null;
+    if (!instance?.generateText) return null;
     const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
