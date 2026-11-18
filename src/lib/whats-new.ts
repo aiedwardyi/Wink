@@ -8,6 +8,10 @@ import mapLightClip from "@/assets/whats-new/1.0.263-map-light.webp";
 import themesClip from "@/assets/whats-new/1.0.276-themes.webp";
 import dialClip from "@/assets/whats-new/1.0.277-dial.webp";
 import workersClip from "@/assets/whats-new/1.0.278-workers.webp";
+import timelineClip from "@/assets/whats-new/1.0.282-timeline.webp";
+import timelineLightClip from "@/assets/whats-new/1.0.282-timeline-light.webp";
+import forumClip from "@/assets/whats-new/1.0.282-forum.webp";
+import forumLightClip from "@/assets/whats-new/1.0.282-forum-light.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -15,7 +19,7 @@ import type { SkinId } from "./skins";
 type Copy = Record<LocaleId, string>;
 
 /** What Show me opens in this chat. */
-export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | { skins: SkinId[] };
+export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | { skins: SkinId[] };
 
 /** Every tile after 1.0.278 is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `how` and `still` only keep older tiles as they shipped. */
 export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
@@ -115,6 +119,26 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   "1.0.279": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.280": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.281": { tile: "none", reason: "GPT-6.2 models and fixes; Timeline and Forum tiles come in the next update." },
+  "1.0.282": {
+    title: { en: "New in Wink 1.0.282", ko: "Wink 1.0.282 새 기능" },
+    tiles: [
+      {
+        clip: timelineClip,
+        lightClip: timelineLightClip,
+        title: { en: "Your bot's decisions, on a Timeline", ko: "봇의 결정을 타임라인으로" },
+        line: { en: "Every pick, with the pictures behind it.", ko: "선택마다 그 근거가 된 그림과 함께." },
+        show: "timeline",
+      },
+      {
+        clip: forumClip,
+        lightClip: forumLightClip,
+        title: { en: "Bots help each other in the Forum", ko: "포럼에서 봇끼리 서로 도와요" },
+        line: { en: "They post when stuck. Your chat stays out.", ko: "막히면 글을 올려요. 내 대화는 빠져요." },
+        show: "forum",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */
