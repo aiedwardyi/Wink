@@ -296,12 +296,12 @@ export function applySyncedRows(
 }
 
 /** One stored row by key, without loading its thread. */
-/** Rows whose text contains `needle` (ASCII case-insensitive) or an escape that may spell its characters (%2E, &#46;), oldest first; the thread's other rows are never parsed. */
-export function textRows(threadId: string, needle: string): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
+/** Rows whose text holds any of `marks` (ASCII case-insensitive), oldest first; the thread's other rows are never parsed. */
+export function linkRows(threadId: string, marks: readonly string[]): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
+  const like = marks.map(() => "text LIKE ? ESCAPE '\\'").join(" OR ");
   // SAFETY: This projection selects TEXT id, role and text, and a nullable TEXT bot id from the stored JSON.
-  return db()
-    .prepare("SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND (text LIKE ? ESCAPE '\\' OR text GLOB '*%[2-7][0-9A-Fa-f]*' OR text GLOB '*&#[0-9]*') ORDER BY rowid")
-    .all(threadId, `%${needle.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`) as Array<{ id: string; role: string; text: string; fromBotId: string | null }>;
+  return db().prepare(`SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND (${like}) ORDER BY rowid`)
+    .all(threadId, ...marks.map((mark) => `%${mark.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`)) as Array<{ id: string; role: string; text: string; fromBotId: string | null }>;
 }
 
 export function readMessage(threadId: string, id: string): Message | undefined {

@@ -28,7 +28,7 @@ describe("linked file rows", () => {
     const { threadId, link } = chat();
     const store = new Store(selection);
     const whole = vi.spyOn(store, "messagesFor");
-    const rows = [...linkedRows(store)(threadId, picture.toLowerCase())];
+    const rows = [...linkedRows(store)(threadId, picture)];
     expect(rows.map((row) => row.id)).toEqual([link.id]);
     expect(whole).not.toHaveBeenCalled();
     expect(store.loaded(threadId)).toBe(false);
@@ -61,12 +61,28 @@ describe("linked file rows", () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  it("skips percent signs that spell no name character", async () => {
+  it("keeps only rows with link syntax", async () => {
     const { linkedRows } = await rowsModule();
     const { threadId, link } = chat();
     const setup = new Store(selection);
     for (let index = 0; index < 20; index++) setup.appendMessage(threadId, { role: "bot", kind: "text", text: `${index * 5}% complete` });
     expect([...linkedRows(new Store(selection))(threadId, picture)].map((row) => row.id)).toEqual([link.id]);
+  });
+
+  it("answers a different file in the same chat without another scan", async () => {
+    const { linkedRows } = await rowsModule();
+    const { threadId, link } = chat();
+    const setup = new Store(selection);
+    const other = setup.appendMessage(threadId, { role: "bot", kind: "text", text: "Also: [chart](</tmp/chart.png>)" });
+    const store = new Store(selection);
+    const rows = linkedRows(store);
+    expect([...rows(threadId, picture)].map((row) => row.id)).toEqual([link.id, other.id]);
+    const prepare = vi.spyOn(messageDatabase(), "prepare");
+    expect([...rows(threadId, "/tmp/chart.png")].map((row) => row.id)).toContain(other.id);
+    const added = store.appendMessage(threadId, { role: "bot", kind: "text", text: "New: [clip](</tmp/clip.mp4>)" });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "no link here" });
+    expect([...rows(threadId, "/tmp/clip.mp4")].map((row) => row.id)).toContain(added.id);
+    expect(prepare.mock.calls.some(([sql]) => sql.includes(" LIKE "))).toBe(false);
   });
 
   it("reads a huge answer again instead of keeping it", async () => {
@@ -95,13 +111,6 @@ describe("linked file rows", () => {
     const store = new Store(selection);
     store.messagesFor(threadId);
     expect([...linkedRows(store)(threadId, picture)].map((row) => row.id)).toContain(link.id);
-  });
-
-  it("keys on a run of the name every link form keeps", async () => {
-    const { nameRun } = await rowsModule();
-    expect(nameRun(picture)).toBe("shot_2.png");
-    expect(nameRun("/tmp/주간 보고서.pdf")).toBe(".pdf");
-    expect(nameRun("/tmp/사진")).toBe("");
   });
 
   it("the linked-file route never loads the whole thread", () => {
