@@ -260,38 +260,37 @@ function sharpPath() {
   throw new Error("sharp not found: it decodes the scene stills");
 }
 
-/** Brightest and darkest pixel of the still under a box `top` CSS px down and each `insets` px in from the `sides` it can sit on. */
-async function extremesBehind(file, { size, insets, sides, top }) {
+/** The pixel of median brightness under a box `top` CSS px down and each `insets` px in from `side`: a lamp or a star under one stroke does not decide it, the backdrop the lines mostly sit on does. */
+async function medianBehind(file, { size, insets, top }, side) {
   const sharp = createRequire(import.meta.url)(sharpPath());
   const { data, info } = await sharp(file).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const px = (css) => Math.round(css * STILL_PX_PER_CSS_PX);
-  let best = { r: 0, g: 0, b: 0 };
-  let worst = { r: 255, g: 255, b: 255 };
-  const starts = insets.flatMap((inset) => sides.map((side) => (side === "left" ? px(inset) : info.width - px(inset + size))));
-  for (const x0 of starts) {
+  const pixels = [];
+  for (const inset of insets) {
+    const x0 = side === "left" ? px(inset) : info.width - px(inset + size);
     for (let y = px(top); y < px(top + size); y++) {
       for (let x = x0; x < x0 + px(size); x++) {
         const i = (y * info.width + x) * 3;
-        const pixel = { r: data[i], g: data[i + 1], b: data[i + 2] };
-        if (luminance(pixel) > luminance(best)) best = pixel;
-        if (luminance(pixel) < luminance(worst)) worst = pixel;
+        pixels.push({ r: data[i], g: data[i + 1], b: data[i + 2] });
       }
     }
   }
-  return { brightest: best, darkest: worst };
+  pixels.sort((a, b) => luminance(a) - luminance(b));
+  return pixels[Math.floor((pixels.length - 1) / 2)];
 }
 
 const toHex = ({ r, g, b }) => "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
 
-/** Every token `property` takes in the scene rule that gives the icon `marker` its look on skin `id` (`color: var(--x)`, or the color inside each `drop-shadow(...)` of the filter). */
-function iconPaint(source, marker, id, property) {
-  const pattern = property === "halo" ? /drop-shadow\([^)]*var\((--color-[\w-]+)\)/g : /(?:^|[;\s])color:\s*var\((--color-[\w-]+)\)/g;
+/** The ink token a scene rule gives the icon `marker` on skin `id` and drawer side `side` (`color: var(--x)`); a rule naming `[data-side]` applies to that side only. */
+function iconInk(source, marker, id, side) {
   for (const [, selector, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     if (!selector.includes(marker) || !selector.includes(`[data-skin="${id}"]`)) continue;
-    const tokens = [...body.matchAll(pattern)].map((match) => match[1]);
-    if (tokens.length) return tokens;
+    const onlySide = selector.match(/\[data-side="(left|right)"\]/)?.[1];
+    if (onlySide && onlySide !== side) continue;
+    const token = body.match(/(?:^|[;\s])color:\s*var\((--color-[\w-]+)\)/)?.[1];
+    if (token) return token;
   }
-  return [];
+  return null;
 }
 
 /** A token's value on the skin; a token the skin does not define fails loudly, since contrast() of nothing never fails. */
@@ -300,32 +299,24 @@ function tokenHex(tokens, token, id) {
   return tokens[token];
 }
 
-/** Icon ink over what sits behind it: the backing the scene paints, else the scene's brightest and darkest pixel there, the darkest swapped for the halo token the scene gives the lines. */
+/** Icon ink over what sits behind it on each side it can sit on: the backing the scene paints, else the scene's median pixel there. */
 async function sceneIconProblems(id, tokens, stills, source) {
   const still = stills.get(id);
   if (!still) return [];
   const problems = [];
   for (const icon of SCENE_ICONS) {
     const backingToken = iconBacking(source, icon.marker);
-    const inkToken = iconPaint(source, icon.marker, id, "color")[0] ?? icon.ink;
-    const haloTokens = iconPaint(source, icon.marker, id, "halo");
-    const behinds = [];
-    if (backingToken) behinds.push({ label: backingToken, hex: tokenHex(tokens, backingToken, id) });
-    else {
-      const { brightest, darkest } = await extremesBehind(still, icon);
-      behinds.push({ label: `scene pixel ${toHex(brightest)}`, hex: toHex(brightest) });
-      for (const haloToken of haloTokens) behinds.push({ label: `halo ${haloToken}`, hex: tokenHex(tokens, haloToken, id) });
-      if (!haloTokens.length) behinds.push({ label: `scene pixel ${toHex(darkest)}`, hex: toHex(darkest) });
-    }
-    for (const { label, hex } of behinds) {
-      const ratio = contrast(tokenHex(tokens, inkToken, id), hex);
-      if (ratio < icon.min) problems.push({ icon: icon.name, ink: inkToken, behind: label, ratio, min: icon.min });
+    for (const side of icon.sides) {
+      const inkToken = iconInk(source, icon.marker, id, side) ?? icon.ink;
+      const behind = backingToken ? tokenHex(tokens, backingToken, id) : toHex(await medianBehind(still, icon, side));
+      const ratio = contrast(tokenHex(tokens, inkToken, id), behind);
+      if (ratio < icon.min) problems.push({ icon: `${icon.name} (${side})`, ink: inkToken, behind: backingToken ?? `scene pixel ${behind}`, ratio, min: icon.min });
     }
   }
   return problems;
 }
 
-export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, iconPaint, sceneIconProblems };
+export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, iconInk, sceneIconProblems };
 
 function isDirectRun() {
   const entry = process.argv[1];

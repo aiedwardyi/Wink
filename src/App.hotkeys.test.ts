@@ -45,6 +45,8 @@ describe("phone drawer menu button", () => {
     expect(button).toContain("sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT");
     expect(button).toContain("md:hidden");
     expect(button).toContain("data-phone-menu");
+    // The scene CSS picks the line color by this side.
+    expect(button).toContain('data-side={sidebarOnRight ? "right" : "left"}');
     // Both sides share one inset and one top, so neither can drift from the header row.
     expect(DRAWER_BUTTON_LEFT).toBe(DRAWER_BUTTON_RIGHT.replace("right-3.5", "left-3.5"));
     expect(DRAWER_BUTTON_LEFT).toContain("top-[15px]");

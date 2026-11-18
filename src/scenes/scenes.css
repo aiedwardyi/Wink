@@ -16,9 +16,9 @@ main[data-scene] .thinking-sheen { text-shadow: none; }
 main[data-scene] .\@container\/chathead button:has([data-model-label]) { background-color: var(--color-raised); }
 /* The phone menu button floats beside main, so it finds the scene by what follows it. No box: its lines carry a soft shadow to read over the scene. */
 [data-phone-menu]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) > svg { filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.7)); }
-/* These four have white in the corner the button can sit in: dark lines with a soft light halo, so they read on the dark half too. */
-:is([data-skin="samurai-ink"], [data-skin="night-rain"], [data-skin="warp"], [data-skin="snow-night"]) [data-phone-menu]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) { color: var(--color-accent-ink); }
-:is([data-skin="samurai-ink"], [data-skin="night-rain"], [data-skin="warp"], [data-skin="snow-night"]) [data-phone-menu]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) > svg { filter: drop-shadow(0 0 2px var(--color-ink-secondary)) drop-shadow(0 0 4px var(--color-ink-secondary)); }
+/* Only Samurai Ink's moon sits under the button, and only when the drawer opens from the right: dark lines there, no shadow. Every other skin and side has dark sky behind it. The check measures each side. */
+[data-skin="samurai-ink"] [data-phone-menu][data-side="right"]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) { color: var(--color-accent-ink); }
+[data-skin="samurai-ink"] [data-phone-menu][data-side="right"]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) > svg { filter: none; }
 /* The side pane toggle ends the header, where a scene's moon or light can sit. */
 main[data-scene] [data-show-pane-button] { background-color: var(--color-raised); }
 /* The composer's bottom bg-app slab would cut a band out of the scene. */
