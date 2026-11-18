@@ -92,7 +92,7 @@ it("badge number is every open worker, the same number the sidebar line says", a
   expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("27");
 });
 
-it.each([["BLOCKED", "waiting"], ["FAIL", "failed"]] as const)("badge number takes the %s state's ink while another worker runs", async (word, shown) => {
+it.each([["BLOCKED", "waiting", "bg-warning text-app"], ["FAIL", "failed", "bg-danger"]] as const)("badge number takes the %s state's fill and ink while another worker runs", async (word, shown, classes) => {
   const launch = (i: number): Message => ({ id: `l${i}`, at: i * 2 + 1, role: "bot", kind: "launch", text: `Launched W${i} | Opus 5.5 | high\nSession: ${String(i).padStart(8, "0")}-1` });
   const note: Message = { id: "n1", at: 10, role: "bot", kind: "note", text: `[pane 00000001] [W1 | Opus 5.5 | high] from Ada (ada): ${word} W1 branch=x sha=y dirty=no\nstuck` };
   const runs = workerRuns([launch(1), launch(2), note]).map((run) => ({ run, state: run.state }));
@@ -101,5 +101,5 @@ it.each([["BLOCKED", "waiting"], ["FAIL", "failed"]] as const)("badge number tak
   const badge = host.querySelector("[data-worker-badge]")!;
   expect(badge.getAttribute("data-worker-state")).toBe(shown);
   expect(badge.textContent).toBe("2");
-  expect(badge.className).toMatch(/\btext-app\b/);
+  expect(badge.className).toContain(classes);
 });

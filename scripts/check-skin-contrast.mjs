@@ -86,19 +86,23 @@ function contrast(fgHex, bgHex) {
 }
 
 // The side pane toggle's count badge fills with the first worker's state color, so its number
-// needs an ink for every state. bg-accent carries its own (the rule at the bottom of styles.css, which
-// a skin may override for the badge); any other fill needs a text-<token> utility, and only @theme
+// needs an ink for every state. bg-accent and bg-danger carry theirs (the rules at the bottom of
+// styles.css, which beat a text-<token> utility and which a skin may override for the badge); any other fill needs a text-<token> utility, and only @theme
 // tokens have one.
 const workerRows = readFileSync(join(root, "src/components/WorkerRows.tsx"), "utf8");
 const themeTokens = new Set([...(css.match(/@theme\s*\{([^}]*)\}/)?.[1] ?? "").matchAll(/--color-([\w-]+)\s*:/g)].map(([, name]) => name));
 const workerStatus = workerRows.match(/export const WORKER_STATUS = \{[\s\S]*?\} as const/)?.[0] ?? "";
 const BADGE_PAIRS = [...workerStatus.matchAll(/dot: "bg-([\w-]+)", ink: "(?:text-([\w-]+))?"/g)].map(([, fill, ink]) => {
-  if (!ink && fill !== "accent") throw new Error(`WORKER_STATUS bg-${fill} has no ink: only bg-accent carries one, so its badge number would inherit the toggle's gray`);
-  if (ink && !themeTokens.has(ink)) throw new Error(`WORKER_STATUS ink text-${ink} is not a utility: only @theme colors have one (accent-ink comes from the .bg-accent rule)`);
+  const ruled = new RegExp(`^\\.bg-${fill}\\s*\\{[^}]*\\bcolor:`, "m").test(css);
+  if (!ink && !ruled) throw new Error(`WORKER_STATUS bg-${fill} has no ink and no .bg-${fill} color rule in styles.css, so its badge number would inherit the toggle's gray`);
+  if (ink && ruled) throw new Error(`WORKER_STATUS ink text-${ink} on bg-${fill} never applies: the .bg-${fill} rule in styles.css sets the color and wins; leave ink "" and override that rule`);
+  if (ink && !themeTokens.has(ink)) throw new Error(`WORKER_STATUS ink text-${ink} is not a utility: only @theme colors have one (accent-ink and danger-ink come from the .bg-accent and .bg-danger rules)`);
   return [`--color-${ink ?? `${fill}-ink`}`, `--color-${fill}`, 4.5];
 });
 const badgeInk = new Map();
-for (const [, skin, fill, token] of css.matchAll(/\[data-skin="([\w-]+)"\]\s+\[data-worker-badge\]\.bg-([\w-]+)\s*\{\s*color:\s*var\((--color-[\w-]+)\)/g)) badgeInk.set(skin, (badgeInk.get(skin) ?? new Map()).set(`--color-${fill}`, token));
+for (const [, selectors, token] of css.matchAll(/((?:\[data-skin="[\w-]+"\]\s+\[data-worker-badge\]\.bg-[\w-]+\s*,?\s*)+)\{\s*color:\s*var\((--color-[\w-]+)\)/g)) {
+  for (const [, skin, fill] of selectors.matchAll(/\[data-skin="([\w-]+)"\]\s+\[data-worker-badge\]\.bg-([\w-]+)/g)) badgeInk.set(skin, (badgeInk.get(skin) ?? new Map()).set(`--color-${fill}`, token));
+}
 const showPaneButton = readFileSync(join(root, "src/components/ShowPaneButton.tsx"), "utf8");
 if (!/data-worker-badge[^\n]*WORKER_STATUS\[first\.state\]\.ink/.test(showPaneButton)) throw new Error("the badge in src/components/ShowPaneButton.tsx must take WORKER_STATUS[first.state].ink: without it the number inherits the toggle's gray whatever the table says");
 const statusCount = (workerStatus.match(/\bkey: "workers\./g) ?? []).length;

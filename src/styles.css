@@ -5320,8 +5320,9 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
 .bg-danger {
   color: var(--color-danger-ink);
 }
-/* Midnight's white accent ink is 3.65:1; the 9px badge number needs 4.5:1. */
-[data-skin="midnight"] [data-worker-badge].bg-accent {
+/* Midnight's white inks are 3.65:1 on accent and 3.10:1 on danger; the 9px badge number needs 4.5:1. */
+[data-skin="midnight"] [data-worker-badge].bg-accent,
+[data-skin="midnight"] [data-worker-badge].bg-danger {
   color: var(--color-app);
 }
 
