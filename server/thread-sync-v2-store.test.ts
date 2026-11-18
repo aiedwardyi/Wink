@@ -7,12 +7,16 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setSafeTimers } from "vitest/internal/browser";
+import { z } from "zod";
 
 import type { BotRecord, Message, TaskRecord } from "./store.ts";
 import { CONFLICT_NOTICE } from "./thread-sync.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { writeDeviceRecord } from "./device-sync.ts";
+import { createDriveClient } from "./drive-client.ts";
+import { createDriveMirror, type DriveHashes } from "./drive-mirror.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
+import { FakeDrive } from "./testing/fake-drive.ts";
 import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
 import { bootRowsNow, testBootReads } from "./testing/boot-rows.ts";
 
@@ -2060,5 +2064,315 @@ describe("copied installs", { timeout: 180_000 }, () => {
       expect(counts(peer.dataDir)).toEqual({ doubledRows: 0, quarantined: 0 });
     }
     expect(readdirSync(join(folder, "threads-v2", "bot", "thread", identity(b.dataDir)))).toEqual(["head.json"]);
+  });
+});
+
+interface Box { peer: ReturnType<typeof pc>; folder: string; statePath: string; device: string; hashes: DriveHashes }
+
+function box(device: string, writer: string): Box {
+  const folder = temp();
+  return { peer: pc(folder, device, true, false, false, writer), folder, statePath: join(temp(), "table.json"), device, hashes: new Map() };
+}
+
+// A second install from a copy of the first one's data folder: same database, mirror folder and Drive table.
+async function copyBox(source: Box): Promise<Box> {
+  const dataDir = temp();
+  const folder = temp();
+  await source.peer.call("restart", { copy: dataDir });
+  cpSync(source.folder, folder, { recursive: true });
+  const statePath = join(temp(), "table.json");
+  const table = JSON.parse(readFileSync(source.statePath, "utf8"));
+  writeFileSync(statePath, JSON.stringify({ ...table, binding: { ...table.binding, mirrorPath: folder } }));
+  return { peer: pc(folder, source.device, true, false, false, undefined, dataDir), folder, statePath, device: source.device, hashes: new Map() };
+}
+
+// Fake Drive returns parents only when the request asks for them.
+function driveFetch(drive: FakeDrive): typeof fetch {
+  return async (input, init) => {
+    const response = await drive.fetch(input, init);
+    const url = new URL(input instanceof URL ? input.href : input instanceof Request ? input.url : input);
+    if (!response.ok || url.searchParams.get("alt") === "media" || !url.searchParams.get("fields")?.endsWith(",parents")) return response;
+    const parents = drive.records.get(decodeURIComponent(url.pathname.split("/").at(-1) ?? ""))?.parents;
+    const body = z.object({}).passthrough().parse(await response.json());
+    return Response.json(parents ? { ...body, parents } : body);
+  };
+}
+
+// One pass the way google-sync runs it: ids read at the start, every landed chat head pulled.
+async function pass(drive: FakeDrive, target: Box): Promise<void> {
+  const landed: string[] = [];
+  await createDriveMirror({
+    owner: { issuer: "https://accounts.google.com", sub: "account-a" }, mirrorPath: target.folder, statePath: target.statePath, hashes: target.hashes,
+    ownIds: { profileDeviceId: `device-${target.device}`, writerId: identity(target.peer.dataDir), memoryDeviceId: target.device.repeat(12) },
+    client: createDriveClient({ getAccessToken: async () => "test-access", fetch: driveFetch(drive) }),
+    downloaded: (path) => void landed.push(path),
+  }).syncOnce();
+  for (const path of landed) {
+    const head = /^threads-v2\/([^/]+)\/([^/]+)\/[^/]+\/head\.json$/.exec(path);
+    if (head) await target.peer.call("pull", { threadId: head[2], botSyncId: head[1] });
+  }
+}
+
+async function cycle(drive: FakeDrive, boxes: Box[], threads = ["thread"], count = 3): Promise<void> {
+  for (let round = 0; round < count; round++) {
+    for (const target of boxes) {
+      await pass(drive, target);
+      for (const threadId of threads) await target.peer.call("flush", { threadId });
+    }
+  }
+}
+
+async function shown(target: Pick<Box, "peer">, threadId = "thread") {
+  const snapshot = await target.peer.call<Snapshot>("snapshot", { threadId });
+  const rows = snapshot.rows.filter((row) => row.kind === "text");
+  return {
+    ids: rows.map((row) => row.id), texts: rows.map((row) => row.text ?? ""), notices: snapshot.rows.filter(isConflictNotice).length,
+    task: snapshot.tasks.find((task) => task.threadId === threadId)?.title ?? null, hold: await target.peer.call("hold", { threadId }), ...counts(target.peer.dataDir),
+  };
+}
+
+async function converged(boxes: Array<Pick<Box, "peer">>, length: number, threadId = "thread", forks?: string[][]): Promise<string[]> {
+  const views = await Promise.all(boxes.map((target) => shown(target, threadId)));
+  for (const view of views) {
+    expect({ ...view, ids: view.ids.length, distinct: new Set(view.ids).size }).toMatchObject({ ids: length, distinct: length, doubledRows: 0, quarantined: 0 });
+    // A fork kept split can list either branch first and show a notice; each install's own rows keep their order.
+    if (forks) for (const order of forks) expect(view.ids.filter((id) => order.includes(id))).toEqual(order);
+    else expect({ ids: view.ids, notices: view.notices }).toEqual({ ids: views[0].ids, notices: 0 });
+  }
+  return views[0].texts;
+}
+
+const own = (boxes: Array<Pick<Box, "peer">>) => Promise.all(boxes.map(async (target) => (await shown(target)).ids));
+
+describe("copied installs syncing separate folders", { timeout: 240_000 }, () => {
+  it("gives both copies every row when each sealed a same-named segment before seeing the other", async () => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("flush");
+    await pass(drive, a);
+    const b = await copyBox(a);
+    for (const target of [a, b]) {
+      await target.peer.call("batch", { count: 1500 });
+      await target.peer.call("flush");
+    }
+    const segments = (target: Box) => readdirSync(join(target.folder, "threads-v2", "bot", "thread", LOW)).filter((name) => name.startsWith("seg-")).sort();
+    expect(segments(b)).toEqual(segments(a));
+    const forks = await own([a, b]);
+    await pass(drive, a);
+    await cycle(drive, [b, a]);
+    // Both installs added 1500 turns after the copy, a real fork past the join limit, so a PC may keep it split with a notice.
+    await converged([a, b], 4000, "thread", forks);
+  });
+
+  it.each(["copy", "original"])("gives the copy and a later third PC every row when the %s sealed a shorter first segment", async (shorter) => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    const c = box("c", HIGH);
+    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("flush");
+    await pass(drive, a);
+    const b = await copyBox(a);
+    // A long first row ends that install's segment sooner, so the two seal different ranges.
+    await (shorter === "copy" ? b : a).peer.call("append", { text: "x".repeat(4000) });
+    for (const target of [a, b]) {
+      await target.peer.call("batch", { count: 1500 });
+      await target.peer.call("flush");
+    }
+    const forks = await own([a, b]);
+    await pass(drive, a);
+    await cycle(drive, [b, a]);
+    await cycle(drive, [c, a, b], ["thread"], 2);
+    await converged([a, b, c], 4001, "thread", forks);
+  });
+
+  it("lets the original seal the range the copy sealed before it split", async () => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    const c = box("c", HIGH);
+    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("flush");
+    await pass(drive, a);
+    const b = await copyBox(a);
+    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("flush");
+    await b.peer.call("batch", { count: 1000 });
+    await b.peer.call("batch", { count: 500 });
+    await b.peer.call("flush");
+    const [copied] = await own([b]);
+    await pass(drive, a);
+    await pass(drive, b);
+    expect(identity(b.peer.dataDir)).not.toBe(LOW);
+    await a.peer.call("batch", { count: 500 });
+    await a.peer.call("flush");
+    const forks = [...await own([a]), copied];
+    await cycle(drive, [a, b, c]);
+    await converged([a, b, c], 4000, "thread", forks);
+  });
+
+  it.each(["copy", "original"])("gives a third PC every row when a synced folder carried segments the %s sealed before the split", async (longer) => {
+    const [home, work, third] = [temp(), temp(), temp()];
+    const a = pc(home, "a", true, false, false, LOW);
+    await a.call("batch", { count: 1000 });
+    await a.call("flush");
+    const b = await copy(a, work, "a");
+    cpSync(home, work, { recursive: true });
+    await (longer === "copy" ? b : a).call("append", { text: "x".repeat(4000) });
+    for (const peer of [a, b]) {
+      await peer.call("batch", { count: 1500 });
+      await peer.call("flush");
+    }
+    const forks = await own([a, b].map((peer) => ({ peer })));
+    const dir = (folder: string, writer = "") => join(folder, "threads-v2", "bot", "thread", writer);
+    // A sync client: segments copy once each way, a head only from the one install that owns its writer id.
+    const sync = () => {
+      for (const [from, to] of [[home, work], [work, home]]) {
+        for (const writer of readdirSync(dir(from))) for (const name of readdirSync(dir(from, writer))) {
+          if (!name.startsWith("seg-") || existsSync(join(dir(to, writer), name))) continue;
+          mkdirSync(dir(to, writer), { recursive: true });
+          cpSync(join(dir(from, writer), name), join(dir(to, writer), name));
+        }
+      }
+      const owners = [[identity(a.dataDir), home, work], [identity(b.dataDir), work, home]];
+      for (const [writer, from, to] of owners) {
+        if (owners.filter(([id]) => id === writer).length > 1 || !existsSync(join(dir(from, writer), "head.json"))) continue;
+        mkdirSync(dir(to, writer), { recursive: true });
+        writeFileSync(join(dir(to, writer), "head.json"), readFileSync(join(dir(from, writer), "head.json")));
+      }
+    };
+    sync();
+    writeFileSync(join(dir(work, LOW), "head.json"), readFileSync(join(dir(home, LOW), "head.json")));
+    for (let round = 0; round < 3; round++) {
+      for (const peer of [b, a]) {
+        await peer.call("pull");
+        await peer.call("poll");
+        await peer.call("flush");
+        sync();
+      }
+    }
+    cpSync(home, third, { recursive: true });
+    const c = pc(third, "c", true, false, false, HIGH);
+    for (let round = 0; round < 2; round++) {
+      await c.call("pull");
+      await c.call("poll");
+    }
+    await converged([a, b, c].map((peer) => ({ peer })), 4001, "thread", forks);
+  });
+
+  it.each([1, 2])("keeps every row when the original publishes %i time(s) offline after a copy of a running turn", async (offline) => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    const c = box("c", HIGH);
+    await a.peer.call("append", { text: "base" });
+    await a.peer.call("flush");
+    await pass(drive, a);
+    await pass(drive, c);
+    await a.peer.call("live", { value: true });
+    await a.peer.call("append", { text: "prompt" });
+    await a.peer.call("saved");
+    await pass(drive, a);
+    await pass(drive, c);
+    await a.peer.call("append", { role: "bot", text: "reply part 1" });
+    const b = await copyBox(a);
+    await a.peer.call("append", { role: "bot", text: "reply part 2" });
+    await a.peer.call("live", { value: false });
+    await a.peer.call("flush");
+    if (offline === 2) {
+      await a.peer.call("append", { text: "second offline message" });
+      await a.peer.call("flush");
+    }
+    await b.peer.call("flush");
+    await pass(drive, b);
+    await pass(drive, a);
+    await a.peer.call("flush");
+    await a.peer.call("append", { text: "after reconnect on A" });
+    await a.peer.call("flush");
+    await cycle(drive, [a, b, c]);
+    await b.peer.call("append", { text: "later on B" });
+    await b.peer.call("flush");
+    await cycle(drive, [b, a, c]);
+    const texts = await converged([a, b, c], offline + 5);
+    expect([...texts].sort()).toEqual(["base", "prompt", "reply part 1", "reply part 2", ...(offline === 2 ? ["second offline message"] : []), "after reconnect on A", "later on B"].sort());
+  });
+
+  it.each(["publishes during the pass", "publishes while Drive is full"])("keeps a chat the original %s that lands the copy's head", async (how) => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    const c = box("c", HIGH);
+    await a.peer.call("append", { text: "chat1 base" });
+    await a.peer.call("flush");
+    const chat = (await a.peer.call<TaskRecord>("create")).threadId;
+    await a.peer.call("append", { threadId: chat, text: "chat2 base" });
+    await a.peer.call("flush", { threadId: chat });
+    await pass(drive, a);
+    await pass(drive, c);
+    const b = await copyBox(a);
+    await b.peer.call("append", { text: "chat1 from B" });
+    await b.peer.call("flush");
+    await pass(drive, b);
+    const reply = async () => {
+      await a.peer.call("append", { threadId: chat, text: "chat2 reply on A" });
+      await a.peer.call("flush", { threadId: chat });
+    };
+    if (how === "publishes during the pass") {
+      let done = false;
+      drive.onDownload = async (file) => {
+        if (done || !decodeURIComponent(file.name).endsWith(`/thread/${LOW}/head.json`)) return;
+        done = true;
+        await reply();
+      };
+    } else {
+      await reply();
+      drive.full = true;
+    }
+    await pass(drive, a);
+    drive.onDownload = undefined;
+    drive.full = false;
+    expect(identity(a.peer.dataDir)).not.toBe(LOW);
+    await cycle(drive, [a, b, c], ["thread", chat]);
+    await a.peer.call("append", { threadId: chat, text: "chat2 later on A" });
+    await a.peer.call("flush", { threadId: chat });
+    await cycle(drive, [a, b, c], ["thread", chat]);
+    expect(await converged([a, b, c], 3, chat)).toEqual(["chat2 base", "chat2 reply on A", "chat2 later on A"]);
+    expect([...await converged([a, b, c], 2)].sort()).toEqual(["chat1 base", "chat1 from B"]);
+    for (const target of [b, c]) expect((await shown(target, chat)).hold).toBe("free");
+  });
+
+  it("keeps an edit, a rename and a delete the original published while Drive was full", async () => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    const c = box("c", HIGH);
+    await a.peer.call("append", { text: "chat1 base" });
+    await a.peer.call("flush");
+    const chat = (await a.peer.call<TaskRecord>("create")).threadId;
+    const first = await a.peer.call<Message>("append", { threadId: chat, text: "chat2 base" });
+    await a.peer.call("flush", { threadId: chat });
+    const gone = (await a.peer.call<TaskRecord>("create")).threadId;
+    await a.peer.call("append", { threadId: gone, text: "chat3 base" });
+    await a.peer.call("flush", { threadId: gone });
+    await pass(drive, a);
+    await pass(drive, c);
+    const b = await copyBox(a);
+    await b.peer.call("append", { text: "chat1 from B" });
+    await b.peer.call("flush");
+    await pass(drive, b);
+    await a.peer.call("patch", { threadId: chat, id: first.id, patch: { text: "chat2 base EDITED on A" } });
+    await a.peer.call("rename", { threadId: chat, title: "Renamed on A" });
+    await a.peer.call("flush", { threadId: chat });
+    await a.peer.call("delete", { threadId: gone });
+    await a.peer.call("flush", { threadId: gone });
+    drive.full = true;
+    await pass(drive, a);
+    drive.full = false;
+    const threads = ["thread", chat, gone];
+    await cycle(drive, [a, b, c], threads);
+    await a.peer.call("append", { threadId: chat, text: "chat2 later on A" });
+    await a.peer.call("flush", { threadId: chat });
+    await cycle(drive, [a, b, c], threads);
+    expect(await converged([a, b, c], 2, chat)).toEqual(["chat2 base EDITED on A", "chat2 later on A"]);
+    for (const target of [a, b, c]) {
+      expect(await shown(target, chat)).toMatchObject({ task: "Renamed on A", hold: "free" });
+      expect((await shown(target, gone)).task).toBeNull();
+    }
   });
 });

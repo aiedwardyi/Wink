@@ -139,6 +139,7 @@ export function createSyncEngine(input: SyncOptions) {
   const hashSchema = z.object({ hash: z.string() }).optional();
   const nextSeqSchema = z.object({ next_seq: integer });
   const sealSchema = jsonSchema.extend({ first_seq: integer, last_seq: integer });
+  const sealFileSchema = sealSchema.extend({ thread: threadIdSchema, bot: idSchema });
   const localHeadSchema = z.object({ cut: integer, generation: integer, head: z.string().nullable() });
   const peerHeadSchema = z.object({ generation: integer, cut: integer, last_seq: integer, hash: z.string() });
   const parentSchema = z.object({ parent: z.union([z.string(), z.number()]).nullable() });
@@ -658,7 +659,7 @@ export function createSyncEngine(input: SyncOptions) {
     } catch {
       return (previous?.lastSeq ?? 0) + 1;
     }
-    if (head.generation <= state.generation && mine(scope.threadId, head)) return (previous?.lastSeq ?? 0) + 1;
+    if (head.generation <= state.generation && mine(scope.threadId, head)) return Math.min(previous?.lastSeq ?? 0, head.lastSeq) + 1;
     const theirs = new Map(head.versions.map((packet) => [packet.seq, packetHash(packet)]));
     const shared = new Set<number>();
     for (const name of readdirSync(dirname(path))) {
@@ -721,6 +722,7 @@ export function createSyncEngine(input: SyncOptions) {
     const forks = new Map(owned().map((row) => [row.thread, forkOf({ threadId: row.thread, botSyncId: row.bot })]));
     if ([...forks.values()].includes(null)) return null;
     const next = randomUUID();
+    const leftovers: string[] = [];
     const moved = withMessageTransaction(() => {
       for (const row of owned()) if (!forks.has(row.thread)) forks.set(row.thread, forkOf({ threadId: row.thread, botSyncId: row.bot }));
       if ([...forks.values()].includes(null)) return null;
@@ -729,6 +731,17 @@ export function createSyncEngine(input: SyncOptions) {
         const map = rehome(thread, fork!, next);
         if (thread === scope.threadId) mapped = map;
       }
+      // Our seals past the fork would reach peers under the old id, which now carries the other install's history.
+      for (const seal of all(sealFileSchema, "SELECT thread, bot, first_seq, last_seq, json FROM sync_v2_seals JOIN sync_v2_threads USING (thread)")) {
+        const fork = forks.get(seal.thread);
+        if (!fork || seal.last_seq < fork) continue;
+        const path = join(dirname(headPath({ threadId: seal.thread, botSyncId: seal.bot })), `seg-${seal.first_seq}-${seal.last_seq}.json.gz`);
+        try {
+          if (gunzipSync(readFileSync(path), { maxOutputLength: headBytes }).toString("utf8") === seal.json) leftovers.push(path);
+        } catch {
+          continue;
+        }
+      }
       sql("UPDATE sync_v2_threads SET cut = 0, generation = 0, head = NULL").run();
       sql("DELETE FROM sync_v2_seals").run();
       sql("UPDATE sync_v2_identity SET writer = ? WHERE id = 1").run(next);
@@ -736,6 +749,7 @@ export function createSyncEngine(input: SyncOptions) {
     });
     if (!moved) return null;
     ownWriter();
+    for (const path of leftovers) unlinkSync(path);
     return moved;
   }
 
@@ -889,6 +903,28 @@ export function createSyncEngine(input: SyncOptions) {
     reconcilePendingHead(scope);
   }
 
+  /** A copied install can leave segments overlapping the writer's own; of those, only the run ending at the head's sealedThrough is read. */
+  function tiled(scope: SyncScope, writer: string, dir: string, names: string[]): string[] {
+    const ranges = names.flatMap((name) => {
+      const range = /^seg-([1-9]\d*)-([1-9]\d*)\.json\.gz$/.exec(name);
+      return range ? [{ name, first: Number(range[1]), last: Number(range[2]) }] : [];
+    });
+    const overlapping = new Set(ranges.filter((a) => ranges.some((b) => a !== b && a.first <= b.last && b.first <= a.last)).map((range) => range.name));
+    if (!overlapping.size) return names;
+    let last = 0;
+    try {
+      last = validateHead(readFileSync(join(dir, "head.json")), scope, writer).sealedThrough;
+    } catch {
+      last = 0;
+    }
+    const chain = new Set<string>();
+    for (let ends = ranges.filter((range) => range.last === last); last > 0 && ends.length === 1; ends = ranges.filter((range) => range.last === last)) {
+      chain.add(ends[0].name);
+      last = ends[0].first - 1;
+    }
+    return names.filter((name) => !overlapping.has(name) || chain.has(name));
+  }
+
   function pull(scope: SyncScope): SyncApplyResult {
     scopeDir(scope);
     ownWriter();
@@ -903,7 +939,7 @@ export function createSyncEngine(input: SyncOptions) {
         const writer = entry.name;
         const writerDir = join(dir, writer);
         const names = readdirSync(writerDir).filter((name) => name === "head.json" || /^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(name));
-        for (const name of names) {
+        for (const name of tiled(scope, writer, writerDir, names)) {
           const segment = name !== "head.json";
           if (segment && sql("SELECT 1 FROM sync_v2_files WHERE thread = ? AND writer = ? AND name = ?").get(scope.threadId, writer, name)) continue;
           let bytes: Buffer;

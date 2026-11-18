@@ -177,7 +177,7 @@ describe("Drive mirror", () => {
     expect(drive.records.get(file.file.id)!.bytes.toString()).toBe("copy");
   });
 
-  it.each(["assets/a.png", "pictures/a.png", "workspace.json", "threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "threads/bot/thread.json", "memory/bot/MEMORY.md", "changes/000000000001-device-work-op.json"])("never overwrites either differing copy of %s", async (path) => {
+  it.each(["assets/a.png", "pictures/a.png", "workspace.json", "threads/bot/thread.json", "memory/bot/MEMORY.md", "changes/000000000001-device-work-op.json"])("never overwrites either differing copy of %s", async (path) => {
     const remote = seed(path, "remote");
     write(pcs[0], path, "local");
     const before = drive.records.get(remote.id)!.file.modifiedTime;
@@ -194,6 +194,45 @@ describe("Drive mirror", () => {
       if (drivePathRule(path, pc.ids) === "own") expect(existsSync(join(pc.folder, path))).toBe(false);
       else expect(read(pc, path)).toBe("remote");
     }
+  });
+
+  it("takes Drive's first copy of a chat segment over a differing local one", async () => {
+    const path = "threads-v2/bot/thread/writer-home/seg-1-2.json.gz";
+    const remote = seed(path, "remote");
+    write(pcs[0], path, "local");
+    const summary = await pcs[0].mirror.syncOnce();
+    expect(summary.conflicts).toEqual([]);
+    expect(summary.downloaded).toEqual([path]);
+    expect(read(pcs[0], path)).toBe("remote");
+    expect(drive.records.get(remote.id)!.bytes.toString()).toBe("remote");
+    expect(table(pcs[0]).files[path]?.driveId).toBe(remote.id);
+  });
+
+  it("holds our chat segment while a copy's change to that chat head is on Drive", async () => {
+    const head = `threads-v2/bot/thread/${pcs[0].ids.writerId}/head.json`;
+    const segment = `threads-v2/bot/thread/${pcs[0].ids.writerId}/seg-1-2.json.gz`;
+    write(pcs[0], head, "local");
+    await pcs[0].mirror.syncOnce();
+    const file = [...drive.records.values()].find(({ file }) => decodeDrivePath(file.name) === head)!;
+    drive.edit(file.file.id, Buffer.from("copy"));
+    write(pcs[0], segment, "sealed here");
+    const summary = await pcs[0].mirror.syncOnce();
+    expect(summary.uploaded).toEqual([]);
+    expect(summary.downloaded).toEqual([head]);
+    expect([...drive.records.values()].some(({ file }) => decodeDrivePath(file.name) === segment)).toBe(false);
+    expect(read(pcs[0], segment)).toBe("sealed here");
+  });
+
+  it("uploads our chat head from before a split while Drive still holds the copy we synced", async () => {
+    const path = `threads-v2/bot/thread/${pcs[0].ids.writerId}/head.json`;
+    write(pcs[0], path, "synced");
+    await pcs[0].mirror.syncOnce();
+    await pcs[1].mirror.syncOnce();
+    write(pcs[0], path, "flushed before the split");
+    const summary = await mirrorFor(pcs[0], { ownIds: { ...pcs[0].ids, writerId: "writer-split" } }).syncOnce();
+    expect(summary.uploaded).toEqual([path]);
+    await pcs[1].mirror.syncOnce();
+    expect(read(pcs[1], path)).toBe("flushed before the split");
   });
 
   it("publishes peer files atomically after the entire download", async () => {
