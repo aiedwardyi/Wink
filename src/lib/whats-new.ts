@@ -114,6 +114,7 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   },
   "1.0.279": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.280": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.281": { tile: "none", reason: "GPT-6.2 models and fixes; Timeline and Forum tiles come in the next update." },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */
