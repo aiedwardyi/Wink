@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
+import { rememberQueuedDraft, takeQueuedDraft } from "@/lib/drafts";
 import { ConnectionError } from "@/lib/error-text";
 import { api, StoreProvider, useStore, type Bot, type Group, type Message, type OptionCardData } from "./store";
 
@@ -134,6 +135,17 @@ it("keeps a room tap's action time while its card save waits", async () => {
 });
 
 describe("send reject after the server accepted", () => {
+  it("releases the held draft when the bot POST and recovery both fail", async () => {
+    await mount(() => Response.json({ messages: [], hasMore: false }));
+    const sendId = "failed-draft";
+    const draft = { text: "hello", attachments: [] };
+    rememberQueuedDraft(sendId, draft);
+    const onError = vi.fn();
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, threadId: bot.threadId, text: draft.text, sendId, onError }));
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(takeQueuedDraft(sendId)).toBeUndefined();
+  });
+
   it("consumes a promoted receipt when accepted-send recovery finds its message", async () => {
     await mount((thread) => Response.json({ messages: [accepted(thread)], hasMore: false }));
     await act(async () => store.dispatch({ type: "pendingQueued", threadId: bot.threadId, queueId: "q1", text: "hello", sendId: "s1" }));
@@ -507,8 +519,11 @@ describe("send while the server holds the thread", () => {
     await mount(() => Response.json({ messages: [], hasMore: false }), async () => queued(), [
       { ...bot, busy: false, activity: "idle" },
     ]);
+    const draft = { text: "look", attachments: [] };
+    rememberQueuedDraft("s1", draft);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text, sendId: "s1", threadId: bot.threadId }));
     await vi.waitFor(() => expect(store.state.pendingQueued[bot.threadId]).toHaveLength(1));
+    expect(takeQueuedDraft("s1")).toEqual(draft);
     const painted = withAcceptedMessages([], store.state.acceptedSends[bot.threadId], store.state.pendingQueued[bot.threadId]);
     expect(painted.map((message) => message.text)).toEqual([text]);
   });

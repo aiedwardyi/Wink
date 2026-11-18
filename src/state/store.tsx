@@ -1450,6 +1450,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!sendId) break;
           const pending: { stop?: Promise<{ removed: boolean; returned: boolean }> } = {};
           postingBotSends.current.set(sendId, pending);
+          let retainDraft = false;
           const restoreStopped = async (cancelled: boolean) => {
             if (!pending.stop || typeof threadId !== "string") return false;
             const { removed, returned } = await pending.stop;
@@ -1472,7 +1473,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }),
             });
           const settle = async (body: any) => {
-            if (body?.message && !body.message.quick) takeQueuedDraft(sendId);
             if (action.queueId && !body?.queued && typeof threadId === "string") {
               rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
             }
@@ -1489,6 +1489,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }
               return;
             }
+            retainDraft = Boolean(body?.queued || body?.message?.quick);
             const settledThread =
               typeof body?.threadId === "string" ? body.threadId : threadId;
             if (body?.message && typeof body.threadId === "string") {
@@ -1528,6 +1529,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const accepted =
                 typeof threadId === "string" ? await acceptedSend(stateRef.current, threadId, sendId, action.text) : null;
               if (accepted && typeof threadId === "string") {
+                retainDraft = Boolean(accepted.quick);
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
@@ -1546,7 +1548,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               action.onError?.();
             })
             .finally(() => {
-              if (postingBotSends.current.get(sendId) === pending) postingBotSends.current.delete(sendId);
+              if (postingBotSends.current.get(sendId) !== pending) return;
+              postingBotSends.current.delete(sendId);
+              if (!retainDraft) takeQueuedDraft(sendId);
             });
           void holdReload(sending);
           break;
