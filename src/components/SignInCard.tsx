@@ -6,7 +6,7 @@ import type { InstanceInfo } from "@/state/store";
 import { accountReady } from "@/lib/accounts";
 import { useI18n } from "@/lib/i18n";
 import { EngineSignIn } from "./EngineSetup";
-import { ProviderMark } from "./ProviderIcons";
+import { BrandMark } from "./ProviderIcons";
 
 const BUTTON = "rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-semibold text-accent-ink hover:brightness-110";
 
@@ -15,7 +15,7 @@ function Row({ instance, title, help, children }: { instance: InstanceInfo; titl
   return (
     <div data-sign-in-card="" className="group/card flex w-full items-center gap-3 has-[[data-computer-only],[data-sign-in-open]]:flex-wrap rounded-xl border border-hairline/30 bg-panel/70 px-3 py-2.5">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-inset">
-        <ProviderMark driverKind={instance.driverKind} size={16} />
+        <BrandMark driverKind={instance.driverKind} size={16} />
       </span>
       <div className="min-w-0 flex-1 group-has-[[data-sign-in-open]]/card:basis-52">
         <div className="text-[13px] font-semibold text-ink">{title}</div>

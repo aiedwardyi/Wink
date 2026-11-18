@@ -7,7 +7,7 @@ import { usageAccount } from "@/lib/accounts";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
-import { ProviderMark } from "./ProviderIcons";
+import { BrandMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 import { trackOnboard } from "@/lib/usage-stats";
 
@@ -87,11 +87,11 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
       className={featured ? "rounded-xl border border-hairline/50 bg-card p-4" : "border-b border-hairline/30 py-3 last:border-0"}>
       {featured ? <>
-        <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-ink"><ProviderMark driverKind={instance.driverKind} size={20} />{instance.displayName}</div>
+        <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-ink"><BrandMark driverKind={instance.driverKind} size={20} />{instance.displayName}</div>
         {button}
         <p className="mt-2.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName })}</p>
       </> : <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5"><ProviderMark driverKind={instance.driverKind} size={16} />
+        <div className="flex items-center gap-2.5"><BrandMark driverKind={instance.driverKind} size={16} />
           <div><div className="text-[13px] font-medium text-ink">{instance.displayName}</div>
             {accountKey && <div className="mt-0.5 text-[11.5px] text-ink-secondary">{t(accountKey)}</div>}
           </div>

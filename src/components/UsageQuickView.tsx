@@ -16,7 +16,7 @@ import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
-import { ProviderMark } from "./ProviderIcons";
+import { BrandMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, mainFailedText, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
@@ -200,7 +200,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
         {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
-          <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+          <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><BrandMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
           <span data-engine-name="" className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{engineName(engine.engine)}</span>
           {buttons}
         </div>}
