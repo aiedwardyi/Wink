@@ -1,6 +1,7 @@
 import "./ProfileFields.test-dom.ts";
 import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, applyLocale, localeTag, t } from "@/lib/i18n";
@@ -13,7 +14,8 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 import { ModelIndexSection } from "./ModelIndexSection";
-import { dodge, placeNames } from "./ModelIndexPhone";
+import { Badge, ProviderChips, dodge, placeNames } from "./ModelIndexPhone";
+import { ProviderMark } from "./ProviderIcons";
 
 let root: Root;
 let host: HTMLElement;
@@ -946,6 +948,46 @@ describe("full screen chart", () => {
       expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
       expect(svg().getAttribute("data-mi-zoom")).toBeNull();
     });
+  });
+});
+
+describe("model index provider marks", () => {
+  const providers = { anthropic: "claudeAgent", openai: "codex", google: "geminiAgent", xai: "grokAgent", meta: "museAgent" } as const;
+  const glyph = (element: Element) => [...element.querySelectorAll("path, rect")].map((part) => [part.tagName, part.getAttribute("d"), part.getAttribute("width")]);
+
+  it("uses the picker mark for each chart badge and phone chip", async () => {
+    for (const [provider, driverKind] of Object.entries(providers)) {
+      const expected = document.createElement("div");
+      expected.innerHTML = renderToStaticMarkup(createElement(ProviderMark, { driverKind, size: 12 }));
+      await act(async () => root.render(createElement("svg", null, createElement(Badge, { provider: provider as keyof typeof providers, r: 8, clip: "test" }))));
+      expect(host.querySelector("image, img")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
+      await act(async () => root.render(createElement(ProviderChips, { providers: [provider as keyof typeof providers], value: null, onChange: () => undefined, t })));
+      expect(host.querySelector("image, img")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
+    }
+    await act(async () => root.render(createElement("svg", null, createElement(Badge, { provider: "other", r: 8, clip: "test" }))));
+    expect(host.querySelector("svg svg, image")).toBeNull();
+    expect(host.querySelector('circle[style*="--mi-other"]')).not.toBeNull();
+  });
+
+  it("renders marks in desktop chart, phone list and phone chart", async () => {
+    const desktop = host.querySelector("[data-mi-badge]")!;
+    expect(desktop.querySelector("svg")).not.toBeNull();
+    expect(desktop.querySelector("image, img")).toBeNull();
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
+    try {
+      await mount();
+      const row = host.querySelector("[data-mi-row]")!;
+      expect(row.querySelector("svg")).not.toBeNull();
+      expect(row.querySelector("image, img")).toBeNull();
+      pick("Chart", "Chart");
+      const dot = host.querySelector("[data-mi-dot]")!;
+      expect(dot.querySelector("svg")).not.toBeNull();
+      expect(dot.querySelector("image, img")).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

@@ -4,7 +4,7 @@ import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { chartProvider, effortRank, fitLogTicks, formatCost, linearTicks, logTicks, type ChartProvider, type ModelIndexPoint } from "@/lib/model-index";
-import { botAvatarAssetPath, type BotAvatarId } from "../../shared/bot-avatar";
+import { ProviderMark } from "./ProviderIcons";
 import { edgeFade } from "./Segmented";
 
 export const PROVIDER_NAME = {
@@ -15,13 +15,13 @@ export const PROVIDER_NAME = {
   meta: "Meta",
 } satisfies Record<Exclude<ChartProvider, "other">, string>;
 
-const AVATAR = {
-  anthropic: "icon-45",
-  openai: "icon-46",
-  google: "icon-47",
-  xai: "icon-48",
-  meta: "icon-49",
-} satisfies Record<Exclude<ChartProvider, "other">, BotAvatarId>;
+const DRIVER = {
+  anthropic: "claudeAgent",
+  openai: "codex",
+  google: "geminiAgent",
+  xai: "grokAgent",
+  meta: "museAgent",
+} satisfies Record<Exclude<ChartProvider, "other">, string>;
 
 // Best value looks only at the top of the list, so a cheap low scorer never takes it.
 const VALUE_POOL = 9;
@@ -71,10 +71,11 @@ export function bestValue(rows: readonly PhoneModel[]): string | undefined {
 }
 
 function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
-  const id = provider === "other" ? undefined : AVATAR[provider];
   const radius = size > 20 ? "rounded-lg" : "rounded-[4px]";
-  return id ? (
-    <img src={botAvatarAssetPath(id)} alt="" width={size} height={size} draggable={false} className={cn("block shrink-0", radius)} style={{ width: size, height: size }} />
+  return provider !== "other" ? (
+    <span className={cn("flex shrink-0 items-center justify-center", radius)} style={{ width: size, height: size }}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size * 0.75} />
+    </span>
   ) : (
     <span aria-hidden className={cn("block shrink-0", radius)} style={{ width: size, height: size, background: color(provider) }} />
   );
@@ -82,12 +83,16 @@ function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
 
 /** A lab's logo in a round badge, for charts; clip is a circle clipPath in objectBoundingBox units. */
 export function Badge({ provider, r, clip }: { provider: ChartProvider; r: number; clip: string }) {
-  const id = provider === "other" ? undefined : AVATAR[provider];
   return (
     <>
       <circle r={r + 1.5} style={{ fill: "var(--color-panel)" }} />
-      {id ? (
-        <image href={botAvatarAssetPath(id)} x={-r} y={-r} width={r * 2} height={r * 2} clipPath={`url(#${clip})`} preserveAspectRatio="xMidYMid slice" />
+      {provider !== "other" ? (
+        <g clipPath={`url(#${clip})`}>
+          <circle r={r} style={{ fill: "var(--color-panel)" }} />
+          <svg x={-r * 0.75} y={-r * 0.75} width={r * 1.5} height={r * 1.5}>
+            <ProviderMark driverKind={DRIVER[provider]} size={r * 1.5} />
+          </svg>
+        </g>
       ) : (
         <circle r={r} style={{ fill: color(provider) }} />
       )}
