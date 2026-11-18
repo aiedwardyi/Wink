@@ -50,6 +50,13 @@ describe("phone drawer menu button", () => {
     expect(DRAWER_BUTTON_LEFT).toContain("top-[15px]");
   });
 
+  it("has no box behind it, hovered or over a scene", () => {
+    expect(menuButtonSource().split("<Menu")[0]).not.toMatch(/(?:^|[\s"`:])(?:hover:)?bg-/);
+    const scenes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "scenes", "scenes.css"), "utf8");
+    const backed = [...scenes.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selector, body]) => selector.includes("[data-phone-menu]") && /background/.test(body));
+    expect(backed.map(([, selector]) => selector.trim())).toEqual([]);
+  });
+
   it("centers on the same leading row every page header reserves", () => {
     expect(DRAWER_HEADER_LEFT).toBe(DRAWER_HEADER_RIGHT.replace("pr-", "pl-"));
     // 30px button centered on the row: 15 + 15 + 30 = 60.

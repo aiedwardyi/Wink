@@ -260,12 +260,13 @@ function sharpPath() {
   throw new Error("sharp not found: it decodes the scene stills");
 }
 
-/** Brightest pixel of the still under a box `top` CSS px down and each `insets` px in from the `sides` it can sit on. */
-async function brightestBehind(file, { size, insets, sides, top }) {
+/** Brightest and darkest pixel of the still under a box `top` CSS px down and each `insets` px in from the `sides` it can sit on. */
+async function extremesBehind(file, { size, insets, sides, top }) {
   const sharp = createRequire(import.meta.url)(sharpPath());
   const { data, info } = await sharp(file).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const px = (css) => Math.round(css * STILL_PX_PER_CSS_PX);
   let best = { r: 0, g: 0, b: 0 };
+  let worst = { r: 255, g: 255, b: 255 };
   const starts = insets.flatMap((inset) => sides.map((side) => (side === "left" ? px(inset) : info.width - px(inset + size))));
   for (const x0 of starts) {
     for (let y = px(top); y < px(top + size); y++) {
@@ -273,29 +274,52 @@ async function brightestBehind(file, { size, insets, sides, top }) {
         const i = (y * info.width + x) * 3;
         const pixel = { r: data[i], g: data[i + 1], b: data[i + 2] };
         if (luminance(pixel) > luminance(best)) best = pixel;
+        if (luminance(pixel) < luminance(worst)) worst = pixel;
       }
     }
   }
-  return best;
+  return { brightest: best, darkest: worst };
 }
 
 const toHex = ({ r, g, b }) => "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
 
-/** Icon ink over what sits behind it: the backing the scene paints, else the scene's brightest pixel there. */
+/** The token `property` takes in the scene rule that gives the icon `marker` its look on skin `id` (`color: var(--x)`, or the color inside `filter: drop-shadow(...)`). */
+function iconPaint(source, marker, id, property) {
+  const pattern = property === "halo" ? /drop-shadow\([^)]*var\((--color-[\w-]+)\)/ : /(?:^|[;\s])color:\s*var\((--color-[\w-]+)\)/;
+  for (const [, selector, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!selector.includes(marker) || !selector.includes(`[data-skin="${id}"]`)) continue;
+    const token = body.match(pattern)?.[1];
+    if (token) return token;
+  }
+  return null;
+}
+
+/** Icon ink over what sits behind it: the backing the scene paints, else the scene's brightest and darkest pixel there, the darkest swapped for the halo token the scene gives the lines. */
 async function sceneIconProblems(id, tokens, stills, source) {
   const still = stills.get(id);
   if (!still) return [];
   const problems = [];
   for (const icon of SCENE_ICONS) {
     const backingToken = iconBacking(source, icon.marker);
-    const behind = backingToken ? tokens[backingToken] : toHex(await brightestBehind(still, icon));
-    const ratio = contrast(tokens[icon.ink], behind);
-    if (ratio < icon.min) problems.push({ icon: icon.name, ink: icon.ink, behind: backingToken ?? `scene pixel ${behind}`, ratio, min: icon.min });
+    const inkToken = iconPaint(source, icon.marker, id, "color") ?? icon.ink;
+    const haloToken = iconPaint(source, icon.marker, id, "halo");
+    const behinds = [];
+    if (backingToken) behinds.push({ label: backingToken, hex: tokens[backingToken] });
+    else {
+      const { brightest, darkest } = await extremesBehind(still, icon);
+      behinds.push({ label: `scene pixel ${toHex(brightest)}`, hex: toHex(brightest) });
+      if (haloToken) behinds.push({ label: `halo ${haloToken}`, hex: tokens[haloToken] });
+      else behinds.push({ label: `scene pixel ${toHex(darkest)}`, hex: toHex(darkest) });
+    }
+    for (const { label, hex } of behinds) {
+      const ratio = contrast(tokens[inkToken], hex);
+      if (ratio < icon.min) problems.push({ icon: icon.name, ink: inkToken, behind: label, ratio, min: icon.min });
+    }
   }
   return problems;
 }
 
-export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, sceneIconProblems };
+export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, iconPaint, sceneIconProblems };
 
 function isDirectRun() {
   const entry = process.argv[1];
