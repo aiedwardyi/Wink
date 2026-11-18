@@ -55,12 +55,20 @@ function same(a: MediaList, b: MediaList): boolean {
 
 interface HeldIndex {
   v: string;
+  leaf: string | null;
+  plainParent?: string | null;
   pages: MediaIndex[];
   cursors: Set<string>;
   cursor: string | null;
   seen: Set<string>;
   dirty?: true;
   sizes: Map<string, Promise<number | null>>;
+  legacy?: MediaIndex;
+  legacyLoad?: Promise<MediaIndex>;
+}
+
+function mightShowMedia({ image, kind, role, text }: MediaRow): boolean {
+  return Boolean(image || (kind === "text" && text && (role === "user" ? text.includes("<attached-") : text.includes("](") || text.includes("!["))));
 }
 
 function readPage(threadId: string, cached: HeldIndex, limit: number): MediaIndex {
@@ -80,52 +88,102 @@ function readPage(threadId: string, cached: HeldIndex, limit: number): MediaInde
   return page;
 }
 
+function readSize(cached: HeldIndex, n: number, slot: number): Promise<number | null> {
+  const page = cached.pages[n];
+  const ref = page?.ref[slot];
+  // A UNC path would authenticate to a remote host.
+  if (!ref || page.kind[slot] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return Promise.resolve(null);
+  const key = `${n}:${slot}`;
+  let size = cached.sizes.get(key);
+  if (!size) {
+    size = stat(ref).then((info) => info.isFile() ? info.size : null, () => null);
+    cached.sizes.set(key, size);
+  }
+  return size;
+}
+
 export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) {
   const held = new Map<string, HeldIndex>();
   let count = 0;
   store.onChange((change) => {
-    if (!("threadId" in change)) return;
+    if (!("threadId" in change) || change.type === "task.packet") return;
+    if (change.type === "thread.deleted") { held.delete(change.threadId); return; }
     const cached = held.get(change.threadId);
-    if (change.type === "thread.deleted") held.delete(change.threadId);
-    else if (cached) {
-      cached.dirty = true;
-      cached.sizes.clear();
+    if (!cached) return;
+    cached.sizes.clear();
+    cached.legacyLoad = undefined;
+    if (cached.dirty) return;
+    if (change.type === "message" && !change.imported && change.message.parentId === cached.leaf && !mightShowMedia(change.message)) {
+      cached.plainParent = cached.leaf;
+      cached.leaf = change.message.id;
+      return;
     }
+    if (change.type === "message.patch" && cached.plainParent !== undefined && change.message.id === cached.leaf
+      && change.message.parentId === cached.plainParent && !mightShowMedia(change.message)) return;
+    cached.dirty = true;
   });
+
+  function current(threadId: string): HeldIndex {
+    let cached = held.get(threadId);
+    if (!cached || cached.dirty) {
+      const leaf = store.activeLeaf(threadId);
+      const next: HeldIndex = {
+        v: `${boot}.${++count}`, leaf, cursor: leaf, cursors: new Set(), pages: [], seen: new Set(), sizes: new Map(), legacy: cached?.legacy,
+      };
+      const page = readPage(threadId, next, FIRST_ROWS);
+      const prior = cached?.pages[0];
+      if (cached && prior && !prior.next && !page.next && same(prior, page)) {
+        cached.dirty = undefined;
+        cached.leaf = leaf;
+        cached.plainParent = undefined;
+      } else cached = next;
+    }
+    held.delete(threadId);
+    held.set(threadId, cached);
+    if (held.size > HELD) held.delete(held.keys().next().value!);
+    return cached;
+  }
+
+  function complete(threadId: string, cached: HeldIndex): MediaIndex[] {
+    while (cached.cursor) readPage(threadId, cached, OLDER_ROWS);
+    return cached.pages;
+  }
+
   return {
     list(threadId: string, v?: string | null): MediaIndex | { v: string } {
-      let cached = held.get(threadId);
-      if (!cached || cached.dirty) {
-        const next = { v: `${boot}.${++count}`, cursor: store.activeLeaf(threadId), cursors: new Set<string>(), pages: [], seen: new Set<string>(), sizes: new Map() };
-        const page = readPage(threadId, next, FIRST_ROWS);
-        const prior = cached?.pages[0];
-        if (cached && prior && !prior.next && !page.next && same(prior, page)) cached.dirty = undefined;
-        else cached = next;
-      }
-      held.delete(threadId);
-      held.set(threadId, cached);
-      if (held.size > HELD) held.delete(held.keys().next().value!);
+      const cached = current(threadId);
       return v === cached.v ? { v } : cached.pages[0]!;
     },
     page(threadId: string, v: string | null, n: number): MediaIndex | null {
       const cached = held.get(threadId);
-      if (!cached || cached.v !== v) return null;
+      if (!cached || cached.dirty || cached.v !== v) return null;
       return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(threadId, cached, OLDER_ROWS) : null);
     },
-    async size(threadId: string, v: string | null, slot: number, n = 0): Promise<number | null> {
-      const cached = held.get(threadId);
-      const page = cached?.pages[n];
-      if (!page || cached.v !== v || !Number.isSafeInteger(slot)) return null;
-      const ref = page.ref[slot];
-      // A UNC path would authenticate to a remote host.
-      if (!ref || page.kind[slot] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return null;
-      const key = `${n}:${slot}`;
-      let size = cached.sizes.get(key);
-      if (!size) {
-        size = stat(ref).then((info) => info.isFile() ? info.size : null, () => null);
-        cached.sizes.set(key, size);
+    snapshot(threadId: string): MediaIndex[] {
+      return complete(threadId, current(threadId));
+    },
+    async legacy(threadId: string, v: string | null): Promise<MediaIndex | { v: string }> {
+      const cached = current(threadId);
+      if (!cached.legacyLoad) {
+        const pages = complete(threadId, cached);
+        const pending = Promise.all(pages.flatMap((page, n) => page.size.map((size, slot) => size ?? readSize(cached, n, slot))))
+          .then((size) => {
+            const list: MediaList = {
+              ids: pages.flatMap((page) => page.ids), at: pages.flatMap((page) => page.at), kind: pages.map((page) => page.kind).join(""),
+              name: pages.flatMap((page) => page.name), ref: pages.flatMap((page) => page.ref), size,
+            };
+            const index = cached.legacy && same(cached.legacy, list) ? cached.legacy : { v: `${boot}.full.${++count}`, ...list };
+            if (cached.legacyLoad === pending) cached.legacy = index;
+            return index;
+          });
+        cached.legacyLoad = pending;
       }
-      return size;
+      const index = await cached.legacyLoad;
+      return index.v === v ? { v } : index;
+    },
+    size(threadId: string, v: string | null, slot: number, n = 0): Promise<number | null> {
+      const cached = held.get(threadId);
+      return cached?.v === v && Number.isSafeInteger(slot) ? readSize(cached, n, slot) : Promise.resolve(null);
     },
   };
 }

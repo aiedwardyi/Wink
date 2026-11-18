@@ -98,6 +98,50 @@ describe("search", () => {
 });
 
 describe("media", () => {
+  function mediaRoute() {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const get = async (query = "") => {
+      let status = 0;
+      let body = "";
+      const res = { writeHead: (code: number) => { status = code; }, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.media(res, ["", threadId] as RegExpMatchArray, new URL(`http://localhost/media${query}`));
+      return { status, body: JSON.parse(body) };
+    };
+    const old = store.appendMessage(threadId, { role: "bot", kind: "text", text: "[first.pdf](C:\\w\\first.pdf)" });
+    const notice = store.appendMessage(threadId, { role: "bot", kind: "note", text: "Sync notice" });
+    for (let n = 0; n < 256; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
+    return { store, threadId, get, old, notice };
+  }
+
+  it("returns the whole history to clients that did not opt into paging", async () => {
+    const { get, old } = mediaRoute();
+    expect(await get("?paged=1")).toMatchObject({ status: 200, body: { ids: [], next: 1 } });
+    const result = await get();
+    expect(result).toMatchObject({ status: 200, body: { ids: [old.id], name: ["first.pdf"] } });
+    expect(result.body).not.toHaveProperty("next");
+    expect(await get(`?v=${result.body.v}`)).toEqual({ status: 200, body: { v: result.body.v } });
+  });
+
+  it("rejects a continuation whose cursor was removed during sync", async () => {
+    const { store, threadId, get, old, notice } = mediaRoute();
+    const { body: first } = await get("?paged=1");
+    store.removeSyncNotices(threadId, [notice.id]);
+    expect((await get(`?v=${first.v}&page=1`)).status).toBe(409);
+    const snapshot = await get("?paged=1&snapshot=1");
+    expect(snapshot.body.flatMap((page: { ids: string[] }) => page.ids)).toEqual([old.id]);
+  });
+
+  it("rejects the old version after another client refreshes the same chat", async () => {
+    const { store, threadId, get } = mediaRoute();
+    const { body: first } = await get("?paged=1");
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
+    const { body: refreshed } = await get("?paged=1");
+    expect(refreshed.v).not.toBe(first.v);
+    expect((await get(`?v=${first.v}&page=1`)).status).toBe(409);
+  });
+
   it("lists a chat's files in one answer, then the version alone, and 404s an unknown chat", async () => {
     rmSync(DATA_DIR, { recursive: true, force: true });
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));

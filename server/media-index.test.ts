@@ -105,6 +105,25 @@ describe("media index", () => {
     expect(createMediaIndex(store).list(threadId)).toMatchObject({ name: ["shot-2.png", "shot-5.png"] });
   });
 
+  it("keeps a paged revision and its older pages through ordinary text replies", () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.pdf](C:\\w\\old.pdf)" });
+    for (let n = 0; n < 256; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
+    const media = createMediaIndex(store);
+    const first = media.list(threadId);
+    const old = media.page(threadId, first.v, 1);
+
+    store.appendMessage(threadId, { role: "user", kind: "text", text: "thanks" });
+    const reply = store.appendMessage(threadId, { role: "bot", kind: "text", text: "Working" });
+    store.patchMessage(threadId, reply.id, { text: "You're welcome" });
+    expect(media.list(threadId, first.v)).toEqual({ v: first.v });
+    expect(media.page(threadId, first.v, 1)).toBe(old);
+
+    store.patchMessage(threadId, reply.id, { text: "Here's [plot.png](C:\\w\\plot.png)" });
+    expect(media.list(threadId, first.v)).toMatchObject({ name: ["plot.png"] });
+  });
+
   it("carries attached sizes and reads linked sizes only on request", async () => {
     const store = new Store(selection);
     const { threadId } = store.createBot({}, { seedMessages: false });

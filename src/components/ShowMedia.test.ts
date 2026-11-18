@@ -60,7 +60,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
     if (url.includes("&size=")) return Response.json({ size: 300 });
-    const asked = url.match(/^\/api\/threads\/([^/?]+)\/media(?:\?v=(.+))?$/);
+    const asked = url.match(/^\/api\/threads\/([^/?]+)\/media\?paged=1(?:&v=(.+))?$/);
     if (asked) {
       const answer = media[asked[1]!] ?? wire([]);
       return Response.json(asked[2] === answer.v ? { v: answer.v } : answer);
@@ -195,7 +195,7 @@ it("loads the timeline on open and a linked size when its row appears", async ()
   expect(calls).toEqual([]);
   await click(tab("Media"));
   await settle();
-  expect(calls).toEqual(["/api/threads/t1/media"]);
+  expect(calls).toEqual(["/api/threads/t1/media?paged=1"]);
   await click(tab("Files"));
   await settle();
   expect(names().at(-1)).toBe("first.pdf");
@@ -203,7 +203,7 @@ it("loads the timeline on open and a linked size when its row appears", async ()
   await click(tab("Show"));
   await click(tab("Media"));
   await settle();
-  expect(calls.filter((url) => !url.includes("&size="))).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
+  expect(calls.filter((url) => !url.includes("&size="))).toEqual(["/api/threads/t1/media?paged=1", "/api/threads/t1/media?paged=1&v=1"]);
   expect(calls.filter((url) => url.includes("&size="))).toEqual(Array(2).fill("/api/threads/t1/media?v=1&size=0"));
   expect(names().at(-1)).toBe("first.pdf");
 });
@@ -213,14 +213,13 @@ it("renders the first page while older media is loading", async () => {
   const older = new Promise<Response>((resolve) => { finish = resolve; });
   const initial = wire([["b2", 2000, "l", "new.png", "C:\\w\\new.png"]]);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url === "/api/threads/t1/media") return Response.json({ ...initial, head: "b2", next: 1 });
+    if (url === "/api/threads/t1/media?paged=1") return Response.json({ ...initial, head: "b2", next: 1 });
     if (url === "/api/threads/t1/media?v=1&page=1") return older;
     return new Response(null, { status: 206 });
   }));
 
   await act(async () => showMedia("t1"));
   await render({ ...chat, messages: [
-    { id: "b1", role: "bot", kind: "text", at: 1000, text: "[old.png](C:\\w\\old.png)" },
     { id: "b2", role: "bot", kind: "text", at: 2000, text: "[new.png](C:\\w\\new.png)" },
   ] });
   await settle();
@@ -231,14 +230,94 @@ it("renders the first page while older media is loading", async () => {
   expect(tiles()).toEqual(["new.png", "old.png"]);
 });
 
-// `older` messages before the loaded page, paged or indexed; only the very first brings a file
+it.each([409, 503])("recovers the complete index when a continuation returns %s", async (status) => {
+  const old = wire([["b1", 1000, "l", "old.png", "C:\\w\\old.png"]], "2");
+  let snapshot = false;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    const params = new URL(url, "http://x").searchParams;
+    if (params.has("snapshot")) { snapshot = true; return Response.json([old]); }
+    if (params.has("page")) return Response.json(null, { status });
+    return Response.json({ ...wire([]), head: "b2", next: 1 });
+  }));
+
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  expect(snapshot).toBe(true);
+  expect(tiles()).toEqual(["old.png"]);
+});
+
+it("includes a file streamed into the current head while older pages are pending", async () => {
+  const head: Message = { id: "b2", role: "bot", kind: "text", at: 2000, text: "Working" };
+  let finish!: (response: Response) => void;
+  const older = new Promise<Response>((resolve) => { finish = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("page=") ? older : Response.json({ ...wire([]), head: head.id, next: 1 })));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [head] });
+  await settle();
+
+  await render({ ...chat, messages: [{ ...head, text: "[plot.png](C:\\w\\plot.png)" }] });
+  expect(tiles()).toEqual(["plot.png"]);
+  finish(Response.json(wire([])));
+  await settle();
+});
+
+it("publishes older history in one update while keeping the newest page usable", async () => {
+  const picture = (n: number) => wire([[`b${n}`, n * 1000, "l", `picture-${n}.png`, `C:\\w\\picture-${n}.png`]]);
+  let finish!: (response: Response) => void;
+  const last = new Promise<Response>((resolve) => { finish = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("page=2")) return last;
+    if (url.includes("page=1")) return Response.json({ ...picture(2), next: 2 });
+    return Response.json({ ...picture(3), head: "b3", next: 1 });
+  }));
+
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  expect(tiles()).toEqual(["picture-3.png"]);
+  finish(Response.json(picture(1)));
+  await settle();
+  expect(tiles()).toEqual(["picture-3.png", "picture-2.png", "picture-1.png"]);
+});
+
+it("keeps an audio row playing when an older photo arrives", async () => {
+  const initial = wire([["b2", 2000, "l", "audio.mp3", "C:\\w\\audio.mp3"]]);
+  let finish!: (response: Response) => void;
+  const older = new Promise<Response>((resolve) => { finish = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("size=")) return Response.json({ size: null });
+    if (url.includes("page=")) return older;
+    return Response.json({ ...initial, head: "b2", next: 1 });
+  }));
+
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  await click(row("audio.mp3"));
+  const playing = host.querySelector("audio");
+  expect(playing).not.toBeNull();
+  finish(Response.json(wire([["b1", 1000, "l", "photo.png", "C:\\w\\photo.png"]])));
+  await settle();
+  expect(tab("Files").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector("audio")).toBe(playing);
+});
+
+// Only the very first of the unloaded messages brings a file.
 function longChat(older: number, fail = 0) {
+  const last = Math.ceil(Math.max(0, older - 255) / 2048);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
     if (fail-- > 0) return new Response(null, { status: 503 });
     if (url.includes("&size=")) return Response.json({ size: null });
-    if (url.includes("/media")) return Response.json(wire([["h0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]));
-    const before = new URL(url, "http://x").searchParams.get("before")!;
+    const params = new URL(url, "http://x").searchParams;
+    if (url.includes("/media")) {
+      const page = Number(params.get("page"));
+      return Response.json(page === last
+        ? wire([["h0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]])
+        : { ...wire([]), head: reply.id, next: page + 1 });
+    }
+    const before = params.get("before")!;
     const end = before === "u1" ? older : Number(before.slice(1));
     const start = Math.max(0, end - 1_000);
     return Response.json({ hasMore: start > 0, messages: Array.from({ length: end - start }, (_, n): Message => ({ id: `h${start + n}`, role: "bot", kind: "text", at: 0, text: start + n ? "old" : "[first.pdf](C:\\w\\first.pdf)" })) });
@@ -252,6 +331,7 @@ it("lists the first file of a chat past 5,000 older messages", async () => {
   for (let i = 0; i < 4; i++) await settle();
   await click(tab("Files"));
   expect(names()).toContain("first.pdf");
+  expect(calls.filter((url) => url.includes("page=") && !url.includes("size="))).toHaveLength(3);
 });
 
 it("asks once more when the timeline fails to load, without reopening Media", async () => {
@@ -263,7 +343,7 @@ it("asks once more when the timeline fails to load, without reopening Media", as
   for (let i = 0; i < 4; i++) await settle();
   await click(tab("Files"));
   expect(names()).toContain("first.pdf");
-  expect(calls.filter((url) => url === "/api/threads/t1/media")).toHaveLength(2);
+  expect(calls.filter((url) => url === "/api/threads/t1/media?paged=1")).toHaveLength(2);
 });
 
 it("keeps the grid as it is while a reply streams, and adds a file the moment it lands", async () => {

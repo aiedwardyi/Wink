@@ -44,7 +44,6 @@ const HELD = 16;
 const RETRY_MS = 1_000;
 const held = new Map<string, Held>();
 const loads = new Map<string, Promise<Held>>();
-const older = new WeakMap<Held, Promise<Held>>();
 const tails = new WeakMap<MediaFile[], { known: Set<string>; fresh: string; files: MediaFile[] }>();
 const kinds = new Map<string, MediaKind>();
 
@@ -78,11 +77,13 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
     const was = held.get(key);
     const ask = (): Promise<Held> => roomId
       ? request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles & { files: Array<RoomFile & { at: number; sender?: string }> }) => ({ files: roomMedia(threadId, roomId, list.files), list }))
-      : request(`/api/threads/${threadId}/media${was?.v ? `?v=${encodeURIComponent(was.v)}` : ""}`)
+      : request(`/api/threads/${threadId}/media?paged=1${was?.v ? `&v=${encodeURIComponent(was.v)}` : ""}`)
         .then((wire: MediaWire | { v: string }) => {
-          if ("ids" in wire) return { v: wire.v, head: wire.head, next: wire.next, files: decodeMedia(threadId, wire) };
+          if (wire && "ids" in wire) return { v: wire.v, head: wire.head, next: wire.next, files: decodeMedia(threadId, wire) };
           const current = held.get(key);
-          return current?.v === wire.v ? current : was!;
+          if (current && current.v === wire?.v) return current;
+          if (was && was.v === wire?.v) return was;
+          throw new Error("Unknown Media version");
         });
     const next = ask().catch(() => new Promise((wait) => setTimeout(wait, RETRY_MS)).then(ask));
     load = next.then((got) => {
@@ -96,19 +97,35 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
   return load;
 }
 
-export function loadOlderMedia(threadId: string, was: Held): Promise<Held> {
-  let load = older.get(was);
-  if (!load) {
-    const page = was.next!;
-    load = request(`/api/threads/${threadId}/media?v=${encodeURIComponent(was.v!)}&page=${page}`).then((wire: MediaWire | null) => {
-      const files = wire?.ids.length ? [...was.files, ...decodeMedia(threadId, wire, page)] : was.files;
-      const got = { ...was, next: wire?.next, files };
-      if (held.get(threadId) === was) held.set(threadId, got);
-      return got;
-    }).finally(() => older.delete(was));
-    older.set(was, load);
+export async function loadOlderMedia(threadId: string, was: Held, signal: AbortSignal, showFirst: (index: Held) => void): Promise<Held> {
+  const path = `/api/threads/${threadId}/media`;
+  const chunks = [was.files];
+  let shown = Boolean(was.files.length);
+  let got: Held;
+  try {
+    for (let page = was.next; page;) {
+      const wire: MediaWire | null = await request(`${path}?v=${encodeURIComponent(was.v!)}&page=${page}`, { signal });
+      signal.throwIfAborted();
+      if (!wire || wire.v !== was.v) throw new Error("Media version expired");
+      const files = decodeMedia(threadId, wire, page);
+      if (files.length) {
+        chunks.push(files);
+        if (!shown && wire.next) {
+          shown = true;
+          showFirst({ ...was, files });
+        }
+      }
+      page = wire.next;
+    }
+    got = { ...was, next: undefined, files: chunks.length === 1 ? was.files : chunks.flat() };
+  } catch {
+    signal.throwIfAborted();
+    const pages: MediaWire[] = await request(`${path}?paged=1&snapshot=1`, { signal });
+    got = { v: pages[0]?.v, files: pages.flatMap((wire, n) => decodeMedia(threadId, wire, n)) };
   }
-  return load;
+  signal.throwIfAborted();
+  if (held.get(threadId) === was) held.set(threadId, got);
+  return got;
 }
 
 export function forgetMedia(): void {
