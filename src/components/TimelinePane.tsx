@@ -15,6 +15,7 @@ import "./TimelinePane.css";
 const picture = z.object({ path: z.string(), caption: z.string().optional() });
 const entry = z.object({
   id: z.string(),
+  at: z.number().optional(),
   key: z.string(),
   replacedBy: z.string().optional(),
   picked: z.string(),
@@ -40,11 +41,10 @@ const when = (stamp: string, now: Date) => (stamp.startsWith(`${now.getFullYear(
 const pictureSrc = (threadId: string, path: string) => (/[\\/]attachments[\\/][^\\/]+$/.test(path) && attachmentImageUrl(path)) || linkedFileSrc(threadId, path);
 const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-// A tab switch unmounts the pane, so each replaced pick's fold, the search and the view live here for the session.
+// A tab switch unmounts the pane, so each replaced pick's fold and the search live here for the session.
 const folds = new Map<string, boolean>();
 const queries = new Map<string, string>();
 type View = { x: number; y: number; scale: number };
-const views = new Map<string, View & { needle: string }>();
 
 const ViewPicture = createContext<(path: string, threadId: string, opener: HTMLElement) => void>(() => {});
 const Redraw = createContext<() => void>(() => {});
@@ -69,15 +69,19 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     }
     return each;
   };
+  const offset = (entry: Entry) => (entry.at ?? 0) % 60_000;
+  const ordered = [...entries].reverse().sort((a, b) => stampOf(b.id).localeCompare(stampOf(a.id)) || offset(b) - offset(a));
   const rows = new Map<Entry, Row>();
-  for (const each of [...entries].reverse().sort((a, b) => stampOf(b.id).localeCompare(stampOf(a.id)))) {
+  for (const each of ordered) {
     const head = headOf(each);
     const row = rows.get(head) ?? { ...head, older: [], hay: "" };
     rows.set(head, row);
     if (head !== each) row.older.push(each);
   }
   const days = new Map<string, Row[]>();
-  for (const row of rows.values()) {
+  for (const each of ordered) {
+    const row = rows.get(each);
+    if (!row) continue;
     row.hay = [row, ...row.older].flatMap((each) => [each.key, each.picked, each.said ?? "", ...each.over, ...each.tweaks.map((tweak) => tweak.said)]).join("\n").toLowerCase();
     const day = days.get(dayOf(row.id));
     if (day) day.push(row);
@@ -231,7 +235,7 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
   ink.innerHTML = paths.join("");
 }
 
-type PaneProps = { botId: string; threadId: string; maximized: boolean; profileName?: string };
+type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string };
 
 export function TimelinePane(props: PaneProps) {
   const [viewing, setViewing] = useState<PreviewImage | null>(null);
@@ -247,7 +251,7 @@ export function TimelinePane(props: PaneProps) {
   );
 }
 
-function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
+function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -304,21 +308,22 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
               </label>
               {shown.length === 0
                 ? <p className="show-media-empty">{t("find.noResults")}</p>
-                : <Canvas days={shown} needle={needle} botId={botId} threadId={threadId} you={you} />}
+                : <Canvas days={shown} needle={needle} botId={botId} threadId={threadId} you={you} closing={closing} />}
             </>
           )}
     </div>
   );
 }
 
-function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; rows: Row[] }[]; needle: string; botId: string; threadId: string; you: string }) {
+function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: string; rows: Row[] }[]; needle: string; botId: string; threadId: string; you: string; closing: boolean }) {
   const { t, locale } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
   const ink = useRef<SVGSVGElement>(null);
   const zoom = useRef<HTMLElement>(null);
-  const view = useRef<View | null>(views.get(botId) ?? null);
-  const searched = useRef(views.get(botId)?.needle ?? needle);
+  const view = useRef<View | null>(null);
+  const searched = useRef(needle);
+  const wasClosing = useRef(closing);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const dragged = useRef(false);
   const [touch] = useState(() => window.matchMedia?.("(pointer: coarse)").matches ?? false);
@@ -357,10 +362,9 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
       ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, START.x), y: edge(height, box.clientHeight, next.y, START.y) }
       : next;
     view.current = kept;
-    views.set(botId, { ...kept, needle: searched.current });
     sheet.current!.style.transform = `translate(${kept.x}px, ${kept.y}px) scale(${kept.scale})`;
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
-  }, [botId]);
+  }, []);
 
   const zoomAt = useCallback((x: number, y: number, factor: number) => {
     const at = view.current!;
@@ -375,13 +379,17 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
     redraw();
     const box = frame.current!;
     const width = sheet.current!.offsetWidth;
-    // the newest picks sit under the search box at the top left
-    const top = START;
-    // a kept view may sit below picks that have not mounted yet, so only gestures clamp
-    const next = !view.current ? { ...top, scale: Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1)) } : searched.current === needle ? view.current : { ...top, scale: view.current.scale };
+    const scale = Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1));
+    const at = view.current;
+    const reopened = wasClosing.current && !closing;
+    const changed = searched.current !== needle;
+    const next = !at || reopened || (changed && !needle)
+      ? { ...START, scale }
+      : changed ? { ...START, scale: at.scale } : at;
+    wasClosing.current = closing;
     searched.current = needle;
     show(next, true);
-  }, [drawn, needle, opened, redraw, show]);
+  }, [closing, drawn, needle, opened, redraw, show]);
 
   useEffect(() => {
     const box = frame.current!;
@@ -482,6 +490,7 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
       <Redraw.Provider value={redraw}>
         <div ref={sheet} className="timeline-sheet">
           <svg ref={ink} className="timeline-ink" aria-hidden="true" />
+          <p className="timeline-day"><b>{t("timeline.newest")}</b></p>
           {drawn.map(({ day, rows }) => {
             const [name, date] = dayLabel(day, now, t, locale);
             return (
@@ -491,6 +500,7 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
               </section>
             );
           })}
+          {grow.limit >= total && <p className="timeline-day"><b>{t("timeline.oldest")}</b></p>}
         </div>
       </Redraw.Provider>
       <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>

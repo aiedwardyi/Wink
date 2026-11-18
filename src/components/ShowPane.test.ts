@@ -464,8 +464,8 @@ it("pulses the pane once when its file is clicked again, and not when a click on
 
 const timeline = readFileSync("test/fixtures/decision-timeline/decisions.md", "utf8");
 const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url).endsWith("/memory/topics/decisions.md") ? reply() : new Response(null, { status: 404 })));
-// each test names its own bot: a replaced pick's fold, the search and the view are kept for the session, per bot
-const openTimeline = (botId = "b1") => render({ timeline: true, profileName: "Edward", botId, source: { threadId: "t1", messages: [] }, hidden: false });
+// each test names its own bot: a replaced pick's fold and the search are kept for the session, per bot
+const openTimeline = (botId = "b1", closing = false) => render({ timeline: true, profileName: "Edward", botId, source: { threadId: "t1", messages: [] }, hidden: false, closing });
 const picked = () => [...host.querySelectorAll<HTMLElement>("[data-timeline-pick]:not([data-old])")];
 const named = (key: string) => picked().find((pick) => pick.querySelector(".timeline-key")?.textContent === key)!;
 const strokes = (kind: string) => host.querySelectorAll(`.timeline-ink path[data-ink="${kind}"]`).length;
@@ -543,6 +543,78 @@ it("keeps the search text and an open replaced pick after a tab switch and back"
   expect(host.querySelector("[data-timeline-replaced]")?.getAttribute("aria-expanded")).toBe("true");
 });
 
+it("opens on the newest pick again after panning, reopening, and clearing search", async () => {
+  pickList();
+  const newestAtStart = () => {
+    expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Timeline place");
+    expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+  };
+  await openTimeline("b-reopen");
+  await until(() => picked().length > 0);
+  newestAtStart();
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }), { ctrlKey: { value: false } }));
+  });
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, -456px) scale(0.86)");
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  expect(host.querySelector(".timeline-canvas")).toBeNull();
+  await openTimeline("b-reopen");
+  await until(() => picked().length > 0);
+  newestAtStart();
+
+  const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
+  await type(search, "speed board");
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Speed board look");
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100 }), { ctrlKey: { value: true }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  expect(host.querySelector(".timeline-hint b")?.textContent).toBe("110%");
+  await type(search, "");
+  newestAtStart();
+});
+
+it("returns to the newest pick if reopened before the pane finishes closing", async () => {
+  pickList();
+  await openTimeline("b-reopen-during-exit");
+  await until(() => picked().length > 0);
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }), { ctrlKey: { value: false } }));
+  });
+  await openTimeline("b-reopen-during-exit", true);
+  expect(sheet.style.transform).toBe("translate(4px, -456px) scale(0.86)");
+  await openTimeline("b-reopen-during-exit");
+  expect(sheet.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+});
+
+it("orders days and picks by the current pick, even when a newer tap lost to it", async () => {
+  const text = `# Decision timeline
+
+## 2026-11-14 10:00 | Old choice | current
+- Picked: A
+
+## 2026-11-17 09:00 | Morning choice | current
+- Picked: A
+
+## 2026-11-17 10:00 | Latest choice | current
+- Picked: B
+- At: ${Date.UTC(2026, 10, 17, 10, 0, 35)}
+
+## 2026-11-17 10:00 (2) | Earlier choice | current
+- Picked: A
+- At: ${Date.UTC(2026, 10, 17, 10, 0, 15)}
+
+## 2026-11-18 10:00 | Old choice | replaced by 2026-11-14 10:00
+- Picked: B
+- Tapped: yes
+`;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-order");
+  await until(() => picked().length > 0);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Latest choice", "Earlier choice", "Morning choice", "Old choice"]);
+});
+
 it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {
   pickList();
   await openTimeline("b-move");
@@ -584,8 +656,13 @@ it("draws the newest picks first and the rest a batch a frame", async () => {
   await until(() => picked().length > 0);
   expect(picked().length).toBe(8);
   expect(picked()[0].querySelector(".timeline-key")?.textContent).toBe("Question 27");
+  const sheet = host.querySelector(".timeline-sheet")!;
+  expect(sheet.querySelector(".timeline-day")?.textContent).toBe("Newest");
+  expect(sheet.lastElementChild?.className).not.toBe("timeline-day");
   while (frames.length) await act(async () => frames.shift()!(0));
   expect(picked().length).toBe(40);
+  expect(sheet.lastElementChild?.className).toBe("timeline-day");
+  expect(sheet.lastElementChild?.textContent).toBe("Oldest");
   raf.mockRestore();
 });
 
