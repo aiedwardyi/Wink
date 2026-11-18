@@ -1,15 +1,14 @@
-// Handoff eval: Bot A is blocked on X and calls; the user answers in chat and Bot A posts
-// the fix. Later Bot B hits X, gets that fix from the Board, and finishes without a call. A stub engine plays
+// Handoff eval: Bot A is blocked on X and calls; the user answers in chat and Bot A clears
+// the blocker with the fix as its note. Later Bot B hits X, gets that fix from the Board, and finishes without a call. A stub engine plays
 // both bots through the same task-state route and call wiring the server uses.
 import { EventEmitter } from "node:events";
-import { readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BOARD_USER, createBoard, type Board } from "./board.ts";
-import { createBoardCalls, userAnswer, type BoardCalls } from "./board-calls.ts";
+import { createBoardCalls, type BoardCalls } from "./board-calls.ts";
 import { createBotCalls } from "./bot-call.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import type { BotRecord, Store } from "./store.ts";
@@ -67,32 +66,24 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 /** The stub engine's update_task_state call. */
-async function blockers(bot: BotRecord, list: Array<{ kind: string; note: string }>): Promise<string> {
+async function blockers(bot: BotRecord, list: Array<{ kind: string; note: string }>, completed_note?: string): Promise<string> {
   let status = 0;
   let body = "";
   const res = { writeHead(code: number) { status = code; }, end(text: string) { body = text; } } as unknown as ServerResponse;
   const req = new EventEmitter() as IncomingMessage;
   const pending = route.taskState(req, res);
-  req.emit("data", JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, blockers: list }));
+  req.emit("data", JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, blockers: list, completed_note }));
   req.emit("end");
   await pending;
   expect(status).toBe(200);
   return String(JSON.parse(body).notice ?? "");
 }
 
-/** What the server does with a message the user types. */
-const say = (threadId: string, text: string, id = "m-answer") => {
-  const message = { id, role: "user", kind: "text", text };
-  if (userAnswer(message)) boardCalls.answered(threadId, message);
-};
-
 /** What a bot's board_post does with the fix once the answer unblocked it. */
 const posted = (bot: BotRecord, parentId: string, text: string) => {
   const parent = board.get(parentId)!;
   board.post({ author_bot_id: bot.id, kind: "fix", title: parent.title, body: text, fix: text, parent_id: parentId, project_id: parent.project_id, error_sig: parent.error_sig, source_ref: `tool:${bot.threadId}:${text}` });
 };
-
-const stored = () => readdirSync(board.dir).map((name) => readFileSync(join(board.dir, name), "utf8")).join("\n");
 
 describe("board handoff eval", () => {
   it("Bot B finishes on Bot A's fix without calling", async () => {
@@ -102,14 +93,10 @@ describe("board handoff eval", () => {
     const [stuck] = board.list();
     expect(stuck).toMatchObject({ kind: "stuck", status: "open", author_bot_id: "astra", project_id: "wink" });
 
-    // the user answers in chat: the post is solved without their words, and Bot A posts the fix as itself
-    say("ta", ANSWER);
-    expect(board.get(stuck!.id)).toMatchObject({ status: "solved", fix: "" });
-    posted(BOTS.astra!, stuck!.id, ANSWER);
-    await blockers(BOTS.astra!, []);
+    // the user answers in chat; Bot A clears the blocker and the note it writes then is the fix
+    await blockers(BOTS.astra!, [], ANSWER);
     boardCalls.turnEnded("ta", true);
     expect(board.get(stuck!.id)).toMatchObject({ status: "solved", fix: ANSWER });
-    expect(board.list().find((post) => post.kind === "fix")).toMatchObject({ parent_id: stuck!.id, author_bot_id: "astra", body: ANSWER });
 
     // later Bot B hits X: Wink finds the fix before the call goes out
     await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -128,7 +115,6 @@ describe("board handoff eval", () => {
 
   it("a fix that did not work calls on the second try", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
-    say("ta", ANSWER);
     posted(BOTS.astra!, board.list()[0]!.id, ANSWER);
     const callsBefore = sent.length;
     await blockers(BOTS.carbon!, [X("09:30")]);
@@ -142,7 +128,6 @@ describe("board handoff eval", () => {
   it("a solved blocker that comes back gets a fresh post, rings and takes the new answer", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
     const [first] = board.list();
-    say("ta", ANSWER);
     posted(BOTS.astra!, first!.id, ANSWER);
     await blockers(BOTS.astra!, []);
     boardCalls.turnEnded("ta", true);
@@ -157,7 +142,6 @@ describe("board handoff eval", () => {
     const fresh = stuck.find((post) => post.id !== first!.id)!;
     expect(fresh).toMatchObject({ status: "open", author_bot_id: "astra" });
     const NEW = "Codex moved to the team plan; sign in again with the work account.";
-    say("ta", NEW, "m-answer-2");
     posted(BOTS.astra!, fresh.id, NEW);
     expect(board.get(fresh.id)).toMatchObject({ status: "solved", fix: NEW });
     expect(board.list().find((post) => post.kind === "fix" && post.parent_id === fresh.id)).toMatchObject({ body: NEW, author_bot_id: "astra" });
@@ -181,19 +165,27 @@ describe("board handoff eval", () => {
     expect(board.list().filter((post) => post.helped_bot_ids.includes("carbon")).map((post) => post.fix).sort()).toEqual(["fix 0", "fix 1"]);
   });
 
-  it("answering a call stores none of the user's words, in a 1:1 or a room", async () => {
-    const room = createBoardCalls({ board, projectOf: () => "wink", rings: () => false });
+  it("a chat reply is never the fix: the post waits for the bot to clear its blocker", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
-    room.called("carbon", "room-thread", { kind: "engine", note: X("09:30").note });
-    say("ta", ANSWER);
-    const ROOM_ANSWER = "Teammates can use my Claude seat today.";
-    const message = { id: "m-room", role: "user", kind: "text", text: ROOM_ANSWER };
-    if (userAnswer(message)) room.answered("room-thread", message);
-    expect(board.list().filter((post) => post.kind === "stuck").map((post) => post.status)).toEqual(["solved", "solved"]);
+    const [stuck] = board.list();
+    expect("answered" in boardCalls).toBe(false);
+    expect(board.get(stuck!.id)!.status).toBe("open");
+    await blockers(BOTS.astra!, []);
+    expect(board.get(stuck!.id)).toMatchObject({ status: "solved", fix: "" });
     expect(board.list().some((post) => post.author_bot_id === BOARD_USER)).toBe(false);
-    expect(stored()).not.toContain(ANSWER);
-    expect(stored()).not.toContain(ROOM_ANSWER);
-    expect(JSON.stringify(board.search({ query: ANSWER }))).not.toContain(ANSWER);
+  });
+
+  it("a cleared blocker that was never called leaves the Board alone", async () => {
+    packets.get("ta")!.blockers = [{ kind: "input", note: "Which folder?" } as TaskResumePacket["blockers"][number]];
+    await blockers(BOTS.astra!, [], "picked the Wink folder");
+    expect(board.list()).toEqual([]);
+  });
+
+  it("a phone blocker is held on an open handoff, not only on solved fixes", async () => {
+    board.post({ author_bot_id: "astra", kind: "handoff", title: "Codex usage limit", body: "When Codex says you hit the usage limit, try again later or switch the worker to the Claude account.", project_id: "wink", source_ref: "tool:handoff" });
+    const notice = await blockers(BOTS.carbon!, [X("09:30")]);
+    expect(notice).toContain("switch the worker to the Claude account");
+    expect(sent).toEqual([]);
   });
 
   it("an open post with no answer yet holds nothing back", async () => {

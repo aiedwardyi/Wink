@@ -271,19 +271,7 @@ export function createBoard(options: BoardOptions) {
       if (changed) options.changed?.();
     },
     search(input: BoardSearch): BoardPost[] {
-      const words = boardWords(input.query);
-      const minShare = input.minShare ?? 0;
-      const scored = board.list().flatMap((post) => {
-        if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
-        const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
-        const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
-        const hits = words.filter((word) => held.has(word)).length;
-        const share = words.length ? hits / words.length : 0;
-        if (!sig && (!hits || share < minShare)) return [];
-        return [{ post, score: (sig ? 1 : 0) + share, local: Boolean(input.projectId && post.project_id === input.projectId) }];
-      });
-      scored.sort((a, b) => Number(b.local) - Number(a.local) || b.score - a.score || b.post.updated_at - a.post.updated_at);
-      return scored.slice(0, input.limit ?? 5).map((entry) => entry.post);
+      return searchBoard(board.list(), input);
     },
     /**
      * Drive sync. Each PC writes only its own folder, so two PCs posting at once never
@@ -345,6 +333,22 @@ export function createBoard(options: BoardOptions) {
 }
 
 export type Board = ReturnType<typeof createBoard>;
+
+export function searchBoard(posts: readonly BoardPost[], input: BoardSearch): BoardPost[] {
+  const words = boardWords(input.query);
+  const minShare = input.minShare ?? 0;
+  const scored = posts.flatMap((post) => {
+    if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
+    const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
+    const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
+    const hits = words.filter((word) => held.has(word)).length;
+    const share = words.length ? hits / words.length : 0;
+    if (!sig && (!hits || share < minShare)) return [];
+    return [{ post, score: (sig ? 1 : 0) + share, local: Boolean(input.projectId && post.project_id === input.projectId) }];
+  });
+  scored.sort((a, b) => Number(b.local) - Number(a.local) || b.score - a.score || b.post.updated_at - a.post.updated_at);
+  return scored.slice(0, input.limit ?? 5).map((entry) => entry.post);
+}
 
 /** What a bot sees of a post: a few hundred characters, never the whole thread. */
 export function boardLine(post: BoardPost, max = 300): string {

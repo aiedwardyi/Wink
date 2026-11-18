@@ -29,7 +29,7 @@ const RULES = [
 ];
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
-const FORUM = "When stuck or before a long task, board_search the Forum first; never before a chat reply. After replying, board_post reusable finds; add to a matching post, no duplicates.";
+const FORUM = "Before asking the user for a fact, path, setup or error (not a decision), board_search once. After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
 const CUSTOM = "Keep build notes in the team wiki.";
 const DECISIONS = [
   "In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date",

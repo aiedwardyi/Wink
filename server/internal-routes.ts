@@ -67,7 +67,7 @@ type InternalRouteDeps = {
   answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
-  boardCalls?: Pick<BoardCalls, "hold">;
+  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -229,7 +229,10 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
-      if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+      if (saved && body.blockers !== undefined) {
+        deps.boardCalls?.cleared(body.fromThreadId, current.blockers, saved.blockers, body.completed_note);
+        deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+      }
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
@@ -490,6 +493,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
           whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
+          forum: (botId, threadId, question) => deps.boardCalls?.ask(botId, threadId, question) ?? "",
         },
         askUserRequestSchema.parse(body),
       );

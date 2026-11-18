@@ -62,11 +62,13 @@ export interface AskUserDeps<B extends Sender> {
   notifyQuestion(bot: B, target: string, question: string): void;
   /** Runs `post` now, or once the asking turn has replied. */
   whenSettled(botId: string, threadId: string, post: () => void, question: string): void;
+  /** Forum posts that may answer the question, for the bot to try first; "" posts the card. */
+  forum?(botId: string, threadId: string, question: string): string;
 }
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean } | { notice: string };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -86,6 +88,8 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     }
     return { status: 200, body: { closed } };
   }
+  const notice = deps.forum?.(from.id, request.fromThreadId, question);
+  if (notice) return { status: 200, body: { notice } };
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",

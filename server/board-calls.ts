@@ -1,5 +1,5 @@
-// Bot calls feed the Board: a call leaves a stuck post, the user's answer solves it, and a later
-// bot with the same blocker gets the fix a bot posted instead of calling. No model calls.
+// Bot calls feed the Board: a call leaves a stuck post, the bot clearing that blocker solves it, and a later
+// bot with the same blocker, or about to ask the user, gets the post instead. No model calls.
 import { boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 
@@ -11,13 +11,11 @@ export const BOARD_HITS = 2;
 const HIT_CHARS = 240;
 const MIN_SHARE = 0.6;
 
-/** A message the user typed on a thread, the only kind that answers a call. */
-export const userAnswer = (message: { role: string; kind: string; comm?: unknown; from?: unknown }) =>
-  message.role === "user" && message.kind === "text" && !message.comm && !message.from;
-
 const calls = (blocker: Blocker) => blocker.kind === "login" || blocker.kind === "engine";
 const keyOf = (blocker: Blocker) => `${blocker.kind}\n${blocker.note}`;
 const callRef = (threadId: string) => `call:${threadId}:`;
+// handoffs and tips are never solved, so they count as answers while open
+const answers = (post: BoardPost) => (post.status === "solved" && Boolean(post.fix)) || post.kind === "handoff" || post.kind === "tip";
 
 export interface BoardCallDeps {
   board: Board;
@@ -34,11 +32,17 @@ export function createBoardCalls(deps: BoardCallDeps) {
     query: note,
     errorSig: errorSig(note),
     projectId: deps.projectOf(threadId),
-    solvedOnly: true,
     minShare: MIN_SHARE,
-    limit: BOARD_HITS,
+    limit: Number.POSITIVE_INFINITY,
     withoutRoom: true,
-  });
+  }).filter(answers).slice(0, BOARD_HITS);
+  const episodeRef = (threadId: string, blocker: Blocker, episode: number) => `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
+  /** The call's current episode: the first whose post is not solved yet. */
+  const episodeOf = (threadId: string, blocker: Blocker) => {
+    let episode = 0;
+    while (deps.board.get(boardPostId(episodeRef(threadId, blocker, episode)))?.status === "solved") episode++;
+    return episode;
+  };
 
   return {
     /**
@@ -83,11 +87,27 @@ export function createBoardCalls(deps: BoardCallDeps) {
         notice: `Not called yet: the Board has a fix for this blocker. Try it once. If it still fails, write the same blocker again to call.\n${lines.join("\n")}`,
       };
     },
+    /**
+     * Before an ask_user card posts: a question the Forum may answer is held once and the posts
+     * go back to the bot. The same question asked again posts.
+     */
+    ask(botId: string, threadId: string, question: string): string {
+      if (!deps.rings(threadId)) return "";
+      const key = `ask\n${question}`;
+      const offered = offers.get(threadId) ?? [];
+      const tried = offered.findIndex((offer) => offer.botId === botId && offer.key === key);
+      if (tried >= 0) {
+        offered.splice(tried, 1);
+        if (!offered.length) offers.delete(threadId);
+        return "";
+      }
+      const posts = hits(threadId, question);
+      if (!posts.length) return "";
+      offers.set(threadId, [...offered, { botId, key, postIds: posts.map((post) => post.id) }]);
+      return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it doesn't, ask again.`;
+    },
     /** A call went out: the blocker becomes an open stuck post, a fresh one once the last call was solved. */
     called(botId: string, threadId: string, blocker: Blocker): BoardPost {
-      const ref = (episode: number) => `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
-      let episode = 0;
-      while (deps.board.get(boardPostId(ref(episode)))?.status === "solved") episode++;
       return deps.board.post({
         author_bot_id: botId,
         kind: "stuck",
@@ -95,14 +115,16 @@ export function createBoardCalls(deps: BoardCallDeps) {
         body: blocker.note,
         error_sig: errorSig(blocker.note),
         project_id: deps.projectOf(threadId),
-        source_ref: ref(episode),
+        source_ref: episodeRef(threadId, blocker, episodeOf(threadId, blocker)),
       });
     },
-    /** The user's next message on a called thread answers it: the post is solved, and their words stay in chat. */
-    answered(threadId: string, message: { text?: string }): BoardPost[] {
-      if (!message.text?.trim()) return [];
-      const open = deps.board.list().filter((post) => post.kind === "stuck" && post.status === "open" && post.source_ref.startsWith(callRef(threadId)));
-      return open.map((stuck) => deps.board.solve(stuck.id, stuck.fix)!);
+    /** The bot cleared a blocker it called on: the stuck post is solved, with the note it wrote then as the fix. The user's chat is never the fix. */
+    cleared(threadId: string, before: readonly Blocker[], after: readonly Blocker[], note = ""): BoardPost[] {
+      const left = new Set(after.map(keyOf));
+      return before.filter((blocker) => calls(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
+        const id = boardPostId(episodeRef(threadId, blocker, episodeOf(threadId, blocker)));
+        return deps.board.get(id)?.kind === "stuck" ? [deps.board.solve(id, note)!] : [];
+      });
     },
     /** A turn that held a Board fix and ended without calling: the fix helped. */
     turnEnded(threadId: string, ok: boolean): void {

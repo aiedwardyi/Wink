@@ -983,6 +983,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
       if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
+      if (typeof result.notice === "string") return { text: result.notice };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
       return { text: `Couldn't ask: ${e instanceof Error ? e.message : String(e)}`, isError: true };
