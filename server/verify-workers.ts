@@ -1,4 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
 import { freemem, homedir } from "node:os";
 import { basename, dirname, extname, parse, relative, resolve, sep } from "node:path";
 
@@ -45,8 +45,10 @@ const clock = (ms: number) => { const at = new Date(ms); return `${String(at.get
 
 /** A folder a worker's site can be in: never a drive, the home folder or one of its direct children, nor a path through a link. */
 async function workerRoot(cwd: string): Promise<string | null> {
+  // compare link status, not path text: realpath also expands 8.3 short names
+  if (!(await lstat(cwd).catch(() => null))?.isDirectory()) return null;
   const real = await realpath(cwd).catch(() => null);
-  if (!real || real.toLowerCase() !== resolve(cwd).toLowerCase() || parse(real).root === real) return null;
+  if (!real || parse(real).root === real) return null;
   const home = resolve(homedir()).toLowerCase();
   return real.toLowerCase() === home || dirname(real).toLowerCase() === home ? null : real;
 }

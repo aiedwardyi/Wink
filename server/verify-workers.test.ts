@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,6 +119,23 @@ describe("Live Verify on a worker's DONE report", () => {
     await t.post(DONE);
     expect(t.runs).toEqual([]);
     expect(t.arrived).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks a cwd written as an 8.3 short name and refuses a junction root", async () => {
+    const root = site({ "long folder name/index.html": "<h1>Hi</h1>" });
+    const long = join(root, "long folder name");
+    const short = process.platform === "win32" ? execSync(`for %I in ("${long}") do @echo %~sI`, { encoding: "utf8", shell: "cmd.exe" }).trim() : long;
+    expect(short).not.toBe(long);
+    const t = await fixture(short);
+    await t.post(DONE);
+    expect(t.runs).toHaveLength(1);
+
+    const link = join(root, "link");
+    symlinkSync(long, link, "junction");
+    const linked = await fixture(link);
+    await linked.post(DONE);
+    expect(linked.runs).toEqual([]);
+    expect(linked.arrived).toHaveBeenCalledTimes(1);
   });
 
   it("calls a build older than its source inconclusive", async () => {
