@@ -275,22 +275,27 @@ async function medianBehind(file, { size, insets, top }, side) {
       }
     }
   }
+  if (!pixels.length) throw new Error(`medianBehind: no pixels sampled from ${file}`);
   pixels.sort((a, b) => luminance(a) - luminance(b));
   return pixels[Math.floor((pixels.length - 1) / 2)];
 }
 
 const toHex = ({ r, g, b }) => "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
 
-/** The ink token a scene rule gives the icon `marker` on skin `id` and drawer side `side` (`color: var(--x)`); a rule naming `[data-side]` applies to that side only. */
+/** The ink token a scene rule gives the icon `marker` on skin `id` and drawer side `side` (`color: var(--x)`). Like the cascade: a rule naming `[data-side]` applies to that side only and beats a general one, and among equals the later rule wins. */
 function iconInk(source, marker, id, side) {
+  let general = null;
+  let sided = null;
   for (const [, selector, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     if (!selector.includes(marker) || !selector.includes(`[data-skin="${id}"]`)) continue;
     const onlySide = selector.match(/\[data-side="(left|right)"\]/)?.[1];
     if (onlySide && onlySide !== side) continue;
     const token = body.match(/(?:^|[;\s])color:\s*var\((--color-[\w-]+)\)/)?.[1];
-    if (token) return token;
+    if (!token) continue;
+    if (onlySide) sided = token;
+    else general = token;
   }
-  return null;
+  return sided ?? general;
 }
 
 /** A token's value on the skin; a token the skin does not define fails loudly, since contrast() of nothing never fails. */
