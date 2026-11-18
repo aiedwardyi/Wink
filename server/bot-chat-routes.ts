@@ -330,11 +330,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       }
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
       const call = parseCallTag(body.call);
-      const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
+      const heldSend = queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId) : null;
+      const cardId = heldSend && heldSend.id === queueId ? heldSend.answersCard : body.cardId;
+      const asked = typeof cardId === "string" ? store.activePath(threadId).find((message) => message.id === cardId) : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // Send now on a held send: the user acted when they queued it
-      const actedAt = (queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId)?.actedAt : undefined) ?? sentAt;
+      const actedAt = heldSend?.actedAt ?? sentAt;
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),

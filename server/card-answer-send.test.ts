@@ -123,6 +123,24 @@ it("the model still reads a tapped answer on replay", async () => {
   expect(answer.text).toContain("Dinner?");
 });
 
+it.each([true, false])("Send now keeps the queued answer's question (busy: %s)", async (busy) => {
+  const h = harness();
+  h.busy();
+  const sendId = "send-card-answer-001";
+  const queued = await h.send({ text: "Sure", cardId: h.card.id, sendId, deliver: "after" });
+  expect(queued.queued).toBe(true);
+  if (!busy) h.store.setActivity(h.bot.id, "idle");
+  await h.send({ text: "Sure", sendId, queueId: queued.queueId });
+  if (busy) {
+    expect(h.steer.mock.calls[0]![1]).toContain(h.card.id);
+    expect(h.last()).toMatchObject({ text: "Sure", answersCard: h.card.id });
+  } else {
+    const [, text, opts] = h.startTurn.mock.calls[0]!;
+    expect(opts?.answersCard).toBe(h.card.id);
+    expect(composeUserTurnPrompt(text, { messages: h.store.activePath(h.bot.threadId), ...opts })).toContain("Dinner?");
+  }
+});
+
 it("a call answer dropped by the engine keeps its question when folded into the next turn", () => {
   const h = harness();
   const answer = h.store.appendMessage(h.bot.threadId, {
