@@ -182,6 +182,12 @@ export function useMascotMotionExpiry(nonce: number | undefined, dispatch: (acti
   }, [nonce, dispatch]);
 }
 
+function consumeFocus(state: AppState, threadId?: string): AppState {
+  const focus = state.focusMessage;
+  if (!focus || focus.consumed || (threadId !== undefined && focus.threadId !== threadId)) return state;
+  return { ...state, focusMessage: { ...focus, consumed: true } };
+}
+
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
@@ -234,6 +240,8 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "olderMessages": {
+      const focus = state.focusMessage;
+      if (action.focusNonce !== undefined && (focus?.nonce !== action.focusNonce || focus.consumed || focus.threadId !== action.threadId)) return state;
       // A cursor that is no longer the head means a snapshot replaced this
       // list mid-request; prepending would leave a hole.
       const patches = state.olderPatches[action.threadId] ?? {};
@@ -282,6 +290,7 @@ export function reducer(state: AppState, action: Action): AppState {
           )
         : [{ ...(action.group as Group), messages: action.group.messages ?? [] }, ...state.groups];
       const patchedGroup = groups.find((group) => group.id === action.group.id);
+      if (before && before.threadId !== patchedGroup?.threadId) state = consumeFocus(state, before.threadId);
       // a turn that fails before any member starts ends without a busyBotId frame
       const settled = Boolean(before?.working) && patchedGroup?.working === false;
       const acceptedSends =
@@ -315,7 +324,7 @@ export function reducer(state: AppState, action: Action): AppState {
       // the slot's panels belong to the chat being left, and so does a jump still loading there: a fresh phone page would replay it
       if (action.id !== state.selectedId) {
         state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
-        if (state.focusMessage) state = reducer(state, { type: "focusMessageConsumed", nonce: state.focusMessage.nonce });
+        state = consumeFocus(state);
       }
       // reselecting the conversation a workspace covers does not reveal it
       const covered = state.workspaceOpen && state.selectedId === action.id;
@@ -438,6 +447,8 @@ export function reducer(state: AppState, action: Action): AppState {
         };
         return reconcileSnapshotQueues(added, [action.bot]);
       }
+      const switchedThread = typeof action.bot.threadId === "string" && action.bot.threadId !== before.threadId;
+      if (switchedThread) state = consumeFocus(state, before.threadId);
       const kind =
         action.bot.unread && !before?.unread
           ? "surprise"
@@ -459,8 +470,6 @@ export function reducer(state: AppState, action: Action): AppState {
             ),
           }
         : animated;
-      const switchedThread =
-        typeof action.bot.threadId === "string" && action.bot.threadId !== before.threadId;
       const patched = updateBot(next, action.bot.id, (b) => ({
         ...b,
         ...action.bot,
@@ -623,8 +632,7 @@ export function reducer(state: AppState, action: Action): AppState {
         },
       };
     case "focusMessageConsumed":
-      if (!state.focusMessage || state.focusMessage.nonce !== action.nonce) return state;
-      return { ...state, focusMessage: { ...state.focusMessage, consumed: true } };
+      return state.focusMessage?.nonce === action.nonce ? consumeFocus(state) : state;
     case "mascotMotionDone":
       return state.mascotMotion?.nonce === action.nonce ? { ...state, mascotMotion: null } : state;
     case "setWorkspaceOpen": {
@@ -930,6 +938,8 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "taskSwitched": {
       if (action.generation !== undefined && state.taskSwitches[action.bot.id] !== action.generation) return state;
+      const before = state.bots.find((bot) => bot.id === action.bot.id);
+      if (before && before.threadId !== action.bot.threadId) state = consumeFocus(state, before.threadId);
       const switched = updateBot(state, action.bot.id, (bot) => {
         const snapshot = action.bot.messages ?? [];
         if (bot.threadId !== action.bot.threadId) {
@@ -1134,6 +1144,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshGeneration = useRef(0);
   const instancesVersion = useRef(0);
   const taskSwitchGeneration = useRef(0);
+  const searchLanding = useRef<{ id: string; threadId: string; request: AbortController } | null>(null);
   const pendingNotificationSwitch = useRef<NotificationTarget | null>(null);
   const pendingTaskResumes = useRef(new Map<string, (error: string | null, pending?: boolean) => void>());
   // per-frame stream-delta batching (see the "runtime" SSE case); stream
@@ -1348,6 +1359,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }).then((res) => stillOpen(res, threadId), () => true);
       void holdReload(saving);
       return saving;
+    };
+
+    const cancelSearchForTaskSwitch = (id: string, threadId: string) => {
+      const landing = searchLanding.current;
+      if (landing?.id !== id || landing.threadId === threadId) return;
+      landing.request.abort();
+      searchLanding.current = null;
     };
 
     const wrapped: React.Dispatch<Action> = (rawAction) => {
@@ -1748,6 +1766,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "select": {
+          if (searchLanding.current?.id !== action.id || action.searchLanding) {
+            searchLanding.current?.request.abort();
+            searchLanding.current = action.searchLanding ? { id: action.id, ...action.searchLanding } : null;
+          }
           closeGroupArchive();
           // a chat picked before hydrate drops a pending notification target
           pendingNotificationSwitch.current = null;
@@ -1965,6 +1987,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // tasks: the server answers with the bot AND the live transcript,
         // because switching changes which conversation is on screen
         case "switchTask":
+          cancelSearchForTaskSwitch(action.botId, action.threadId);
           api(`/api/bots/${action.botId}/tasks/${action.threadId}`, { method: "POST" })
             .then((r: any) => r?.bot && dispatch({ type: "taskSwitched", bot: r.bot, generation: action.generation }))
             .catch(showError);
@@ -1973,6 +1996,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pendingNotificationSwitch.current = action.target;
           break;
         case "switchGroupTask": {
+          cancelSearchForTaskSwitch(action.groupId, action.threadId);
           const asked = groupTaskTicket();
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "POST" })
             .then((r: any) => r?.group && showGroupTask(r.group, dispatch, asked))

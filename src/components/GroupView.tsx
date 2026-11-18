@@ -1082,7 +1082,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const accepted = state.acceptedSends[group.threadId];
   // a sent line shows at once, as in a 1:1 chat, while the server still holds it
   const messages = useMemo(() => withAcceptedMessages(group.messages, accepted), [group.messages, accepted]);
-  const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots);
+  const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots, state.focusMessage);
   const shown = jump.messages ?? messages;
   // rooms have no pane liveness, so a run without a report stays Working
   const workers = useMemo(() => workerRuns(group.messages).map((run) => ({ run, state: shownState(run, null) })), [group.messages]);
@@ -1202,7 +1202,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     if (targetIndex < 0) {
       if (group.hasMore && requestedFocus.current !== focus.nonce) {
         requestedFocus.current = focus.nonce;
-        openJump(focus.messageId);
+        openJump(focus.messageId, focus.nonce);
       }
       return;
     }

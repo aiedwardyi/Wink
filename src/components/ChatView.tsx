@@ -1055,7 +1055,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   // lastUserMessage, working dots) stays computed from the FULL list.
   const transcriptKey = `${bot.id}:${bot.threadId}`;
   // an old jump shows its own window; the live pages below keep taking arrivals
-  const jump = useJumpWindow(dispatch, transcriptKey, bot.threadId, bot.messages, bot.activeLeafId, state.olderPatches[bot.threadId], state.snapshots);
+  const jump = useJumpWindow(dispatch, transcriptKey, bot.threadId, bot.messages, bot.activeLeafId, state.olderPatches[bot.threadId], state.snapshots, state.focusMessage);
   const shown = jump.messages ?? messages;
   const runs = useMemo(() => workerRuns(messages), [messages]);
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
@@ -1349,7 +1349,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     if (targetIndex < 0) {
       if (bot.hasMore && requestedFocus.current !== focus.nonce) {
         requestedFocus.current = focus.nonce;
-        openJump(focus.messageId);
+        openJump(focus.messageId, focus.nonce);
       }
       return;
     }

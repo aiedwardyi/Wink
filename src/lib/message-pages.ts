@@ -1,7 +1,7 @@
 // Hydrate holds only the newest page of each conversation. Older pages come
 // from the scrollback endpoint one at a time, when the reader reaches the top.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, MESSAGE_PAGE, type Action, type Message } from "@/state/store";
+import { api, MESSAGE_PAGE, type Action, type AppState, type Message } from "@/state/store";
 import { captureTranscriptAnchor, distanceFromTranscriptEdge, restoreTranscriptAnchor, restoreTranscriptScroll, type TranscriptAnchor } from "./bottom-follow";
 import { TRANSCRIPT_WINDOW_SIZE, advanceWindow, shouldAdvanceWindow } from "./transcript-window";
 import { groupActivityRuns } from "./activity-runs";
@@ -165,10 +165,12 @@ export function useJumpWindow(
   leafId: string | null | undefined,
   patches: Record<string, Message> | undefined,
   snapshot: number,
+  focus: AppState["focusMessage"],
 ) {
   const [held, setHeld] = useState<JumpWindow | null>(null);
+  const [opening, setOpening] = useState<(JumpWindow & { nonce: number }) | null>(null);
   // keyed: a lookup still hanging in one chat must not read as pending in the next
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ key: string; nonce: number } | null>(null);
   const inflight = useRef(false);
   const latest = useRef(0);
   // own counter, so a snapshot refetch never strands a jump still in flight
@@ -177,6 +179,12 @@ export function useJumpWindow(
   const [forwardFailed, setForwardFailed] = useState<string | null>(null);
   // leaving the view drops the window; coming back opens at the newest message
   if (held && held.key !== key) setHeld(null);
+  const focusNonce = focus && !focus.consumed && focus.threadId === threadId ? focus.nonce : null;
+  // A selection and the lookup reply can land in the same render.
+  if (opening) {
+    setOpening(null);
+    if (opening.key === key && opening.nonce === focusNonce) setHeld(opening);
+  }
   const current = held?.key === key ? held : null;
   const committed = useRef({ current, key, loaded, leafId, snapshot });
   useLayoutEffect(() => { committed.current = { current, key, loaded, leafId, snapshot }; });
@@ -187,17 +195,17 @@ export function useJumpWindow(
     return jumpWindowMessages(rows, loaded, current.targetId, leafId);
   }, [current, patches, leafId, loaded]);
   const open = useCallback(
-    (messageId: string) => {
+    (messageId: string, nonce: number) => {
       const generation = ++latest.current;
       setForwardFailed(null);
-      setPending(key);
+      setPending({ key, nonce });
       fetchAround(threadId, messageId)
         .then(({ rows, hasMore }) => {
           if (generation !== latest.current) return;
           // reaches the loaded pages: join them instead of opening a detached window
           const joins = head ? rows.findIndex((message) => message.id === head) : -1;
-          if (joins >= 0) dispatch({ type: "olderMessages", threadId, before: head!, messages: rows.slice(0, joins), hasMore });
-          else setHeld({ key, targetId: messageId, messages: rows, hasMore, snapshot });
+          if (joins >= 0) dispatch({ type: "olderMessages", threadId, before: head!, messages: rows.slice(0, joins), hasMore, focusNonce: nonce });
+          else setOpening({ key, targetId: messageId, messages: rows, hasMore, snapshot, nonce });
         })
         .catch(() => {})
         .finally(() => {
@@ -276,10 +284,11 @@ export function useJumpWindow(
   const close = useCallback(() => {
     latest.current++;
     setPending(null);
+    setOpening(null);
     setHeld(null);
     setForwardFailed(null);
   }, []);
-  return { messages, hasMore: Boolean(current?.hasMore), pending: pending === key, forwardFailed: forwardFailed === forwardKey && forwardKey !== null, open, older, newer, close };
+  return { messages, hasMore: Boolean(current?.hasMore), pending: pending?.key === key && pending.nonce === focusNonce, forwardFailed: forwardFailed === forwardKey && forwardKey !== null, open, older, newer, close };
 }
 
 export function useForwardWindow<W extends { key: string; start: number; end: number | null; expanded?: boolean }>({

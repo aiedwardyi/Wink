@@ -3,10 +3,11 @@ import { Suspense, act, createElement, startTransition, use } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, formatTime, useStore, type Bot, type Group, type Message } from "@/state/store";
+import { StoreProvider, formatTime, openNotificationTarget, useStore, type Bot, type Group, type Message } from "@/state/store";
 import type { TurnStreamState } from "@/lib/turn-stage";
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
+import { landOnSearchHit } from "@/lib/focus-message";
 
 import { closeShow, useWorkersThread } from "@/lib/show-pane";
 import { ChatView, clearLivePaneCache } from "./ChatView";
@@ -793,6 +794,105 @@ describe("paged transcripts", () => {
     expect(host.textContent).toContain("a row 4999;");
     expect(host.querySelector('[data-mid="a2500"]')).toBeNull();
     expect(button(host, "Jump to latest")).toBeUndefined();
+  });
+
+  it.each(["sidebar", "notification", "notification broadcast", "room task"] as const)("discards a held jump after a round trip via %s", async (route) => {
+    const a = bot(lettered("a", 600).slice(-200), true);
+    const b = { ...a, id: "b", threadId: "thread-b", name: "B", messages: lettered("b", 200) };
+    const task = { ...a, threadId: b.threadId, messages: b.messages };
+    const g = room(a.messages, true);
+    const roomTask = { ...g, threadId: b.threadId, messages: b.messages };
+    const isRoom = route === "room task";
+    const isNotification = route === "notification" || route === "notification broadcast";
+    const threadId = isRoom ? g.threadId : a.threadId;
+    let release: (() => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "/api/bots?messages=200") return Response.json({ bots: isRoom ? [] : [a, b], groups: isRoom ? [g] : [], computerControl: {} });
+      if (url === `/api/threads/${threadId}/messages?around=a150&limit=200`) {
+        return new Promise<Response>((resolve) => { release = () => resolve(Response.json({ messages: lettered("a", 251).slice(51), hasMore: true })); });
+      }
+      if (isNotification && url.startsWith("/api/bots/a/tasks/")) {
+        const next = url.endsWith(`/${task.threadId}`) ? task : a;
+        if (route === "notification broadcast") {
+          store.dispatch({ type: "botPatched", bot: next });
+        }
+        return Response.json({ bot: next });
+      }
+      if (url === `/api/groups/g/tasks/${roomTask.threadId}`) return Response.json({ group: roomTask });
+      if (url === `/api/groups/g/tasks/${g.threadId}`) return Response.json({ group: g });
+      return new Promise<Response>(() => {});
+    }));
+    if (isNotification) {
+      a.tasks = [{ threadId: a.threadId }, { threadId: task.threadId }] as Bot["tasks"];
+      task.tasks = a.tasks;
+    }
+    const host = await mount(isRoom ? "room" : "chat");
+    await act(async () => store.dispatch({ type: "select", id: isRoom ? g.id : a.id }));
+    await act(async () => store.dispatch({ type: "focusMessage", threadId, messageId: "a150" }));
+    expect(release).toBeDefined();
+
+    const navigate = (away: boolean) => act(async () => {
+      if (route === "sidebar") store.dispatch({ type: "select", id: away ? b.id : a.id });
+      else if (isNotification) openNotificationTarget(store.dispatch, { botId: a.id, threadId: away ? task.threadId : a.threadId }, store.state, true);
+      else store.dispatch({ type: "switchGroupTask", groupId: g.id, threadId: away ? roomTask.threadId : g.threadId });
+    });
+    await navigate(true);
+    expect(host.querySelector('[data-mid="b199"]')).not.toBeNull();
+    await navigate(false);
+    expect(host.querySelector('[data-mid="a599"]')).not.toBeNull();
+
+    await act(async () => release!());
+    expect(host.querySelector('[data-mid="a599"]')).not.toBeNull();
+    expect(host.querySelector('[data-mid="a150"]')).toBeNull();
+    expect(button(host, "Jump to latest")).toBeUndefined();
+  });
+
+  it.each(["swiping away and back", "opening another task by notification"] as const)("discards a held search task switch after %s", async (navigation) => {
+    const a = bot(lettered("a", 200), false);
+    const b = { ...a, id: "b", threadId: "thread-b", name: "B", messages: lettered("b", 200) };
+    const task = { ...a, threadId: "thread-a2", messages: lettered("t", 600).slice(-200), hasMore: true };
+    const next = { ...a, threadId: "thread-a3", messages: lettered("n", 200) };
+    a.tasks = [task, next].map(({ threadId }) => ({ threadId, title: threadId, createdAt: 1 }));
+    let release: (() => void) | undefined;
+    const fetch = vi.fn(async (url: string) => {
+      if (url === "/api/bots?messages=200") return Response.json({ bots: [a, b], groups: [], computerControl: {} });
+      if (url === `/api/bots/a/tasks/${task.threadId}`) {
+        return new Promise<Response>((resolve) => { release = () => resolve(Response.json({ bot: task })); });
+      }
+      if (url === `/api/bots/a/tasks/${next.threadId}`) return Response.json({ bot: next });
+      if (url === `/api/threads/${task.threadId}/messages?around=t150&limit=200`) {
+        return Response.json({ messages: lettered("t", 251).slice(51), hasMore: true });
+      }
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal("fetch", fetch);
+    const host = await mount("chat", true);
+    await act(async () => store.dispatch({ type: "select", id: b.id }));
+    let landing: ReturnType<typeof landOnSearchHit>;
+    await act(async () => {
+      landing = landOnSearchHit({
+        botId: a.id, name: a.name, threadId: task.threadId, messageId: "t150", role: "user", kind: "text",
+        at: 1, snippet: "t row 150;", matchStart: 0, matchLength: 1, onActivePath: true,
+      }, store.state, store.dispatch);
+    });
+    expect(release).toBeDefined();
+    expect(host.querySelector('[data-mid="a199"]')).not.toBeNull();
+    if (navigation === "swiping away and back") {
+      await act(async () => store.dispatch({ type: "select", id: b.id }));
+      expect(host.querySelector('[data-mid="b199"]')).not.toBeNull();
+      await act(async () => store.dispatch({ type: "select", id: a.id }));
+    } else {
+      await act(async () => openNotificationTarget(store.dispatch, { botId: a.id, threadId: next.threadId }, store.state, true));
+    }
+    const current = navigation === "swiping away and back" ? a : next;
+    const latest = `[data-mid="${current.messages.at(-1)!.id}"]`;
+    expect(host.querySelector(latest)).not.toBeNull();
+
+    await act(async () => { release!(); await landing; });
+    expect(host.querySelector(latest)).not.toBeNull();
+    expect(store.state.bots.find((candidate) => candidate.id === a.id)?.threadId).toBe(current.threadId);
+    expect(store.state.focusMessage).toBeNull();
+    expect(fetch.mock.calls.some(([url]) => url.includes("around=t150"))).toBe(false);
   });
 
   it("shows an edit made in a jump window on its new branch with the ancestors", async () => {
