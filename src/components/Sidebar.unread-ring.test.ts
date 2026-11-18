@@ -537,7 +537,7 @@ describe("Sidebar arrival glow", () => {
     const { host, unmount } = await mountApp([bot("open", picked), bot("closed", { ...picked, unread: true })]);
     try {
       await vi.waitFor(() => expect(host.querySelector('[data-sidebar-row-id="closed"]')).not.toBeNull());
-      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("1");
+      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("");
       const menu = () => host.querySelector("[data-phone-menu]");
       expect(menu()?.hasAttribute("data-arrival-glow")).toBe(false);
       await sendFrame(replyFrame("closed-thread", botText("live-1", 11)));
@@ -545,7 +545,7 @@ describe("Sidebar arrival glow", () => {
       expect(menu()?.className).toContain("arrival-glow");
       await endGlow(menu()!);
       expect(menu()?.hasAttribute("data-arrival-glow")).toBe(false);
-      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("1");
+      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("");
     } finally {
       await unmount();
     }

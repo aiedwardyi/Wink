@@ -1,0 +1,200 @@
+{
+  "circuit": {
+    "left": {
+      "360": {
+        "menu": "#02070a",
+        "toggle": "#04070b"
+      },
+      "390": {
+        "menu": "#03070a",
+        "toggle": "#03070b"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#03070b",
+        "toggle": "#03070a"
+      },
+      "390": {
+        "menu": "#03070b",
+        "toggle": "#03070b"
+      }
+    }
+  },
+  "lagoon": {
+    "left": {
+      "360": {
+        "menu": "#cbf0eb",
+        "toggle": "#d7fcf6"
+      },
+      "390": {
+        "menu": "#ccf0eb",
+        "toggle": "#ccf1ec"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#d2f7f2",
+        "toggle": "#d3f4f0"
+      },
+      "390": {
+        "menu": "#cdf1ec",
+        "toggle": "#defffc"
+      }
+    }
+  },
+  "lagoon-night": {
+    "left": {
+      "360": {
+        "menu": "#0e3d46",
+        "toggle": "#114952"
+      },
+      "390": {
+        "menu": "#0e3d46",
+        "toggle": "#0e3e48"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#10444e",
+        "toggle": "#0f424c"
+      },
+      "390": {
+        "menu": "#0e3f48",
+        "toggle": "#124f58"
+      }
+    }
+  },
+  "neon-grid": {
+    "left": {
+      "360": {
+        "menu": "#100c25",
+        "toggle": "#100c25"
+      },
+      "390": {
+        "menu": "#100c25",
+        "toggle": "#100c25"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#100c25",
+        "toggle": "#100c25"
+      },
+      "390": {
+        "menu": "#100c25",
+        "toggle": "#100c25"
+      }
+    }
+  },
+  "night-rain": {
+    "left": {
+      "360": {
+        "menu": "#000000",
+        "toggle": "#01070f"
+      },
+      "390": {
+        "menu": "#000000",
+        "toggle": "#020b18"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#04081b",
+        "toggle": "#000819"
+      },
+      "390": {
+        "menu": "#001225",
+        "toggle": "#010a1c"
+      }
+    }
+  },
+  "samurai-ink": {
+    "left": {
+      "360": {
+        "menu": "#000000",
+        "toggle": "#c1b8ab"
+      },
+      "390": {
+        "menu": "#000000",
+        "toggle": "#c2b9ac"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#b8afa3",
+        "toggle": "#ece1d1"
+      },
+      "390": {
+        "menu": "#bab1a5",
+        "toggle": "#ece1d1"
+      }
+    }
+  },
+  "snow": {
+    "left": {
+      "360": {
+        "menu": "#d0d6ec",
+        "toggle": "#d0d6ec"
+      },
+      "390": {
+        "menu": "#d0d6ec",
+        "toggle": "#d0d6ec"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#d0d6ec",
+        "toggle": "#d0d6ec"
+      },
+      "390": {
+        "menu": "#d0d6ec",
+        "toggle": "#d0d6ec"
+      }
+    }
+  },
+  "snow-night": {
+    "left": {
+      "360": {
+        "menu": "#1d212b",
+        "toggle": "#1d212b"
+      },
+      "390": {
+        "menu": "#1d212a",
+        "toggle": "#1d212b"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#1d212b",
+        "toggle": "#202530"
+      },
+      "390": {
+        "menu": "#1d212a",
+        "toggle": "#20242f"
+      }
+    }
+  },
+  "warp": {
+    "left": {
+      "360": {
+        "menu": "#090c1b",
+        "toggle": "#483459"
+      },
+      "390": {
+        "menu": "#060914",
+        "toggle": "#48345b"
+      }
+    },
+    "right": {
+      "360": {
+        "menu": "#483456",
+        "toggle": "#322e54"
+      },
+      "390": {
+        "menu": "#3d375b",
+        "toggle": "#322e54"
+      }
+    }
+  }
+}

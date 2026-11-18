@@ -59,6 +59,16 @@ describe("phone drawer menu button", () => {
     expect(backed.map(([, selector]) => selector.trim())).toEqual([]);
   });
 
+  it("leaves the side pane toggle a bare icon on the phone", () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const scenes = readFileSync(join(dir, "scenes", "scenes.css"), "utf8");
+    const backed = scenes.split("\n").filter((line) => line.includes("[data-show-pane-button]") && /background/.test(line));
+    expect(backed.length).toBeGreaterThan(0);
+    for (const line of backed) expect(line.trimStart()).toMatch(/^@media \(min-width: 768px\)/);
+    const toggle = readFileSync(join(dir, "components", "ShowPaneButton.tsx"), "utf8");
+    expect(toggle).not.toMatch(/(?:^|[\s"`])hover:bg-/);
+  });
+
   it("centers on the same leading row every page header reserves", () => {
     expect(DRAWER_HEADER_LEFT).toBe(DRAWER_HEADER_RIGHT.replace("pr-", "pl-"));
     // 30px button centered on the row: 15 + 15 + 30 = 60.
@@ -80,7 +90,7 @@ describe("phone drawer menu button", () => {
   it("badges other unread chats, excluding the open one", () => {
     const button = menuButtonSource();
     expect(button).toContain("data-menu-unread");
-    expect(button).toContain("{menuUnreadBadge}");
+    expect(button).not.toMatch(/\{menuUnread\w*\}/);
     expect(app).toContain("collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms)");
   });
 
