@@ -557,12 +557,16 @@ it("holds the docked panel for its exit and gives the chat its column back at on
   expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*position: absolute; inset: 0 0 0 auto; transition: none;/);
 });
 
-it("keeps the chat's column when maximizing and moves the backdrop by transform", () => {
+it("raises the pane before the maximize motion starts and preserves the chat's column", () => {
   const maximized = watchRule(".verify-watch:not([data-closing]):has(> .verify-watch-frame[data-maximized])");
-  expect(maximized).toContain("width: 100cqi;");
-  expect(maximized).toContain("margin-left: calc(var(--dock) - 100cqi);");
+  expect(maximized).toContain("z-index: 15;");
+  expect(maximized).toContain("transition-property: --dock-overhang, border-left-width;");
+  expect(maximized).toContain("--dock-overhang: calc(100cqi - var(--dock));");
   expect(maximized).not.toMatch(/position:|inset:|align-items/);
-  expect(watchCss).toMatch(/\.verify-watch::after \{[^}]*transition: transform var\(--motion-large\) var\(--ease-standard\)/);
+  const dock = watchRule(".verify-watch");
+  expect(dock).toContain("width: calc(var(--dock) + var(--dock-overhang));");
+  expect(dock).toContain("margin-left: calc(-1 * var(--dock-overhang));");
+  expect(dock).toContain("transition: --dock-overhang var(--motion-large) var(--ease-standard)");
   expect(watchRule(".verify-watch-frame")).toContain("transition: min-height var(--motion-large) var(--ease-standard);");
   expect(watchRule(".verify-watch-frame[data-maximized]")).toContain("min-height: calc(100% - 24px);");
   expect(watchCss).not.toMatch(/\d\s?ms\b/);

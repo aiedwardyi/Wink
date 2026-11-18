@@ -235,32 +235,30 @@ export function TerminalWorkspace({
     terminal.open(host);
     const report = (cause: unknown) => { if (alive) setError(cause instanceof Error ? cause.message : String(cause)); };
     let requestedSize: { id: string; cols: number; rows: number } | null = null;
-    let pendingResize: Promise<void> | null = null;
     let repaintAt: { cols: number; rows: number } | null = null;
     const syncSize = (refresh = false) => {
-      if (!alive || !visibleRef.current || replaying || !host.clientWidth || !host.clientHeight) return pendingResize;
+      if (!alive || !visibleRef.current || replaying || !host.clientWidth || !host.clientHeight) return;
       fit.fit();
       const { cols, rows } = terminal;
       if (refresh) terminal.refresh(0, Math.max(0, rows - 1));
-      if (!id || exits.has(id)) return pendingResize;
+      if (!id || exits.has(id)) return;
       // A different size already repaints an alternate screen. Bounce only at the same size.
       const bounce = repaintAt?.cols === cols && repaintAt.rows === rows && rows > 1;
       repaintAt = null;
-      if (!bounce && requestedSize?.id === id && requestedSize.cols === cols && requestedSize.rows === rows) return pendingResize;
+      if (!bounce && requestedSize?.id === id && requestedSize.cols === cols && requestedSize.rows === rows) return;
       const size = { id, cols, rows };
       requestedSize = size;
-      const current = () => alive && id === size.id && !exits.has(size.id);
-      const next = (pendingResize ?? Promise.resolve()).then(async () => {
-        if (!current()) return;
-        if (bounce) await bridge.resize(size.id, cols, rows - 1);
-        if (current()) await bridge.resize(size.id, cols, rows);
-      }).catch((cause) => {
+      const failed = (cause: unknown) => {
         if (requestedSize === size) requestedSize = null;
         report(cause);
-      });
-      pendingResize = next;
-      void next.then(() => { if (pendingResize === next) pendingResize = null; });
-      return next;
+      };
+      try {
+        // Resize and input share the PTY channel, including both halves of a repaint.
+        if (bounce) void Promise.resolve(bridge.resize(size.id, cols, rows - 1)).catch(failed);
+        void Promise.resolve(bridge.resize(size.id, cols, rows)).catch(failed);
+      } catch (cause) {
+        failed(cause);
+      }
     };
     const resize = () => {
       cancelAnimationFrame(frame);
@@ -319,7 +317,6 @@ export function TerminalWorkspace({
     });
     // Forward keystrokes and emulator replies only after historical replay finishes.
     // onBinary carries non-UTF8 mouse reports (wheel in X10/RXVT mode); without it the wheel is dropped.
-    let pendingInput: Promise<void> | null = null;
     const forwardInput = (data: string, track = true) => {
       if (!id || !replayComplete || terminal.options.disableStdin || exits.has(id)) return;
       if (track) trackFeatureOnce("terminal.type");
@@ -335,23 +332,15 @@ export function TerminalWorkspace({
       }
       const afterMessageId = submitted ? latestPaneRun(workersRef.current, sessionId)?.messageIds.at(-1) : undefined;
       const typedAt = Date.now();
-      const send = () => {
+      const send = async () => {
         if (!alive || id !== sessionId || exits.has(sessionId)) return;
-        return Promise.resolve(bridge.write(sessionId, data)).then(() => {
-          if (submitted) void Promise.resolve(api(`/api/bots/${encodeURIComponent(bot.id)}/terminal/resume`, {
-            method: "POST", body: JSON.stringify({ sessionId, afterMessageId, submittedAgo: Date.now() - typedAt }),
-          })).catch(() => {});
-        }).catch(report);
+        if (/[\r\n]/.test(data)) syncSize();
+        await bridge.write(sessionId, data);
+        if (submitted) void Promise.resolve(api(`/api/bots/${encodeURIComponent(bot.id)}/terminal/resume`, {
+          method: "POST", body: JSON.stringify({ sessionId, afterMessageId, submittedAgo: Date.now() - typedAt }),
+        })).catch(() => {});
       };
-      const submit = /[\r\n]/.test(data);
-      // Enter waits for sizing and later keystrokes wait for Enter to be sent.
-      const sizing = submit ? syncSize() : null;
-      if (sizing || pendingInput) {
-        const next = Promise.all([pendingInput, sizing]).then(() => { void send(); }).catch(report);
-        pendingInput = next;
-        void next.then(() => { if (pendingInput === next) pendingInput = null; });
-      } else if (submit) void send();
-      else void Promise.resolve().then(send);
+      void send().catch(report);
     };
     forwardInputRef.current = forwardInput;
     const input = terminal.onData((data) => forwardInput(data));

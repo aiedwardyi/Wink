@@ -1077,12 +1077,12 @@ it("keeps the PTY size on close and sends each visible size once, before the nex
   }
 });
 
-it("sends typing during a resize and keeps later input behind a waiting submit", async () => {
+it("sends typing and submits in channel order during an unacknowledged resize", async () => {
   let frame!: FrameRequestCallback;
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frame = cb; return 1; });
   vi.stubGlobal("cancelAnimationFrame", () => {});
-  let resized!: () => void;
-  const resize = vi.fn(() => new Promise<void>((resolve) => { resized = resolve; }));
+  const acks: Array<() => void> = [];
+  const resize = vi.fn(() => new Promise<void>((resolve) => { acks.push(resolve); }));
   const write = vi.fn(async () => {});
   const open = vi.fn(async () => ({ id: "session-input", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
   const bot = mountBridge({ appearance: vi.fn(async () => null), open, write, resize, onData: () => vi.fn(), onExit: () => vi.fn() });
@@ -1090,15 +1090,20 @@ it("sends typing during a resize and keeps later input behind a waiting submit",
   Object.defineProperties(host.querySelector("[data-orbit-terminal] > div")!, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
   await act(async () => frame(0));
 
-  await act(async () => {
-    terminal.__emitData("ls");
-    terminal.__emitData("\r");
-    terminal.__emitData("pwd");
-  });
-  expect(write.mock.calls).toEqual([["session-input", "ls"]]);
-
-  await act(async () => resized());
-  expect(write.mock.calls).toEqual([["session-input", "ls"], ["session-input", "\r"], ["session-input", "pwd"]]);
+  try {
+    terminal.cols = 75;
+    await act(async () => {
+      terminal.__emitData("ls");
+      terminal.__emitData("\r");
+      terminal.__emitData("pwd");
+    });
+    expect(resize.mock.calls).toEqual([["session-input", 80, 24], ["session-input", 75, 24]]);
+    expect(write.mock.calls).toEqual([["session-input", "ls"], ["session-input", "\r"], ["session-input", "pwd"]]);
+    expect(resize.mock.invocationCallOrder.at(-1)).toBeLessThan(write.mock.invocationCallOrder[1]!);
+  } finally {
+    terminal.cols = 80;
+    await act(async () => { for (const ack of acks) ack(); });
+  }
 });
 
 it("preserves exit received during a rejected restart attempt", async () => {
