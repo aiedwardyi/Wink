@@ -252,7 +252,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       if (!sendOnly && !typing && !bearerMatches(req.headers.authorization, token, botId)) return json(res, 401, { error: "Unauthorized" });
       if (live && !typing) return json(res, 403, { error: "Forbidden" });
       try {
-        const sessionId = parsed.searchParams.get("sessionId");
+        let sessionId = parsed.searchParams.get("sessionId");
         if (match[2] === "map-events") {
           if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });
           return streamMapPanes(res, host, botId);
@@ -269,6 +269,11 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           return json(res, 200, await host.readBot(botId, options));
         }
         if (req.method === "GET" && match[2] === "stream") {
+          if (!sessionId && parsed.searchParams.get("main") === "1") {
+            const { panes } = host.readBot(botId, { panesOnly: true });
+            sessionId = panes.find((pane) => pane.main)?.sessionId;
+            if (!sessionId) return json(res, 409, { error: "No active terminal for this bot" });
+          }
           const watch = host.watchBot(botId, sessionId, {
             send: (frame) => { res.write(`${JSON.stringify(frame)}\n`); return res.writableLength; },
             end: () => res.end(),

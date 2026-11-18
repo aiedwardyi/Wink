@@ -145,7 +145,7 @@ export function TerminalWorkspace({
     if (!bridge) return;
     let alive = true;
     const closed = new Set<string>();
-    void Promise.resolve().then(() => bridge.readBot?.(bot.id)).then((snapshot) => {
+    void Promise.resolve().then(() => webBridge ? bridge.readBot?.(bot.id, { panesOnly: true }) : bridge.readBot?.(bot.id)).then((snapshot) => {
       if (!alive || !snapshot?.panes) return;
       const seeded = snapshot.panes.filter((item) => !item.main && !closed.has(item.sessionId)).map((item) => ({ id: item.sessionId, label: item.label, exited: item.exited, changedAt: item.changedAt }));
       setPanes((list) => [...seeded, ...list.filter((item) => !seeded.some((seed) => seed.id === item.id))]);

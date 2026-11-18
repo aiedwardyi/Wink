@@ -2223,7 +2223,7 @@ it("runs on a web bridge prop with no preload, without new-shell controls, and h
   await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web", cwd: "C:\\work" }, visible: true, focusBlocked: false, onClose: vi.fn(), webBridge })));
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(window.ogb).toBeUndefined();
-  expect(readBot).toHaveBeenCalledWith("bot-web");
+  expect(readBot).toHaveBeenCalledWith("bot-web", { panesOnly: true });
   expect(webBridge.open).toHaveBeenCalledTimes(1);
   expect(host.querySelector('[aria-label="Choose a folder"]')).toBeNull();
   expect(host.textContent).toContain("work");
