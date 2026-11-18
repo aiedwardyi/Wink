@@ -226,6 +226,14 @@ describe("skins", () => {
     expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
   });
 
+  it("lets no skin undo the phone bot bubble width", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const sheets = [join(root, "styles.css"), ...readdirSync(join(root, "skins")).filter((f) => f.endsWith(".css")).map((f) => join(root, "skins", f))];
+    const important = sheets.flatMap((file) => [...readFileSync(file, "utf8").matchAll(/\[data-orbit-message-body\][^{}]*\{[^}]*max-width:[^;}]*!important/g)].map(() => file));
+    expect(important).toEqual([]);
+    expect(readFileSync(join(root, "components/ChatBubble.tsx"), "utf8")).toContain('!user && "max-sm:max-w-full!"');
+  });
+
   it("gives every non-Midnight skin its own focus and control tokens", () => {
     // Midnight inherits Grok-blue --color-focus from @theme. A light skin
     // that skips the token wears that blue on stone, paper, or porcelain.

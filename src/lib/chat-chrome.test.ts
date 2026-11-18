@@ -73,7 +73,7 @@ describe("assistant message action bar", () => {
   });
 
   it("reserves its band so it cannot cover the timestamp or the reaction chips", () => {
-    expect(bubbleFn).toContain('className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !user && "max-sm:max-w-full")}');
+    expect(bubbleFn).toContain('className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !user && "max-sm:max-w-full!")}');
     expect(bubbleFn).not.toContain("top-full");
   });
 });
