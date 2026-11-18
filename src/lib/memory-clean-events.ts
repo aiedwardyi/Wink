@@ -2,18 +2,18 @@ import type { Message } from "@/state/store";
 
 type Listener = (message: Message) => void;
 const listeners = new Map<string, Set<Listener>>();
-const saves = new Map<string, Set<Listener>>();
+const saves = new Map<string, Set<() => void>>();
 
 export function watchMemoryArrival(botId: string, listener: Listener): () => void {
   return watch(listeners, botId, listener);
 }
 
-export function watchMemorySave(botId: string, listener: Listener): () => void {
+export function watchMemorySave(botId: string, listener: () => void): () => void {
   return watch(saves, botId, listener);
 }
 
-function watch(registry: Map<string, Set<Listener>>, botId: string, listener: Listener): () => void {
-  const set = registry.get(botId) ?? new Set<Listener>();
+function watch<T>(registry: Map<string, Set<T>>, botId: string, listener: T): () => void {
+  const set = registry.get(botId) ?? new Set<T>();
   registry.set(botId, set);
   set.add(listener);
   return () => {
@@ -26,7 +26,11 @@ export function noteMemoryFrame(frame: { kind: string; threadId?: string; replay
   if (!state.hydrated || frame.kind !== "message" || frame.imported || frame.message?.tool?.name !== "memory.save" || frame.message.tool.ok === false) return;
   const bot = state.bots.find((bot) => bot.threadId === frame.threadId);
   const owner = frame.message.tool.memoryBotId ?? bot?.id ?? state.bots.find((bot) => bot.tasks?.some((task) => task.threadId === frame.threadId))?.id;
-  if (owner) saves.get(owner)?.forEach((listener) => listener(frame.message as Message));
+  if (owner) saves.get(owner)?.forEach((listener) => listener());
   if (frame.replayed || !bot || bot.messages?.some((message) => message.id === frame.message!.id)) return;
   listeners.get(bot.id)?.forEach((listener) => listener(frame.message as Message));
+}
+
+export function noteMemorySnapshot(): void {
+  for (const set of saves.values()) set.forEach((listener) => listener());
 }

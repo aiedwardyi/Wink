@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ModelPickerControl } from "@/components/ModelPicker";
+import { TimelinePane } from "@/components/TimelinePane";
 import { I18nProvider } from "@/lib/i18n";
 import { StoreProvider, useStore, useStreaming, type Bot, type InstanceInfo, type Message } from "./store";
 
@@ -40,8 +41,8 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-async function mount(snapshot: () => Promise<Response>) {
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => (String(url) === "/api/bots?messages=200" ? snapshot() : new Promise<Response>(() => {}))));
+async function mount(snapshot: () => Promise<Response>, child?: ReactNode, fetchOther = (_url: string) => new Promise<Response>(() => {})) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => (String(url) === "/api/bots?messages=200" ? snapshot() : fetchOther(String(url)))));
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.spyOn(console, "warn").mockImplementation(() => {});
   function Probe() {
@@ -52,16 +53,17 @@ async function mount(snapshot: () => Promise<Response>) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(StoreProvider, null, createElement(Probe))));
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(Probe), child)));
   unmount = async () => {
     await act(async () => root.unmount());
     host.remove();
   };
+  return host;
 }
 
-async function hello() {
+async function hello(cursor = "stream00:1") {
   await act(async () => {
-    FakeEventSource.last!.onmessage!({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "stream00:1" }), lastEventId: "" });
+    FakeEventSource.last!.onmessage!({ data: JSON.stringify({ kind: "hello", resumed: false, cursor }), lastEventId: "" });
   });
 }
 
@@ -71,6 +73,53 @@ async function hide() {
 }
 
 describe("chat catch-up on return", () => {
+  it.each(["offline", "during hydration", "during hydration and covered by the snapshot"])(
+    "refreshes an open Timeline for a pick saved %s",
+    async (when) => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const bots = [botOf("b1", [text("b1", 0)])];
+      const saved: Message = { id: "save", at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, memoryBotId: "b1" } };
+      let resolveSnapshot!: (response: Response) => void;
+      const replacement = new Promise<Response>((resolve) => { resolveSnapshot = resolve; });
+      const snapshot = vi.fn(() => replacement)
+        .mockResolvedValueOnce(Response.json({ bots, cursor: "stream00:1" }));
+      const entry = { id: "2026-11-18 09:00", key: "layout", picked: "Old layout", over: [], overPictures: [], files: [], tweaks: [] };
+      const topic = vi.fn(() => Response.json({ entries: [entry] }));
+      const host = await mount(
+        snapshot,
+        createElement(TimelinePane, { botId: "b1", threadId: "t-b1", maximized: false }),
+        async (url) => url.endsWith("/memory/topics/decisions.md") ? topic() : new Response(null, { status: 404 }),
+      );
+      await hello();
+      expect(store.state.hydrated).toBe(true);
+      expect(host.textContent).toContain("Old layout");
+      await hide();
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(FakeEventSource.last!.url).toBe("/api/events?since=stream00%3A1");
+      await hello("stream00:600");
+      expect(snapshot).toHaveBeenCalledTimes(2);
+      const previousReads = topic.mock.calls.length;
+      topic.mockImplementation(() => Response.json({ entries: [entry, { ...entry, id: "2026-11-18 10:00", key: "spacing", picked: "New spacing" }] }));
+      if (when !== "offline") {
+        await act(async () => FakeEventSource.last!.onmessage!({
+          data: JSON.stringify({ kind: "message", threadId: "t-b1", message: saved }),
+          lastEventId: "stream00:601",
+        }));
+      }
+      expect(host.textContent).toContain("Old layout");
+      expect(host.textContent).not.toContain("New spacing");
+      const covered = when !== "during hydration";
+      await act(async () => resolveSnapshot(Response.json({
+        bots: covered ? [botOf("b1", [text("b1", 0), saved])] : bots,
+        cursor: when === "during hydration and covered by the snapshot" ? "stream00:601" : "stream00:600",
+      })));
+      expect(store.state.bots[0]?.messages?.filter(({ id }) => id === saved.id)).toHaveLength(1);
+      expect(topic).toHaveBeenCalledTimes(previousReads + 1);
+      expect(host.textContent).toContain("New spacing");
+    },
+  );
+
   it.each(["visibilitychange", "focus", "online", "pageshow"])(
     "keeps the chat visible while replaying missing messages on %s",
     async (event) => {

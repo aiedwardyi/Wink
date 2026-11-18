@@ -20,6 +20,7 @@ import {
   type MemoryPass,
   type NoteGenerator,
 } from "./memory-pass.ts";
+import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import type { Message, StoreChange } from "./store.ts";
@@ -155,6 +156,8 @@ describe("memory pass", () => {
 
   it("saves a scripted pick to the timeline and its fact to MEMORY.md", async () => {
     const question = "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it.";
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
+    const expectedPrompt = recorded.stamp.prompt.replace("At most 3 decisions, one per thing.", "One decision per thing.");
     const generateText = vi.fn(async () => JSON.stringify([
       { kind: "decision", key: "model picker look", fact: "2 - Follow the app theme", quote: "the second one", over: ["1 - Always dark", "3 - Always light"] },
       { kind: "fact", fact: "Uses pnpm for projects", quote: "I use pnpm for my projects." },
@@ -164,7 +167,7 @@ describe("memory pass", () => {
     say("t1", "the second one");
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "the second one", context: question }, { text: "I use pnpm for my projects." }]), expect.anything());
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(expectedPrompt, expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
@@ -741,16 +744,20 @@ describe("memory pass", () => {
     const old = "- Repo uses spaces (noted 2026-10-01)";
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
-    // a folder where the timeline goes fails its write
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    mkdirSync(side, { recursive: true });
+    const write = atomic.writeFileAtomic;
+    const failWrite = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...args) => {
+      if (path === side) throw new Error("timeline write failed");
+      write(path, ...args);
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
     say("t1", "tabs");
     generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
     await settle("t1", 3 * MINUTE);
+    expect(failWrite).toHaveBeenCalledWith(side, expect.any(String), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(notes);
-    rmSync(side, { recursive: true });
+    failWrite.mockRestore();
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");

@@ -756,7 +756,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const land = (botId: string, threadId: string, batch: Batch, memory: { text: string; revision: string }, raw: string, ms: number) => {
-    const timeline = readMemoryTopic(botId, PICKS_FILE) ?? "";
+    let timeline: string;
+    try {
+      timeline = readMemoryTopic(botId, PICKS_FILE) ?? "";
+    } catch (error) {
+      held.set(threadId, batch);
+      log({ botId, threadId, lines: batch.source.length, ms, result: "error" });
+      console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
+      return;
+    }
     const accepted = acceptFacts(batch.facts, batch.source, memory.text, timeline);
     if (!accepted.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });

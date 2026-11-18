@@ -1,14 +1,21 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createBotRoutes } from "./bot-routes.ts";
 import { acceptFacts, attachedImages, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { currentPicks } from "./picks.ts";
 import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
+
+vi.mock("node:fs", async (original) => {
+  const actual = await original<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -62,6 +69,10 @@ describe("decision timeline", () => {
   };
   const reply = (...items: object[]) => generate.mockResolvedValueOnce(JSON.stringify(items));
   const timeline = () => readMemoryTopic(BOT, "decisions.md") ?? "";
+  const timelinePath = () => join(workspaceDir(BOT), "memory", "decisions.md");
+  const failTimelineRead = (code: string) => vi.mocked(readFileSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error(code), { code });
+  });
   const showMocks = () => {
     const mock = (name: string) => join(dataDir, "mocks", `${name}.png`);
     mkdirSync(join(dataDir, "mocks"), { recursive: true });
@@ -286,6 +297,42 @@ describe("decision timeline", () => {
     pass.dispose();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each(["EBUSY", "EACCES"])("returns a server error when a Timeline GET hits %s", async (code) => {
+    const store = { bot: () => ({ id: BOT }) };
+    const routes = createBotRoutes({ store } as unknown as Parameters<typeof createBotRoutes>[0]);
+    const match = ["/memory/topics/decisions.md", BOT, "decisions.md"] as RegExpMatchArray;
+    const response = { writeHead: vi.fn(), end: vi.fn() };
+    mkdirSync(join(workspaceDir(BOT), "memory"), { recursive: true });
+    const text = "# Decision timeline\n";
+    writeFileSync(timelinePath(), text);
+    failTimelineRead(code);
+    await routes.memoryTopic(response as unknown as ServerResponse, match);
+    expect(response.writeHead).toHaveBeenCalledWith(500, expect.anything());
+    expect(timeline()).toBe(text);
+  });
+
+  it("keeps history and pending picks when the Timeline read fails just before writing", async () => {
+    const earlier = "# Decision timeline\n\n## 2026-11-17 09:00 | forum | current\n- Picked: A - plain list\n";
+    mkdirSync(join(workspaceDir(BOT), "memory"), { recursive: true });
+    writeFileSync(timelinePath(), earlier);
+    bot("For the header: A - dark, B - light. Which one?");
+    const line = say("I choose B for the header");
+    generate.mockImplementationOnce(async () => {
+      failTimelineRead("EBUSY");
+      return JSON.stringify([{ kind: "decision", key: "header", fact: "B - light", quote: line.text }]);
+    });
+    await settle();
+    expect(timeline()).toBe(earlier);
+    expect(JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"))).toEqual({ threads: { t1: [line.id] } });
+    expect(store.messagesFor("t1").some(({ tool }) => tool?.name === MEMORY_SAVE_TOOL)).toBe(false);
+
+    pass.onSettled(BOT, "t1", true);
+    await pass.idle();
+    expect(generate).toHaveBeenCalledOnce();
+    expect(currentPicks(timeline()).map(({ key }) => key).sort()).toEqual(["forum", "header"]);
+    expect(JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"))).toEqual({ threads: {} });
   });
 
   it("leaves only the new pick current after a change of mind, the old one marked replaced", async () => {
