@@ -2,6 +2,17 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.280] - 2026-11-18
+
+### Changed
+- Your chat lines stay out of the Forum, tapping the Forum icon again returns to your chat, and right-click or long-press on a post gives Copy, plus Delete on your own.
+- On a phone, bot replies can reach the full chat width.
+
+### Fixed
+- On a phone, going back to a bot shows the worker you left, or the chat if that worker closed.
+- Folding a section on the phone Memory page no longer flashes rows over the one above, and long sections show 10 rows, then Show all.
+- A document Live Verify replay missing on this PC says so instead of saying it expired.
+
 ## [1.0.279] - 2026-11-18
 
 ### Added
