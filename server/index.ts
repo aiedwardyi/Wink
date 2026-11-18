@@ -426,7 +426,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -2429,6 +2429,7 @@ async function syncMemoryOnce(botId: string): Promise<void> {
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
+    if (memorySyncUnchanged(folder, botSyncId, workspaceDir(botId), memorySyncLedger)) return;
     const snapshots = await readMemorySnapshots(folder, botSyncId);
     if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
     const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });

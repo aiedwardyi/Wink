@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { memorySyncDir, readMemorySnapshots, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { memorySyncDir, memorySyncUnchanged, readMemorySnapshots, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
 
 vi.mock("node:fs", async (original) => {
@@ -76,6 +76,25 @@ describe("memory reads", () => {
     syncBotMemory(join(root, "drive"), "bot", workspace, ledger);
     writeFileSync(join(workspace, "MEMORY.md"), "remember that");
     expect(syncBotMemory(join(root, "drive"), "bot", workspace, ledger)["MEMORY.md"]).toBe("pushed");
+  });
+
+  it("knows a pass would change nothing without reading any snapshot", () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-skip-"));
+    roots.push(root);
+    const folder = join(root, "drive");
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+    writeFileSync(join(workspace, "MEMORY.md"), "remember this");
+    const ledger: MemorySyncLedger = { bots: {} };
+    const later = Date.now() + 5_000;
+    expect(memorySyncUnchanged(folder, "bot", workspace, ledger, { now: later })).toBe(false);
+    syncBotMemory(folder, "bot", workspace, ledger, { now: later });
+    syncBotMemory(folder, "bot", workspace, ledger, { now: later });
+    vi.mocked(readFileSync).mockClear();
+    expect(memorySyncUnchanged(folder, "bot", workspace, ledger, { now: later })).toBe(true);
+    expect(vi.mocked(readFileSync)).not.toHaveBeenCalled();
+    writeFileSync(join(workspace, "MEMORY.md"), "remember this, and that");
+    expect(memorySyncUnchanged(folder, "bot", workspace, ledger, { now: later })).toBe(false);
   });
 
   it("retries a file it could not read, even though nothing about it changed", async () => {

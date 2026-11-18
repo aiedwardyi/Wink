@@ -363,6 +363,19 @@ function dropMergedCopies(workspace: string, files: Iterable<string>): string[] 
   return dropped;
 }
 
+/** True when nothing a pass reads has changed since the last one, so its snapshots need not be read at all. */
+export function memorySyncUnchanged(folder: string, botSyncId: string, workspace: string, ledger: MemorySyncLedger, { now = Date.now(), host = machine() }: MemorySyncOptions = {}): boolean {
+  const known = ledger.bots[botSyncId];
+  if (!known?.seen) return false;
+  try {
+    const local = memoryFiles(workspace);
+    const dirs = syncRoots(folder, MEMORY_SYNC_DIR).map((root) => join(root, botSyncId));
+    return Boolean(local) && known.seen === passInputs(dirs, workspace, local ?? [], known, ledger.talked?.[botSyncId] ?? 0, deviceId(ledger, host), now);
+  } catch {
+    return false;
+  }
+}
+
 export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshots | undefined> };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
@@ -387,7 +400,7 @@ export function syncBotMemory(
   if (!localFiles) return {};
   const talkedAt = ledger.talked?.[botSyncId] ?? 0;
   const known = ledger.bots[botSyncId];
-  if (known?.seen && known.seen === passInputs(dirs, workspace, localFiles, known, talkedAt, me, now)) return {};
+  if (!read && known?.seen && known.seen === passInputs(dirs, workspace, localFiles, known, talkedAt, me, now)) return {};
   const groups = read ?? dirs.map(readSnapshots);
   if (groups.some((group) => !group)) return {};
   const snapshots = groups.flatMap((group) => group ?? []);
