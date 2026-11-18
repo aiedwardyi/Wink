@@ -88,6 +88,40 @@ async function holdCall(onCall = vi.fn()) {
   return { host, onCall, call: button(host, "Call Ada")! };
 }
 
+async function swipe(target: Element) {
+  const events: Event[] = [];
+  await act(async () => {
+    for (const [type, y, time] of [["touchstart", 100, 0], ["touchmove", 300, 200], ["touchend", 300, 400]] as const) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        touches: { value: type === "touchend" ? [] : [{ clientX: 200, clientY: y }] },
+        timeStamp: { value: time },
+      });
+      target.dispatchEvent(event);
+      events.push(event);
+    }
+  });
+  return events;
+}
+
+it.each([true, false])("only closes on a downward swipe at the top on phone=%s", async (phone) => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width") && phone }));
+  const { call, onCall } = await holdCall();
+  await act(async () => call.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+  const panel = menu()!;
+  Object.defineProperty(panel, "offsetHeight", { value: 400 });
+  const list = panel.querySelector<HTMLElement>("[data-call-voices]")!;
+  list.scrollTop = 30;
+  const scrolled = await swipe(list);
+  expect(scrolled[1]!.defaultPrevented).toBe(false);
+  expect(panel.dataset.closing).toBeUndefined();
+  list.scrollTop = 0;
+  const atTop = await swipe(list);
+  expect(panel.dataset.closing).toBe(phone ? "true" : undefined);
+  expect(atTop[1]!.defaultPrevented).toBe(phone);
+  expect(onCall).not.toHaveBeenCalled();
+});
+
 it("right-click on Call opens the panel and a left-click still calls", async () => {
   const { onCall, call } = await holdCall();
   await act(async () => call.click());
