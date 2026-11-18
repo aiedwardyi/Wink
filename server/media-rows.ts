@@ -15,6 +15,7 @@ type PageRow = { id: string } & ({ at: null } | {
   roomEcho: SQLOutputValue;
 });
 
+// Code is stripped before links are read, so "[a]`b`(/x.pdf)" is a link; a backtick with a paren is a candidate.
 // A missing parent predates branching and follows insertion order; a null parent ends the path.
 const SQL = `
   WITH RECURSIVE path(id, depth) AS (
@@ -34,7 +35,7 @@ const SQL = `
   FROM path LEFT JOIN messages m ON path.depth < ?3 AND m.thread_id = ?1 AND m.id = path.id
     AND (json_extract(m.json, '$.image') IS NOT NULL OR (m.kind = 'text' AND
       CASE WHEN m.role = 'user' THEN instr(m.text, '<attached-') > 0
-        ELSE instr(m.text, '](') > 0 OR instr(m.text, '![') > 0 END))
+        ELSE instr(m.text, '](') > 0 OR instr(m.text, '![') > 0 OR (instr(m.text, char(96)) > 0 AND instr(m.text, '(') > 0) END))
   WHERE m.id IS NOT NULL OR (path.depth = ?3 AND path.id IS NOT NULL)
   ORDER BY path.depth
 `;

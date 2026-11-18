@@ -113,6 +113,7 @@ const months = () => [...host.querySelectorAll("[data-media-month]")].map((head)
 const names = () => [...host.querySelectorAll("[data-media-file]")].map((row) => row.querySelector("span span")!.textContent);
 const row = (name: string) => [...host.querySelectorAll("[data-media-file]")].find((each) => each.querySelector("span span")!.textContent === name)!;
 const tiles = () => [...host.querySelectorAll("[data-media-grid] [data-media-key]")].map((tile) => tile.getAttribute("title"));
+const retry = () => [...host.querySelectorAll("button")].find((each) => each.textContent === "Retry");
 const scroller = () => host.querySelector<HTMLElement>(".show-media-scroll")!;
 const pointer = (el: Element, type: string, clientY: number) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientY })); });
 const chat: MediaSource = { threadId: "t1", messages: [upload, reply] };
@@ -220,7 +221,7 @@ it("renders the first page while older media is loading", async () => {
 
   await act(async () => showMedia("t1"));
   await render({ ...chat, messages: [
-    { id: "b2", role: "bot", kind: "text", at: 2000, text: "[new.png](C:\\w\\new.png)" },
+    { id: "b2", role: "bot", kind: "text", at: 2000, text: "Working" },
   ] });
   await settle();
   expect(tiles()).toEqual(["new.png"]);
@@ -386,6 +387,63 @@ it("keeps an audio row playing when an older photo arrives", async () => {
   await settle();
   expect(tab("Files").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector("audio")).toBe(playing);
+  await click(tab("Photos"));
+  expect(tiles()).toEqual(["photo.png"]);
+});
+
+it("shows only the indexed files while older pages load and the head is off this branch", async () => {
+  const streamed: Message = { id: "b9", role: "bot", kind: "text", at: 3000, text: "[plot.png](C:\\w\\plot.png)" };
+  let finish!: (response: Response) => void;
+  const older = new Promise<Response>((resolve) => { finish = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("page=") ? older : Response.json({ ...wire([["b2", 2000, "l", "new.png", "C:\\w\\new.png"]]), head: "b2", next: 1 })));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [streamed] });
+  await settle();
+  expect(tiles()).toEqual(["new.png"]);
+
+  finish(Response.json(wire([])));
+  await settle();
+  expect(tiles()).toEqual(["plot.png", "new.png"]);
+});
+
+it("clears Retry once an automatic refresh loads the complete index", async () => {
+  const report: Entry = ["b1", 1000, "l", "report.pdf", "C:\\w\\report.pdf"];
+  let expire!: () => void;
+  const expiring = new Promise<void>((resolve) => { expire = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("v=1&size=")) { await expiring; return Response.json({ error: "media version expired" }, { status: 409 }); }
+    if (url.includes("v=2&size=")) return Response.json({ size: 300 });
+    if (url.includes("page=") || url.includes("snapshot=")) return new Response(null, { status: 503 });
+    if (url.includes("paged=1&v=1")) return Response.json(wire([report], "2"));
+    return Response.json({ ...wire([report]), head: "b2", next: 1 });
+  }));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  expect(retry()).toBeDefined();
+
+  expire();
+  await settle();
+  expect(names()).toEqual(["report.pdf"]);
+  expect(retry()).toBeUndefined();
+});
+
+it("restores Retry when the reload after a failed history also fails", async () => {
+  let reload = false;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("page=") || url.includes("snapshot=") || reload) return new Response(null, { status: 503 });
+    return Response.json({ ...wire([]), head: "b2", next: 1 });
+  }));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  expect(retry()).toBeDefined();
+
+  reload = true;
+  await click(retry()!);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1_100)));
+  await settle();
+  expect(retry()).toBeDefined();
 });
 
 // Only the very first of the unloaded messages brings a file.

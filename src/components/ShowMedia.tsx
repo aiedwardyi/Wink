@@ -52,12 +52,16 @@ function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
       if (signal.aborted) return;
       replacingVersion.current = got.previous?.v;
       setIndex(got.previous ?? got);
-      if (!got.next) return;
+      if (!got.next) { setHistoryFailed(false); return; }
       void loadOlderMedia(threadId, got, signal, setIndex).then((full) => {
-        if (!signal.aborted) setIndex(full);
+        if (signal.aborted) return;
+        setIndex(full);
+        setHistoryFailed(false);
       }, () => { if (!signal.aborted) setHistoryFailed(true); });
     }, () => {
-      if (!signal.aborted) setIndex((was) => was ?? { files: [], list: roomId ? { files: [], error: "unreachable" } : undefined });
+      if (signal.aborted) return;
+      setIndex((was) => was ?? { files: [], list: roomId ? { files: [], error: "unreachable" } : undefined });
+      if (!roomId && heldMedia(threadId)) setHistoryFailed(true);
     });
     return () => controller.abort();
   }, [threadId, roomId, latest, removed, attempt]);

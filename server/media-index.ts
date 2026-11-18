@@ -72,7 +72,7 @@ interface HeldIndex {
 }
 
 function mightShowMedia({ image, kind, role, text }: MediaRow): boolean {
-  return Boolean(image || (kind === "text" && text && (role === "user" ? text.includes("<attached-") : text.includes("](") || text.includes("!["))));
+  return Boolean(image || (kind === "text" && text && (role === "user" ? text.includes("<attached-") : text.includes("](") || text.includes("![") || (text.includes("`") && text.includes("(")))));
 }
 
 function readPage(threadId: string, cached: HeldIndex, limit: number, database?: DatabaseSync): MediaIndex {
@@ -212,7 +212,7 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
     },
     async size(threadId: string, v: string | null, slot: number, n = 0): Promise<number | null | undefined> {
       const cached = held.get(threadId);
-      if (!cached || cached.v !== v) return undefined;
+      if (!cached || cached.v !== v || !cached.pages[n]) return undefined;
       return Number.isSafeInteger(slot) ? readSize(cached, n, slot) : null;
     },
   };

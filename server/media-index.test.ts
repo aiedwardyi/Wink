@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { buildMediaIndex, createMediaIndex } from "./media-index.ts";
-import { closeMessageDb } from "./message-db.ts";
+import { closeMessageDb, replaceThread } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -147,6 +147,45 @@ describe("media index", () => {
     store.appendMessage(threadId, { role: "user", kind: "text", text: "thanks" });
     expect(media.list(threadId, index.v)).toEqual({ v: index.v });
     expect(await media.size(threadId, index.v, 0)).toBe(700);
+  });
+
+  it("lists a file whose link text holds inline code, and sees one arrive", () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    const link = "[report]`note`(C:\\w\\report.pdf)";
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: link });
+    const media = createMediaIndex(store);
+    expect(media.list(threadId)).toMatchObject({ name: ["report.pdf"] });
+
+    const other = store.createBot({}, { seedMessages: false }).threadId;
+    store.appendMessage(other, { role: "bot", kind: "text", text: "[a.png](C:\\w\\a.png)" });
+    const first = media.list(other);
+    store.appendMessage(other, { role: "bot", kind: "text", text: link });
+    expect(media.list(other, first.v)).toMatchObject({ name: ["report.pdf", "a.png"] });
+  });
+
+  it("answers a size for a page it does not hold as expired", async () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    const report = join(DATA_DIR, "report.pdf");
+    writeFileSync(report, "x".repeat(500));
+    const rows: Message[] = [
+      { id: "r0", at: START, role: "bot", kind: "text", text: `[report.pdf](<${report}>)` },
+      ...Array.from({ length: 2_400 }, (_, n): Message => ({ id: `p${n}`, at: START + n + 1, role: "user", kind: "text", text: "no media" })),
+    ];
+    replaceThread(threadId, rows, "p2399");
+    const media = createMediaIndex(store);
+
+    const quiet = await media.snapshot(threadId);
+    expect(quiet).toHaveLength(3);
+    expect(await media.size(threadId, quiet[0]!.v, 0, 2)).toBe(500);
+
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.png](C:\\w\\b.png)" });
+    const racing = media.snapshot(threadId);
+    store.patchMessage(threadId, "p2399", { text: "[c.png](C:\\w\\c.png)" });
+    const pages = await racing;
+    expect(pages).toHaveLength(3);
+    expect(await media.size(threadId, pages[0]!.v, 0, 2)).toBeUndefined();
   });
 
   it("keeps an older index stable when the next revision adds a file", () => {
