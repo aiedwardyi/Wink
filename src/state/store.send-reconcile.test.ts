@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
+import { rememberQueuedDraft, takeQueuedDraft } from "@/lib/drafts";
 import { ConnectionError } from "@/lib/error-text";
 import { api, StoreProvider, useStore, type Bot, type Group, type Message, type OptionCardData } from "./store";
 
@@ -63,10 +64,13 @@ async function mount(
   groups: Group[] = [group],
   snapshot: object = {},
   cardPatch?: () => Promise<Response>,
+  routines?: () => Promise<Response>,
 ) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {}, ...snapshot });
+    if (path === "/api/routines" && routines) return routines();
     if (init?.method === "PATCH" && path.includes("/cards/") && cardPatch) return cardPatch();
     if (init?.method === "POST" && (path.endsWith("/messages") || path.endsWith("/respond"))) return post(init);
     const page = path.match(/^\/api\/threads\/([\w-]+)\/messages\?/);
@@ -104,6 +108,29 @@ const messagesOf = (threadId: string) =>
   store.state.bots.find((b) => b.threadId === threadId)?.messages ??
   store.state.groups.find((g) => g.threadId === threadId)?.messages;
 
+const liveFrame = (data: string) =>
+  FakeEventSource.last!.onmessage!({ data, lastEventId: "e2" });
+
+it("applies live chat and routine frames while the first routines request is pending", async () => {
+  let release!: (response: Response) => void;
+  const routines = vi.fn(() => new Promise<Response>((resolve) => { release = resolve; }));
+  await mount(() => Response.json({ messages: [] }), undefined, [bot], [], {}, undefined, routines);
+  const message: Message = { id: "reply", at: 1, role: "bot", kind: "text", text: "Here" };
+  const routine = { id: "r1", name: "Current" };
+  try {
+    expect(routines).toHaveBeenCalledOnce();
+    await act(async () => {
+      liveFrame(JSON.stringify({ kind: "message", threadId: bot.threadId, message }));
+      liveFrame(JSON.stringify({ kind: "routine", routine }));
+    });
+    expect(messagesOf(bot.threadId)).toEqual([message]);
+    expect(store.state.routines).toEqual([routine]);
+  } finally {
+    await act(async () => release(Response.json({ routines: [{ ...routine, name: "Stale" }] })));
+  }
+  expect(store.state.routines).toEqual([routine]);
+});
+
 it("captures a tap before card persistence can delay its message", async () => {
   const ask = { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: "Swap?", options: ["Yes, swap"], askUser: true } } as Message;
   let release!: (response: Response) => void;
@@ -134,6 +161,17 @@ it("keeps a room tap's action time while its card save waits", async () => {
 });
 
 describe("send reject after the server accepted", () => {
+  it("releases the held draft when the bot POST and recovery both fail", async () => {
+    await mount(() => Response.json({ messages: [], hasMore: false }));
+    const sendId = "failed-draft";
+    const draft = { text: "hello", attachments: [] };
+    rememberQueuedDraft(sendId, draft);
+    const onError = vi.fn();
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, threadId: bot.threadId, text: draft.text, sendId, onError }));
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(takeQueuedDraft(sendId)).toBeUndefined();
+  });
+
   it("consumes a promoted receipt when accepted-send recovery finds its message", async () => {
     await mount((thread) => Response.json({ messages: [accepted(thread)], hasMore: false }));
     await act(async () => store.dispatch({ type: "pendingQueued", threadId: bot.threadId, queueId: "q1", text: "hello", sendId: "s1" }));
@@ -279,6 +317,29 @@ describe("a group line nobody answers", () => {
     await sendHi("s1");
     await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1")]));
     expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+  });
+
+  it("drains the next held room line when the idle send's POST response is lost", async () => {
+    let loseResponse!: (error: Error) => void;
+    const post = vi.fn(receipt({ idle: true })).mockImplementationOnce(() =>
+      new Promise<Response>((_, reject) => { loseResponse = reject; }));
+    const page = vi.fn(() => Response.json({ messages: [] }));
+    await mount(page, post, [bot], [idle]);
+    await sendHi("s1");
+    await act(async () => liveFrame(JSON.stringify({ kind: "message", threadId: idle.threadId, message: line("s1") })));
+    expect(messagesOf(idle.threadId)).toEqual([line("s1")]);
+    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ sendId: "s1", kind: "thinking" })]);
+    const held = { text: "next", requestText: "next", sendId: "s2", threadId: idle.threadId, revision: 1, attachments: [] };
+    localStorage.setItem("omb-room-holds", JSON.stringify({ [`group:${idle.id}:${idle.threadId}`]: [held] }));
+    await act(async () => {
+      liveFrame(JSON.stringify({ kind: "group.send.idle", threadId: idle.threadId, sendId: "s1" }));
+      loseResponse(new TypeError("Load failed"));
+    });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(post.mock.calls[1]![0]?.body))).toMatchObject({ text: "next", sendId: "s2" });
+    expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+    expect(messagesOf(idle.threadId)?.filter((message) => message.sendId === "s1")).toEqual([line("s1")]);
+    expect(page).not.toHaveBeenCalled();
   });
 
   it("drops Thinking when the turn ends before any member starts", async () => {
@@ -507,8 +568,11 @@ describe("send while the server holds the thread", () => {
     await mount(() => Response.json({ messages: [], hasMore: false }), async () => queued(), [
       { ...bot, busy: false, activity: "idle" },
     ]);
+    const draft = { text: "look", attachments: [] };
+    rememberQueuedDraft("s1", draft);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text, sendId: "s1", threadId: bot.threadId }));
     await vi.waitFor(() => expect(store.state.pendingQueued[bot.threadId]).toHaveLength(1));
+    expect(takeQueuedDraft("s1")).toEqual(draft);
     const painted = withAcceptedMessages([], store.state.acceptedSends[bot.threadId], store.state.pendingQueued[bot.threadId]);
     expect(painted.map((message) => message.text)).toEqual([text]);
   });

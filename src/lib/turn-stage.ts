@@ -267,8 +267,8 @@ export function nextTurnSignals(signals: TurnSignals, threadId: string, event: T
  * settled assistant text does that. Leaving the reasoning buffer set past a
  * tool pins the label to "Thinking" for the whole post-tool model wait.
  */
-export function streamResetFor(message: { role?: string; kind?: string; call?: CallTag }): "stream" | "reasoning" | null {
-  if (isVoiceLine(message)) return null;
+export function streamResetFor(message: { role?: string; kind?: string; call?: CallTag; quick?: Message["quick"] }): "stream" | "reasoning" | null {
+  if (isVoiceLine(message) || message.quick?.state === "answer") return null;
   if (message.role === "bot" && message.kind === "text") return "stream";
   if (message.kind === "activity") return "reasoning";
   return null;

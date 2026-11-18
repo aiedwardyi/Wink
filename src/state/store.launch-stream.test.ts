@@ -41,6 +41,7 @@ async function mountOriginStore(messages: Bot["messages"] = [], busy = false, sn
     : Response.json({}, { status: 404 })));
   function Probe() {
     store = useStore();
+    stream = useStreaming();
     onOrigin?.(store.turnOrigin);
     return null;
   }
@@ -135,6 +136,41 @@ async function delta(text: string) {
 }
 
 describe("launch rows while streaming", () => {
+  it.each(["question", "remark", "receipt-first question"])("keeps the live reply through a fast %s reply", async (kind) => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { frame = callback; return 1; }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const question = kind !== "remark";
+    await mountOriginStore([{ id: "u1", at: 1, role: "user", kind: "text", text: "Start a long task" }], true);
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
+    await delta("Opening ");
+    expect(buffersForTurn(stream, "t1", "u1").streaming).toBe("Opening ");
+    const followUp = {
+      id: "u2", parentId: "u1", at: 2, role: "user", kind: "text", text: question ? "How long?" : "Thanks", sendId: "s2",
+      ...(question ? { quick: { state: "asked" } } : { steered: true }),
+    };
+    if (kind === "receipt-first question") {
+      const previousFetch = fetch;
+      vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => args[0] === "/api/bots/b1/messages"
+        ? Response.json({ threadId: "t1", message: followUp })
+        : previousFetch(...args)));
+      await act(async () => store.dispatch({ type: "send", botId: "b1", threadId: "t1", sendId: "s2", text: followUp.text }));
+      expect.soft(buffersForTurn(stream, "t1", "u2").streaming).toBe("Opening ");
+    }
+    await emit({ kind: "message", threadId: "t1", message: followUp });
+    expect.soft(buffersForTurn(stream, "t1", "u2").streaming).toBe("Opening ");
+    await emit({ kind: "message", threadId: "t1", message: {
+      id: "quick", parentId: "u2", at: 3, role: "bot", kind: "text", text: "A minute", quick: { state: "answer", askId: "u2" },
+    } });
+    expect.soft(buffersForTurn(stream, "t1", "quick").streaming).toBe("Opening ");
+    expect(store.state.bots[0]!.messages.map((message) => message.id)).toEqual(["u1", "u2", "quick"]);
+    await delta("more");
+    expect.soft(buffersForTurn(stream, "t1", "quick").streaming).toBe("Opening more");
+    await emit({ kind: "message", threadId: "t1", message: {
+      id: "reply", parentId: "quick", at: 4, role: "bot", kind: "text", text: "Opening more",
+    } });
+    expect(stream.streaming.t1).toBeUndefined();
+  });
+
   it("keeps streamed text through three launch rows and chat switches", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("EventSource", FakeEventSource);

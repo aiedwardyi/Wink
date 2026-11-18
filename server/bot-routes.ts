@@ -44,6 +44,7 @@ type BotRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
+  noteTalked: (botId: string) => void;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -505,6 +506,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       }
       const saved = saveMemoryFile(m[1], parsed.data.text, parsed.data.baseRevision);
       if (saved.conflict) return json(res, 409, { error: "conflict", text: saved.text, revision: saved.revision });
+      deps.noteTalked(m[1]);
       memoryHealthCheck.refresh(m[1]);
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });

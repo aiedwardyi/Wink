@@ -57,7 +57,8 @@ export class BotAccounts {
       const id = this.routedAccount(instance.instanceId);
       if (!id && !this.accounts.drains[instance.instanceId]) return instance;
       const main = instances.find((row) => row.instanceId === id);
-      return { ...instance, pickerSnapshot: id && this.available(id) && main ? main.snapshot : { state: "unavailable" },
+      return { ...instance, pickerSnapshot: id && this.registry.accountChecking(id) ? { state: "checking" }
+        : id && this.available(id) && main ? main.snapshot : { state: "unavailable" },
         ...(main?.models ? { pickerModels: main.models } : {}),
       };
     });
@@ -71,7 +72,7 @@ export class BotAccounts {
       const account = accounts.find((row) => row.id === instance.instanceId);
       if (!account) return instance;
       return { ...instance, accountOf: account.of, accountMain: !account.error && this.accounts.isDefault(account.id),
-        accountState: account.existing && this.registry.accountBlocked(account.id) ? "stopped" as const : account.state,
+        accountState: account.existing && this.registry.accountStopped(account.id) ? "stopped" as const : account.state,
         ...(this.accounts.drains[account.id] ? { drain: this.accounts.drains[account.id] } : {}),
       };
     });

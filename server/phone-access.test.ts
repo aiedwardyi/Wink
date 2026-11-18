@@ -135,7 +135,7 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
         ...credentials,
         holder: phone?.id,
         threadId: "t1",
-        messages: [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
+        messages: () => [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
         deviceId: "this-pc",
         writerDeviceId: () => null,
         rootsFor: () => [linkedRoot],
