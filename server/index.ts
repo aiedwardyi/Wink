@@ -449,6 +449,7 @@ import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-st
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
+import { linkedRows } from "./linked-rows.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -544,7 +545,7 @@ if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { cacheDir: DATA_DIR });
-await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot)));
+await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot), { deferAccountAuth: true }));
 const bundledSkills = loadBundledSkills();
 const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DATA_DIR, "skills")));
 
@@ -1107,6 +1108,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const linkedMessages = linkedRows(store);
 const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
@@ -2456,8 +2458,11 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-  // the poll runs for every idle bot, so only changed files refresh the check
-  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+  // the poll runs for every idle bot, so only pulled changes refresh the page and check
+  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
+    memoryHealthCheck.refresh(botId);
+    broadcast({ kind: "memory.changed", botId });
+  }
   return true;
 }
 
@@ -2472,7 +2477,7 @@ async function syncMemoryOnce(botId: string): Promise<void> {
   if (ran || memoryLedgerUnsaved) saveMemoryLedger();
 }
 
-// the PC the user is talking to a bot on keeps its copy of the bot's memory when two PCs changed it at once
+// ties favor the PC with the latest chat or hand edit
 function noteTalked(botId: string): void {
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (botSyncId) markTalked(memorySyncLedger, botSyncId);
@@ -3232,10 +3237,10 @@ const usageBoard = createUsageBoard({
   codexPromo: codexPromoStatus,
   accounts: {
     list: () => [
-      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountBlocked(row.id), status: providerSnapshots.get(row.id) })),
+      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountStopped(row.id), checking: registry.accountChecking(row.id), status: providerSnapshots.get(row.id) })),
       ...Object.entries(instanceConfigs(cfg)).flatMap(([id, entry]) => {
         const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
-        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountBlocked(id), status: providerSnapshots.get(id) }] : [];
+        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountStopped(id), checking: registry.accountChecking(id), status: providerSnapshots.get(id) }] : [];
       }),
       ...codexCreditRows(codexCreditFor()),
     ],
@@ -4481,6 +4486,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // channel that only ever shows requests is half a record. Mirror the
       // reply on success; mirror a failed/stopped terminal chip otherwise.
       finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? "");
+      store.trimThreadCache();
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
@@ -4999,6 +5005,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
+store.holdThreads(() => dispatchedThreads.values());
 const roomLanes = createRoomLanes();
 const laneHandoffs = createLaneHandoffs();
 
@@ -5011,6 +5018,7 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
   if (owned === undefined || owned === threadId) return false;
   if (threadHasLiveTurn(owned)) return true;
   dispatchedThreads.delete(botId);
+  store.trimThreadCache();
   return false;
 }
 
@@ -8021,6 +8029,7 @@ const botRoutes = createBotRoutes({
   taskPacketForWrite,
   projectNotesCheck,
   memoryHealthCheck,
+  noteTalked,
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -8699,17 +8708,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
       if ((!bot && !group) || linkedFilesClosed(group, threadId)) return json(res, 404, { error: "no such conversation" });
-      const messages = store.messagesFor(threadId).map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        fromBotId: message.from?.botId,
-      }));
       return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         holder: phone?.id,
         threadId,
-        messages,
+        messages: (target) => linkedMessages(threadId, target),
         deviceId: profileSyncSettings.deviceId,
         own: ownChat(threadId, Boolean(group?.hosted), joinedRoomThreads),
         writerDeviceId: (messageId) => threadSyncGate.enabled ? threadSyncV2?.messageWriter(threadId, messageId) ?? null : messageWriter(DATA_DIR, threadId, messageId),
@@ -9196,13 +9199,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/instances") {
-      await startupTiming.waitFor("accounts").catch(() => {});
       // A plain GET runs on every page load, so it answers from the last probe:
       // one CLI launch on Windows can stall the whole server for ~5 s.
       // ?refresh=1 re-probes for a CLI installed or signed in since;
       // ?rescan=1 may also start WSL.
       const probe =
         url.searchParams.get("rescan") === "1" ? "rescan" : url.searchParams.get("refresh") === "1" ? "refresh" : "cached";
+      // A cached read needs no restore: an account whose boot check is still running reads as checking.
+      if (probe !== "cached") await startupTiming.waitFor("accounts").catch(() => {});
       // Windows never pushes PATH changes into a live process, so without
       // this a re-probe answers from the boot PATH.
       if (probe !== "cached") resetPathCache();

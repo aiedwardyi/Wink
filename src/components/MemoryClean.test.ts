@@ -79,7 +79,7 @@ describe("memory motion", () => {
     await mount(createElement(MemoryCleanIcon, { botId: "bot", active: true }));
     const message = { id: "new", at: Date.now(), role: "bot", kind: "activity", tool: { name: "memory.save", lines: ["- New"] } } as const;
     const bots = [{ id: "bot", threadId: "thread", messages: [] }];
-    for (const frame of [{ kind: "hydrate", message }, { kind: "message", replayed: true, message }, { kind: "message", imported: true, message }]) {
+    for (const frame of [{ kind: "hydrate", message }, { kind: "message", replayed: true, message }, { kind: "message", imported: true, message }, { kind: "memory.changed", botId: "bot" }]) {
       await act(async () => noteMemoryFrame({ ...frame, threadId: "thread" }, { hydrated: true, bots }));
       expect(host.querySelector(".mc-ripple")).toBeNull();
     }

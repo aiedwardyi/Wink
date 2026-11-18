@@ -535,6 +535,20 @@ it.each([
   expect(rows()).toHaveLength(5);
 });
 
+it("refreshes the open Timeline when its bot receives a synced pick", async () => {
+  const botId = "b-peer-sync";
+  const bots = [{ id: botId, threadId: "t1" }];
+  const sync = (id: string) => act(async () => noteMemoryFrame({ kind: "memory.changed", botId: id }, { hydrated: true, bots }));
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  await sync("other-bot");
+  expect(rows()).toHaveLength(0);
+  await sync(botId);
+  expect(rows()).toHaveLength(5);
+});
+
 it("keeps the loaded Timeline rows when a save refresh fails", async () => {
   pickList();
   await openTimeline("b-failed-refresh");

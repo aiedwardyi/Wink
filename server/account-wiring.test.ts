@@ -49,7 +49,7 @@ async function wired(main = "claude") {
   const broadcast = vi.fn();
   const scope = {
     createUsageBoard, createUsageHistory: (path: string) => createUsageHistory(path, { schedule: () => {} }), DATA_DIR: dir,
-    accounts, accountNames, registry: { accountBlocked: () => false }, providerSnapshots: new Map(),
+    accounts, accountNames, registry: { accountBlocked: () => false, accountStopped: () => false, accountChecking: () => false }, providerSnapshots: new Map(),
     instanceConfigs: () => ({ claude: { driver: "claudeAgent" }, muse: { driver: "museAgent" } }), cfg: {},
     rateLimitsByInstance: new Map(), liveWorkerRuns: async () => ({ known: false, reason: "no-host" }), terminalBridgeAccess: null,
     store: { bots: [{ id: "atlas", name: "Atlas", modelSelection: { instanceId: "claude" } }] }, broadcast,

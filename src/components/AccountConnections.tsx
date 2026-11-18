@@ -14,7 +14,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
-import { useEngineSignIn } from "./EngineSetup";
+import { engineChecking, useEngineSignIn } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
@@ -137,15 +137,18 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
   const draining = account.drain && account.drain.phase !== "failed";
-  const signInRow = !ready && !account.drain;
+  // Its first check has not answered: neither signed in nor signed out yet.
+  const checking = !ready && !account.drain && engineChecking(account);
+  const signInRow = !ready && !account.drain && !checking;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
   // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
-  const control = draining ? <span role="status">{t("accounts.removing")}</span> : signInRow ? phone && canName && more : phone ? more : controls;
+  const control = draining ? <span role="status">{t("accounts.removing")}</span> : checking ? <span aria-live="polite">{t("engines.checking")}</span>
+    : signInRow ? phone && canName && more : phone ? more : controls;
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
-      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && label} name={<>
+      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && !checking && label} name={<>
         {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
           onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
           : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}

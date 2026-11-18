@@ -96,11 +96,11 @@ const fullLines = new Map<string, number>();
 beforeEach(() => {
   fullLines.clear();
   const lineOf = (el: HTMLElement) => fullLines.get(el.closest("[data-mid]")?.getAttribute("data-mid") ?? "") ?? 1;
-  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-fold") ? lineOf(this) * 20 : 0; } });
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-fold-clip") ? lineOf(this) * 20 : 0; } });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", {
     configurable: true,
     get(this: HTMLElement) {
-      if (!this.hasAttribute("data-fold")) return 0;
+      if (!this.hasAttribute("data-fold-clip")) return 0;
       return Math.min(lineOf(this), this.className.includes("max-h-[3lh]") ? 3 : Infinity) * 20;
     },
   });
@@ -352,8 +352,8 @@ describe("ChatView asker-side peer rows", () => {
     fullLines.set("reply", 12);
     const { host } = await mount(bot([{ ...sent, text: long }, { ...reply, text: long }]));
     for (const id of ["sent", "reply"]) {
-      const fold = () => body(host, id)?.querySelector("[data-fold]")?.className ?? "";
-      const toggle = () => body(host, id)?.querySelector<HTMLButtonElement>("[data-fold] + button");
+      const fold = () => body(host, id)?.querySelector("[data-fold-clip]")?.className ?? "";
+      const toggle = () => body(host, id)?.querySelector<HTMLButtonElement>("[data-fold-clip] + button");
       expect(fold()).toContain("max-h-[3lh]");
       expect(fold()).not.toContain("max-h-40");
       expect(toggle()?.textContent).toBe("Show full message");
@@ -368,7 +368,7 @@ describe("ChatView asker-side peer rows", () => {
   it("shows a 3 line sent message whole, with no button", async () => {
     fullLines.set("sent", 3);
     const { host } = await mount(bot([{ ...sent, text: "a\nb\nc" }]));
-    expect(body(host, "sent")?.querySelector("[data-fold]")?.className).not.toContain("mask-image");
+    expect(body(host, "sent")?.querySelector("[data-fold-clip]")?.className).not.toContain("mask-image");
     expect(body(host, "sent")?.querySelector("button")).toBeNull();
   });
 
@@ -565,8 +565,8 @@ describe("ChatView bot-to-bot clip", () => {
   const received: Message = { id: "received", at: 1, role: "bot", kind: "activity", tool: { name: "Message from @Atlas" }, comm: { ...comm, peer: "from" } };
   const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
   const table = ["| file | hash |", "| --- | --- |", ...Array.from({ length: 8 }, (_, i) => `| a${i}.ts | ${i}f3c |`)].join("\n");
-  const clip = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-mid="${id}"] [data-fold]`);
-  const toggle = (host: HTMLElement, id: string) => host.querySelector<HTMLButtonElement>(`[data-mid="${id}"] [data-fold] + button`);
+  const clip = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-mid="${id}"] [data-fold-clip]`);
+  const toggle = (host: HTMLElement, id: string) => host.querySelector<HTMLButtonElement>(`[data-mid="${id}"] [data-fold-clip] + button`);
   it("clips an incoming bot message at 3 lines and opens it from the toggle", async () => {
     fullLines.set("inbound", 12);
     const { host } = await mount(bot([received, { ...inbound, text: lines(12) }]));

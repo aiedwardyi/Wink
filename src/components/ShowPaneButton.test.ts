@@ -8,7 +8,7 @@ import { sidebarWorkerStatus } from "@/lib/worker-status";
 import { workerRuns } from "@/lib/worker-runs";
 import type { Message } from "@/state/store";
 import { saveSidebarSide } from "@/lib/sidebar-preferences";
-import { closeShow, showItem, useMediaThread, useShowItem } from "@/lib/show-pane";
+import { closeShow, showItem, showMedia, showWorkers, useMediaThread, useShowItem, useWorkersThread } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPaneButton } from "./ShowPaneButton";
 import type { WorkerSource } from "./WorkerRows";
@@ -20,9 +20,11 @@ let host: HTMLElement;
 let state: unknown[] = [];
 
 let workers: WorkerSource | undefined;
+let crew: string | null = null;
 
 function Probe({ threadId }: { threadId: string }) {
   state = [useShowItem()?.path ?? null, useMediaThread(), Boolean(useVerifyWatch())];
+  crew = useWorkersThread();
   return createElement(ShowPaneButton, { threadId, workers });
 }
 
@@ -102,4 +104,37 @@ it.each([["BLOCKED", "waiting", "bg-warning text-app"], ["FAIL", "failed", "bg-d
   expect(badge.getAttribute("data-worker-state")).toBe(shown);
   expect(badge.textContent).toBe("2");
   expect(badge.className).toContain(classes);
+});
+
+it("reopens on the chat's last tab while no worker is listed, and on Workers once one is", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(), onOpenTerminal: () => {} };
+  await render("b7");
+  await act(async () => showMedia("b7"));
+  await press();
+  await press();
+  expect([state[1], crew]).toEqual(["b7", null]);
+  await press();
+  const launch: Message = { id: "l1", at: 1, role: "bot", kind: "launch", text: "Launched W1 | Opus 5.5 | high\nSession: 00000001-1" };
+  const runs = workerRuns([launch]).map((run) => ({ run, state: run.state }));
+  workers = { ...workers, runs, livePanes: new Set(["00000001-1"]) };
+  await render("b7");
+  await press();
+  expect([state[1], crew]).toEqual([null, "b7"]);
+});
+
+it("reopens on Workers when it was the chat's last tab, with no worker listed", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(), onOpenTerminal: () => {} };
+  await render("b9");
+  await act(async () => showWorkers("b9"));
+  await press();
+  expect(crew).toBeNull();
+  await press();
+  expect([state[1], crew]).toEqual([null, "b9"]);
+});
+
+it("keeps the Working badge and sidebar line for an open pane whose run is past the loaded page", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(["00000009-1"]), paneLabels: new Map([["00000009-1", "OLD | Opus 5.5 | high"]]) };
+  await render("b8");
+  expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("1");
+  expect(sidebarWorkerStatus([], ["OLD | Opus 5.5 | high"], (key, vars) => translate("en", key, vars))).toBe("1 worker");
 });

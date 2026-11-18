@@ -16,6 +16,7 @@ import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
+import { THREAD_CACHE_CHARS, ThreadCache } from "./thread-cache.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
@@ -763,7 +764,8 @@ const onboardingCard = (): OptionCardData => ({
 /** Messages form a tree (forks appear when a message is edited); the
  * visible conversation is the path from the root to activeLeafId. */
 interface ThreadState {
-  messages: Message[];
+  /** Written only through the thread cache, which weighs every row. */
+  readonly messages: readonly Message[];
   activeLeafId: string | null;
 }
 
@@ -776,7 +778,9 @@ export class Store {
   readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
-  private threads = new Map<string, ThreadState>();
+  private threads: ThreadCache<ThreadState>;
+  /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
+  private heldThreads: () => Iterable<string> = () => [];
   private taskPackets = new Map<string, TaskResumePacket | null>();
   private defaultSelection: () => ModelSelection;
   private listeners = new Set<(change: StoreChange) => void>();
@@ -789,7 +793,8 @@ export class Store {
     this.pruneSessionSystems();
   });
 
-  constructor(defaultSelection: () => ModelSelection, opts: { coalesceSaves?: boolean } = {}) {
+  constructor(defaultSelection: () => ModelSelection, opts: { coalesceSaves?: boolean; threadCacheChars?: number } = {}) {
+    this.threads = new ThreadCache(opts.threadCacheChars ?? THREAD_CACHE_CHARS, () => this.busyThreads());
     this.defaultSelection = defaultSelection;
     this.coalesce = opts.coalesceSaves === true;
     mkdirSync(DATA_DIR, { recursive: true });
@@ -1174,8 +1179,10 @@ export class Store {
   patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
+    const wasBusy = Boolean(group.busyBotId);
     if (patch.unread === false) group.readAt = Date.now();
     Object.assign(group, patch);
+    if (wasBusy && !group.busyBotId) this.threads.trim();
     if (!group.dm && Object.prototype.hasOwnProperty.call(patch, "pinnedMessageId")) {
       const active = this.activeGroupTask(group.id);
       if (active) active.pinnedMessageId = patch.pinnedMessageId;
@@ -1313,11 +1320,24 @@ export class Store {
   }
 
   private thread(threadId: string): ThreadState {
-    let t = this.threads.get(threadId);
-    if (t) return t;
+    const cached = this.threads.get(threadId);
+    if (cached) return cached;
+    const { state, chars } = this.readState(threadId);
+    this.threads.set(threadId, state, chars);
+    return state;
+  }
+
+  /** Loads a cold chat only into spare cache room, as the least recent, so a warm never evicts a chat in use. */
+  warm(threadId: string): void {
+    if (this.threads.has(threadId)) return;
+    const { state, chars } = this.readState(threadId);
+    this.threads.offer(threadId, state, chars);
+  }
+
+  private readState(threadId: string): { state: ThreadState; chars: number } {
     // SQLite is the source of truth; a thread with no rows imports its
     // legacy messages-<threadId>.json once, inside readThread
-    const { messages, activeLeafId: storedLeaf } = mdb.readThread(threadId, messagesFile(threadId));
+    const { messages, activeLeafId: storedLeaf, chars } = mdb.readThread(threadId, messagesFile(threadId));
     let activeLeafId = storedLeaf;
     // legacy rows carry no parentId — chain them in array order
     let prev: string | null = null;
@@ -1326,18 +1346,35 @@ export class Store {
       prev = m.id;
     }
     if (!activeLeafId) activeLeafId = messages.at(-1)?.id ?? null;
-    t = { messages, activeLeafId };
-    this.threads.set(threadId, t);
-    return t;
+    return { state: { messages, activeLeafId }, chars };
+  }
+
+  /** Threads a running turn writes to; the cache keeps them. */
+  private busyThreads(): Set<string> {
+    const busy = new Set<string>();
+    for (const bot of this.bots) if (bot.busy) busy.add(bot.activeThreadId ?? bot.threadId);
+    for (const group of this.groups) if (group.busyBotId) busy.add(group.threadId);
+    for (const threadId of this.heldThreads()) busy.add(threadId);
+    return busy;
+  }
+
+  /** Driver turns survive Stop's cancel grace. Call trimThreadCache after a driver releases its thread. */
+  holdThreads(held: () => Iterable<string>): void {
+    this.heldThreads = held;
+  }
+
+  trimThreadCache(): void {
+    this.threads.trim();
   }
 
   messagesFor(threadId: string): Message[] {
-    return this.thread(threadId).messages;
+    // SAFETY: callers read the transcript; rows change only through the thread cache.
+    return this.thread(threadId).messages as Message[];
   }
 
   /** One row by id: the cached copy when the thread is loaded, else a key read. */
   row(threadId: string, messageId: string): Message | undefined {
-    const t = this.threads.get(threadId);
+    const t = this.threads.peek(threadId);
     return t ? t.messages.find((m) => m.id === messageId) : mdb.readMessage(threadId, messageId);
   }
 
@@ -1385,19 +1422,19 @@ export class Store {
     }
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
     const previousLeaf = t.activeLeafId;
-    t.messages.push(full);
+    this.threads.push(threadId, full);
     t.activeLeafId = full.id;
     this.beforeWrite(threadId);
     try {
       this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
     } catch (error) {
-      t.messages.pop();
+      this.threads.pop(threadId);
       t.activeLeafId = previousLeaf;
       throw error;
     }
     if (full.comm?.mailKey && full.comm.peer === "reply") this.indexMail(threadId, full);
     if (full.kind === "screen") {
-      for (const pruned of this.pruneScreenFrames(t)) {
+      for (const pruned of this.pruneScreenFrames(threadId, t)) {
         this.persistThread(threadId, [{ kind: "row", value: pruned }], () => mdb.updateMessage(threadId, pruned));
         this.emit({ type: "message.patch", threadId, message: pruned });
       }
@@ -1448,7 +1485,7 @@ export class Store {
    * the transcript as placeholders. Mirrors the client's own frame cap.
    * Returns the messages whose pixels were dropped so the caller can
    * persist exactly those. */
-  private pruneScreenFrames(t: { messages: Message[] }, keep = 4): Message[] {
+  private pruneScreenFrames(threadId: string, t: ThreadState, keep = 4): Message[] {
     const pruned: Message[] = [];
     let seen = 0;
     for (let i = t.messages.length - 1; i >= 0 && seen < t.messages.length; i--) {
@@ -1456,8 +1493,9 @@ export class Store {
       if (m.kind !== "screen" || !m.png || m.shown) continue;
       seen += 1;
       if (seen > keep) {
-        m.png = undefined;
-        pruned.push(m);
+        const shed = { ...m, png: undefined };
+        this.threads.put(threadId, i, shed);
+        pruned.push(shed);
       }
     }
     return pruned;
@@ -1478,7 +1516,7 @@ export class Store {
       parentId: source.parentId ?? null,
       replyToId: source.replyToId,
     };
-    t.messages.push(full);
+    this.threads.push(threadId, full);
     t.activeLeafId = full.id;
     this.beforeWrite(threadId);
     this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
@@ -1511,7 +1549,7 @@ export class Store {
     // Same scrub as appendMessage: a patch is a durable write too, and the
     // hydrate that GET /api/bots serves reads the patched record, not the
     // frame the UI already saw.
-    t.messages[idx] = redactBotAuthored({ ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card });
+    this.threads.put(threadId, idx, redactBotAuthored({ ...t.messages[idx]!, ...patch, card: patch.card ?? t.messages[idx]!.card }));
     this.beforeWrite(threadId);
     this.persistThread(threadId, [{ kind: "row", value: t.messages[idx] }], () => mdb.updateMessage(threadId, t.messages[idx]));
     if (t.messages[idx].comm?.mailKey && t.messages[idx].comm?.peer === "reply") this.indexMail(threadId, t.messages[idx]);
@@ -1690,6 +1728,7 @@ export class Store {
   setActivity(botId: string, activity: BotActivity, activeThreadId?: ThreadId): BotRecord | null {
     const bot = this.bot(botId);
     if (!bot) return null;
+    const previousThreadId = bot.busy ? bot.activeThreadId ?? bot.threadId : undefined;
     const busy = ACTIVITY_BUSY.has(activity);
     const nextThreadId = busy ? activeThreadId ?? bot.activeThreadId : undefined;
     const settled = !busy && bot.pendingModelSelection !== undefined;
@@ -1705,6 +1744,7 @@ export class Store {
     applyPendingModel(bot);
     if (nextThreadId) bot.activeThreadId = nextThreadId;
     else delete bot.activeThreadId;
+    if (previousThreadId && (!busy || previousThreadId !== (nextThreadId ?? bot.threadId))) this.threads.trim();
     this.saveBotsSoon();
     this.emit({ type: "bot", botId });
     return bot;
@@ -2189,7 +2229,7 @@ export class Store {
     messages = messages.map(message => receipts.has(message.id) ? { ...message, mailbox: receipts.get(message.id) } : message);
     const before = new Map(t.messages.map((m) => [m.id, JSON.stringify(m)]));
     mdb.replaceThread(threadId, messages, activeLeafId);
-    t.messages = messages;
+    this.threads.reset(threadId, messages);
     t.activeLeafId = activeLeafId ?? messages.at(-1)?.id ?? null;
     let record = this.taskByThread(botId, threadId);
     if (record) {
@@ -2263,7 +2303,7 @@ export class Store {
         task = { threadId, title: UNTITLED_TASK, createdAt: 0, resumeCursors: {} };
         bot.tasks = [...(bot.tasks ?? []), task];
       }
-      const cached = this.threads.get(threadId);
+      const cached = this.threads.peek(threadId);
       const events: StoreChange[] = [];
       const pathChanged = mdb.withMessageTransaction((db) => {
         const changed = syncPathChanged(db, threadId, changes);
@@ -2281,8 +2321,8 @@ export class Store {
             indexMailRow(task, message);
             if (cached) {
               const at = cached.messages.findIndex((row) => row.id === message.id);
-              if (at < 0) cached.messages.push(message);
-              else cached.messages[at] = message;
+              if (at < 0) this.threads.push(threadId, message);
+              else this.threads.put(threadId, at, message);
             }
             events.push(exists ? { type: "message.patch", threadId, message } : { type: "message", threadId, message, imported: true });
           } else if (change.kind === "head") {

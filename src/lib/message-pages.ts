@@ -68,39 +68,43 @@ export function screenImageUrl(threadId: string, messageId: string): string {
   return `/api/threads/${threadId}/messages/${messageId}/image`;
 }
 
-const lookups = new Map<string, Promise<Message | null>>();
+type MessageLookup = { result: Promise<Message | null>; readers: number };
+const lookups = new Map<string, MessageLookup>();
 
-function lookupMessage(threadId: string, messageId: string): Promise<Message | null> {
-  const key = `${threadId}:${messageId}`;
-  let lookup = lookups.get(key);
-  if (!lookup) {
-    lookup = api(`/api/threads/${threadId}/messages?around=${encodeURIComponent(messageId)}&limit=1`)
-      .then((page) => (page?.messages as Message[] | undefined)?.find((message) => message.id === messageId) ?? null)
-      .catch(() => {
-        lookups.delete(key);
-        return null;
-      });
-    lookups.set(key, lookup);
-  }
+function lookupMessage(key: string, threadId: string, messageId: string): MessageLookup {
+  const existing = lookups.get(key);
+  if (existing) return existing;
+  const result = api(`/api/threads/${threadId}/messages?around=${encodeURIComponent(messageId)}&limit=1`)
+    .then((page: { messages?: Message[] } | null) => page?.messages?.find((message) => message.id === messageId) ?? null)
+    .catch(() => {
+      if (lookups.get(key) === lookup) lookups.delete(key);
+      return null;
+    });
+  const lookup = { result, readers: 0 };
+  lookups.set(key, lookup);
   return lookup;
 }
 
 /** A pinned or quoted message, fetched alone when it is older than every loaded page. */
 export function useThreadMessage(threadId: string, messageId: string | undefined, held: Message | undefined): Message | undefined {
   const preview = useChatPreview();
-  const [fetched, setFetched] = useState<Message | null>(null);
-  const missing = Boolean(messageId && !held);
+  const [fetched, setFetched] = useState<{ key: string; message: Message } | null>(null);
+  const key = messageId && !held && !preview ? `${threadId}:${messageId}` : undefined;
   useEffect(() => {
-    if (preview || !missing || !messageId) return;
+    setFetched(null);
+    if (!key || !messageId) return;
+    const lookup = lookupMessage(key, threadId, messageId);
+    lookup.readers++;
     let alive = true;
-    void lookupMessage(threadId, messageId).then((message) => {
-      if (alive) setFetched(message);
+    void lookup.result.then((message) => {
+      if (alive && message) setFetched({ key, message });
     });
     return () => {
       alive = false;
+      if (--lookup.readers === 0 && lookups.get(key) === lookup) lookups.delete(key);
     };
-  }, [threadId, messageId, missing, preview]);
-  return held ?? (fetched && fetched.id === messageId ? fetched : undefined);
+  }, [key, threadId, messageId]);
+  return held ?? (fetched && fetched.key === key ? fetched.message : undefined);
 }
 
 type JumpWindow = { key: string; targetId: string; messages: Message[]; hasMore: boolean; snapshot: number };

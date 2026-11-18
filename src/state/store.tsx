@@ -836,11 +836,10 @@ export function reducer(state: AppState, action: Action): AppState {
         }),
       };
     }
-    case "sendSettled":
-      return {
-        ...state,
-        acceptedSends: settleAcceptedSend(state.acceptedSends, action.threadId, action.sendId, action.queued),
-      };
+    case "sendSettled": {
+      const acceptedSends = settleAcceptedSend(state.acceptedSends, action.threadId, action.sendId, action.queued);
+      return acceptedSends === state.acceptedSends ? state : { ...state, acceptedSends };
+    }
     case "sendRejected": {
       const rejected = (state.acceptedSends[action.threadId] ?? []).find(
         (entry) => entry.sendId === action.sendId,
@@ -1079,24 +1078,17 @@ function normalizeSnapshotFailure(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
 }
 
-/** A refused SSE resume needs the chat transcript snapshot before its cursor
- * can be acknowledged. The other panels should refresh at the same boundary,
- * but a broken optional endpoint must not hold every chat frame hostage. */
+/** Only the chat snapshot gates the live cursor after a refused resume. */
 export async function loadSnapshotBoundary<Key extends string>(
   loadChat: () => Promise<void>,
   peripherals: readonly PeripheralSnapshotLoad<Key>[],
   onPeripheralFailure: (part: PeripheralSnapshotLoad<Key>, error: Error) => void,
 ): Promise<boolean> {
-  const [chat, ...settledPeripherals] = await Promise.allSettled([
-    loadChat(),
-    ...peripherals.map((part) => part.load()),
-  ]);
-  settledPeripherals.forEach((result, index) => {
-    if (result.status === "rejected") {
-      onPeripheralFailure(peripherals[index]!, normalizeSnapshotFailure(result.reason));
-    }
-  });
-  return chat.status === "fulfilled";
+  const chat = loadChat();
+  for (const part of peripherals) {
+    void part.load().catch((error) => onPeripheralFailure(part, normalizeSnapshotFailure(error)));
+  }
+  return chat.then(() => true, () => false);
 }
 
 /** Per-frame stream state lives in its OWN context: token frames update only
@@ -1132,6 +1124,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   useMascotMotionExpiry(state.mascotMotion?.nonce, rawDispatch);
   const cancelledSendsRef = useRef(new Set<string>());
+  const postingBotSends = useRef(new Map<string, { stop?: Promise<{ removed: boolean; returned: boolean }> }>());
   const reorderGeneration = useRef(0);
   const groupReorderGeneration = useRef(0);
   const groupPatchGeneration = useRef(new Map<string, number>());
@@ -1225,6 +1218,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const noteStreamTail = (threadId: string, messageId?: string) => {
     if (!threadId || !messageId) return;
     streamTails.current = rememberStreamTail(streamTails.current, threadId, messageId);
+  };
+  const appendStreamRow = (threadId: string, message: Message) => {
+    const carriesStream = message.kind === "launch" || message.quick?.state === "answer" ||
+      (message.role === "user" && (message.steered || message.quick?.state === "asked"));
+    const fromTail = carriesStream ? lastMessageIdFor(threadId) : undefined;
+    rawDispatch({ type: "messageAdded", threadId, message });
+    noteStreamTail(threadId, message.id);
+    if (fromTail !== undefined && fromTail !== message.id) retargetStream(threadId, fromTail, message.id);
   };
   // With a frame time, live text types out; without one (turn end, a window
   // shown again, history, replays) everything buffered lands at once.
@@ -1381,16 +1382,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.onFailure?.();
         return;
       }
-      if (action.type === "interrupt") {
-        const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
-        for (const entry of bot ? (stateRef.current.acceptedSends[bot.threadId] ?? []) : []) {
-          if (entry.kind !== "thinking") continue;
-          cancelledSendsRef.current.add(entry.sendId);
-          // The interrupt can land before this send does, or after it queued
-          // behind a turn still starting; only a sendId cancel catches both.
-          void api(`/api/bots/${action.botId}/queue/${entry.sendId}`, { method: "DELETE" }).catch(() => {});
-        }
-      }
       if (action.type === "interruptGroup") {
         const group = stateRef.current.groups.find((candidate) => candidate.id === action.groupId);
         for (const entry of group ? (stateRef.current.acceptedSends[group.threadId] ?? []) : []) {
@@ -1449,6 +1440,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
+          const pending: { stop?: Promise<{ removed: boolean; returned: boolean }> } = {};
+          postingBotSends.current.set(sendId, pending);
+          let retainDraft = false;
+          const restoreStopped = async (cancelled: boolean) => {
+            if (!pending.stop || typeof threadId !== "string") return false;
+            const { removed, returned } = await pending.stop;
+            if (returned) return true;
+            if (!removed && !cancelled) return false;
+            returnSendsToComposer(botDraftId(action.botId, threadId), [takeQueuedDraft(sendId) ?? { text: action.text, attachments: [] }]);
+            return true;
+          };
           const post = () =>
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1462,40 +1464,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 actedAt,
               }),
             });
-          const settle = (body: any) => {
+          const settle = async (body: any) => {
             if (action.queueId && !body?.queued && typeof threadId === "string") {
               rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
             }
-            if (receiptRejectsAcceptedSend(body)) {
-              cancelledSendsRef.current.delete(sendId);
+            if (receiptRejectsAcceptedSend(body) || pending.stop) {
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
               }
               if (body?.message && typeof body.threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
+              } else if (pending.stop) {
+                const deleted = body?.queued && typeof body.queueId === "string" &&
+                  await api(`/api/bots/${action.botId}/queue/${body.queueId}`, { method: "DELETE" }).catch(() => null);
+                await restoreStopped(body?.cancelled === true || Boolean(deleted?.send));
               }
               return;
             }
-            if (cancelledSendsRef.current.has(sendId)) {
-              cancelledSendsRef.current.delete(sendId);
-              if (typeof threadId === "string") {
-                rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
-              }
-              if (body?.queued && typeof body.queueId === "string") {
-                void api(`/api/bots/${action.botId}/queue/${body.queueId}`, { method: "DELETE" }).catch(
-                  () => {},
-                );
-                return;
-              }
-              if (body?.message && typeof body.threadId === "string") {
-                rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
-              }
-              return;
-            }
+            retainDraft = Boolean(body?.queued || body?.message?.quick);
             const settledThread =
               typeof body?.threadId === "string" ? body.threadId : threadId;
             if (body?.message && typeof body.threadId === "string") {
-              rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
+              if (body.message.quick?.state === "asked" && lastMessageIdFor(body.threadId) === (body.message.parentId ?? "")) {
+                appendStreamRow(body.threadId, body.message);
+              } else {
+                rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
+              }
             }
             if (
               body?.queued &&
@@ -1527,7 +1521,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const accepted =
                 typeof threadId === "string" ? await acceptedSend(stateRef.current, threadId, sendId, action.text) : null;
               if (accepted && typeof threadId === "string") {
-                cancelledSendsRef.current.delete(sendId);
+                retainDraft = Boolean(accepted.quick);
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
@@ -1536,14 +1530,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               // A queued send stays off the transcript until drain; the same
               // sendId is idempotent, so a re-POST returns its receipt.
               const receipt =
-                error instanceof TypeError && !cancelledSendsRef.current.has(sendId) ? await post().catch(() => null) : null;
+                error instanceof TypeError && !pending.stop ? await post().catch(() => null) : null;
               if (receipt) return settle(receipt);
-              cancelledSendsRef.current.delete(sendId);
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
               }
+              if (await restoreStopped(false)) return;
               showError(error);
               action.onError?.();
+            })
+            .finally(() => {
+              if (postingBotSends.current.get(sendId) !== pending) return;
+              postingBotSends.current.delete(sendId);
+              if (!retainDraft) takeQueuedDraft(sendId);
             });
           void holdReload(sending);
           break;
@@ -1897,10 +1896,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "interrupt": {
           // Like the server's Stop: the bot's chat, the thread it is working on and a room it is busy in.
           const stopped = stateRef.current.bots.find((bot) => bot.id === action.botId);
+          const sends = stopped ? stateRef.current.acceptedSends[stopped.threadId] ?? [] : [];
+          const cancellations = sends.flatMap(({ sendId, kind }) => {
+            if (kind !== "thinking") return [];
+            // A sendId cancel also catches a POST that reaches the server after Stop.
+            const deletion = api(`/api/bots/${action.botId}/queue/${sendId}`, { method: "DELETE" }).catch(() => null);
+            return [{ sendId, deletion }];
+          });
           landTyping([stopped?.threadId, stopped?.workingThreadId, ...stateRef.current.groups.filter((group) => group.busyBotId === action.botId).map((group) => group.threadId)]);
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
-          api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
+          const interrupting = api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
             .then((body) => {
               const returned: Array<{ threadId: string; queueId: string; sendId?: string; text: string }> =
                 Array.isArray(body?.returned) ? body.returned : [];
@@ -1916,13 +1922,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }
               if (action.switchThreadId && body.stopped !== true) release();
               action.onStopped?.({ stopped: body.stopped === true, returned });
+              return returned;
             })
             .catch((error) => {
               if (action.onFailure) action.onFailure();
               else showError(error);
               release();
+              return [];
             })
             .finally(() => action.onSettled?.());
+          for (const { sendId, deletion } of cancellations) {
+            const pending = postingBotSends.current.get(sendId);
+            if (!pending) continue;
+            pending.stop = Promise.all([deletion, interrupting]).then(([deleted, returned]) => ({
+              removed: Boolean(deleted?.send),
+              returned: returned.some((send) => send.sendId === sendId),
+            }));
+          }
           break;
         }
         case "resumeTask": {
@@ -2081,10 +2097,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refresh.attempt += 1;
       refresh.timer = setTimeout(() => {
         refresh.timer = null;
-        void loadPeripheral(part, true).catch((nextError) => schedulePeripheralRetry(part, nextError));
+        void loadPeripheral(part).catch((nextError) => schedulePeripheralRetry(part, nextError));
       }, delay);
     };
-    const loadPeripheral = async (part: PeripheralPart, protectLiveFrames: boolean): Promise<void> => {
+    const loadPeripheral = async (part: PeripheralPart): Promise<void> => {
       const refresh = refreshState(part.key);
       if (refresh.timer) {
         clearTimeout(refresh.timer);
@@ -2095,10 +2111,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       try {
         const apply = await part.request();
         if (!alive || refresh.generation !== generation) return;
-        // A background retry must never replace a live patch that arrived
-        // after its request began. Discard that stale response and try again
-        // from the newer event boundary instead.
-        if (protectLiveFrames && refresh.version !== version) {
+        // Live patches can overtake a peripheral snapshot.
+        if (refresh.version !== version) {
           schedulePeripheralRetry(part);
           return;
         }
@@ -2155,7 +2169,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       };
       const peripherals = firstChatPeripherals(peripheralParts).map((part) => ({
         key: part.key,
-        load: () => loadPeripheral(part, false),
+        load: () => loadPeripheral(part),
       }));
       const chatReady = await loadSnapshotBoundary(chat, peripherals, (failed, error) => {
         const part = partByKey.get(failed.key);
@@ -2222,8 +2236,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // At most STREAM_PACE_MS: the tail types out, then the settled reply takes over.
       if (
         frame.kind === "message" &&
-        frame.message?.role === "bot" &&
-        frame.message.kind === "text" &&
+        frame.message?.role === "bot" && frame.message.kind === "text" && frame.message.quick?.state !== "answer" &&
         deltaBuffer.current.get(frame.threadId)?.ramps?.length &&
         document.visibilityState === "visible" &&
         !reducedMotion()
@@ -2251,13 +2264,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         case "message": {
-          const needsRetarget = frame.message?.kind === "launch" || (frame.message?.role === "user" && frame.message.steered);
-          const launchFrom = needsRetarget ? lastMessageIdFor(frame.threadId) : undefined;
           viewedReplies.current.note(stateRef.current, frame.threadId, frame.message, document.visibilityState === "visible" && document.hasFocus());
-          rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
-          noteStreamTail(frame.threadId, frame.message?.id);
-          if (frame.message) updateOrigin({ threadId: frame.threadId, event: { type: "row", row: frame.message, now } });
-          if (launchFrom !== undefined && frame.message?.id) retargetStream(frame.threadId, launchFrom, frame.message.id);
+          if (frame.message) {
+            appendStreamRow(frame.threadId, frame.message);
+            updateOrigin({ threadId: frame.threadId, event: { type: "row", row: frame.message, now } });
+          }
           // the sidebar's one-shot arrival glow; per-chat, store state untouched
           const arrivalId = arrivalChatForFrame(frame, stateRef.current);
           if (arrivalId) noteArrival(arrivalId);
@@ -2269,11 +2280,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             });
           }
           // a settled assistant bubble replaces the in-flight stream
-          if (frame.message && streamResetFor(frame.message) === "reasoning") {
-            clearReasoning(frame.threadId);
-          }
+          const reset = frame.message && streamResetFor(frame.message);
+          if (reset === "reasoning") clearReasoning(frame.threadId);
+          if (reset === "stream") clearStream(frame.threadId);
           if (frame.message?.role === "bot" && frame.message?.kind === "text" && !isVoiceLine(frame.message)) {
-            clearStream(frame.threadId);
             buzzOnReply(frame, stateRef.current, document.visibilityState === "visible");
             // Auto-speak lives HERE rather than in the chat view so a bot
             // you switched away from still reads its answer out — which is
@@ -2440,6 +2450,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
           break;
+        case "group.send.idle":
+          rawDispatch({ type: "sendSettled", threadId: frame.threadId, sendId: frame.sendId, queued: true });
+          break;
         case "queue.cancelled":
           for (const send of frame.sends ?? []) {
             rawDispatch({ type: "cancelQueued", botId: frame.botId, threadId: send.threadId, queueId: send.queueId });
@@ -2477,7 +2490,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           {
             const instances = partByKey.get("instances");
             if (instances) {
-              void loadPeripheral(instances, true).catch((error) =>
+              void loadPeripheral(instances).catch((error) =>
                 schedulePeripheralRetry(instances, error),
               );
             }
@@ -2509,7 +2522,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // The mount's deferred load covers the first boundary; a later one may follow a missed instances frame.
         const instances = partByKey.get("instances");
         if (snapshotBoundaries++ > 0 && instances) {
-          void loadPeripheral(instances, true).catch((error) => schedulePeripheralRetry(instances, error));
+          void loadPeripheral(instances).catch((error) => schedulePeripheralRetry(instances, error));
         }
         return hydrate(cursor);
       },
@@ -2537,7 +2550,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopDeferredInstances = instancesPart
       ? scheduleDeferredInstancesLoad(() => {
           if (!alive) return;
-          void loadPeripheral(instancesPart, true).catch((error) =>
+          void loadPeripheral(instancesPart).catch((error) =>
             schedulePeripheralRetry(instancesPart, error),
           );
         })

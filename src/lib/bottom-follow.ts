@@ -2,6 +2,28 @@
  * high-DPI fractional scaling without creating a wide snap zone. */
 export const BOTTOM_FOLLOW_THRESHOLD = 16;
 
+const followScrollTops = new WeakMap<HTMLElement, number>();
+const followScrollEvents = new WeakSet<Event>();
+
+export function scrollToFollowBottom(el: HTMLElement): number {
+  const previousTop = el.scrollTop;
+  el.scrollTo({ top: el.scrollHeight });
+  const top = el.scrollTop;
+  if (top !== previousTop) followScrollTops.set(el, top);
+  return top;
+}
+
+export function isBottomFollowScroll(event: Event): boolean {
+  if (followScrollEvents.has(event)) return true;
+  const el = event.target;
+  if (!(el instanceof HTMLElement)) return false;
+  const top = followScrollTops.get(el);
+  followScrollTops.delete(el);
+  if (top !== el.scrollTop) return false;
+  followScrollEvents.add(event);
+  return true;
+}
+
 /**
  * Resume automatic bottom-follow only when the reader is already at the
  * rest position and still moving toward it. Re-pinning must not imply a
