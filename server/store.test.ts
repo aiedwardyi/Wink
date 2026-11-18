@@ -23,6 +23,7 @@ import { buildResumeFallback, engineIsFresh } from "./turn-context.ts";
 import { workspaceDir } from "./workspace.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
+import { REPLACED_MODELS, replacedModelMoves, type ReplacedModel } from "../shared/replaced-models.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -1126,6 +1127,34 @@ describe("Store", () => {
       expect(reloaded.taskByThread(bot.id, bot.threadId)?.lastModel).toBe(`gemini-3.8-flash-${effort}`);
     }
     expect(reloaded.bot(other.id)?.modelSelection.model).toBe("gemini-3.7-flash-high");
+  });
+
+  const moveReplaced = (store: Store, engine: ReplacedModel["engine"], instanceId: string) => {
+    for (const { from, to, resetSession } of replacedModelMoves(engine)) store.renameModel([instanceId], from, to, resetSession ? { resetSession } : {});
+  };
+
+  it("moves a bot saved on any replaced Codex model to its current one and keeps its effort", () => {
+    const store = new Store(selection);
+    const saved = [["gpt-6-sol", "gpt-6.2-sol", "low"], ["gpt-6.1-sol", "gpt-6.2-sol", "high"], ["gpt-6-astra", "gpt-6.2-astra", "xhigh"], ["gpt-5.6-terra", "gpt-6.1-terra", "medium"]] as const;
+    const bots = saved.map(([model, , effort]) => store.createBot({ modelSelection: { instanceId: "codex", model, effort } }));
+
+    moveReplaced(store, "codex", "codex");
+
+    const reloaded = new Store(selection);
+    expect(bots.map((bot) => reloaded.bot(bot.id)?.modelSelection)).toEqual(saved.map(([, model, effort]) => ({ instanceId: "codex", model, effort })));
+  });
+
+  it("a new replaced-models row moves a saved bot with no other code change", () => {
+    const rows = REPLACED_MODELS as ReplacedModel[];
+    rows.push({ engine: "codex", from: "old-x", to: "new-x", fromLabel: "Old X", toLabel: "New X" });
+    try {
+      const store = new Store(selection);
+      const bot = store.createBot({ modelSelection: { instanceId: "codex", model: "old-x", effort: "high" } });
+      moveReplaced(store, "codex", "codex");
+      expect(new Store(selection).bot(bot.id)?.modelSelection).toEqual({ instanceId: "codex", model: "new-x", effort: "high" });
+    } finally {
+      rows.pop();
+    }
   });
 
   it("renameModel resets migrated Codex sessions and keeps Claude sessions", () => {

@@ -480,6 +480,116 @@
       "kind": "independent"
     },
     {
+      "model": "gpt-6.2-astra",
+      "effort": "low",
+      "value": 51.010101010101,
+      "cost_per_task": 0.795390170444278,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-low",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-low",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "medium",
+      "value": 58.5858585858586,
+      "cost_per_task": 1.754899184127889,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-medium",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-medium",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "high",
+      "value": 60.1010101010101,
+      "cost_per_task": 2.499368722692741,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-high",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-high",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "xhigh",
+      "value": 64.1414141414141,
+      "cost_per_task": 2.880790520204879,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-xhigh",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-xhigh",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "max",
+      "value": 64.1414141414141,
+      "cost_per_task": 4.657998705285525,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "low",
+      "value": 37.8787878787879,
+      "cost_per_task": 0.3500387744101477,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-low",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-low",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "medium",
+      "value": 56.0606060606061,
+      "cost_per_task": 0.6774887038171429,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-medium",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-medium",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "high",
+      "value": 58.5858585858586,
+      "cost_per_task": 0.770567311826925,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-high",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-high",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "xhigh",
+      "value": 56.0606060606061,
+      "cost_per_task": 0.9338873442079093,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-xhigh",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-xhigh",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "max",
+      "value": 60.1010101010101,
+      "cost_per_task": 1.293535836052996,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
       "model": "gpt-6-astra",
       "effort": "low",
       "value": 41.9191919191919,

@@ -69,7 +69,7 @@ function mouse(width: number, height = 900) {
 function control({ grokSignedIn = true, dial = true, model = "claude-opus-5-5", open = true } = {}) {
   const instances = [
     engine("claude", "claudeAgent", ["claude-opus-5-5", "claude-sonnet-5-5"]),
-    engine("codex", "codex", ["gpt-6.1-sol", "gpt-6-luna"]),
+    engine("codex", "codex", ["gpt-6.2-sol", "gpt-6-luna"]),
     engine("grok", "grokAgent", ["grok-4.7"], grokSignedIn),
   ];
   const bot: Bot = { id: "bot-1", threadId: "thread-1", name: "Dial", title: "", description: "", color: "green", notifications: false, unread: false, messages: [], modelSelection: { instanceId: "claude", model, effort: "high", mode: "pinned" } };
@@ -127,7 +127,7 @@ async function wheel(deltaY: number, deltaMode = 0) {
   });
 }
 
-const order = ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6-luna", "grok-4.7"];
+const order = ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.2-sol", "gpt-6-luna", "grok-4.7"];
 const selected = () => document.querySelector('.dial-card[aria-pressed="true"]')?.getAttribute("data-model-cell");
 const effort = () => document.querySelector(".dial-effort b")?.textContent;
 const saved = () => dispatch.mock.calls.find(([action]) => action.type === "setModel")?.[0].selection;
@@ -220,7 +220,7 @@ describe("ModelDial", () => {
   it.each([
     [true, '[aria-label="Previous model"]', "grok-4.7"],
     [true, '[aria-label="Next model"]', "claude-sonnet-5-5"],
-    [true, '[data-dial-lab="codex"]', "gpt-6.1-sol"],
+    [true, '[data-dial-lab="codex"]', "gpt-6.2-sol"],
     [false, '[aria-label="Previous model"]', "grok-4.7"],
     [false, '[aria-label="Next model"]', "claude-sonnet-5-5"],
   ])("keeps native Enter activation on %s dial %s", async (dial, selector, model) => {
@@ -321,9 +321,9 @@ describe("ModelDial", () => {
     await key("o");
     expect(selected()).toBe("claude-sonnet-5-5");
     await key("l");
-    expect(selected()).toBe("gpt-6.1-sol");
+    expect(selected()).toBe("gpt-6.2-sol");
     await key("Enter");
-    expect(saved()).toEqual({ instanceId: "codex", model: "gpt-6.1-sol", effort: "high", mode: "pinned" });
+    expect(saved()).toEqual({ instanceId: "codex", model: "gpt-6.2-sol", effort: "high", mode: "pinned" });
   });
 
   it("shows a signed-out engine locked and never picks it", async () => {
@@ -815,7 +815,7 @@ describe("ModelDial", () => {
       }
       await pointer("pointerup", 200, 294, kind);
       await settle();
-      expect(selected()).toBe("gpt-6.1-sol");
+      expect(selected()).toBe("gpt-6.2-sol");
     });
 
     it("stays one model when a fast swipe rests past the hold", async () => {
@@ -852,7 +852,7 @@ describe("ModelDial", () => {
       [1, [1, 3, 2, 1, 1]],
       [2, [1, 1]],
     ])("turns one model per burst and its momentum tail in delta mode %i", async (mode, deltas) => {
-      for (const [dir, model] of [[1, "claude-sonnet-5-5"], [1, "gpt-6.1-sol"], [-1, "claude-sonnet-5-5"]] as const) {
+      for (const [dir, model] of [[1, "claude-sonnet-5-5"], [1, "gpt-6.2-sol"], [-1, "claude-sonnet-5-5"]] as const) {
         await burst(deltas.map((delta) => dir * delta), mode);
         expect(selected()).toBe(model);
         await wait(250);
@@ -891,7 +891,7 @@ describe("ModelDial", () => {
       expect(selected()).toBe("claude-sonnet-5-5");
       await wait(1);
       await wheel(delta, mode);
-      expect(selected()).toBe("gpt-6.1-sol");
+      expect(selected()).toBe("gpt-6.2-sol");
     });
 
     it("keeps a trackpad flick starting on a big delta to one step", async () => {

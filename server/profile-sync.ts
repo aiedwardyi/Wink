@@ -704,10 +704,12 @@ export function mergeSyncedModelSelection(
   current: ModelSelection,
   apply: Record<string, unknown>,
   offers: (instanceId: string, model: string) => boolean,
+  replacement: (instanceId: string, model: string) => string = (_instanceId, model) => model,
 ): ModelSelection {
-  const model = "model" in apply ? apply.model : current.model;
-  if (typeof model !== "string" || !model) return current;
+  const synced = "model" in apply ? apply.model : current.model;
+  if (typeof synced !== "string" || !synced) return current;
   const instanceId = typeof apply.instanceId === "string" && apply.instanceId ? apply.instanceId : current.instanceId;
+  const model = replacement(instanceId, synced);
   if (!offers(instanceId, model)) return current;
   const merged: ModelSelection = { ...current, instanceId, model };
   if ("effort" in apply) {

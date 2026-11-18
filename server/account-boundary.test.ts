@@ -220,7 +220,7 @@ describe.each(["claudeAgent", "codex"] as const)("%s account boundaries", (kind)
     const value = await instance.generateText!("fixture", { lean: true });
     if (kind === "codex") {
       expect(value).toContain("SUMMARY");
-      expect(f.catalogs[0].models).toEqual([expect.objectContaining({ slug: "gpt-6.1-sol", tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null })]);
+      expect(f.catalogs[0].models).toEqual([expect.objectContaining({ slug: "gpt-6.2-sol", tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null })]);
       expect(JSON.stringify(f.catalogs)).not.toMatch(/unselected|unrelated|never copy/);
     }
     else { expect(value).toBe("fixture helper answer"); await instance.reviewPermission!("fixture"); }
