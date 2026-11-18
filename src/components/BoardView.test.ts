@@ -263,6 +263,30 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pbot"]);
   });
 
+it("a deleted reply's own replies stay in the thread, moved up to its parent", async () => {
+    posts = [
+      post("pbot", { created_at: 1 }),
+      post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 }),
+      post("pchild", { parent_id: "pmine", author_bot_id: "carbon", kind: "tip", body: "Child.", created_at: 3 }),
+    ];
+    const ok = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board/delete" ? json({ posts: [] }) : ok(url, init))));
+    await render(BoardView);
+    await openRow("pbot");
+    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    const inThread = () => host.querySelector('[data-side-panel] [data-board-post="pchild"]');
+    expect(host.querySelector('[data-board-post="pmine"]')).toBeNull();
+    expect(inThread()).not.toBeNull();
+    // a load asked before the delete still names the deleted parent
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector('[data-board-post="pmine"]')).toBeNull();
+    expect(inThread()).not.toBeNull();
+  });
+
   it("a newer send of the same draft keeps its retry id when an older send finishes", async () => {
     posts = [post("pop", { created_at: 1 })];
     const ok = globalThis.fetch;

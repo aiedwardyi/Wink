@@ -110,7 +110,7 @@ export interface BoardPostsView {
   posts: BoardPost[] | null;
   failed: boolean;
   saved: (post: BoardPost) => void;
-  removed: (id: string) => void;
+  removed: (post: BoardPost) => void;
   retry: () => void;
 }
 
@@ -122,7 +122,13 @@ export function useBoardPosts(): BoardPostsView {
   // a reply saved here stays until a load carries it, since that load may have been asked before the save
   const mine = useRef(new Map<string, BoardPost>());
   // a deleted reply stays gone, even from a load asked before the delete or with the live link down
-  const gone = useRef(new Set<string>());
+  const gone = useRef(new Map<string, string | null>());
+  // replies under a deleted post move up to its parent, as the server moves them
+  const lift = useCallback((post: BoardPost) => {
+    let parent = post.parent_id;
+    while (parent && gone.current.has(parent)) parent = gone.current.get(parent)!;
+    return parent === post.parent_id ? post : { ...post, parent_id: parent };
+  }, []);
   const reload = useRef(() => {});
   useEffect(() => {
     let live = true;
@@ -133,7 +139,7 @@ export function useBoardPosts(): BoardPostsView {
           if (!live || seq !== asked.current) return;
           const list = (Array.isArray(body?.posts) ? body.posts : []).filter((post) => !gone.current.has(post.id));
           for (const post of list) mine.current.delete(post.id);
-          setPosts((forumKept.posts = [...list, ...mine.current.values()]));
+          setPosts((forumKept.posts = [...list, ...mine.current.values()].map(lift)));
           setFailed(false);
         },
         () => live && seq === asked.current && setFailed(true),
@@ -146,16 +152,16 @@ export function useBoardPosts(): BoardPostsView {
       live = false;
       window.removeEventListener(BOARD_CHANGED_EVENT, load);
     };
-  }, []);
+  }, [lift]);
   const saved = useCallback((post: BoardPost) => {
     mine.current.set(post.id, post);
     setPosts((now) => (forumKept.posts = [...(now ?? []).filter((held) => held.id !== post.id), post]));
   }, []);
-  const removed = useCallback((id: string) => {
-    gone.current.add(id);
-    mine.current.delete(id);
-    setPosts((now) => (forumKept.posts = (now ?? []).filter((held) => held.id !== id)));
-  }, []);
+  const removed = useCallback((post: BoardPost) => {
+    gone.current.set(post.id, post.parent_id);
+    mine.current.delete(post.id);
+    setPosts((now) => (forumKept.posts = (now ?? []).filter((held) => held.id !== post.id).map(lift)));
+  }, [lift]);
   const retry = useCallback(() => reload.current(), []);
   return { posts, failed, saved, removed, retry };
 }

@@ -458,11 +458,11 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   const [deleteFailed, setDeleteFailed] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<BoardPost | null>(null);
   const confirm = usePresence(deleting);
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
-  const remove = (id: string) => deleteFromBoard(id).then(() => {
-    removed(id);
+  const remove = (post: BoardPost) => deleteFromBoard(post.id).then(() => {
+    removed(post);
     setDeleteFailed(false);
   }, () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
@@ -586,7 +586,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isOwnReply(menuPost) ? () => setDeleting(menuPost.id) : undefined}
+          onDelete={menuPost && isOwnReply(menuPost) ? () => setDeleting(menuPost) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (
