@@ -80,6 +80,7 @@ describe("engine sign-in row", () => {
     const fetchMock = vi.fn(async () => json({}));
     vi.stubGlobal("fetch", fetchMock);
     const row = instance("antigravityAgent", { instanceId: "antigravity", snapshot: { state: "available", authChecked: true } });
+    row.install = { ...row.install, signInProbeUnsupported: true };
     await render(createElement(EngineRow, { instance: row }));
     expect(host.textContent).toContain("Sign In");
     await click("Sign In");

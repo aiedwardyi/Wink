@@ -437,6 +437,8 @@ export interface EngineInstall {
   docsUrl?: string;
   /** Interactive sign-in run after installing, when install isn't enough. */
   signInCommand?: string;
+  /** The host has no way to probe this engine's sign-in. */
+  signInProbeUnsupported?: boolean;
   /** A printed URL with `?code=` is kept only on `authHosts` (device links). */
   login?: { args: string[]; deviceArgs?: string[]; env?: Record<string, string>; authHosts?: string[] };
   logout?: string[];

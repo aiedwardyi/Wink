@@ -45,7 +45,7 @@ function profileRequest(url: string, init?: RequestInit) {
   if (url === "/api/onboarding") {
     if (init?.method === "PUT") {
       const { enabled } = JSON.parse(String(init.body));
-      if (!profileDone && !bots.length) sharing ??= enabled;
+      if (enabled === false || sharing === undefined) sharing = enabled;
       profileDone = true;
     }
     return Promise.resolve(Response.json({ done: profileDone || bots.length > 0 || sharing !== undefined, enabled: sharing ?? false }));
@@ -127,21 +127,50 @@ describe("first run end", () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/bots?messages=0")).toHaveLength(1);
   });
 
-  it("covers the app while setup loads only on the desktop", async () => {
-    // a fresh App each time, so an Onboarding chunk loaded earlier can't skip the fallback
-    const fresh = async () => {
-      vi.resetModules();
-      return (await import("./App")).default;
-    };
-    const browserApp = await fresh();
-    act(() => root.render(createElement(browserApp)));
-    expect(cover()).toBeNull();
-    await act(async () => root.unmount());
+  it("keeps a failed sharing choice available until the profile saves it", async () => {
     vi.stubGlobal("ogb", {});
-    const desktopApp = await fresh();
-    root = createRoot(host);
-    act(() => root.render(createElement(desktopApp)));
-    expect(cover()).not.toBeNull();
+    let fail = true;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/onboarding" && init?.method === "PUT" && fail) return Promise.resolve(Response.json({}, { status: 500 }));
+      return profileRequest(url, init);
+    });
+    await toFinalStep();
+    await act(async () => checkbox().click());
+    await act(async () => button("Open Wink")!.click());
+    expect(localStorage.getItem("omb-onboarding-done")).toBeNull();
+    expect(checkbox().checked).toBe(false);
+    fail = false;
+    await act(async () => button("Try again")!.click());
+    expect(sent()).toEqual([{ enabled: false }, { enabled: false }]);
+    expect(sharing).toBe(false);
+    expect(localStorage.getItem("omb-onboarding-done")).toBe("true");
+  });
+
+  it("lets fresh desktop setup recover from a failed profile check", async () => {
+    vi.stubGlobal("ogb", {});
+    let fail = true;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url === "/api/onboarding" && fail ? Promise.resolve(Response.json({}, { status: 500 })) : profileRequest(url, init));
+    await act(async () => root.render(createElement(App)));
+    expect(await until(() => button("Try again"))).toBeDefined();
+    expect(button("Continue")).toBeUndefined();
+    expect(localStorage.getItem("omb-onboarding-done")).toBeNull();
+    fail = false;
+    await act(async () => button("Try again")!.click());
+    expect(await until(() => button("Continue"))).toBeDefined();
+  });
+
+  it("leaves the desktop shell uncovered while the profile check is pending", async () => {
+    vi.stubGlobal("ogb", {});
+    let answer!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { answer = resolve; });
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url === "/api/onboarding" && !init?.method ? pending : profileRequest(url, init));
+    await act(async () => root.render(createElement(App)));
+    expect(cover()).toBeNull();
+    expect(button("Continue")).toBeUndefined();
+    await act(async () => answer(Response.json({ done: false })));
+    expect(await until(() => button("Continue"))).toBeDefined();
   });
 
   it("shows Star on GitHub once, then never again", async () => {

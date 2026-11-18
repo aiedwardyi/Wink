@@ -963,29 +963,45 @@ function setOnboardingDone() {
 export default function App() {
   const desktop = Boolean(window.ogb);
   const [onboarding, setOnboarding] = useState(() => onboardingDone() ? "done" : desktop ? "checking" : "open");
-  const onboardingOpen = onboarding !== "done";
+  const [savingOnboarding, setSavingOnboarding] = useState(false);
+  const [onboardingSaveError, setOnboardingSaveError] = useState(false);
+  const savePending = useRef(false);
+  const showOnboarding = onboarding === "open" || onboarding === "error";
   const cover = desktop ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null;
   useEffect(() => markColdOpen("mount"), []);
   useEffect(() => startIdleMotion(), []);
   useEffect(() => {
-    if (!desktop) return;
-    if (onboardingDone()) {
+    if (desktop && onboardingDone()) {
       void api("/api/onboarding", { method: "PUT", body: "{}" }).catch(() => {});
-      return;
     }
-    let active = true;
-    void api("/api/onboarding").then(({ done }) => {
-      if (!active) return;
-      if (done === true) setOnboardingDone();
-      setOnboarding(done === false ? "open" : "done");
-    }).catch(() => { if (active) setOnboarding("done"); });
-    return () => { active = false; };
   }, [desktop]);
-  const finishOnboarding = (enabled?: boolean) => {
+  useEffect(() => {
+    if (onboarding !== "checking") return;
+    const check = new AbortController();
+    void api("/api/onboarding", { signal: check.signal }).then(({ done }) => {
+      if (check.signal.aborted) return;
+      if (done === true) setOnboardingDone();
+      setOnboarding(done === true ? "done" : done === false ? "open" : "error");
+    }).catch(() => { if (!check.signal.aborted) setOnboarding("error"); });
+    return () => check.abort();
+  }, [onboarding]);
+  const finishOnboarding = async (enabled?: boolean) => {
+    if (savePending.current) return;
     if (desktop || enabled !== undefined) {
-      if (enabled === false) usageStatsSwitched(false);
-      void api("/api/onboarding", { method: "PUT", body: JSON.stringify({ enabled }), keepalive: true })
-        .then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
+      savePending.current = true;
+      setSavingOnboarding(true);
+      setOnboardingSaveError(false);
+      try {
+        if (enabled === false) usageStatsSwitched(false);
+        const body = await api("/api/onboarding", { method: "PUT", body: JSON.stringify({ enabled }), keepalive: true });
+        usageStatsSwitched(body.capture === true, body.period);
+      } catch {
+        setOnboardingSaveError(true);
+        return;
+      } finally {
+        savePending.current = false;
+        setSavingOnboarding(false);
+      }
     }
     setOnboardingDone();
     setOnboarding("done");
@@ -994,11 +1010,11 @@ export default function App() {
     <I18nProvider>
       <DesktopCapabilitiesProvider>
       <StoreProvider>
-        <Shell onboardingOpen={onboardingOpen} />
-        {onboarding === "checking" && cover}
-        {onboarding === "open" && (
+        <Shell onboardingOpen={onboarding !== "done"} />
+        {showOnboarding && (
           <LazyView overlay fallback={cover}>
-            <Onboarding onDone={finishOnboarding} />
+            <Onboarding onDone={finishOnboarding} saving={savingOnboarding} saveError={onboardingSaveError}
+              retryProfile={onboarding === "error" ? () => setOnboarding("checking") : undefined} />
           </LazyView>
         )}
       </StoreProvider>

@@ -34,7 +34,8 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const others = engines.filter((instance) => !primary.includes(instance));
   // Account copies are hidden here, so a base row signs in its Main account.
   const signInAs = (instance: InstanceInfo) => {
-    const main = needsSignIn(instance) ? usageAccount(instances, instance.instanceId) : undefined;
+    const account = usageAccount(instances, instance.instanceId);
+    const main = needsSignIn(instance) || account?.loginState === "pending" ? account : undefined;
     return main && main.instanceId !== instance.instanceId
       ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginCapture: main.loginCapture } : instance;
   };
@@ -59,7 +60,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     finally { setBusy((current) => ({ ...current, [id]: false })); }
   };
 
-  const row = (instance: InstanceInfo, recommended = false) => {
+  const row = (instance: InstanceInfo, recommended = false, last = false) => {
     const installed = instance.snapshot.state === "available";
     const state = engineAuthState(instance);
     const ready = state === "ready";
@@ -76,7 +77,9 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
             : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
     const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${featured ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
-    const button = state === "signed-out" ? <EngineSignIn instance={signInAs(instance)} buttonLabel={label} buttonClassName={buttonClassName}
+    const signIn = signInAs(instance);
+    const button = state === "signed-out" || state === "unverified" || installed && signIn.loginState === "pending" ? <EngineSignIn instance={signIn} buttonLabel={label} buttonClassName={buttonClassName}
+      forceSignIn={state === "unverified"}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
       // Launchers report spawn, not the window's end, so an open window never locks the button.
       : <button type="button" disabled={Boolean(ready || checking || busy[instance.instanceId])}
@@ -84,19 +87,17 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       {ready ? <Check size={14} /> : recommended && !checking && !working ? <Download size={14} /> : null}
       {label}
     </button>;
-    return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
-      className={featured ? "rounded-xl border border-hairline/50 bg-card p-4" : "border-b border-hairline/30 py-3 last:border-0"}>
-      {featured ? <>
-        <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-ink"><ProviderMark driverKind={instance.driverKind} size={20} />{instance.displayName}</div>
-        {button}
-        <p className="mt-2.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName })}</p>
-      </> : <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5"><ProviderMark driverKind={instance.driverKind} size={16} />
-          <div><div className="text-[13px] font-medium text-ink">{instance.displayName}</div>
-            {accountKey && <div className="mt-0.5 text-[11.5px] text-ink-secondary">{t(accountKey)}</div>}
+    return <div key={`engine:${instance.instanceId}`} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
+      className={featured ? "rounded-xl border border-hairline/50 bg-card p-4" : `py-3 ${last ? "" : "border-b border-hairline/30"}`}>
+      <div className={featured ? "contents" : "flex flex-wrap items-center justify-between gap-2"}>
+        <div className={featured ? "mb-3 flex items-center gap-2 text-[15px] font-semibold text-ink" : "flex items-center gap-2.5"}>
+          <ProviderMark driverKind={instance.driverKind} size={featured ? 20 : 16} />
+          <div><div className={featured ? undefined : "text-[13px] font-medium text-ink"}>{instance.displayName}</div>
+            {!featured && accountKey && <div className="mt-0.5 text-[11.5px] text-ink-secondary">{t(accountKey)}</div>}
           </div>
         </div>{button}
-      </div>}
+      </div>
+      {featured && <p className="mt-2.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName })}</p>}
       {working && <p role="status" className="mt-2 text-[12px] text-ink-secondary">{t(paste ? "engine.pasteAndEnter" : "engineConnect.finish")}</p>}
       {failed && <p role="status" className="mt-2 text-[12px] text-ink-secondary">{t("engineConnect.didntFinish")}</p>}
     </div>;
@@ -104,12 +105,15 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
 
   return <div data-engine-connect-panel className="flex min-h-0 flex-col">
     <div className="-mx-1 flex min-h-0 flex-col overflow-y-auto px-1 [scrollbar-width:thin]">
-      {primary.map((instance) => row(instance, instance.driverKind === "claudeAgent"))}
-      <h2 className="mt-5 text-[12px] font-semibold text-ink-secondary">{t("engineConnect.others")}</h2>
-      <div>{others.map((instance) => row(instance))}</div>
+      {[
+        ...primary.map((instance) => row(instance, instance.driverKind === "claudeAgent")),
+        <h2 key="others" className="mt-5 text-[12px] font-semibold text-ink-secondary">{t("engineConnect.others")}</h2>,
+        ...others.map((instance, index) => row(instance, false, index === others.length - 1)),
+      ]}
       <Fold open={commands}>
         <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
-          {engines.filter((instance) => engineAuthState(instance) !== "checking").map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
+          {engines.filter((instance) => engineAuthState(instance) !== "checking").map((instance) => <EngineSetup key={instance.instanceId}
+            instance={signInAs(instance)} intent="cloud" signIn={engineAuthState(instance) === "unverified"} />)}
         </div>
       </Fold>
     </div>

@@ -13,7 +13,7 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { Fold } from "./Fold";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
 
-export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot" | "access">): boolean {
+export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot" | "access" | "install">): boolean {
   return engineAuthState(instance) === "ready";
 }
 

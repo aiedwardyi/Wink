@@ -2,11 +2,12 @@ import type { InstanceInfo } from "@/state/store";
 
 export type UsageAccount = InstanceInfo;
 
-export function engineAuthState(instance: Pick<InstanceInfo, "snapshot" | "access">) {
+export function engineAuthState(instance: Pick<InstanceInfo, "snapshot" | "access" | "install">) {
   const { state, authenticated } = instance.snapshot;
   if (state !== "available") return state;
   if (instance.access === "custom" || authenticated === true) return "ready";
-  return authenticated === false ? "signed-out" : "checking";
+  if (authenticated === false) return "signed-out";
+  return instance.install?.signInProbeUnsupported ? "unverified" : "checking";
 }
 
 export function usageAccount(instances: InstanceInfo[], instanceId: string): UsageAccount | undefined {

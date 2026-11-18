@@ -27,8 +27,12 @@ export function hasCompletedOnboarding(dataDir: string): boolean {
 }
 
 export function completeOnboarding(dataDir: string, enabled?: boolean): boolean | undefined {
+  if (enabled !== undefined) {
+    const saved = readAnalyticsSettings(dataDir);
+    if (saved?.success && (enabled || saved.data.enabled === false)) return;
+    return saveAnalyticsConsent(dataDir, enabled);
+  }
   if (hasCompletedOnboarding(dataDir)) return;
-  if (enabled !== undefined) return saveAnalyticsConsent(dataDir, enabled);
   mkdirSync(dataDir, { recursive: true });
   writeFileAtomic(join(dataDir, ONBOARDING_FILE), "true");
 }

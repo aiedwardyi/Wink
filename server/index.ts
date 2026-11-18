@@ -8544,8 +8544,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "PUT" && path === "/api/onboarding") {
       const body = z.object({ enabled: z.boolean().optional() }).safeParse(await readBody(req));
-      if (!body.success) return json(res, 400, { error: "enabled must be a boolean" });
-      const saved = completeOnboarding(DATA_DIR, profileHasBots() ? undefined : body.data.enabled);
+      if (!body.success) return json(res, 400, { error: "expected an object with an optional boolean enabled" });
+      const saved = completeOnboarding(DATA_DIR, body.data.enabled);
       if (saved !== undefined) applyAnalyticsConsent(saved);
       return json(res, 200, analyticsStatus(saved));
     }

@@ -57,6 +57,8 @@ describe("analytics consent", () => {
     expect(hasCompletedOnboarding(root)).toBe(true);
     expect(loadAnalyticsConsent(root)).toBe(false);
     expect(loadAnalyticsConsent(root, true)).toBe(true);
+    expect(completeOnboarding(root, false)).toBe(false);
+    expect(loadAnalyticsConsent(root, true)).toBe(false);
     expect(completeOnboarding(root, true)).toBeUndefined();
     expect(loadAnalyticsConsent(root)).toBe(false);
     saveAnalyticsConsent(root, true);

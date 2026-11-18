@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { InstanceInfo } from "@/state/store";
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
 import { engineAuthState, setupEngine } from "@/lib/accounts";
@@ -10,7 +10,12 @@ import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
 import { trackOnboard } from "@/lib/usage-stats";
 
-export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) {
+export function Onboarding({ onDone, retryProfile, saving, saveError }: {
+  onDone: (enabled?: boolean) => void;
+  retryProfile?: () => void;
+  saving?: boolean;
+  saveError?: boolean;
+}) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [connectSession, setConnectSession] = useState(false);
@@ -20,11 +25,13 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
   const browser = !window.ogb;
   const refreshInstancesRef = useRef<() => Promise<void>>(async () => {});
   const dialogRef = useRef<HTMLDivElement>(null);
+  const lastFocused = useRef<HTMLElement>(null);
   const welcomed = useRef(false);
   const hidden = browser && instances === null && !signedOut && !instancesError;
   const welcomeChecking = step === 0 && !instances && !instancesError && !signedOut;
 
   useEffect(() => {
+    if (retryProfile) return;
     let active = true;
     let pending: Promise<void> | undefined;
     let recheck: ReturnType<typeof setTimeout> | undefined;
@@ -73,7 +80,7 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
       clearTimeout(recheck);
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [retryProfile]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -101,12 +108,21 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
     return () => dialog.removeEventListener("keydown", onKey);
   }, [step, hidden, welcomeChecking, signedOut]);
 
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    const previous = lastFocused.current;
+    const active = document.activeElement;
+    if (step !== 1 || !dialog || !previous) return;
+    if (active && active !== document.body && (active !== previous || !previous.matches(":disabled"))) return;
+    (dialog.contains(previous) && !previous.matches(":disabled") ? previous : dialog).focus({ preventScroll: true });
+  }, [instances, step]);
+
   // A browser on a PC that already has bots closes setup before showing it.
   useEffect(() => {
-    if (hidden || welcomed.current) return;
+    if (hidden || retryProfile || welcomed.current) return;
     welcomed.current = true;
     trackOnboard("welcome");
-  }, [hidden]);
+  }, [hidden, retryProfile]);
 
   if (hidden) return null;
 
@@ -119,13 +135,17 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
     setStep(2);
   };
 
-  const hasReadyEngine = instances !== null && baseInstances(instances).some((instance) =>
-    !isRetiredEngineKind(instance.driverKind) && engineAuthState(setupEngine(instance, instances)) === "ready");
+  const hasReadyEngine = instances !== null && baseInstances(instances).some((instance) => {
+    if (isRetiredEngineKind(instance.driverKind)) return false;
+    const state = engineAuthState(setupEngine(instance, instances));
+    return state === "ready" || state === "unverified";
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app/95 p-6 backdrop-blur-xl">
       <div
         ref={dialogRef}
+        onFocusCapture={(event) => { lastFocused.current = event.target; }}
         role="dialog"
         tabIndex={-1}
         aria-modal="true"
@@ -150,16 +170,16 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
             </button>
           </div>
         ) : step === 2 ? (
-          <OnboardingFinish onDone={onDone} />
+          <OnboardingFinish onDone={onDone} saving={saving} saveError={saveError} />
         ) : step === 0 ? (
           <div className="flex flex-col items-center px-8 py-9">
             <div className="relative">
               <div className="absolute inset-2 rounded-full bg-accent/20 blur-2xl" />
               <OrbitMark size={82} />
             </div>
-            <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t("onboarding.welcomeTitle")}</h1>
+            <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t(retryProfile ? "onboarding.enginesError" : "onboarding.welcomeTitle")}</h1>
             <p className="mt-1.5 max-w-[420px] text-center text-[13.5px] leading-relaxed text-ink-secondary">
-              {t("onboarding.welcomeBody")}
+              {t(retryProfile ? "onboarding.enginesErrorHint" : "onboarding.welcomeBody")}
             </p>
 
             {instancesError && (
@@ -169,8 +189,9 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
             )}
             <button
               type="button"
-              disabled={!instances && !instancesError}
+              disabled={!instances && !instancesError && !retryProfile}
               onClick={() => {
+                if (retryProfile) return retryProfile();
                 if (instancesError) return retryInstances();
                 if (hasReadyEngine) return finish();
                 setConnectSession(emptyConnect);
@@ -179,7 +200,7 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
               }}
               className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40`}
             >
-              {instancesError ? t("onboarding.tryAgain") : !instances ? t("onboarding.checking") : emptyConnect ? t("noEngines.title") : t("onboarding.continue")}
+              {instancesError || retryProfile ? t("onboarding.tryAgain") : !instances ? t("onboarding.checking") : emptyConnect ? t("noEngines.title") : t("onboarding.continue")}
             </button>
           </div>
         ) : (
@@ -192,16 +213,17 @@ export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) 
               </div>
             </div>
             <div className={`mt-5 flex min-h-0 flex-col ${emptyConnect ? "" : "gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]"}`}>
-              {!emptyConnect && instancesError && (
+              {(instancesError || saveError) && (
                 <div role="alert" className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12.5px] text-danger">
-                  {instancesError} {t("onboarding.enginesErrorHint")}
+                  {instancesError ? <>{instancesError} {t("onboarding.enginesErrorHint")}</> : t("errors.request")}
                 </div>
               )}
               {instances && <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
-                footer={emptyConnect ? { back: () => setStep(0), open: finish } : {
+                footer={emptyConnect && !instancesError && !saveError ? { back: () => setStep(0), open: finish, disabled: saving } : {
                   back: () => setStep(0), open: instancesError ? retryInstances : finish,
-                  label: instancesError ? "onboarding.tryAgain" : "onboarding.continue",
-                  disabled: !instancesError && !hasReadyEngine, skip: hasReadyEngine || instancesError ? undefined : () => onDone(),
+                  label: instancesError || (emptyConnect && saveError) ? "onboarding.tryAgain" : "onboarding.continue",
+                  disabled: saving || (!instancesError && !emptyConnect && !hasReadyEngine),
+                  skip: saving || hasReadyEngine ? undefined : emptyConnect ? (instancesError ? finish : undefined) : () => onDone(),
                 }} />}
               {!emptyConnect && <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>}
             </div>
