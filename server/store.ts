@@ -155,6 +155,7 @@ export interface Message {
    * something — the UI offers setup instead of a retry that cannot work. */
   tool?: {
     name: string;
+    memoryBotId?: string;
     /** Claude Code tool name, when the engine said the kind. */
     verb?: string;
     ok?: boolean;

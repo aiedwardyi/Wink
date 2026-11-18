@@ -149,24 +149,35 @@ describe("memory pass", () => {
       `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects", memoryBotId: "bot-t1" });
     expect(stored()).toEqual({ threads: {} });
   });
 
-  it("saves a recorded Claude pick to the timeline and its fact to MEMORY.md", async () => {
-    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
-    const generateText = vi.fn(async () => recorded.reply.text);
+  it("saves a scripted pick to the timeline and its fact to MEMORY.md", async () => {
+    const question = "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it.";
+    const generateText = vi.fn(async () => JSON.stringify([
+      { kind: "decision", key: "model picker look", fact: "2 - Follow the app theme", quote: "the second one", over: ["1 - Always dark", "3 - Always light"] },
+      { kind: "fact", fact: "Uses pnpm for projects", quote: "I use pnpm for my projects." },
+    ]));
     generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
-    store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    store.appendMessage("t1", { role: "bot", kind: "text", text: question });
     say("t1", "the second one");
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "the second one", context: question }, { text: "I use pnpm for my projects." }]), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects", memoryBotId: "bot-t1" });
+  });
+
+  it("keeps the source pending when an extraction cannot be parsed", async () => {
+    const line = say("t1", "I prefer pnpm.");
+    generate.mockResolvedValueOnce('[{"fact":"Prefers pnpm"');
+    await settle("t1", 3 * MINUTE);
+    expect(stored()).toEqual({ threads: { t1: [line.id] } });
+    expect(chips("t1")).toHaveLength(0);
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -321,7 +332,7 @@ describe("memory pass", () => {
       "# Memory\n- Prefers pnpm\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Hates drama (noted 2026-10-15)\n",
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama", memoryBotId: "bot-t1" });
   });
 
   it("starts an empty file from the seed", async () => {
@@ -997,8 +1008,9 @@ describe("memory pass filters", () => {
 
   it("parses the model's JSON reply", () => {
     expect(parseFacts('```json\n[{"fact":"a","quote":"b"}]\n```')).toEqual([{ fact: "a", quote: "b" }]);
-    expect(parseFacts("nothing")).toEqual([]);
-    expect(parseFacts('[{"fact":1}]')).toEqual([]);
+    expect(parseFacts("[]")).toEqual([]);
+    expect(parseFacts("nothing")).toBeNull();
+    expect(parseFacts('[{"fact":1}]')).toBeNull();
   });
 
   it("appends within the budget only", () => {

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -88,6 +88,10 @@ describe("decision timeline", () => {
     await pass.idle();
     expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
     expect(currentPicks(readMemoryTopic("bot-t2", "decisions.md"))[0]?.picked).toBe("C - Reddit cards");
+    expect(store.messagesFor("room1").filter(({ tool }) => tool?.name === MEMORY_SAVE_TOOL).map(({ tool }) => tool)).toEqual([
+      expect.objectContaining({ memoryBotId: BOT }),
+      expect.objectContaining({ memoryBotId: "bot-t2" }),
+    ]);
     const calls = generate.mock.calls.length;
     store.appendMessage("room1", { role: "user", kind: "text", text: "I choose B", author: { kind: "person", id: "peer", name: "Peer" } });
     pass.onSettled(BOT, "room1");
@@ -106,6 +110,18 @@ describe("decision timeline", () => {
     reply(...asks.map(([thing, first]) => ({ kind: "decision", key: thing, fact: first, quote: `I choose A for the ${thing}` })));
     await settle();
     expect(currentPicks(timeline()).map((pick) => pick.key).sort()).toEqual(["footer", "forum", "header", "theme"]);
+  });
+
+  it("lands every pick when one extraction returns more than 20 decisions", async () => {
+    const keys = Array.from({ length: 23 }, (_, i) => `panel ${i + 1}`);
+    for (const key of keys) {
+      bot(`For the ${key}: A - plain list, B - tiles. Which one?`);
+      say(`I choose A for the ${key}`);
+    }
+    reply(...keys.map((key) => ({ kind: "decision", key, fact: "A - plain list", quote: `I choose A for the ${key}` })));
+    await settle();
+    expect(currentPicks(timeline()).map(({ key }) => key).sort()).toEqual(keys.sort());
+    expect(JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"))).toEqual({ threads: {} });
   });
 
   it("keeps an introductory letter pick and its tweak", async () => {
@@ -412,6 +428,24 @@ describe("decision timeline", () => {
     await settle();
     expect(timeline()).toContain(`- Picture: ${copy("C")} (C - Reddit cards)\n- Over: A - plain list\n- Over pictures: ${copy("A")} (A - plain list)\n`);
     expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copy("A")} (A - plain list)\n${mock("B")} (B - tiles)\n${copy("C")} (C - Reddit cards)\n</pictures>`);
+  });
+
+  it("keeps captioned copies when the bot also names all five original paths", async () => {
+    const originals = ["A", "B", "C", "D", "E"].map((name) => join(dataDir, `${name}.png`));
+    const copies = originals.map((_, i) => join(dataDir, "attachments", `copy-${i}.png`));
+    mkdirSync(join(dataDir, "attachments"), { recursive: true });
+    for (const [i, original] of originals.entries()) {
+      writeFileSync(original, "");
+      writeFileSync(copies[i]!, "");
+      const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "show_image", summary: original } });
+      store.appendMessage("t1", { role: "bot", kind: "screen", parentId: shown.id, image: `copy-${i}.png`, text: `Option ${i + 1}` });
+    }
+    bot(originals.join("\n"));
+    say("I choose Option 1");
+    reply({ kind: "decision", key: "mock layout", fact: "Option 1", quote: "I choose Option 1", picture: copies[0] });
+    await settle();
+    expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copies.map((copy, i) => `${copy} (Option ${i + 1})`).join("\n")}\n</pictures>`);
+    expect(currentPicks(timeline())[0]?.picture?.path).toBe(copies[0]);
   });
 
   it("keeps a change of mind quoted from the bot's confirmation, never a bot pick", async () => {

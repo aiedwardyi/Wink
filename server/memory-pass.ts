@@ -26,6 +26,7 @@ const MAX_PASSES = 2;
 const PASS_TIMEOUT_MS = 120_000;
 const SAVE_DELAY_MS = 1_000;
 const MAX_PENDING = 200;
+const FACTS_PER_CHUNK = 20;
 const QUOTE_MAX = 120;
 const FACT_MAX = 200;
 const DECISION_MAX = 100;
@@ -45,7 +46,7 @@ const factsSchema = z
     kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish(),
     key: z.string().nullish(), over: listSchema, picture: z.string().nullish(), over_pictures: listSchema,
   }))
-  .max(20);
+  .max(FACTS_PER_CHUNK);
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
@@ -175,7 +176,7 @@ export function attachedImages(text: string): string[] {
   return [...new Set([...typed.matchAll(ATTACHED)].map((match) => match[1]!.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")).filter(Boolean))];
 }
 
-/** For each id, the pictures the bot showed or named since the user's line before it: show_image sources that still exist, else the shown copy, and image paths in its text. */
+/** Pictures the bot showed or named in the turn before each user line. */
 export function replyPictures(messages: readonly Message[], ids: string[], attachments: string): Map<string, Picture[]> {
   const wanted = new Set(ids);
   const found = new Map<string, Picture[]>();
@@ -190,7 +191,17 @@ export function replyPictures(messages: readonly Message[], ids: string[], attac
     }
     const captions = new Map(turn.flatMap((message) => (message.kind === "screen" && message.parentId && message.text?.trim() ? [[message.parentId, message.text] as const] : [])));
     const copies = new Map(turn.flatMap((message) => (message.kind === "screen" && message.parentId && message.image ? [[message.parentId, join(attachments, message.image)] as const] : [])));
-    const tools = new Set(turn.filter(shownImage).map((message) => message.id));
+    const originals = new Set<string>();
+    const pathKey = (path: string) => plainLine(path).replaceAll("\\", "/").toLowerCase();
+    const shown = new Map(turn.filter(shownImage).map((message) => {
+      const source = message.tool!.summary!;
+      const copy = copies.get(message.id);
+      if (copy && existsSync(copy)) {
+        originals.add(pathKey(source));
+        return [message.id, copy] as const;
+      }
+      return [message.id, existsSync(source) ? source : (copy ?? "")] as const;
+    }));
     const pictures: Picture[] = [];
     const add = (path: string, caption?: string) => {
       const clean = plainLine(path);
@@ -199,13 +210,14 @@ export function replyPictures(messages: readonly Message[], ids: string[], attac
       pictures.push(label ? { path: clean, caption: label } : { path: clean });
     };
     for (const message of turn) {
-      // the chat draws the attachments copy and the pane loads only that; a show_image summary is a display line cut at 120 characters, and a bot may delete the file it showed
-      if (shownImage(message)) {
-        const copy = copies.get(message.id);
-        add(copy && existsSync(copy) ? copy : existsSync(message.tool!.summary!) ? message.tool!.summary! : (copy ?? ""), captions.get(message.id));
+      const path = shown.get(message.id);
+      if (path !== undefined) add(path, captions.get(message.id));
+      else if (message.kind === "screen" && message.image && !(message.parentId && shown.has(message.parentId))) add(join(attachments, message.image), message.text);
+      else if (message.kind === "text" && message.text) {
+        for (const named of message.text.match(IMAGE_PATH) ?? []) {
+          if (!originals.has(pathKey(named))) add(named);
+        }
       }
-      else if (message.kind === "screen" && message.image && !(message.parentId && tools.has(message.parentId))) add(join(attachments, message.image), message.text);
-      else if (message.kind === "text" && message.text) for (const path of message.text.match(IMAGE_PATH) ?? []) add(path);
     }
     if (pictures.length) found.set(messages[i]!.id, pictures.slice(-PICTURES_MAX));
   }
@@ -257,15 +269,22 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
   ].join("\n");
 }
 
-export function parseFacts(output: string): Fact[] {
+export function parseFacts(output: string): Fact[] | null {
   const start = output.indexOf("[");
   const end = output.lastIndexOf("]");
-  if (start < 0 || end < start) return [];
+  if (start < 0 || end < start) return null;
   try {
-    const parsed = factsSchema.safeParse(JSON.parse(output.slice(start, end + 1)));
-    return parsed.success ? parsed.data : [];
+    const values: unknown = JSON.parse(output.slice(start, end + 1));
+    if (!Array.isArray(values)) return null;
+    const facts: Fact[] = [];
+    for (let i = 0; i < values.length; i += FACTS_PER_CHUNK) {
+      const parsed = factsSchema.safeParse(values.slice(i, i + FACTS_PER_CHUNK));
+      if (!parsed.success) return null;
+      facts.push(...parsed.data);
+    }
+    return facts;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -794,7 +813,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     deps.store.appendMessage(sourceThread(threadId), {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)) },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)), memoryBotId: botId },
     });
     log({
       botId, threadId, lines: batch.source.length, facts: text === null ? 0 : facts.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
@@ -865,7 +884,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
+    const facts = parseFacts(output);
+    if (!facts) {
+      log({ botId, threadId, lines: lines.length, ms: now() - started, result: "error" });
+      return;
+    }
+    land(botId, threadId, { ids, facts, source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {

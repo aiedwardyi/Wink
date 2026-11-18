@@ -6,7 +6,7 @@ import { request } from "@/lib/api-request";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
-import { watchMemoryArrival } from "@/lib/memory-clean-events";
+import { watchMemorySave } from "@/lib/memory-clean-events";
 import { fileOpen, openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { Fold } from "./Fold";
@@ -102,10 +102,12 @@ export function TimelinePane(props: PaneProps) {
   const [pick, setPick] = useState<MediaReference[]>([]);
   const view = useMemo(() => (path: string, threadId: string, opener: HTMLElement) => {
     opener.focus({ preventScroll: true });
-    // the pictures of one pick, in the order they sit on screen
-    const paths = [...(opener.closest(".timeline-detail") ?? opener).querySelectorAll<HTMLElement>("[data-path]")].map((each) => each.dataset.path!).filter((each) => fileOpen(each) === "picture");
-    setPick(paths.map((each) => ({ src: pictureSrc(threadId, each), name: showName(each), id: each, messageId: threadId })));
-    openFile({ path, threadId, src: pictureSrc(threadId, path) }, { view: setViewing });
+    const buttons = [...(opener.closest(".timeline-detail")?.querySelectorAll<HTMLElement>("[data-path]") ?? [opener])].filter((button) => fileOpen(button.dataset.path!) === "picture");
+    const pictures = buttons.map(({ dataset }, i) => ({ src: pictureSrc(threadId, dataset.path!), name: showName(dataset.path!), id: String(i), messageId: threadId }));
+    setPick(pictures);
+    const selected = pictures[buttons.indexOf(opener)];
+    if (selected) setViewing(selected);
+    else openFile({ path, threadId, src: pictureSrc(threadId, path) }, { view: setViewing });
   }, []);
   return (
     <ViewPicture.Provider value={view}>
@@ -125,7 +127,7 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
   const [query, setQuery] = useState("");
   const [saves, setSaves] = useState(0);
 
-  useEffect(() => watchMemoryArrival(botId, () => setSaves((count) => count + 1)), [botId]);
+  useEffect(() => watchMemorySave(botId, () => setSaves((count) => count + 1)), [botId]);
 
   useEffect(() => {
     let alive = true;
@@ -157,7 +159,7 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
 
   return (
     <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined}>
-      {failed
+      {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
         : entries?.length === 0
           ? <p className="show-media-empty">{t("timeline.empty")}</p>
