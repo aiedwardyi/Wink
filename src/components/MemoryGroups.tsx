@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { Brain, Check, ChevronDown, Pencil } from "lucide-react";
+import { Brain, Check, ChevronDown } from "lucide-react";
 import type { AppState, Bot, Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -78,13 +78,12 @@ export function MemoryFold({ title, hint, status, open, onToggle, ref, children 
   );
 }
 
-export function MemoryFile({ text, loading, save, open, editing, onEdit, onToggle, ref, children }: {
+export function MemoryFile({ text, loading, save, open, onDone, onToggle, ref, children }: {
   text: string;
   save?: MemorySaveStatus;
   loading: boolean;
   open: boolean;
-  editing: boolean;
-  onEdit?: (next: boolean) => void;
+  onDone?: () => void;
   onToggle: () => void;
   ref?: Ref<HTMLButtonElement>;
   children?: ReactNode;
@@ -95,10 +94,10 @@ export function MemoryFile({ text, loading, save, open, editing, onEdit, onToggl
       ref={ref}
       title={<>{t("bot.memoryFile")}{!loading && <MemoryFileLines text={text} />}</>}
       hint={t("bot.memoryThisBotHelp")}
-      status={(save || onEdit) && (
+      status={(save || onDone) && (
         <>
           {save && <SaveState status={save} />}
-          {onEdit && <MemoryEditButton editing={editing} onEdit={onEdit} />}
+          {onDone && <MemoryDoneButton onDone={onDone} />}
         </>
       )}
       open={open}
@@ -115,11 +114,11 @@ export function MemoryFileLines({ text }: { text: string }) {
   return lines > 0 ? <span className="font-normal text-ink-secondary"> · {t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines })}</span> : null;
 }
 
-export function MemoryEditButton({ editing, onEdit }: { editing: boolean; onEdit: (next: boolean) => void }) {
+export function MemoryDoneButton({ onDone }: { onDone: () => void }) {
   const { t } = useI18n();
   return (
-    <button type="button" className="mm-action" onClick={() => onEdit(!editing)}>
-      {editing ? t("bot.memoryEditDone") : <><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</>}
+    <button type="button" className="mm-action" onClick={onDone}>
+      {t("bot.memoryEditDone")}
     </button>
   );
 }
