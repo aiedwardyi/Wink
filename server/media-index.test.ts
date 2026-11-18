@@ -80,13 +80,20 @@ describe("media index", () => {
   it("reads media across database pages without loading the chat transcript", () => {
     const writer = new Store(selection);
     const { threadId } = writer.createBot({}, { seedMessages: false });
-    writer.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png)" });
+    writer.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png) [new.png](C:\\w\\new.png)" });
     for (let n = 0; n < 300; n++) writer.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
     writer.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
 
     const store = new Store(selection);
     const activePath = vi.spyOn(store, "activePath");
-    expect(createMediaIndex(store).list(threadId)).toMatchObject({ name: ["new.png", "old.png"] });
+    const media = createMediaIndex(store);
+    const first = media.list(threadId);
+    expect(first).toMatchObject({ name: ["new.png"], next: 1 });
+    expect(media.page(threadId, first.v, 2)).toBeNull();
+    const older = media.page(threadId, first.v, 1);
+    expect(older).toMatchObject({ name: ["old.png"] });
+    expect(older?.next).toBeUndefined();
+    expect(media.page(threadId, first.v, 1)).toBe(older);
     expect(activePath).not.toHaveBeenCalled();
     expect(store.loaded(threadId)).toBe(false);
   });

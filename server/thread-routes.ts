@@ -106,11 +106,14 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
       mediaIndex ??= createMediaIndex(store);
       const v = url.searchParams.get("v");
+      const page = url.searchParams.get("page");
+      if (page !== null && (!/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)))) return json(res, 400, { error: "invalid media page" });
       const slot = url.searchParams.get("size");
       if (slot !== null) {
         if (!/^\d+$/.test(slot)) return json(res, 400, { error: "invalid media slot" });
-        return json(res, 200, { size: await mediaIndex.size(threadId, v, Number(slot)) });
+        return json(res, 200, { size: await mediaIndex.size(threadId, v, Number(slot), Number(page)) });
       }
+      if (page !== null) return json(res, 200, mediaIndex.page(threadId, v, Number(page)));
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
       return json(res, 200, mediaIndex.list(threadId, v));

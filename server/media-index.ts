@@ -4,12 +4,14 @@ import { stat } from "node:fs/promises";
 
 import { mediaKey, messageRefs, showKind } from "../src/lib/chat-media.ts";
 
-import { mediaRows, type MediaRow } from "./media-rows.ts";
+import { readMediaRows, type MediaRow } from "./media-rows.ts";
 import type { Store } from "./store.ts";
 
 export interface MediaIndex {
-  /** Moves only when the list does, so an unchanged chat answers with `{ v }` alone. */
+  /** An unchanged chat answers with `{ v }` alone. */
   v: string;
+  head?: string;
+  next?: number;
   ids: string[];
   /** Seconds. */
   at: number[];
@@ -21,15 +23,16 @@ export interface MediaIndex {
   size: Array<number | null>;
 }
 
-type MediaList = Omit<MediaIndex, "v">;
+type MediaList = Omit<MediaIndex, "v" | "head" | "next">;
 
 // held per chat; the least recently asked go first
 const HELD = 16;
+const FIRST_ROWS = 256;
+const OLDER_ROWS = 2048;
 const boot = Date.now().toString(36);
 
-export function buildMediaIndex(threadId: string, newestFirst: Iterable<MediaRow>): MediaList {
+export function buildMediaIndex(threadId: string, newestFirst: Iterable<MediaRow>, seen = new Set<string>()): MediaList {
   const index: MediaList = { ids: [], at: [], kind: "", name: [], ref: [], size: [] };
-  const seen = new Set<string>();
   for (const message of newestFirst) {
     for (const ref of messageRefs(message)) {
       const key = mediaKey(threadId, ref);
@@ -51,9 +54,30 @@ function same(a: MediaList, b: MediaList): boolean {
 }
 
 interface HeldIndex {
-  index: MediaIndex;
+  v: string;
+  pages: MediaIndex[];
+  cursors: Set<string>;
+  cursor: string | null;
+  seen: Set<string>;
   dirty?: true;
-  sizes: Map<number, Promise<number | null>>;
+  sizes: Map<string, Promise<number | null>>;
+}
+
+function readPage(threadId: string, cached: HeldIndex, limit: number): MediaIndex {
+  const start = cached.cursor;
+  const { rows, next } = readMediaRows(threadId, start, limit);
+  if (start) cached.cursors.add(start);
+  cached.cursor = next && !cached.cursors.has(next) ? next : null;
+  const page: MediaIndex = { v: cached.v, ...buildMediaIndex(threadId, rows, cached.seen) };
+  if (cached.cursor) {
+    if (cached.pages.length === 0 && start) page.head = start;
+    page.next = cached.pages.length + 1;
+  } else {
+    cached.cursors.clear();
+    cached.seen.clear();
+  }
+  cached.pages.push(page);
+  return page;
 }
 
 export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) {
@@ -72,25 +96,34 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
     list(threadId: string, v?: string | null): MediaIndex | { v: string } {
       let cached = held.get(threadId);
       if (!cached || cached.dirty) {
-        const list = buildMediaIndex(threadId, mediaRows(threadId, store.activeLeaf(threadId)));
-        if (cached && same(cached.index, list)) cached.dirty = undefined;
-        else cached = { index: { v: `${boot}.${++count}`, ...list }, sizes: new Map() };
+        const next = { v: `${boot}.${++count}`, cursor: store.activeLeaf(threadId), cursors: new Set<string>(), pages: [], seen: new Set<string>(), sizes: new Map() };
+        const page = readPage(threadId, next, FIRST_ROWS);
+        const prior = cached?.pages[0];
+        if (cached && prior && !prior.next && !page.next && same(prior, page)) cached.dirty = undefined;
+        else cached = next;
       }
       held.delete(threadId);
       held.set(threadId, cached);
       if (held.size > HELD) held.delete(held.keys().next().value!);
-      return v === cached.index.v ? { v } : cached.index;
+      return v === cached.v ? { v } : cached.pages[0]!;
     },
-    async size(threadId: string, v: string | null, slot: number): Promise<number | null> {
+    page(threadId: string, v: string | null, n: number): MediaIndex | null {
       const cached = held.get(threadId);
-      if (!cached || cached.index.v !== v || !Number.isSafeInteger(slot)) return null;
-      const ref = cached.index.ref[slot];
+      if (!cached || cached.v !== v) return null;
+      return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(threadId, cached, OLDER_ROWS) : null);
+    },
+    async size(threadId: string, v: string | null, slot: number, n = 0): Promise<number | null> {
+      const cached = held.get(threadId);
+      const page = cached?.pages[n];
+      if (!page || cached.v !== v || !Number.isSafeInteger(slot)) return null;
+      const ref = page.ref[slot];
       // A UNC path would authenticate to a remote host.
-      if (!ref || cached.index.kind[slot] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return null;
-      let size = cached.sizes.get(slot);
+      if (!ref || page.kind[slot] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return null;
+      const key = `${n}:${slot}`;
+      let size = cached.sizes.get(key);
       if (!size) {
         size = stat(ref).then((info) => info.isFile() ? info.size : null, () => null);
-        cached.sizes.set(slot, size);
+        cached.sizes.set(key, size);
       }
       return size;
     },

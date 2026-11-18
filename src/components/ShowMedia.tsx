@@ -4,7 +4,7 @@ import { File as FileIcon, FileArchive, FileAudio, FileCode, FileSpreadsheet, Fi
 import { formatSize } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { FILE_ROW, GAP, HEAD, PAD, monthAt, useMediaGrid, type GridLayout, type GridMonth } from "@/lib/media-grid";
-import { heldMedia, loadMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
+import { heldMedia, loadMedia, loadOlderMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
 import { openFile } from "@/lib/open-file";
 import { chatMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
@@ -41,8 +41,20 @@ function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
     return () => { alive = false; };
   }, [threadId, roomId, latest, removed]);
 
-  const files = useMemo(() => roomId || !index ? index?.files ?? null : withLive(index.files, chatMedia(threadId, messages)), [threadId, roomId, index, messages]);
-  return { files, room: index?.list ?? null };
+  useEffect(() => {
+    if (!index?.next) return;
+    let alive = true;
+    void loadOlderMedia(threadId, index).then((got) => { if (alive) setIndex(got); }, () => {});
+    return () => { alive = false; };
+  }, [threadId, index]);
+
+  const files = useMemo(() => {
+    if (roomId || !index) return index?.files ?? null;
+    if (!index.next) return withLive(index.files, chatMedia(threadId, messages));
+    const head = messages.findLastIndex((message) => message.id === index.head);
+    return head < 0 ? index.files : withLive(index.files, chatMedia(threadId, messages.slice(head + 1)));
+  }, [threadId, roomId, index, messages]);
+  return { files: index?.next && !files?.length ? null : files, room: index?.list ?? null };
 }
 
 export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {

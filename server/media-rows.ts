@@ -15,8 +15,6 @@ type PageRow = { id: string } & ({ at: null } | {
   roomEcho: SQLOutputValue;
 });
 
-const PAGE = 256;
-
 // A missing parent predates branching and follows insertion order; a null parent ends the path.
 const SQL = `
   WITH RECURSIVE path(id, depth) AS (
@@ -41,18 +39,16 @@ const SQL = `
   ORDER BY path.depth
 `;
 
-export function* mediaRows(threadId: string, head: string | null): Iterable<MediaRow> {
-  if (!head) return;
+export function readMediaRows(threadId: string, cursor: string | null, limit: number): { rows: MediaRow[]; next: string | null } {
+  if (!cursor) return { rows: [], next: null };
   const statement = messageDatabase().prepare(SQL);
-  const cursors = new Set<string>();
-  for (let cursor: string | undefined = head; cursor && !cursors.has(cursor); ) {
-    cursors.add(cursor);
-    // SAFETY: The SQL projects media fields and one row carrying the next page's id.
-    const rows = statement.all(threadId, cursor, PAGE) as PageRow[];
-    cursor = undefined;
-    for (const row of rows) {
-      if (row.at === null) cursor = row.id;
-      else yield { ...row, text: row.text ?? undefined, image: row.image ?? undefined, summarized: Boolean(row.summarized) };
-    }
+  // SAFETY: The SQL projects media fields and one row carrying the next page's id.
+  const page = statement.all(threadId, cursor, limit) as PageRow[];
+  const rows: MediaRow[] = [];
+  let next: string | null = null;
+  for (const row of page) {
+    if (row.at === null) next = row.id;
+    else rows.push({ ...row, text: row.text ?? undefined, image: row.image ?? undefined, summarized: Boolean(row.summarized) });
   }
+  return { rows, next };
 }

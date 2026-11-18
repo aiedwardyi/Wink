@@ -208,6 +208,29 @@ it("loads the timeline on open and a linked size when its row appears", async ()
   expect(names().at(-1)).toBe("first.pdf");
 });
 
+it("renders the first page while older media is loading", async () => {
+  let finish!: (response: Response) => void;
+  const older = new Promise<Response>((resolve) => { finish = resolve; });
+  const initial = wire([["b2", 2000, "l", "new.png", "C:\\w\\new.png"]]);
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/threads/t1/media") return Response.json({ ...initial, head: "b2", next: 1 });
+    if (url === "/api/threads/t1/media?v=1&page=1") return older;
+    return new Response(null, { status: 206 });
+  }));
+
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [
+    { id: "b1", role: "bot", kind: "text", at: 1000, text: "[old.png](C:\\w\\old.png)" },
+    { id: "b2", role: "bot", kind: "text", at: 2000, text: "[new.png](C:\\w\\new.png)" },
+  ] });
+  await settle();
+  expect(tiles()).toEqual(["new.png"]);
+
+  finish(Response.json(wire([["b1", 1000, "l", "old.png", "C:\\w\\old.png"]])));
+  await settle();
+  expect(tiles()).toEqual(["new.png", "old.png"]);
+});
+
 // `older` messages before the loaded page, paged or indexed; only the very first brings a file
 function longChat(older: number, fail = 0) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
