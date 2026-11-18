@@ -117,7 +117,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
-      else closePane();
+      else { event.preventDefault(); closePane(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

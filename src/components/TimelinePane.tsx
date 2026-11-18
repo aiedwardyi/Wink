@@ -5,9 +5,9 @@ import { z } from "zod";
 import { request } from "@/lib/api-request";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
-import type { PreviewImage } from "@/lib/media-viewer";
+import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
-import { openFile } from "@/lib/open-file";
+import { fileOpen, openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { Fold } from "./Fold";
 import { MediaViewer } from "./MediaViewer";
@@ -99,14 +99,21 @@ type PaneProps = { botId: string; threadId: string; maximized: boolean; profileN
 
 export function TimelinePane(props: PaneProps) {
   const [viewing, setViewing] = useState<PreviewImage | null>(null);
+  const [pick, setPick] = useState<MediaReference[]>([]);
   const view = useMemo(() => (path: string, threadId: string, opener: HTMLElement) => {
     opener.focus({ preventScroll: true });
+    // the pictures of one pick, in the order they sit on screen
+    const paths = [...(opener.closest(".timeline-detail") ?? opener).querySelectorAll<HTMLElement>("[data-path]")].map((each) => each.dataset.path!).filter((each) => fileOpen(each) === "picture");
+    setPick(paths.map((each) => ({ src: pictureSrc(threadId, each), name: showName(each), id: each, messageId: threadId })));
     openFile({ path, threadId, src: pictureSrc(threadId, path) }, { view: setViewing });
   }, []);
   return (
     <ViewPicture.Provider value={view}>
       <Picks {...props} />
-      {viewing && <MediaViewer image={viewing} onClose={() => setViewing(null)} />}
+      {viewing && (
+        <MediaViewer image={viewing} onClose={() => setViewing(null)} previous={Boolean(adjacentMedia(pick, viewing, -1))} next={Boolean(adjacentMedia(pick, viewing, 1))}
+          onNavigate={(direction) => setViewing((current) => current && (adjacentMedia(pick, current, direction) ?? current))} />
+      )}
     </ViewPicture.Provider>
   );
 }
@@ -268,7 +275,7 @@ function Img({ path, threadId, onFail, viewable = false }: { path: string; threa
   const [loaded, setLoaded] = useState(false);
   const img = <img src={pictureSrc(threadId, path)} alt="" loading="lazy" decoding="async" data-loaded={loaded || undefined} onLoad={() => setLoaded(true)} onError={onFail} />;
   return viewable
-    ? <button type="button" className="timeline-open" aria-label={t("viewer.open", { name: showName(path) })} onClick={(event) => view(path, threadId, event.currentTarget)}>{img}</button>
+    ? <button type="button" className="timeline-open" data-path={path} aria-label={t("viewer.open", { name: showName(path) })} onClick={(event) => view(path, threadId, event.currentTarget)}>{img}</button>
     : img;
 }
 

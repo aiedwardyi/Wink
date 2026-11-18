@@ -147,7 +147,6 @@ export const PROMPT_WORDING: Limits = {
   "server/drivers/team-report-tool.ts": { "at most eight": PROMPT },
   "server/index.ts": { "at most one short activity line": PROMPT },
   "server/live-call.ts": { "two at most": PROMPT, "in at most two short sentences": PROMPT },
-  "server/memory-pass.ts": { "At most ": PROMPT },
   "server/side-chat.ts": { "at most 3 Read, Glob or Grep": PROMPT },
   "server/team-report-evidence.ts": { "(at most 8)": PROMPT },
   "server/verify-doc-text.ts": { "at most 8 words": PROMPT, "At most 12 findings": PROMPT },

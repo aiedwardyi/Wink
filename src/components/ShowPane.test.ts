@@ -517,6 +517,15 @@ it("shows a pick Auto Notes saves while the pane is open", async () => {
   expect(rows()).toHaveLength(5);
 });
 
+it("consumes Escape when it closes the Timeline, so a card behind it stays", async () => {
+  pickList();
+  await openTimeline("b-esc");
+  await until(() => rows().length > 0);
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => { window.dispatchEvent(escape); });
+  expect(escape.defaultPrevented).toBe(true);
+});
+
 it("keeps the Timeline search box at 16px on a phone so iOS does not zoom", async () => {
   pickList();
   await openTimeline("b-zoom");
@@ -559,6 +568,24 @@ it("opens a screenshot, or a picked or crossed picture, in the viewer on one cli
     await until(() => !document.querySelector("[data-media-viewer]"));
     expect(document.querySelector("[data-media-viewer]")).toBeNull();
   }
+});
+
+it("moves to the next and previous picture of the same pick with the arrow keys", async () => {
+  pickList();
+  await openTimeline("b-arrows");
+  await until(() => rows().length > 0);
+  const shown = () => document.querySelector("[data-media-viewer] img")?.getAttribute("src") ?? "";
+  const name = (button?: HTMLElement) => button!.dataset.path!.split("\\").pop()!;
+  const press = (key: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+  const [first, second] = [...mapRow().querySelectorAll<HTMLElement>("[data-path]")];
+  await act(async () => first!.click());
+  expect(shown()).toContain(name(first));
+  await press("ArrowLeft");
+  expect(shown()).toContain(name(first));
+  await press("ArrowRight");
+  expect(shown()).toContain(name(second));
+  await press("ArrowLeft");
+  expect(shown()).toContain(name(first));
 });
 
 it("leaves right-click on a picture to the image's own menu, with nothing drawn over it", async () => {
