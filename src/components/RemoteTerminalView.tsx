@@ -223,8 +223,11 @@ export function RemoteTerminalView({
     let timer = 0;
     let live = true;
     // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
-    const tick = () => void Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]).then(() => { if (live) timer = window.setTimeout(tick, REFRESH_MS); });
-    tick();
+    const tick = async () => {
+      await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+      if (live) timer = window.setTimeout(tick, REFRESH_MS);
+    };
+    void tick();
     return () => {
       live = false;
       window.clearTimeout(timer);
