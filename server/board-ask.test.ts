@@ -1,13 +1,14 @@
-// The ask hold: an ask_user card posts unless it asks a plain fact that a solved fix in the same project
-// already covers; then the fix goes back to the bot once and the same question asked again posts. No model calls.
+// The ask hold: an ask_user card posts unless the bot marked it as a plain fact that a solved fix in the same project
+// already covers; then the fix goes back to the bot once and its next ask posts. No model calls.
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser, type AskUserDeps } from "./ask-user.ts";
 import { BOARD_USER, createBoard, errorSig, type Board, type NewBoardPost } from "./board.ts";
 import { createBoardCalls, type BoardCalls } from "./board-calls.ts";
-import type { MausColor, Message } from "./store.ts";
+import { Store, type MausColor, type Message } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -19,10 +20,21 @@ const GIT = "git exit 128 (not a git repository) at the repo path. What is the r
 const GIT_TITLE = "git exit 128: not a git repository, wrong repo path";
 const GIT_BODY = "git status failed with exit 128 in the parent folder";
 const GIT_FIX = "Run git in the worktree folder, not the parent repo folder.";
+const RESTART = "Can I restart the preview worker?";
+const REBOOT = "Can I reboot the preview worker?";
+const PROBES = [
+  ["Can I", RESTART],
+  ["May I", "May I restart the preview worker?"],
+  ["an imperative", "Restart the preview worker?"],
+  ["a sign-off", "Sign off on the preview worker restart?"],
+  ["a reworded retry", REBOOT],
+  ["a production ask on a staging fix", "Which port does the production preview worker listen on?"],
+];
 
 let board: Board;
 let calls: BoardCalls;
 let appended: Array<Omit<Message, "id" | "at">>;
+let alerts: string[];
 let deps: AskUserDeps<Bot>;
 let holds: unknown[];
 
@@ -31,6 +43,7 @@ beforeEach(() => {
   board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-ask-")), "board"), pcId: () => "home" });
   calls = createBoardCalls({ board, projectOf: () => "wink", room: (threadId) => threadId === "room", held: (row) => holds.push(row) });
   appended = [];
+  alerts = [];
   deps = {
     bot: (id) => ({ id, name: "Ada", color: "teal" }),
     conversation: () => ({}),
@@ -39,18 +52,23 @@ beforeEach(() => {
     patchMessage: () => null,
     cancelHeld: () => false,
     alertThread: (_bot, threadId) => threadId,
-    notifyQuestion: () => {},
+    notifyQuestion: (_bot, _target, question) => void alerts.push(question),
     whenSettled: (_botId, _threadId, post) => post(),
     forum: (botId, threadId, question, choices) => calls.ask(botId, threadId, question, choices),
   };
 });
 
-const ask = (question = QUESTION, threadId = "ta", choices: string[] = []) => postAskUser(deps, askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: threadId, question, choices }));
+const ask = (question = QUESTION, threadId = "ta", choices: string[] = [], fact = true) => postAskUser(deps, askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: threadId, question, choices, fact }));
 const solvedFix = (title: string, body: string, fix: string, extra: Partial<NewBoardPost> = {}) => {
   const stuck = board.post({ author_bot_id: "wink", kind: "stuck", title, body, project_id: "wink", source_ref: `call:t:0:engine:${title}`, ...extra });
   return board.solve(stuck.id, fix)!;
 };
 const gitFix = (extra: Partial<NewBoardPost> = {}) => solvedFix(GIT_TITLE, GIT_BODY, GIT_FIX, extra);
+const workerFixes = () => {
+  solvedFix("Restart the preview worker", RESTART, "Restart it from the worker panel.");
+  solvedFix("Reboot the preview worker", REBOOT, "Reboot it with the worker script.");
+  solvedFix("Staging preview worker port", "Which port does the staging preview worker listen on?", "The staging preview worker listens on port 4801.");
+};
 
 // Known miss: a question worded apart from the post that answers it (1 of 5 words shared) is not held; exact words at 0.6 cannot reach it.
 describe("ask hold", () => {
@@ -71,14 +89,52 @@ describe("ask hold", () => {
     expect(appended).toHaveLength(1);
   });
 
-  it("posts an account choice, a delete question and a choices card unchanged, even on a strong match", () => {
-    solvedFix("Codex account after the usage limit", QUESTION, "The worker uses the work account after the Codex usage limit.");
-    solvedFix("Delete the stale worktree folder", "Should I delete the stale worktree folder?", "Deleted it once the branch merged.");
-    gitFix();
-    expect(ask(QUESTION).status).toBe(201);
-    expect(ask("Should I delete the stale worktree folder?").status).toBe(201);
-    expect(ask(GIT, "ta", ["D:\\wink", "D:\\wink\\wt"]).status).toBe(201);
-    expect(appended.map((message) => message.card!.subtitle)).toEqual([QUESTION, "Should I delete the stale worktree folder?", GIT]);
+  it.each(PROBES)("delivers %s, unmarked, as one card and one alert without a Board lookup", (_name, question) => {
+    workerFixes();
+    const search = vi.spyOn(board, "search");
+    expect(ask(question, "ta", [], false)).toEqual({ status: 201, body: { messageId: "m-1" } });
+    expect(appended.map((message) => message.card!.subtitle)).toEqual([question]);
+    expect(alerts).toEqual([question]);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("delivers the ask after a hold as one card and one alert, reworded or next turn, even on another post", () => {
+    workerFixes();
+    expect(ask(RESTART).status).toBe(200);
+    expect(ask(REBOOT)).toEqual({ status: 201, body: { messageId: "m-1" } });
+    expect(ask(RESTART, "tb").status).toBe(200);
+    calls.turnEnded("tb", true);
+    expect(ask(REBOOT, "tb")).toEqual({ status: 201, body: { messageId: "m-2" } });
+    expect(alerts).toEqual([REBOOT, REBOOT]);
+  });
+
+  it("delivers an unmarked ask from a running turn once the turn settles, with one alert", () => {
+    workerFixes();
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const askHold = watchAskHold(store, { subscribe: () => () => {} });
+    const bot = store.createBot({ name: "Ada" });
+    const live: AskUserDeps<Bot> = {
+      ...deps,
+      bot: (id) => store.bot(id),
+      conversation: (botId, threadId) => store.conversationForBot(botId, threadId),
+      appendMessage: (threadId, message) => store.appendMessage(threadId, message),
+      whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
+    };
+    store.setActivity(bot.id, "working", bot.threadId);
+    expect(postAskUser(live, askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: bot.threadId, question: RESTART }))).toEqual({ status: 202, body: { held: true } });
+    store.setActivity(bot.id, "idle");
+    expect(store.messagesFor(bot.threadId).filter((message) => message.card?.askUser).map((message) => message.card!.subtitle)).toEqual([RESTART]);
+    expect(alerts).toEqual([RESTART]);
+  });
+
+  it("posts a choices card and a sign-in, money or shipping question even marked as a fact", () => {
+    const vetoed = ["Which login does the preview worker use?", "Who pays the preview worker bill?", "Which branch do I push the preview worker fix to?", "When does the preview worker fix merge?", "Which release has the preview worker fix?"];
+    const port = "Which port does the preview worker listen on?";
+    solvedFix("Preview worker notes", [...vetoed, port].join(" "), "Read the preview worker notes in the repo.");
+    for (const question of vetoed) expect(ask(question).status).toBe(201);
+    expect(ask(port, "ta", ["4801", "4802"]).status).toBe(201);
+    expect(ask(port, "tb").status).toBe(200);
+    expect(alerts).toEqual([...vetoed, port]);
   });
 
   it("holds on nothing but a top-level solved fix from the same project", () => {

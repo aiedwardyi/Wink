@@ -497,6 +497,14 @@ describe("agents-proxy MCP surface", () => {
     expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
   });
 
+  it("forwards a fact mark so the Forum may answer first", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "ask_user");
+    expect(tool.inputSchema.properties.fact).toMatchObject({ type: "boolean" });
+    await callTool("ask_user", { question: " Which port? ", fact: true });
+    expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Which port?", fact: true });
+  });
+
   it("surfaces ask_user rejections and an empty question as tool errors", async () => {
     const refused = await callTool("ask_user", { question: "refuse me" });
     expect(refused.result.isError).toBe(true);

@@ -34,8 +34,8 @@ export interface BoardCallDeps {
 
 export function createBoardCalls(deps: BoardCallDeps) {
   const offers = new Map<string, Offer[]>();
-  /** Per thread and bot, kept past turn end: questions held once and the posts shown for them. */
-  const asked = new Map<string, { questions: Set<string>; postIds: Set<string> }>();
+  /** Per thread and bot, kept past turn end: whether the last eligible ask was held, and every post shown. */
+  const asked = new Map<string, { held: boolean; postIds: Set<string> }>();
 
   const search = (threadId: string, query: string, ask = false) => deps.board.search({
     query,
@@ -106,18 +106,21 @@ export function createBoardCalls(deps: BoardCallDeps) {
       };
     },
     /**
-     * Before an ask_user card posts: a plain question a solved fix in the same project covers is held once
-     * and the fix goes back to the bot. Asking again, in any words or turn, posts. A held ask earns no Helped.
+     * Before an ask_user card the bot marked as a fact posts: a solved fix in the same project that covers it goes back
+     * to the bot instead, each post once. The next ask, in any words or turn, posts. A held ask earns no Helped.
      */
     ask(botId: string, threadId: string, question: string, choices: readonly string[] = []): string {
       if (deps.room(threadId) || !mayHoldAsk(question, choices)) return "";
       const key = `${threadId}\n${botId}`;
-      const seen = asked.get(key) ?? { questions: new Set<string>(), postIds: new Set<string>() };
-      if (seen.questions.has(question)) return "";
+      const seen = asked.get(key) ?? { held: false, postIds: new Set<string>() };
+      if (seen.held) {
+        seen.held = false;
+        return "";
+      }
       const project = deps.projectOf(threadId);
       const posts = project ? search(threadId, question, true).filter((post) => post.project_id === project).slice(0, BOARD_HITS) : [];
       if (!posts.length || posts.some((post) => seen.postIds.has(post.id))) return "";
-      seen.questions.add(question);
+      seen.held = true;
       for (const post of posts) seen.postIds.add(post.id);
       asked.set(key, seen);
       deps.held?.({ kind: "ask", botId, threadId, postIds: posts.map((post) => post.id) });

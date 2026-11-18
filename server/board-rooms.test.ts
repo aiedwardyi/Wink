@@ -35,7 +35,7 @@ describe("room fence", () => {
       whenSettled: (_botId, _threadId, post) => post(),
       forum: (botId, threadId, question, choices) => calls.ask(botId, threadId, question, choices),
     };
-    const ask = (threadId: string) => postAskUser(deps, askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: threadId, question: QUESTION }));
+    const ask = (threadId: string) => postAskUser(deps, askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: threadId, question: QUESTION, fact: true }));
     expect(ask("tj")).toEqual({ status: 201, body: { messageId: "m-1" } });
     expect(ask("ta").status).toBe(200);
     expect(calls.hold("ada", "tj", [], [BLOCKER])).toEqual({ blockers: [BLOCKER], notice: "" });

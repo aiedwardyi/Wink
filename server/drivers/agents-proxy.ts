@@ -462,6 +462,7 @@ const TOOLS = [
       properties: {
         question: { type: "string", description: "One short question, 1-2 lines on a phone. Background goes in your message, not here. When closing, repeat the exact question." },
         close: { type: "boolean", description: "Close your matching open question as answered in chat. Use when the user answered it in their own words; no new card or alert." },
+        fact: { type: "boolean", description: "Missing information, not a decision, preference or sign-off: the Forum may answer first." },
         choices: {
           type: "array",
           items: { type: "string" },
@@ -979,7 +980,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!question) return { text: "ask_user needs a question.", isError: true };
     if (!THREAD_ID) return { text: "Couldn't ask: no active thread.", isError: true };
     // the harness trims, dedupes and caps the choices
-    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }) });
+    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), ...(args.fact === true && { fact: true }) });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
       if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };

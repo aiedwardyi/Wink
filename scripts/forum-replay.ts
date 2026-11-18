@@ -53,11 +53,11 @@ const cards = (db.prepare("SELECT thread_id, at, json FROM messages WHERE kind =
 const solo = cards.filter((row) => !row.message.from);
 const answerable = solo.filter((row) => callsAt(row.at).ask("replay", row.thread_id, row.message.card!.subtitle.trim(), row.message.card!.options ?? []));
 
-// the holds the server logged; re-asked: any question still reached the user on that thread within the hour
+// the holds the server logged; one with no card on its thread within the hour may have hidden the question: a false hold
 const holdsFile = join(dir, FORUM_HOLDS_FILE);
 const holds = (existsSync(holdsFile) ? readFileSync(holdsFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as ForumHold & { at: number }) : [])
   .filter((hold) => hold.kind === "ask" && hold.at >= start && hold.at <= end);
-const reasked = holds.filter((hold) => cards.some((row) => row.thread_id === hold.threadId && row.at > hold.at && row.at - hold.at < 3_600_000));
+const falseHolds = holds.filter((hold) => !cards.some((row) => row.thread_id === hold.threadId && row.at > hold.at && row.at - hold.at < 3_600_000));
 
 const calls = posts.filter((post) => post.kind === "stuck" && post.source_ref.startsWith("call:") && post.created_at >= start && post.created_at <= end);
 const heldCalls = calls.filter((post) => callsAt(post.created_at).hold("replay", "replay", [], [{ kind: "engine", note: post.title }]).notice);
@@ -74,8 +74,8 @@ console.log(JSON.stringify({
   asksSolo: solo.length,
   answerableButAsked: answerable.length,
   holdsShown: holds.length,
-  deflected: holds.length - reasked.length,
-  falseHold: `${reasked.length} (${pct(reasked.length, holds.length)})`,
+  reasked: holds.length - falseHolds.length,
+  falseHold: `${falseHolds.length} (${pct(falseHolds.length, holds.length)})`,
   calls: calls.length,
   callsWithBoardHit: heldCalls.length,
   fixes: fixes.length,

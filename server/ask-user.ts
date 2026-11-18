@@ -24,6 +24,7 @@ export const askUserRequestSchema = z
     question: z.string().catch(""),
     choices: z.array(z.string().catch("")).catch([]),
     close: z.boolean().optional().catch(undefined),
+    fact: z.boolean().optional().catch(undefined),
   })
   .catch({ fromBotId: "", fromThreadId: "", question: "", choices: [] });
 export type AskUserRequest = z.infer<typeof askUserRequestSchema>;
@@ -62,7 +63,7 @@ export interface AskUserDeps<B extends Sender> {
   notifyQuestion(bot: B, target: string, question: string): void;
   /** Runs `post` now, or once the asking turn has replied. */
   whenSettled(botId: string, threadId: string, post: () => void, question: string): void;
-  /** Forum posts that may answer the question, for the bot to try first; "" posts the card. */
+  /** Forum posts that may answer a question the bot marked as a fact, for the bot to try first; "" posts the card. */
   forum?(botId: string, threadId: string, question: string, choices: readonly string[]): string;
 }
 
@@ -89,7 +90,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     return { status: 200, body: { closed } };
   }
   const choices = askUserChoices(request.choices);
-  const notice = deps.forum?.(from.id, request.fromThreadId, question, choices);
+  const notice = request.fact && deps.forum?.(from.id, request.fromThreadId, question, choices);
   if (notice) return { status: 200, body: { notice } };
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
