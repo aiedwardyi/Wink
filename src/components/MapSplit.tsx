@@ -6,9 +6,10 @@ const KEY = "omb-map-split";
 const ROWS = "omb-map-rows";
 const REST = 120;
 const STEP = 24;
-type Box = { from: number; min: number; max: number; below?: HTMLElement; tall?: number };
+type Box = { from: number; min: number; max: number; below?: HTMLElement; tall?: number; solo?: HTMLElement };
 
 // rows: the line above the Git rows, which give or take what the tree gains or loses.
+// The other line moves only the Git rows and the code, never the tree.
 export function MapSplit({ target, rows = false }: { target: RefObject<HTMLElement | null>; rows?: boolean }) {
   const { locale } = useI18n();
   const drag = useRef<Box & { y: number; to: number; frame: number } | null>(null);
@@ -23,6 +24,15 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
   const bounds = (handle: HTMLElement): Box | null => {
     const top = target.current;
     if (!top) return null;
+    const above = handle.previousElementSibling;
+    if (!rows && above instanceof HTMLElement && above.matches(".map-flow-rows")) {
+      const list = above.querySelector<HTMLElement>(".map-flow-list");
+      if (!list) return null;
+      const tall = above.getBoundingClientRect().height;
+      const row = list.firstElementChild?.getBoundingClientRect().height ?? 0;
+      const room = handle.parentElement?.querySelector<HTMLElement>(":scope > .map-code")?.clientHeight ?? 0;
+      return { from: tall, solo: above, min: Math.min(tall, tall - list.clientHeight + row), max: Math.max(tall, Math.min(tall + list.scrollHeight - list.clientHeight, tall + room - REST)) };
+    }
     const from = top.getBoundingClientRect().height;
     const min = Number.parseFloat(getComputedStyle(top).minHeight) || 0;
     const full = top.scrollHeight + top.offsetHeight - top.clientHeight;
@@ -41,6 +51,12 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     const top = target.current;
     const pane = top?.parentElement;
     if (!top || !pane?.clientHeight) return;
+    if (box.solo) {
+      const rest = (height / pane.clientHeight * 100).toFixed(1);
+      pane.style.setProperty("--map-rows", `${rest}%`);
+      localStorage.setItem(ROWS, rest);
+      return;
+    }
     const share = (height / pane.clientHeight * 100).toFixed(1);
     top.style.setProperty("--map-split", `${share}%`);
     localStorage.setItem(KEY, share);
@@ -60,7 +76,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     cancelAnimationFrame(now.frame);
     handle.removeAttribute("data-drag");
     lift(handle, false);
-    now.below?.style.removeProperty("--map-rows");
+    (now.below ?? now.solo)?.style.removeProperty("--map-rows");
     if (now.to !== now.from) keep(now.to, now);
   };
 
@@ -81,6 +97,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
       now.to = Math.max(now.min, Math.min(now.max, now.from + event.clientY - now.y));
       now.frame ||= requestAnimationFrame(() => {
         now.frame = 0;
+        if (now.solo) return now.solo.style.setProperty("--map-rows", `${now.to}px`);
         target.current?.style.setProperty("--map-split", `${now.to}px`);
         if (now.tall !== undefined) now.below?.style.setProperty("--map-rows", `${now.tall + now.from - now.to}px`);
       });

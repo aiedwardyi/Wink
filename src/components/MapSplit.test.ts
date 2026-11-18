@@ -119,13 +119,50 @@ it("restores the saved sizes when the Map opens", async () => {
   expect(share(el(".map-pane"), "--map-rows")).toBe("12.5%");
 });
 
-it("leaves the Git rows alone when the code view line moves", async () => {
+it("moves the tree and the code view line when no Git rows sit between them", async () => {
   localStorage.setItem("omb-map-rows", "12.5");
   await mount({ rows: false });
+  el(".map-flow-rows").remove();
   expect(share(el(".map-pane"), "--map-rows")).toBe("");
   await drag(codeLine(), 100, 900);
   expect(share(el(".map-top"), "--map-split")).toBe("380px");
   await drop(codeLine());
   expect(share(el(".map-pane"), "--map-rows")).toBe("");
   expect(localStorage.getItem("omb-map-rows")).toBe("12.5");
+});
+
+it("drags the line above the code between the Git rows and the code, and leaves the tree alone", async () => {
+  await mount();
+  await drag(codeLine(), 500, 530);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("200px");
+  expect(share(el(".map-top"), "--map-split")).toBe("");
+  await drop(codeLine());
+  expect(share(el(".map-pane"), "--map-rows")).toBe("20.0%");
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("");
+  expect(share(el(".map-top"), "--map-split")).toBe("");
+  expect([localStorage.getItem("omb-map-rows"), localStorage.getItem("omb-map-split")]).toEqual(["20.0", null]);
+});
+
+it("keeps one Git row and never grows the Git rows past what they hold or the code view's rest", async () => {
+  await mount();
+  await drag(codeLine(), 500, 900);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("240px");
+  await drop(codeLine());
+  await drag(codeLine(), 900, -900);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("48px");
+  await drop(codeLine());
+  size(el(".map-code"), { clientHeight: 150 });
+  size(el(".map-flow-list"), { scrollHeight: 2000, clientHeight: 158 });
+  await drag(codeLine(), 0, 900);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("200px");
+  expect(share(el(".map-top"), "--map-split")).toBe("");
+});
+
+it("moves the code view line with the arrow keys without touching the tree", async () => {
+  await mount();
+  await key(codeLine(), "ArrowDown");
+  expect([share(el(".map-pane"), "--map-rows"), share(el(".map-top"), "--map-split")]).toEqual(["19.4%", ""]);
+  await key(codeLine(), "ArrowUp");
+  expect(share(el(".map-pane"), "--map-rows")).toBe("14.6%");
+  expect(localStorage.getItem("omb-map-split")).toBe(null);
 });

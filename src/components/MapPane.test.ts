@@ -931,6 +931,18 @@ it("puts a second drag line between the tree and the Git rows, hidden when no Gi
   expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
 });
 
+it("lets the Git rows take the free room when no code view follows them", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ branch: "b", commits: [{ sha: "abcdef1234", subject: "edit" }], total: 1, pushed: 0, pr: null }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], files: [] }]);
+  await act(async () => {});
+  const pane = host.querySelector(".map-pane")!;
+  expect(pane.lastElementChild?.className).toBe("map-flow-rows");
+  expect(pane.querySelector(".map-code")).toBeNull();
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toMatch(/\.map-pane > \.map-flow-rows:last-child \{[^}]*flex: 1 1 auto; max-height: none;/);
+});
+
 it("keeps a loaded Map through wide, narrow and wide again with no size-only fetch or blank code", async () => {
   let narrow = false;
   const flips = new Set<() => void>();
