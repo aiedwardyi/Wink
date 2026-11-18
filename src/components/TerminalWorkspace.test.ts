@@ -1570,7 +1570,7 @@ it("keeps an exited pane listed as an ended row that still opens until the host 
   const f = paneFixture();
   f.snapshot.panes[0].exited = true;
   await f.render();
-  expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["two", "working"], ["one", "ended"]]);
+  expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["two", "done"], ["one", "ended"]]);
   await act(async () => { f.exit({ id: "pane-two", exitCode: 0 }); });
   expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["one", "ended"], ["two", "ended"]]);
   f.open.mockClear();
@@ -2236,4 +2236,62 @@ it("runs on a web bridge prop with no preload, without new-shell controls, and h
   await act(async () => { exit({ id: "session-web", exitCode: 1 }); });
   expect(host.textContent).toMatch(/exited/i);
   expect([...host.querySelectorAll("button")].some((el) => /New shell|Restart|새 셸/i.test(el.textContent ?? ""))).toBe(false);
+});
+
+it("keeps the keyboard in the chat box when the docked worker pane closes on its own", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select("one");
+  const chatBox = document.createElement("textarea");
+  document.body.append(chatBox);
+  chatBox.focus();
+  terminal.focus.mockClear();
+  await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
+  expect(shownPane()).toBe("Desk");
+  expect(terminal.focus).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(chatBox);
+  chatBox.remove();
+});
+
+it("moves the keyboard to Main when the closed worker pane had it", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select("two");
+  const xtermInput = document.createElement("textarea");
+  host.querySelector("[data-orbit-terminal] > div")!.append(xtermInput);
+  xtermInput.focus();
+  terminal.focus.mockClear();
+  await act(async () => { f.closed({ botId: "bot-1", id: "pane-two" }); });
+  expect(shownPane()).toBe("Desk");
+  expect(terminal.focus).toHaveBeenCalled();
+});
+
+it("never restarts Main on a pane switch after Try again, and Try again on a live Main reattaches", async () => {
+  const f = paneFixture();
+  await f.render();
+  f.write.mockRejectedValueOnce(new Error("write failed"));
+  await act(async () => { terminal.__emitData("ls\r"); });
+  const retry = [...host.querySelectorAll("button")].find((button) => button.textContent === "Try again")!;
+  expect(retry).toBeTruthy();
+  await act(async () => { retry.click(); });
+  expect(f.open).toHaveBeenLastCalledWith(expect.objectContaining({ restart: false }));
+  await f.select("one");
+  await f.select(null);
+  expect(f.open.mock.calls.filter(([input]) => !input.sessionId).map(([input]) => input.restart)).toEqual([false, false, false]);
+});
+
+it("never restarts Main on a pane switch after a folder pick", async () => {
+  const f = paneFixture();
+  const pickFolder = vi.fn(async () => "C:\\new");
+  Object.assign(window.ogb!, { pickFolder });
+  vi.mocked(api).mockResolvedValue({ bot: { id: "bot-1", name: "Desk", cwd: "C:\\new" } });
+  f.open.mockResolvedValueOnce({ needsFolder: true, reason: "choose-folder" });
+  await f.render();
+  const choose = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
+  await act(async () => { choose.click(); });
+  await act(async () => { await Promise.resolve(); });
+  expect(pickFolder).toHaveBeenCalled();
+  await f.select("one");
+  await f.select(null);
+  expect(f.open.mock.calls.filter(([input]) => !input.sessionId).map(([input]) => input.restart)).toEqual([false, false, false]);
 });

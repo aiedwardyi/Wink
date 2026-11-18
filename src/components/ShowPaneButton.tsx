@@ -20,7 +20,8 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
   const ref = useRef<HTMLButtonElement>(null);
   useShareWorkers(threadId, workers);
   const listed = workers ? listedFor(workers) : [];
-  const hasWorkers = listed.length > 0 || Boolean(workers?.onOpenTerminal);
+  const hasWorkers = listed.length > 0;
+  const workerTab = hasWorkers || Boolean(workers?.onOpenTerminal);
   const counts = workerCounts(listed);
   const total = openWorkerCount(listed);
   const first = listed[0];
@@ -29,7 +30,7 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
   const onWorkers = crew === threadId;
   const open = checking || shown?.threadId === threadId || media === threadId || mapping === threadId || onWorkers || timeline === threadId;
   useEffect(() => {
-    if (!hasWorkers) return;
+    if (!workerTab) return;
     const onToggle = () => {
       // Chat stays mounted under the terminal, so only the button that is not inert answers Alt+W.
       if (ref.current?.closest("[inert]")) return;
@@ -39,14 +40,14 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
     };
     window.addEventListener("orbit:toggle-worker-menu", onToggle);
     return () => window.removeEventListener("orbit:toggle-worker-menu", onToggle);
-  }, [hasWorkers, onWorkers, threadId]);
+  }, [workerTab, onWorkers, threadId]);
   return (
     <button
       ref={ref}
       type="button"
       data-show-pane-button
       aria-pressed={open}
-      aria-label={hasWorkers ? t("workers.stripAria", counts) : t("show.pane")}
+      aria-label={workerTab ? t("workers.stripAria", counts) : t("show.pane")}
       title={t("show.pane")}
       onClick={() => open ? closePane() : togglePane(threadId, map, hasWorkers)}
       className={cn("relative shrink-0 rounded-md p-1.5 hover:text-ink md:hover:bg-raised", open ? "text-accent" : "text-ink-secondary", className)}

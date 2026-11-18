@@ -563,10 +563,10 @@ describe("listedRuns", () => {
     const WORK = "aaaaaaaa-1";
     const bare = (ids: string[], labels?: ReadonlyMap<string, string>) => listedRuns(runs(), new Set([WORK, ...ids]), labels);
 
-    it("adds one working row for a live pane with no transcript run", () => {
+    it("adds one row for a live pane with no transcript run, never as working", () => {
       const [first, extra] = bare(["eeeeeeee-1"]);
       expect(first!.run.nick).toBe("WORK");
-      expect(extra).toMatchObject({ state: "working", run: { id: "pane:eeeeeeee-1", nick: "eeeeeeee", model: null, provider: null, sessionId: "eeeeeeee-1", pane8: "eeeeeeee", messageIds: [], notes: [] } });
+      expect(extra).toMatchObject({ state: "done", run: { id: "pane:eeeeeeee-1", nick: "eeeeeeee", model: null, provider: null, sessionId: "eeeeeeee-1", pane8: "eeeeeeee", messageIds: [], notes: [] } });
     });
 
     it("titles the row with the pane label and takes its model and provider", () => {

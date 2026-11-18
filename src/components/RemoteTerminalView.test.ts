@@ -479,17 +479,23 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("renders a slow poll while the next refresh is still pending", async () => {
+  it("waits for a slow poll before the next read and renders it", async () => {
     vi.useFakeTimers();
     let resolve!: (value: { screenText: string }) => void;
     const pending = new Promise<{ screenText: string }>((done) => { resolve = done; });
     store.api.mockReturnValueOnce(pending).mockReturnValue(new Promise(() => {}));
     const { host, root } = await renderView();
     try {
-      await act(async () => vi.advanceTimersByTime(1_000));
-      expect(store.api).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTime(3_000));
+      expect(store.api).toHaveBeenCalledTimes(1);
       await act(async () => resolve({ screenText: "slow response" }));
       expect(host.querySelector("pre")?.textContent).toBe("slow response");
+      expect(store.api).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(1_000));
+      expect(store.api).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(store.api).toHaveBeenCalledTimes(3);
     } finally {
       await act(async () => root.unmount());
     }
@@ -508,7 +514,7 @@ describe("RemoteTerminalView", () => {
     try {
       const listed = await openList(host);
       expect(listed.map(nickOf)).toEqual(["run", "build"]);
-      expect(listed.map(stateOf)).toEqual(["working", "ended"]);
+      expect(listed.map(stateOf)).toEqual(["done", "ended"]);
       expect(listed[1].querySelector("[data-worker-state]")?.textContent).toContain("Ended");
     } finally {
       await act(async () => root.unmount());
@@ -900,6 +906,39 @@ describe("RemoteTerminalView", () => {
     await act(async () => {});
     expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal");
     await act(async () => root.unmount());
+  });
+
+  it("keeps a draft typed for a pane that closed, and sends it nowhere until a pane is picked", async () => {
+    let closed = false;
+    const panes = [{ sessionId: "main", label: null, main: true, exited: false }, { sessionId: "worker", label: "build", main: false, exited: false }];
+    store.api.mockImplementation(async (path: string, init?: { body?: string }) => {
+      if (path.endsWith("/send")) return { screenText: "$ sent", sessionId: JSON.parse(init!.body!).sessionId, generation: 1, panes };
+      if (path.includes("sessionId=worker")) {
+        if (closed) throw new Error("Unknown terminal");
+        return { screenText: "worker$", sessionId: "worker", generation: 1, panes };
+      }
+      return { screenText: "main$", sessionId: "main", generation: 1, panes: closed ? panes.slice(0, 1) : panes };
+    });
+    const { host, root } = await renderView();
+    try {
+      await pickPane(host, "build");
+      await act(async () => typeLine(composer(host)!, "rm -rf build"));
+      closed = true;
+      await act(async () => click(button(host, "Refresh")));
+      await act(async () => {});
+      expect(title(host)).toBe("Terminal / Ada");
+      expect(composer(host)!.value).toBe("rm -rf build");
+      expect(button(host, "Send").disabled).toBe(true);
+      await act(async () => { pressEnter(composer(host)!); });
+      await act(async () => click(button(host, "Send")));
+      expect(sends()).toHaveLength(0);
+      await pickMain(host);
+      expect(button(host, "Send").disabled).toBe(false);
+      await act(async () => click(button(host, "Send")));
+      expect(sends().map(([, init]) => JSON.parse(init.body).sessionId)).toEqual(["main"]);
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   it("reopens the remembered worker and closes to the chat only when it is gone on return", async () => {

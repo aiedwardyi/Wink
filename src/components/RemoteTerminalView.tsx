@@ -111,6 +111,8 @@ export function RemoteTerminalView({
   const [copied, setCopied] = useState(false);
   const [selectedPane, setSelectedPane] = useState<string | null>(() => lastViewedPanes.get(bot.id) ?? null);
   const [draft, setDraft] = useState("");
+  // The pane a draft was typed for; a closed pane must not hand its line to whichever pane takes the screen.
+  const [draftPane, setDraftPane] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -202,12 +204,14 @@ export function RemoteTerminalView({
     if (paneFocus.sessionId === null) {
       focusedRef.current = paneFocus;
       setSelectedPane(mainPane ? null : MAIN_TAB);
+      setDraftPane(mainPane?.sessionId ?? null);
       return;
     }
     const match = panes.find((pane) => pane.sessionId === paneFocus.sessionId);
     if (!match) return;
     focusedRef.current = paneFocus;
     setSelectedPane(match.main ? null : match.sessionId);
+    setDraftPane(match.sessionId);
   }, [paneFocus, panes]);
 
   useEffect(() => {
@@ -216,10 +220,14 @@ export function RemoteTerminalView({
 
   useEffect(() => {
     if (!visible) return;
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), REFRESH_MS);
+    let timer = 0;
+    let live = true;
+    // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
+    const tick = () => void Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]).then(() => { if (live) timer = window.setTimeout(tick, REFRESH_MS); });
+    tick();
     return () => {
-      window.clearInterval(timer);
+      live = false;
+      window.clearTimeout(timer);
       appliedRequestRef.current = ++requestRef.current;
     };
   }, [visible, refresh]);
@@ -237,6 +245,7 @@ export function RemoteTerminalView({
   const text = shown && !noTerminal ? snapshotText(shown).replace(/(?:\r?\n[^\S\r\n]*)+$/, "") : "";
   const screenRuns = shown?.screenRuns?.slice(0, Math.max(1, shown.screenRuns.findLastIndex((row) => row.some((run) => run.t.trim())) + 1));
   const canType = !!shown?.sessionId && shown.generation !== undefined && !noTerminal && !shown.exited;
+  const stranded = draft !== "" && draftPane !== null && draftPane !== shown?.sessionId;
 
   useLayoutEffect(() => {
     const el = outputRef.current;
@@ -288,6 +297,7 @@ export function RemoteTerminalView({
 
   const post = async (input: ReturnType<typeof terminalSendInput> | { key: TerminalKey }) => {
     if (sending || !canType || !shown?.sessionId || shown.generation === undefined) return;
+    if (!("key" in input) && stranded) return;
     const line = draft;
     const sessionId = shown.sessionId;
     const submitted = !("key" in input) && panes.some((pane) => pane.sessionId === sessionId && !pane.main) && createTerminalLineTracker()(`${input.text}${input.paste ? "\n" : ""}`);
@@ -327,6 +337,7 @@ export function RemoteTerminalView({
       appliedRequestRef.current = ++requestRef.current;
       pinnedRef.current = true;
       setSelectedPane(null);
+      setDraftPane(next.sessionId ?? null);
       setSnapshot(next);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
@@ -359,6 +370,7 @@ export function RemoteTerminalView({
   const watchedName = watched ? parseWorkerLabel(watched.label).nick ?? watched.sessionId.slice(0, 8) : bot.name;
   const pick = (sessionId: string | null) => {
     setSelectedPane(sessionId);
+    setDraftPane(sessionId === MAIN_TAB ? null : sessionId ?? mainPane?.sessionId ?? null);
     focusInput(inputRef.current);
   };
 
@@ -462,7 +474,10 @@ export function RemoteTerminalView({
               ref={inputRef}
               rows={1}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                if (!draft || draftPane === null) setDraftPane(shown?.sessionId ?? null);
+                setDraft(event.target.value);
+              }}
               placeholder={t("terminal.inputPlaceholder")}
               aria-label={t("terminal.inputPlaceholder")}
               onKeyDown={onInputKeyDown}
@@ -475,7 +490,7 @@ export function RemoteTerminalView({
             />
             <button
               type="submit"
-              disabled={sending}
+              disabled={sending || stranded}
               aria-label={t("terminal.send")}
               onMouseDown={(event) => event.preventDefault()}
               className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 disabled:opacity-50"
