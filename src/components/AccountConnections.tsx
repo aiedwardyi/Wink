@@ -67,7 +67,8 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
     <div aria-live="polite">
       <ConnectionRow mark={mark}
         label={name ?? (checking ? t("engines.checking") : !loading && <><span className="min-w-0 break-words">{connected ? t("connections.connected") : status || t("accounts.signedOut")}</span>{after}</>)}
-        actions={<>{checking ? name && <span>{t("engines.checking")}</span> : loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
+        actions={<>{checking && name && <span>{t("engines.checking")}</span>}
+        {loading && !checking || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
         </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>

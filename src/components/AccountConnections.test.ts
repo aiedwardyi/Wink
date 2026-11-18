@@ -70,10 +70,10 @@ it("keeps each Connections email bound to its account id when Main and order cha
   }
 });
 
-it("shows an installed engine with an unanswered auth probe as checking in both surfaces", async () => {
+it.each([false, true])("keeps Connections sign-in while setup checks an installed engine (probe ran: %s)", async (authChecked) => {
   const updateBoth = () => act(async () => root.render(createElement(I18nProvider, null,
     createElement(EnginesSettings), createElement(EngineConnect, { instances: state.instances, onRefresh: refreshInstances }))));
-  state.instances = [{ ...engine("claude"), snapshot: { state: "available", authChecked: true } }];
+  state.instances = [{ ...engine("claude"), snapshot: { state: "available", authChecked } }];
   await updateBoth();
   const setup = host.querySelector('[data-engine-connect="claude"]')!;
   const connection = host.querySelector('[data-connection-account="claude"]')!;
@@ -82,7 +82,8 @@ it("shows an installed engine with an unanswered auth probe as checking in both 
   });
   expect(setup.hasAttribute("data-onboarding-ready")).toBe(false);
   expect(connection.textContent).not.toContain("Signed out.");
-  expect(buttons("Sign In")).toHaveLength(0);
+  expect(buttons("Sign In")).toHaveLength(1);
+  expect(buttons("Sign In")[0]!.disabled).toBe(false);
 
   state.instances = [engine("claude", false)];
   await updateBoth();

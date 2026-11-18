@@ -60,7 +60,7 @@ describe("Onboarding engine check", () => {
     vi.useFakeTimers();
     try {
       vi.stubGlobal("ogb", { platform: "win32" });
-      const row = (state: string) => ({ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state }, models: { default: "", options: [] } });
+      const row = (state: string) => ({ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state, authenticated: state === "available" ? false : undefined }, models: { default: "", options: [] } });
       const answers = [row("checking"), row("checking"), row("available")];
       vi.stubGlobal("fetch", vi.fn(async () => Response.json({ instances: [answers.shift() ?? row("available")] })));
       const host = document.createElement("div");

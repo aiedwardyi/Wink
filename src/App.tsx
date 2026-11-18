@@ -1011,6 +1011,7 @@ export default function App() {
       <DesktopCapabilitiesProvider>
       <StoreProvider>
         <Shell onboardingOpen={onboarding !== "done"} />
+        {onboarding === "checking" && cover}
         {showOnboarding && (
           <LazyView overlay fallback={cover}>
             <Onboarding onDone={finishOnboarding} saving={savingOnboarding} saveError={onboardingSaveError}

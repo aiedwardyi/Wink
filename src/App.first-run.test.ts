@@ -160,17 +160,24 @@ describe("first run end", () => {
     expect(await until(() => button("Continue"))).toBeDefined();
   });
 
-  it("leaves the desktop shell uncovered while the profile check is pending", async () => {
-    vi.stubGlobal("ogb", {});
+  it.each([false, true])("covers the app while setup loads only on the desktop (desktop %s)", async (desktop) => {
+    if (desktop) vi.stubGlobal("ogb", {});
     let answer!: (response: Response) => void;
     const pending = new Promise<Response>((resolve) => { answer = resolve; });
     fetchMock.mockImplementation((url: string, init?: RequestInit) =>
       url === "/api/onboarding" && !init?.method ? pending : profileRequest(url, init));
     await act(async () => root.render(createElement(App)));
-    expect(cover()).toBeNull();
-    expect(button("Continue")).toBeUndefined();
+    if (desktop) {
+      expect(cover()).not.toBeNull();
+      expect(button("Continue")).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledWith("/api/onboarding", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    } else {
+      expect(cover()).toBeNull();
+      expect(fetchMock.mock.calls.some(([url]) => url === "/api/onboarding")).toBe(false);
+    }
     await act(async () => answer(Response.json({ done: false })));
     expect(await until(() => button("Continue"))).toBeDefined();
+    expect(cover()).toBeNull();
   });
 
   it("shows Star on GitHub once, then never again", async () => {

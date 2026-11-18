@@ -197,6 +197,46 @@ describe("first engine connection", () => {
     if (result === "opened") expect(panel.querySelector("[data-engine-connect-commands] code")).not.toBeNull();
   });
 
+  it.each([false, true])("rechecks slow sign-in without refocus (after install: %s)", async (afterInstall) => {
+    const claude = instances[0]!;
+    const unknown = { state: "available", authChecked: true } as const;
+    if (afterInstall) {
+      instances[1]!.snapshot = { state: "available", authenticated: false };
+      await render();
+      await click("Continue");
+      await click("Install", host.querySelector('[data-engine-connect="claude"]')!);
+      fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => {
+        setTimeout(() => {
+          claude.snapshot = unknown;
+          resolve(Response.json({ instances }));
+        }, 3000);
+      }));
+      await advance(8000);
+      expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
+    } else {
+      claude.snapshot = unknown;
+      await render();
+      await click("Continue");
+    }
+    const next = () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(next().disabled).toBe(true);
+    expect(host.querySelector('[data-engine-connect="claude"] button')?.textContent).toBe("Checking...");
+    fetchMock.mockClear();
+    fetchMock.mockImplementationOnce((url: string) => new Promise<Response>((resolve) => {
+      setTimeout(() => {
+        if (url === "/api/instances?refresh=1") claude.snapshot = { ...unknown, authenticated: true };
+        resolve(Response.json({ instances }));
+      }, 1000);
+    }));
+    await advance(500);
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/instances?refresh=1");
+    expect(next().disabled).toBe(true);
+    await advance(1000);
+    expect(next().disabled).toBe(false);
+    await click("Continue");
+    expect(host.textContent).toContain("You're all set");
+  });
+
   it("keeps keyboard focus and scroll on an engine refresh", async () => {
     await connect();
     const panel = host.querySelector("[data-engine-connect-panel]")!;

@@ -37,6 +37,7 @@ export function Onboarding({ onDone, retryProfile, saving, saveError }: {
     let recheck: ReturnType<typeof setTimeout> | undefined;
     const refresh = (probe: boolean) => {
       if (pending) return pending;
+      clearTimeout(recheck);
       setInstancesError(null);
       pending = fetch(probe ? "/api/instances?refresh=1" : "/api/instances")
         .then((response) => {
@@ -59,9 +60,13 @@ export function Onboarding({ onDone, retryProfile, saving, saveError }: {
           }
           if (!active) return;
           setSignedOut(!data);
-          if (data) setInstances(data.instances ?? []);
-          // Setup reads no instances frames; ask again until every first check lands.
-          if ((data?.instances as InstanceInfo[] | undefined)?.some((row) => row.snapshot.state === "checking")) recheck = setTimeout(() => void refresh(false), 500);
+          if (!data) return;
+          const rows = (data.instances ?? []) as InstanceInfo[];
+          setInstances(rows);
+          const checkingSignIn = baseInstances(rows).some((row) => row.snapshot.state === "available"
+            && !isRetiredEngineKind(row.driverKind) && engineAuthState(setupEngine(row, rows)) === "checking");
+          // A cached read won't restart a finished probe with an unknown sign-in answer.
+          if (checkingSignIn || rows.some((row) => row.snapshot.state === "checking")) recheck = setTimeout(() => void refresh(checkingSignIn), 500);
         })
         .catch(() => {
           if (active) {

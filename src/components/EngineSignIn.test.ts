@@ -88,11 +88,13 @@ describe("engine sign-in row", () => {
     expect(window.ogb!.openEngineSignIn).toHaveBeenCalledExactlyOnceWith("antigravity");
   });
 
-  it("keeps Windows Muse blank until its authentication probe answers", async () => {
+  it("keeps Windows Muse sign-in available while its authentication probe runs", async () => {
     Object.assign(window, { ogb: { platform: "win32" } });
     const row = instance("museAgent", { snapshot: { state: "available" } });
     await render(createElement(EngineRow, { instance: row }));
-    expect(host.textContent).not.toContain("Sign In");
+    const slot = host.querySelector("[data-engine-slot]")!;
+    expect(slot.textContent).toBe("Checking...Sign In");
+    expect(slot.querySelector("button")?.disabled).toBe(false);
     expect(host.textContent).not.toContain("Connected");
     await act(async () => root!.render(createElement(I18nProvider, null,
       createElement(EngineRow, { instance: { ...row, snapshot: { state: "available", authenticated: true } } }))));
