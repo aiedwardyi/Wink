@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { CallTag } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
+import { promptWithCardAnswer } from "./card-answer.ts";
 import { newId } from "./contracts.ts";
 import { parseJson } from "./schema.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -512,7 +513,7 @@ export function foldQueuedSends(
       });
       rows?.push(row);
       appended.add(item.id);
-      return item.prompt;
+      return promptWithCardAnswer(item.prompt, row.answersCard ? store.messagesFor(threadId).find((message) => message.id === row.answersCard) : undefined);
     });
     if (entry) saveQueueAfterAppend();
     return prompts;

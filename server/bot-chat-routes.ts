@@ -6,6 +6,7 @@ import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
+import { promptWithCardAnswer } from "./card-answer.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -153,6 +154,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     if (!switchHeld(bot) && steersSend(adapter, bot.busy, after)) {
       const turnOpts = {
         replyTo,
+        answersCard,
         messages: store.activePath(threadId),
         userName: cfg.profile?.name?.trim() || "User",
         delivered: store.taskByThread(bot.id, threadId)?.reactionsDelivered,
@@ -163,7 +165,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const prompt = [
         ...closedAskNotes(turnOpts.messages, text, ask?.id),
         ...(call ? callLinesSinceLastUserTurn(turnOpts.messages, new Set()) : []),
-        consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
+        consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(promptWithCardAnswer(text, turnOpts.messages.find((message) => message.id === answersCard)), replyTo, turnOpts.userName),
       ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
       const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];

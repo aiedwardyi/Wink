@@ -4,6 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { planCompaction } from "./context-compaction.ts";
+import type { ProviderInstance } from "./contracts.ts";
+import { composeUserTurnPrompt } from "./replies.ts";
+import { requeueDroppedCall } from "./quick-ask.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { drainSteeredMessages, foldQueuedSends, queueMark, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -14,8 +17,8 @@ function harness(opts: { activeTurn?: boolean } = {}) {
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({}, { seedMessages: false });
   const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Dinner?", options: ["Can't tonight", "Sure"], askUser: true, staysOpen: true } });
-  const steer = vi.fn(async () => true);
-  const startTurn = vi.fn(async (..._args: unknown[]) => ({}));
+  const steer = vi.fn<NonNullable<ProviderInstance["adapter"]["steer"]>>(async () => true);
+  const startTurn = vi.fn<Parameters<typeof createBotChatRoutes>[0]["startTurn"]>(async () => ({}));
   const noop = () => {};
   const routes = createBotChatRoutes({
     cfg: {}, threadSyncGate: { enabled: false }, store, registry: new Map([["claude", { adapter: { capabilities: { queueing: true }, steer, interruptTurn: async () => {} } }]]),
@@ -73,15 +76,17 @@ it("a tap marks only a card on the active path", async () => {
   expect(h.startTurn.mock.calls[0]![2]).not.toHaveProperty("answersCard", expect.anything());
 });
 
-it("a tap into a running turn steers the same prompt and marks the row", async () => {
+it("a tap into a running turn carries its question only in the provider prompt", async () => {
   const h = harness();
   h.busy();
   expect((await h.send({ text: "Can't tonight", cardId: h.card.id })).steered).toBe(true);
   expect(h.last()).toMatchObject({ role: "user", kind: "text", text: "Can't tonight", steered: true, answersCard: h.card.id });
   await h.send({ text: "Can't tonight" });
   expect(h.last().answersCard).toBeUndefined();
-  const prompts = h.steer.mock.calls.map((call) => (call as unknown[])[1]);
-  expect(prompts[0]).toBe(prompts[1]);
+  const prompts = h.steer.mock.calls.map((call) => call[1]);
+  expect(prompts[0]).toContain(h.card.id);
+  expect(prompts[0]).toContain("Dinner?");
+  expect(prompts[1]).toBe("Can't tonight");
 });
 
 it("a queued tap keeps its card through drain and fold", async () => {
@@ -97,7 +102,9 @@ it("a queued tap keeps its card through drain and fold", async () => {
   const held = harness({ activeTurn: true });
   const mark = queueMark();
   expect((await held.send({ text: "Sure", cardId: held.card.id })).queued).toBe(true);
-  expect(foldQueuedSends(held.store, held.bot.id, held.bot.threadId, mark)).toEqual(["Sure"]);
+  const folded = foldQueuedSends(held.store, held.bot.id, held.bot.threadId, mark);
+  expect(folded).toEqual([expect.stringContaining(held.card.id)]);
+  expect(folded[0]).toContain("Dinner?");
   expect(held.last()).toMatchObject({ text: "Sure", steered: true, answersCard: held.card.id });
 });
 
@@ -107,7 +114,61 @@ it("the model still reads a tapped answer on replay", async () => {
   await h.send({ text: "Can't tonight", cardId: h.card.id });
   const plan = planCompaction({ messages: h.store.activePath(h.bot.threadId), contextWindow: 1_000_000 });
   if (plan.needed || plan.status !== "fits") throw new Error("expected the whole transcript");
-  expect(plan.transcript).toContainEqual(expect.objectContaining({ role: "user", text: expect.stringContaining("Can't tonight") }));
+  const answer = plan.transcript.find((message) => message.role === "user")!;
+  expect(answer.text).toContain("Can't tonight");
+  expect(answer.text).toContain(h.card.id);
+  expect(answer.text).toContain("Dinner?");
+});
+
+it("a call answer dropped by the engine keeps its question when folded into the next turn", () => {
+  const h = harness();
+  const answer = h.store.appendMessage(h.bot.threadId, {
+    role: "user", kind: "text", text: "Sure", answersCard: h.card.id, steered: true, call: { id: "c-0123456789ab", ask: true },
+  });
+  const mark = queueMark();
+  requeueDroppedCall(h.store, h.bot.id, h.bot.threadId, answer, () => {});
+  const folded = foldQueuedSends(h.store, h.bot.id, h.bot.threadId, mark);
+  expect(folded).toEqual([expect.stringContaining(h.card.id)]);
+  expect(folded[0]).toContain("Dinner?");
+  expect(h.last()).toMatchObject({ id: answer.id, text: "Sure", answersCard: h.card.id });
+});
+
+it("an unquoted tap or card-typed answer carries the exact question on an idle turn", async () => {
+  const h = harness();
+  const question = "When you type an answer to an open question card, should the sidekick also reply beside it? (my pick: yes)\n" + "Exact long question. ".repeat(20);
+  h.store.patchMessage(h.bot.threadId, h.card.id, { card: { ...h.card.card!, subtitle: question } });
+  for (const text of ["No, leave it", "Only when I ask in my own words"]) {
+    await h.send({ text, cardId: h.card.id });
+    const [botId, sent, opts] = h.startTurn.mock.calls.at(-1)!;
+    expect(botId).toBe(h.bot.id);
+    expect(sent).toBe(text);
+    const prompt = composeUserTurnPrompt(sent, { messages: h.store.activePath(h.bot.threadId), ...opts });
+    expect(prompt).toContain(h.card.id);
+    expect(prompt).toContain(question);
+    expect(prompt).toContain(text);
+  }
+});
+
+it("ten same-label card answers interleaved with typed messages each name only their own question", async () => {
+  const h = harness();
+  const cards = Array.from({ length: 10 }, (_, i) => h.store.appendMessage(h.bot.threadId, {
+    role: "bot", kind: "options", card: { title: "Q", subtitle: `Decision ${i}?`, options: ["Yes"], askUser: true, staysOpen: true },
+  }));
+  h.busy();
+  for (const [i, card] of cards.entries()) {
+    await h.send({ text: "Yes", cardId: card.id });
+    await h.send({ text: `Typed message ${i}` });
+  }
+  const prompts = h.steer.mock.calls.map((call) => call[1]);
+  for (const [i, card] of cards.entries()) {
+    expect(prompts[2 * i]).toContain(card.id);
+    expect(prompts[2 * i]).toContain(card.card!.subtitle);
+    for (const other of cards) if (other !== card) expect(prompts[2 * i]).not.toContain(other.id);
+    expect(prompts[2 * i + 1]).not.toContain(card.id);
+    expect(h.store.activePath(h.bot.threadId).filter((row) => row.answersCard === card.id)).toEqual([
+      expect.objectContaining({ text: "Yes" }),
+    ]);
+  }
 });
 
 it.each([

@@ -12,6 +12,26 @@ const message = (patch: Partial<Message> = {}): Message => ({
   ...patch,
 });
 describe("flat replies", () => {
+  it("keeps a card answer's exact question and id on replay without changing the saved row", () => {
+    const question = "First line\n" + "Long exact question? ".repeat(30);
+    const card = message({ id: "q1", kind: "options", text: undefined, card: { title: "Q", subtitle: question, options: ["Yes"], askUser: true } });
+    const answer = message({ id: "a1", role: "user", text: "Yes", answersCard: card.id });
+    const replay = transcriptText(answer, new Map([[card.id, card], [answer.id, answer]]));
+    expect(replay).toContain(card.id);
+    expect(replay).toContain(question);
+    expect(replay).toContain("Yes");
+    expect(answer.text).toBe("Yes");
+  });
+
+  it("never guesses an answer's question from a shared choice or an invalid link", () => {
+    const card = message({ id: "q1", kind: "options", card: { title: "Q", subtitle: "Ship?", options: ["Yes"], askUser: true } });
+    for (const answersCard of [undefined, "missing"]) {
+      expect(composeUserTurnPrompt("Yes", { messages: [card], answersCard })).toBe("Yes");
+    }
+    const quiz = message({ id: "quiz", kind: "options", card: { title: "Q", subtitle: "First run?", options: ["Yes"] } });
+    expect(composeUserTurnPrompt("Yes", { messages: [quiz], answersCard: quiz.id })).toBe("Yes");
+  });
+
   it("bounds and cleans quoted attachment text", () => {
     expect(replyExcerpt('<attached-image path="/tmp/shot.png" />  hello\nworld')).toBe("[image] hello world");
     expect(replyExcerpt("x".repeat(1_000), 20)).toHaveLength(20);
