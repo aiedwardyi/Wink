@@ -84,17 +84,17 @@ export function AboutYouCard() {
 
   const known = Boolean(sources?.length);
   const steps = (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-6">
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
-        <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-inset p-1.5">
-          <div tabIndex={0} className="max-h-[84px] min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5">
+          <div tabIndex={0} className="min-w-0 flex-1 whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
             {t("aboutYou.prompt")}
           </div>
           <button
             onClick={() => void copy()}
             aria-label={copied ? t("aboutYou.copied") : t("aboutYou.copy")}
-            className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1 [@media(pointer:coarse)]:after:content-['']"
+            className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1 [@media(pointer:coarse)]:after:content-['']"
           >
             {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
           </button>
@@ -110,7 +110,7 @@ export function AboutYouCard() {
           disabled={busy}
           onChange={(event) => setText(event.target.value)}
         />
-        <div className="mt-2 flex justify-end">
+        <div className="mt-6 flex justify-end">
           <button onClick={() => void add()} disabled={busy || !text.trim()} className={cn(ROW_BUTTON, "text-ink")}>
             {t("aboutYou.add")}
           </button>
@@ -155,7 +155,7 @@ export function AboutYouCard() {
           </div>
         </>
       ) : (
-        steps
+        <div className="pt-2">{steps}</div>
       )}
     </Card>
   );
