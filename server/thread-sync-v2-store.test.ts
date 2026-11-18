@@ -1835,6 +1835,19 @@ async function rounds(peers: Array<ReturnType<typeof pc>>): Promise<void> {
   }
 }
 
+function counts(dataDir: string) {
+  const db = new DatabaseSync(join(dataDir, "messages.db"), { readOnly: true });
+  try {
+    const count = (query: string) => Number(db.prepare(query).get()!.n);
+    return {
+      doubledRows: count("SELECT COUNT(*) AS n FROM (SELECT row_id FROM sync_v2_frontier WHERE kind = 'row' GROUP BY row_id HAVING COUNT(*) > 1)"),
+      quarantined: count("SELECT COUNT(*) AS n FROM sync_v2_quarantine"),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 describe("copied installs", { timeout: 180_000 }, () => {
   it("keeps both rows when two installs share a device and writer id", async () => {
     const folder = temp();
@@ -1972,5 +1985,80 @@ describe("copied installs", { timeout: 180_000 }, () => {
     await a.call("pull");
     expect(await texts(a)).toEqual(["edited on B", "from A"]);
     expect(await texts(b)).toEqual(["edited on B", "from A"]);
+  });
+
+  it("keeps a migrated install's writer id across an older head of its own", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, true, false, LOW);
+    await a.call("poll");
+    await a.call("flush");
+    const head = join(folder, "threads-v2", "bot", "thread", LOW, "head.json");
+    const older = readFileSync(head);
+    await a.call("append", { text: "two" });
+    await a.call("flush");
+    const newer = readFileSync(head);
+    const c = pc(folder, "c", true, false, false, HIGH);
+    await c.call("pull");
+    await c.call("poll");
+    await a.call("restart");
+    writeFileSync(head, older);
+    await a.call("pull");
+    expect(readFileSync(head).equals(newer)).toBe(true);
+    await a.call("append", { text: "three" });
+    await a.call("flush");
+    await rounds([a, c]);
+    for (const peer of [a, c]) await peer.call("poll");
+    for (const peer of [a, c]) {
+      expect(await texts(peer)).toEqual(["legacy", "two", "three"]);
+      expect(counts(peer.dataDir)).toEqual({ doubledRows: 0, quarantined: 0 });
+    }
+    expect(identity(a.dataDir)).toBe(LOW);
+  });
+
+  it("splits a copy of a migrated chat without publishing its shared rows again", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, true, false, LOW);
+    await a.call("poll");
+    await a.call("flush");
+    await a.call("append", { text: "base" });
+    await a.call("flush");
+    const c = pc(folder, "c", true, false, false, HIGH);
+    await c.call("pull");
+    const b = await copy(a, folder, "a");
+    await a.call("append", { text: "from A" });
+    await a.call("flush");
+    await b.call("append", { text: "from B" });
+    await b.call("flush");
+    await rounds([a, b, c]);
+    for (const peer of [a, b, c]) await peer.call("poll");
+    for (const peer of [a, b, c]) {
+      expect((await texts(peer)).sort()).toEqual(["base", "from A", "from B", "legacy"]);
+      expect(counts(peer.dataDir)).toEqual({ doubledRows: 0, quarantined: 0 });
+    }
+    const moved = JSON.parse(readFileSync(join(folder, "threads-v2", "bot", "thread", identity(b.dataDir), "head.json"), "utf8"));
+    expect(moved.versions.filter((version: { kind: string }) => version.kind === "row").map((version: { value: Message }) => version.value.text)).toEqual(["from B"]);
+  });
+
+  it("splits a copy of a migrated chat whose migrated rows are sealed", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, true, false, LOW);
+    await a.call("poll");
+    await a.call("flush");
+    await a.call("batch", { count: 2000 });
+    await a.call("flush");
+    const b = await copy(a, folder, "a");
+    await a.call("append", { text: "from A" });
+    await a.call("flush");
+    await b.call("append", { text: "from B" });
+    await b.call("flush");
+    await rounds([a, b]);
+    for (const peer of [a, b]) {
+      const rows = await texts(peer);
+      expect(rows).toHaveLength(2003);
+      expect(new Set(rows).size).toBe(2003);
+      expect(rows).toEqual(expect.arrayContaining(["legacy", "from A", "from B"]));
+      expect(counts(peer.dataDir)).toEqual({ doubledRows: 0, quarantined: 0 });
+    }
+    expect(readdirSync(join(folder, "threads-v2", "bot", "thread", identity(b.dataDir)))).toEqual(["head.json"]);
   });
 });

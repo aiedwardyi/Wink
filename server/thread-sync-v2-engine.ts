@@ -166,6 +166,12 @@ export function createSyncEngine(input: SyncOptions) {
   const saw = (version: SyncVersion, writer: string, seq: number) => (version.seen[writer] ?? 0) >= seq;
   const contentHash = (version: SyncVersion | SyncMutation) => syncContentHash(version.kind === "head" && "legacy" in version && version.legacy?.source
     ? { head: version.value, source: version.legacy.source } : version.value);
+  // A parsed head lists keys in schema order, not the order a packet was stored in, so packets compare by content.
+  const packetHash = (packet: SyncPacket) => syncContentHash(packet);
+  const storedHash = (thread: string, writer: string, seq: number) => {
+    const stored = get(jsonSchema.optional(), "SELECT json FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", thread, writer, seq);
+    return stored && packetHash(JSON.parse(stored.json));
+  };
 
   function scopeDir(scope: SyncScope): string {
     idSchema.parse(scope.botSyncId);
@@ -617,8 +623,8 @@ export function createSyncEngine(input: SyncOptions) {
     const stat = statSync(path, { throwIfNoEntry: false });
     return stat ? `${stat.size}:${stat.mtimeMs}` : "";
   };
-  const ownHash = (thread: string, seq: number) => get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", thread, writerId, seq)?.hash;
-  const mine = (thread: string, head: SyncHead) => head.versions.every((packet) => ownHash(thread, packet.seq) === hash(JSON.stringify(packet)));
+  const ownHash = (thread: string, seq: number) => storedHash(thread, writerId, seq);
+  const mine = (thread: string, head: SyncHead) => head.versions.every((packet) => ownHash(thread, packet.seq) === packetHash(packet));
 
   function ours(scope: SyncScope): boolean {
     const path = headPath(scope);
@@ -653,7 +659,7 @@ export function createSyncEngine(input: SyncOptions) {
       return (previous?.lastSeq ?? 0) + 1;
     }
     if (head.generation <= state.generation && mine(scope.threadId, head)) return (previous?.lastSeq ?? 0) + 1;
-    const theirs = new Map(head.versions.map((packet) => [packet.seq, hash(JSON.stringify(packet))]));
+    const theirs = new Map(head.versions.map((packet) => [packet.seq, packetHash(packet)]));
     const shared = new Set<number>();
     for (const name of readdirSync(dirname(path))) {
       const range = /^seg-([1-9]\d*)-([1-9]\d*)\.json\.gz$/.exec(name);
@@ -662,7 +668,7 @@ export function createSyncEngine(input: SyncOptions) {
         const bytes = gunzipSync(readFileSync(join(dirname(path), name)), { maxOutputLength: headBytes });
         const seal = get(jsonSchema.optional(), "SELECT json FROM sync_v2_seals WHERE thread = ? AND first_seq = ? AND last_seq = ?", scope.threadId, Number(range[1]), Number(range[2]));
         if (seal?.json === bytes.toString("utf8")) shared.add(Number(range[2]));
-        else for (const packet of validateHead(bytes, scope, writerId).versions) theirs.set(packet.seq, hash(JSON.stringify(packet)));
+        else for (const packet of validateHead(bytes, scope, writerId).versions) theirs.set(packet.seq, packetHash(packet));
       } catch {
         continue;
       }
@@ -670,7 +676,7 @@ export function createSyncEngine(input: SyncOptions) {
     let fork = theirs.size ? Math.min(...theirs.keys()) : head.lastSeq + 1;
     // Below the copy's first packet here, its history is a seal both installs published before they parted.
     if (fork > 1 && ownHash(scope.threadId, fork) !== theirs.get(fork)) return shared.has(fork - 1) ? fork : null;
-    while (ownHash(scope.threadId, fork) !== undefined && ownHash(scope.threadId, fork) === theirs.get(fork)) fork++;
+    while (theirs.has(fork) && ownHash(scope.threadId, fork) === theirs.get(fork)) fork++;
     return fork;
   }
 
@@ -828,7 +834,8 @@ export function createSyncEngine(input: SyncOptions) {
     }
     for (const packet of head.versions) {
       const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
-      if (known && known.hash !== hash(JSON.stringify(packet))) {
+      // A packet this PC wrote under that id before a split keeps its stored key order.
+      if (known && known.hash !== hash(JSON.stringify(packet)) && storedHash(scope.threadId, writer, packet.seq) !== packetHash(packet)) {
         result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${packet.seq}`);
         result.rejected++;
         return false;
