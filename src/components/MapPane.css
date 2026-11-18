@@ -19,6 +19,7 @@
 @property --map-split { syntax: "<length-percentage>"; inherits: false; initial-value: 30%; }
 .map-pane[data-expanded] > :is(.map-top, .map-flow-rows) { max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0; overflow: hidden; visibility: hidden; }
 .map-pane[data-expanded] > .map-split { display: none; }
+.map-split::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 4px; translate: -50% -50%; background: radial-gradient(circle, var(--color-ink-secondary) 1.5px, transparent 1.7px) 0 50% / 8px 4px repeat-x; pointer-events: none; }
 .map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }
 /* the drag line above the Git rows sets --map-rows as a share of the pane; 170px is the list's 158px with the box's padding */
 .map-pane > .map-flow-rows { display: flex; flex-direction: column; max-height: var(--map-rows, 170px); }
