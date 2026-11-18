@@ -9,6 +9,7 @@ import { RoomPicture } from "./RoomPicture";
 import { hostRoomBase, isTeamRoom, roomPictureUrl } from "@/lib/team-rooms";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
+import { withPendingCardAnswers } from "@/lib/pending-card-answers";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { useBotModel } from "./BotModelLine";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
@@ -123,7 +124,7 @@ function GroupListItem({
     .map((id) => state.bots.find((b) => b.id === id))
     .filter((b): b is Bot => Boolean(b));
   const last = group.messages.filter(isShownMessage).at(-1);
-  const question = chatNeedsYou(group.messages);
+  const question = chatNeedsYou(withPendingCardAnswers(group.messages, state.acceptedSends[group.threadId], state.pendingQueued[group.threadId]));
   const asking = question || routineRinging(state.routineRuns, group.threadId, group.tasks);
   const unreadCount = useMemo(() => unread ?? unreadReplyCount(group.unread, group.readAt, group.messages), [unread, group.unread, group.readAt, group.messages]);
   const lastAt = at ?? last?.at;
@@ -327,7 +328,7 @@ function BotListItem({
     () => turnElsewhere(bot, state.groups, state.routineRuns, joinedRooms),
     [bot, state.groups, state.routineRuns, joinedRooms],
   );
-  const question = chatNeedsYou(bot.messages);
+  const question = chatNeedsYou(withPendingCardAnswers(bot.messages, state.acceptedSends[bot.threadId], state.pendingQueued[bot.threadId]));
   const asking = question || routineRinging(state.routineRuns, bot.threadId, bot.tasks);
   const unreadCount = useMemo(() => unreadReplyCount(bot.unread, bot.readAt, visible), [bot.unread, bot.readAt, visible]);
   const keepGoing = keepGoingMarkState(bot);

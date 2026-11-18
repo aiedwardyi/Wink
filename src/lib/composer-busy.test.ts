@@ -98,7 +98,7 @@ describe("Composer wiring", () => {
     const store = readFileSync(join(here, "../state/store.tsx"), "utf8");
     expect(composer).toMatch(/dropQueued\(entry\.draft\.sendId\);\s*dispatch\(\{\s*type: "sendGroup",[^}]*actedAt: entry\.draft\.actedAt \?\? entry\.at,/);
     expect(composer).toMatch(/commitQueued\(rest\);\s*dispatch\(\{\s*type: "sendGroup",[^}]*actedAt: next\.draft\.actedAt \?\? next\.at,/);
-    expect(store).toMatch(/takeClosedRoomHold\(draftId\);[\s\S]{0,300}?type: "sendGroup",[^}]*actedAt: at,/);
+    expect(store).toMatch(/takeClosedRoomHold\(draftId\);[\s\S]{0,300}?type: "sendGroup",[^}]*actedAt: actedAt \?\? at,/);
   });
   it("uses composerBusyChrome and does not hard-code the 1:1 wait lecture", () => {
     expect(composer).toContain("composerBusyChrome");

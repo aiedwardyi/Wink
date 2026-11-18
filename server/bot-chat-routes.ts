@@ -6,7 +6,7 @@ import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
-import { canReceiveCardAnswer, promptWithCardAnswer } from "./card-answer.ts";
+import { cardAnswerForSend, promptWithCardAnswer, withCardAnswer } from "./card-answer.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -23,7 +23,7 @@ import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { sendPostReceipt, type StartedTurn } from "./send-receipt.ts";
-import { cancelQueuedSends, cancelSteeredMessage, isSendCancelled, queuedSteeredMessage, queueMark, queueSteeredMessage, withQueuedSend } from "./steer-queue.ts";
+import { cancelQueuedSends, cancelSteeredMessage, isSendCancelled, queuedSteeredMessage, queueMark, queueSteeredMessage, waitingSends, withQueuedSend } from "./steer-queue.ts";
 import type { BotRecord, Message, Store, TaskRecord } from "./store.ts";
 import { syncHold } from "./sync-hold.ts";
 import { isRecoveryFlushReason, shouldStampRecoveryDismiss, type RecoveryFlushReason, type TaskResumeScheduler } from "./task-recovery-flush.ts";
@@ -163,7 +163,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       // that cannot tell leaves them to the next turn's prompt.
       const consumable = adapter.capabilities.steerConsumed === true;
       const prompt = [
-        ...closedAskNotes(turnOpts.messages, text, ask?.id),
+        ...closedAskNotes(turnOpts.messages, text, ask?.id, undefined, answersCard),
         ...(call ? callLinesSinceLastUserTurn(turnOpts.messages, new Set()) : []),
         consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(promptWithCardAnswer(text, turnOpts.messages.find((message) => message.id === answersCard)), replyTo, turnOpts.userName),
       ].join("\n\n");
@@ -333,14 +333,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const heldSend = queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId) : null;
       const cardId = heldSend && heldSend.id === queueId ? heldSend.answersCard : body.cardId;
       const asked = typeof cardId === "string" ? store.activePath(threadId).find((message) => message.id === cardId) : undefined;
-      const answersCard = asked?.card?.askUser ? asked.id : undefined;
+      let answersCard = asked?.card?.askUser ? asked.id : undefined;
       const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // Send now on a held send: the user acted when they queued it
       const actedAt = heldSend?.actedAt ?? sentAt;
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
-        async () => withQueuedSend(bot.id, threadId, queueId, sendId, async () => {
+        async () => withCardAnswer(threadId, cardId, () => withQueuedSend(bot.id, threadId, queueId, sendId, async () => {
           if (sendId) {
             const accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id);
             if (accepted.kind === "conflict") {
@@ -382,12 +382,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             });
           }
 
-          if (cardId !== undefined && (!answersCard || !store.activePath(threadId).some((message) => message.id === answersCard))) {
-            throw Object.assign(new Error("question is not on the active branch"), { status: 409 });
-          }
-          if (answersCard && !canReceiveCardAnswer(store.activePath(threadId), answersCard, text, actedAt)) {
-            throw Object.assign(new Error("question already settled"), { status: 409 });
-          }
+          if (cardId !== undefined) answersCard = cardAnswerForSend(store.activePath(threadId), cardId, text, actedAt, (waitingSends()[threadId] ?? []).filter((entry) => entry.queueId !== queueId));
 
           const adapter = instanceForBot(currentAtStart, threadId)?.adapter;
           const steering = Boolean(currentAtStart.busy && !switchHeld(currentAtStart) && steersSend(adapter, currentAtStart.busy, body.deliver === "after"));
@@ -447,7 +442,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           }
           const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call, answersCard, actedAt });
           return sendPostReceipt(started, threadId);
-        }),
+        })),
       ).finally(() => { if (queueId) drainQueuedSends(); });
       markChatLatency({ sendId, threadId }, "post.receipt");
       return json(res, 202, receipt);

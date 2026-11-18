@@ -547,7 +547,7 @@ export interface AppState {
   } | null;
   /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
-  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; answersCard?: string; reason?: "sync" }>>;
   /** queueIds whose drain frame beat the POST continuation. One-shot and
    * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
@@ -653,7 +653,7 @@ export type Action =
       queueId?: string;
       onError?: () => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; answersCard?: string; reason?: "sync" }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }
@@ -662,10 +662,10 @@ export type Action =
   | { type: "editMessage"; botId: string; messageId: string; text: string; expectedSelection?: ModelSelection; onSettled?: (error?: unknown) => void }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
-  | { type: "answerCard"; botId: string; messageId: string; answer: string }
+  | { type: "answerCard"; botId: string; messageId: string; answer: string; question?: Message }
   | { type: "dismissCard"; botId: string; messageId: string }
   /** rooms: a member's ask_user question, answered by a room message */
-  | { type: "answerGroupCard"; groupId: string; messageId: string; answer: string }
+  | { type: "answerGroupCard"; groupId: string; messageId: string; answer: string; question?: Message }
   | { type: "dismissGroupCard"; groupId: string; messageId: string }
   // permission cards answer by THREAD, so a request raised inside a room
   // can be answered the same way as one in a 1:1 chat

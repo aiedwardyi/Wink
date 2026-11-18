@@ -4,9 +4,9 @@ import type { Message } from "./store.ts";
 
 const question: Message = { id: "q", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: "Which region?", options: ["Seoul", "Tokyo"], askUser: true, staysOpen: true } };
 
-it("receives an older tap after a newer instruction but rejects a fresh stale tap", () => {
+it("rejects another answer once the card was answered, regardless of action time", () => {
   const reply: Message = { id: "typed", at: 300, actedAt: 200, role: "user", kind: "text", text: "Tokyo", answersCard: "q" };
-  expect(canReceiveCardAnswer([question, reply], "q", "Seoul", 100)).toBe(true);
+  expect(canReceiveCardAnswer([question, reply], "q", "Seoul", 100)).toBe(false);
   expect(canReceiveCardAnswer([question, reply], "q", "Seoul", 400)).toBe(false);
 });
 

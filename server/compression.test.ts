@@ -56,6 +56,15 @@ describe("acceptedEncoding", () => {
 });
 
 describe("sendJson", () => {
+  it("carries a precise server clock on JSON responses", async () => {
+    const before = Date.now();
+    const port = await serve((res) => sendJson(res, 200, "{}"));
+    const res = await get(port, {});
+    const timestamp = Number(res.headers["x-wink-time"]);
+    expect(timestamp).toBeGreaterThanOrEqual(before);
+    expect(timestamp).toBeLessThanOrEqual(Date.now());
+  });
+
   it("gzips a big body to the exact original bytes and varies on accept-encoding", async () => {
     expect(Buffer.byteLength(bigJson)).toBeGreaterThan(JSON_COMPRESS_MIN_BYTES);
     const port = await serve((res) => sendJson(res, 200, bigJson));

@@ -80,7 +80,7 @@ function sendEncoded(
 }
 
 export function sendJson(res: ServerResponse, status: number, data: string): void {
-  const headers = { "content-type": "application/json" };
+  const headers = { "content-type": "application/json", "x-wink-time": String(Date.now()) };
   if (Buffer.byteLength(data) <= JSON_COMPRESS_MIN_BYTES) {
     res.writeHead(status, headers);
     res.end(data);

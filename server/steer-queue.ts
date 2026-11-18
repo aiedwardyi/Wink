@@ -539,7 +539,7 @@ export function queuedSteeredMessage(
 }
 
 /** Every thread's waiting sends, as the window that sent them shows them. */
-export function waitingSends(): Record<string, Array<{ queueId: string; text: string; sendId?: string; replyToId?: string; reason?: "sync" }>> {
+export function waitingSends(): Record<string, Array<{ queueId: string; text: string; sendId?: string; replyToId?: string; answersCard?: string; reason?: "sync" }>> {
   const waiting: Record<string, Array<SteerItem & { threadId: string }>> = {};
   for (const entry of queues.values()) {
     for (const item of entry.items) {
@@ -554,6 +554,7 @@ export function waitingSends(): Record<string, Array<{ queueId: string; text: st
       text: item.text,
       sendId: item.sendId,
       replyToId: item.replyToId,
+      ...(item.answersCard ? { answersCard: item.answersCard } : {}),
       ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}),
     })),
   ]));

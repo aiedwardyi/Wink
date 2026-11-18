@@ -10,6 +10,7 @@ export type AcceptedSend = {
   sendId: string;
   kind: AcceptedSendKind;
   text: string;
+  cardId?: string;
   at?: number;
   /** Sent "after this turn": waits even on an engine that could steer it. */
   after?: boolean;

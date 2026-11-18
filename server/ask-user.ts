@@ -114,11 +114,12 @@ export function settledAsk(messages: readonly Message[], messageId: string): Mes
 }
 
 /** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
-export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
+export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string, answersCard?: string): string[] {
   const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
   if (end < 0 || (closerId !== undefined && !isSentByPerson(messages[end]!))) return [];
   const before = messages.slice(0, end);
-  return [...closedNote(before, text, botId), ...openAsksNote(before, text, botId)];
+  const linked = answersCard ?? (closerId === undefined ? undefined : messages[end]?.answersCard);
+  return [...(linked ? [] : closedNote(before, text, botId)), ...openAsksNote(before, text, botId, linked)];
 }
 
 function closedNote(messages: readonly Message[], text: string, botId?: string): string[] {
@@ -136,8 +137,8 @@ function closedNote(messages: readonly Message[], text: string, botId?: string):
 }
 
 // full questions, not excerpts: closing one needs its exact text
-function openAsksNote(messages: readonly Message[], text: string, botId?: string): string[] {
-  const typed: Message = { id: "", at: 0, role: "user", kind: "text", text };
+function openAsksNote(messages: readonly Message[], text: string, botId?: string, answersCard?: string): string[] {
+  const typed: Message = { id: "", at: 0, role: "user", kind: "text", text, answersCard };
   const states = [...askStates([...messages, typed])];
   // `by` is the row itself, so identity marks what the typed message answered
   if (states.some(([, state]) => state.state === "answered" && state.by === typed)) return [];

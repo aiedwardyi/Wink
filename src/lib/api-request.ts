@@ -1,9 +1,17 @@
 import { ConnectionError } from "./error-text";
 import { t } from "./i18n";
+import { actionClock } from "./action-clock";
 
 export async function fetchResponse(path: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(path, { headers: { "content-type": "application/json" }, ...init });
+    const started = performance.now();
+    const response = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
+    if (response.ok) {
+      const timestamp = response.headers?.get("x-wink-time");
+      const server = timestamp ? Number(timestamp) : Date.parse(response.headers?.get("date") ?? "");
+      actionClock.sample(server, started, performance.now());
+    }
+    return response;
   } catch (cause) {
     if (cause instanceof TypeError) throw new ConnectionError();
     throw cause;

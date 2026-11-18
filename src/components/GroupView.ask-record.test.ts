@@ -9,7 +9,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
     ...actual,
-    useStore: () => ({ state: { bots: [], instances: [], config: {} }, dispatch: () => undefined }),
+    useStore: () => ({ state: { bots: [], instances: [], config: {}, acceptedSends: {}, pendingQueued: {} }, dispatch: () => undefined }),
     useStoreDispatch: () => () => undefined,
   };
 });

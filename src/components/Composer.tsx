@@ -93,6 +93,8 @@ import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
 import { pickQuestion, useQuestionPick } from "@/lib/question-view";
+import { withPendingCardAnswers } from "@/lib/pending-card-answers";
+import { actionTime } from "@/lib/action-clock";
 import { useChatPreview } from "@/lib/chat-preview";
 import { questionMovement, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
@@ -289,8 +291,9 @@ export function Composer({
   const repliedTo = (id?: string) => (id && threadMessages.find((message) => message.id === id)) || null;
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
-  const chatMessages = threadMessages;
-  const pinned = pinnedQuestion(chatMessages, threadMessages);
+  const questionThread = group?.threadId ?? bot?.threadId ?? "";
+  const chatMessages = withPendingCardAnswers(threadMessages, state.acceptedSends[questionThread], state.pendingQueued[questionThread], group?.messages ?? bot?.messages);
+  const pinned = pinnedQuestion(chatMessages);
   const questions = pinned ? openQuestions(chatMessages) : [];
   // the row's arrows show an older open question until a newer one arrives
   const questionPick = useQuestionPick(group?.threadId ?? bot?.threadId);
@@ -849,7 +852,7 @@ export function Composer({
       text: liveText,
       requestText: t,
       cardId: restored.cardId ?? (question?.card?.options.length === 0 ? question.id : undefined),
-      actedAt: restored.actedAt ?? Date.now(),
+      actedAt: restored.actedAt ?? actionTime(),
       attachments: [...attachments],
       reply: replyTo ?? null,
       replyToId: replyTo?.id,

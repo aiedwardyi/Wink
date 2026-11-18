@@ -549,12 +549,13 @@ describe("pinned ask_user question", () => {
     if (delivered.length) expect(delivered[0]!.answersCard).toBe(question.id);
   });
 
-  it("keeps a rejected tap open and reuses its send identity for rapid taps", async () => {
+  it("keeps a rejected tap open and gives each tap its own send identity", async () => {
     await mount({ bot: bot([question]) });
     await act(async () => { pinButton("Prod").click(); pinButton("Prod").click(); });
     const posts = sent("POST", "/api/bots/asker/messages");
     expect(posts).toHaveLength(2);
-    for (const post of posts) expect(post.body).toMatchObject({ sendId: `card-answer-${question.id}` });
+    const identities = posts.map((post) => (post.body as { sendId: string }).sendId);
+    expect(new Set(identities).size).toBe(2);
     expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`)).toEqual([]);
     expect(pin()?.getAttribute("data-pending-question")).toBe(question.id);
   });

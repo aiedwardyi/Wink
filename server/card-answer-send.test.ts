@@ -57,19 +57,40 @@ it("keeps the click time through idle, steering and queued delivery", async () =
   busy.busy();
   await busy.send({ text: "Sure", cardId: busy.card.id, actedAt });
   expect(busy.last()).toMatchObject({ actedAt });
-  await busy.send({ text: "Sure", cardId: busy.card.id, deliver: "after", actedAt });
-  busy.store.setActivity(busy.bot.id, "idle");
-  drainSteeredMessages(busy.store, vi.fn());
-  expect(busy.last()).toMatchObject({ actedAt });
+  const queued = harness();
+  queued.busy();
+  await queued.send({ text: "Sure", cardId: queued.card.id, deliver: "after", actedAt });
+  queued.store.setActivity(queued.bot.id, "idle");
+  drainSteeredMessages(queued.store, vi.fn());
+  expect(queued.last()).toMatchObject({ actedAt });
 });
 
-it("coalesces rapid taps with the card's send identity", async () => {
+it("coalesces transport retries with the same send identity", async () => {
   const h = harness();
   h.busy();
-  const body = { text: "Sure", cardId: h.card.id, sendId: `card-answer-${h.card.id}` };
+  const body = { text: "Sure", cardId: h.card.id, sendId: crypto.randomUUID() };
   await Promise.all([h.send(body), h.send(body)]);
   expect(h.store.messagesFor(h.bot.threadId).filter((message) => message.answersCard === h.card.id)).toHaveLength(1);
   expect(h.steer).toHaveBeenCalledTimes(1);
+});
+
+it("accepts only one of two unique taps while the first steer is awaiting acceptance", async () => {
+  const h = harness();
+  h.busy();
+  let entered!: () => void;
+  let release!: (accepted: boolean) => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<boolean>((resolve) => { release = resolve; });
+  h.steer.mockImplementationOnce(() => { entered(); return held; });
+  const first = h.send({ text: "Sure", cardId: h.card.id, sendId: crypto.randomUUID() });
+  await started;
+  const second = h.send({ text: "Can't tonight", cardId: h.card.id, sendId: crypto.randomUUID() });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  release(true);
+  const results = await Promise.allSettled([first, second]);
+  expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+  expect(h.steer).toHaveBeenCalledOnce();
+  expect(h.store.messagesFor(h.bot.threadId).filter((message) => message.answersCard === h.card.id)).toHaveLength(1);
 });
 
 it.each([-1, "yesterday", null])("ignores an invalid client action time: %s", async (actedAt) => {
@@ -213,7 +234,11 @@ it.each([
   h.busy();
   expect((await h.send({ text })).steered).toBe(true);
   expect(await h.patchCard(asked.id, { answered: text })).toBe(settles ? 409 : 200);
-  if (settles) await expect(h.send({ text, cardId: asked.id })).rejects.toMatchObject({ status: 409 });
+  if (settles && card.options.length) await expect(h.send({ text, cardId: asked.id })).rejects.toMatchObject({ status: 409 });
+  else if (!card.options.length) {
+    await h.send({ text, cardId: asked.id });
+    expect(h.last()).toMatchObject({ text, answersCard: undefined });
+  }
 });
 
 it("still receives an answer saved by an older client's card PATCH", async () => {

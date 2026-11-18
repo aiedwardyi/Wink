@@ -7,6 +7,7 @@ import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
 import { ConnectionError } from "@/lib/error-text";
 import { api, StoreProvider, useStore, type Bot, type Group, type Message, type OptionCardData } from "./store";
+import { recordTaskInstruction, seedTaskResumePacket } from "../../server/task-state-fold.ts";
 
 class FakeEventSource {
   static last: FakeEventSource | null = null;
@@ -117,6 +118,17 @@ it("captures a tap before card persistence can delay its message", async () => {
   await act(async () => { release(Response.json({})); await saving; });
   await vi.waitFor(() => expect(post).toHaveBeenCalled());
   expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_000, cardId: ask.id });
+});
+
+it("sends a question rendered by a jump window outside the loaded tail", async () => {
+  const question: Message = { id: "jump-question", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: "Which region?", options: ["Seoul", "Tokyo"], askUser: true, staysOpen: true } };
+  const tail: Message = { id: "tail", at: 10, role: "bot", kind: "text", text: "Still working" };
+  const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: bot.threadId }));
+  await mount(() => Response.json({ messages: [], hasMore: true }), post, [{ ...bot, messages: [tail] }]);
+  const action = { type: "answerCard" as const, botId: bot.id, messageId: question.id, answer: "Seoul", question };
+  await act(async () => store.dispatch(action));
+  expect(post).toHaveBeenCalledOnce();
+  expect(JSON.parse(String(post.mock.calls[0]?.[0]?.body))).toMatchObject({ cardId: question.id, text: "Seoul" });
 });
 
 it("keeps a room tap's action time while its card save waits", async () => {
@@ -694,4 +706,26 @@ describe("room folder lock on the event stream", () => {
     await groupFrame({ pinnedCwd: "C:/new" });
     expect(pinnedNow()).toBe("C:/new");
   });
+});
+
+it("keeps a newer phone instruction when its wall clock is behind the desktop", async () => {
+  const desktop: Message = { id: "desktop", at: 1_900, actedAt: 1_900, role: "user", kind: "text", text: "Use Seoul" };
+  const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: bot.threadId }));
+  const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), post, [{ ...bot, messages: [desktop] }]);
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    const response = await original(url, init);
+    response.headers.set("x-wink-time", "2000");
+    response.headers.set("date", new Date(2_000).toUTCString());
+    return response;
+  });
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
+  await api("/api/bots?messages=200");
+  await act(async () => store.dispatch({ type: "send", botId: bot.id, threadId: bot.threadId, text: "Use Tokyo" }));
+  const body = JSON.parse(String(post.mock.calls[0]![0]?.body));
+  const phone = { id: "phone", at: 2_100, actedAt: body.actedAt };
+  const packet = seedTaskResumePacket({ botId: bot.id, threadId: bot.threadId, messageId: desktop.id, text: desktop.text!, now: desktop.at, turnsAtWrite: 0 });
+  const next = recordTaskInstruction(packet, { messageId: phone.id, text: "Use Tokyo", now: phone.at, messages: [desktop, phone] });
+  expect(next.instructionId).toBe(phone.id);
+  expect(next.goal).toBe("Use Tokyo");
 });

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { askUserCardPatchSchema, settledAsk } from "./ask-user.ts";
-import { canReceiveCardAnswer } from "./card-answer.ts";
+import { cardAnswerForSend, withCardAnswer } from "./card-answer.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
@@ -452,15 +452,15 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
       // a tapped question card is answered by the member that asked, whatever the room's rule
       const asked = typeof body.cardId === "string" ? store.messagesFor(threadId).find((message) => message.id === body.cardId) : undefined;
-      const askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
-      const answersCard = asked?.card?.askUser ? asked.id : undefined;
+      let askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
+      let answersCard = asked?.card?.askUser ? asked.id : undefined;
       const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // nobody was asked to answer: no busy patch will come to end the sender's Thinking
       const idle = () => !groupIsWorking(store.group(group.id) ?? group);
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
-        async () => {
+        async () => withCardAnswer(threadId, body.cardId, async () => {
           if (sendId) {
             const accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id);
             if (accepted.kind === "conflict") {
@@ -480,8 +480,9 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          if (body.cardId !== undefined && (!answersCard || !canReceiveCardAnswer(store.messagesFor(threadId), answersCard, text, actedAt))) {
-            throw Object.assign(new Error("question already settled or unavailable"), { status: 409 });
+          if (body.cardId !== undefined) {
+            answersCard = cardAnswerForSend(store.messagesFor(threadId), body.cardId, text, actedAt);
+            if (!answersCard) askerId = undefined;
           }
           const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard, roomFileIds, actedAt);
           // a Stop during the steer await hands the line back, as a 1:1 Send now
@@ -489,7 +490,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
           // a typed line answers the open question, so its asker takes it; a mention still wins
           const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard, roomFileIds, actedAt);
           return { ok: true as const, threadId, message, idle: idle() };
-        },
+        }),
       ).catch((error: Error & { status?: number; code?: string; file?: string }) => {
         // a teammate's upload names its refused file the same way; the generic 5xx body would hide a full room
         if (error.code !== "ROOM_FILE") throw error;
