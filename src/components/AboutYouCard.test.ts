@@ -78,6 +78,7 @@ describe("About You card", () => {
     await render();
     const copy = button("Copy Prompt");
     expect(copy.className).toContain("[@media(pointer:coarse)]:after:content-['']");
+    expect(copy.classList.contains("hover:bg-raised-hover")).toBe(true);
     const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
     expect(prompt.className).not.toMatch(/(^|\s)focus:outline-none/);
     expect(prompt.className).toContain("focus-visible:outline-none");
