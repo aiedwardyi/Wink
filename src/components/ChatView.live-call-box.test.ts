@@ -296,6 +296,29 @@ describe("live call in the message box", () => {
     }
   });
 
+  it("c-93117b5a76ea a tap on End while the call menu is open ends the call", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      await act(async () => button(frame(host), "Call settings")!.click());
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
+      const end = button(frame(host), "End")!;
+      const touch = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 10, clientY: 10 }] });
+        end.dispatchEvent(event);
+      };
+      await act(async () => {
+        touch("touchstart");
+        touch("touchend");
+        end.click();
+      });
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
   it("Back closes the call menu first", async () => {
     const layers = new Map<string, () => void>();
     const layer = (event: Event) => {

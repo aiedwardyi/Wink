@@ -211,8 +211,8 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
     return held;
   };
   useEffect(() => () => clearTimeout(press.current?.timer), []);
-  // The Language menu is portaled outside the panel.
-  useListMenuDismiss(`[data-call-settings-menu], [role="menu"]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
+  // The Language menu is portaled outside the panel; End is never a dismiss tap, it always ends the call.
+  useListMenuDismiss(`[data-call-settings-menu], [role="menu"], [data-call-end]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
   useBackLayer(Boolean(at), close);
   const rect = shown.value;
   const width = Math.min(360, window.innerWidth - 16);

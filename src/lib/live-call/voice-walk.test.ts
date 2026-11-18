@@ -497,7 +497,7 @@ describe("his 11-15 calls, replayed: a turn he did not prompt never says his las
     e.events.heard("No, I think you're already doing it.");
     if (order === "the result lands first") await tick(1_200);
     speak(e, INVESTIGATING);
-    expect(e.results).toEqual([{ id: "p1", result: "declined. They already heard you answer: say nothing more." }]);
+    expect(e.results).toEqual([{ id: "p1", result: order === "the result lands first" ? "declined" : "declined. They already heard you answer: say nothing more." }]);
     speak(e, INVESTIGATING);
     await tick(0);
     // One tool result is all the app sent after his "No": no [Wink] line, no context.
