@@ -341,7 +341,7 @@ function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message
   return (
     <div {...menuProps} tabIndex={-1}>
       {chip}
-      <PeerMessageBody text={message.text} />
+      <PeerMessageBody text={message.text} short />
       {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
     </div>
   );

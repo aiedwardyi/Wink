@@ -90,6 +90,26 @@ async function mount(current: Bot, others: Bot[] = []) {
 const label = (chip: HTMLButtonElement) => chip.querySelector("span.truncate")?.textContent;
 const chips = (host: HTMLElement) => Array.from(host.querySelectorAll("button")).filter((button) => label(button)?.startsWith("Reply to @"));
 
+const fullLines = new Map<string, number>();
+
+// happy-dom has no layout: a clipped box is 3 lines tall, an open one shows all of its lines
+beforeEach(() => {
+  fullLines.clear();
+  const lineOf = (el: HTMLElement) => fullLines.get(el.closest("[data-mid]")?.getAttribute("data-mid") ?? "") ?? 1;
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-fold") ? lineOf(this) * 20 : 0; } });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (!this.hasAttribute("data-fold")) return 0;
+      return Math.min(lineOf(this), this.className.includes("max-h-[3lh]") ? 3 : Infinity) * 20;
+    },
+  });
+});
+afterEach(() => {
+  Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+  Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+});
+
 describe("ChatView note titles", () => {
   const note: Message = { id: "note", at: 1, role: "bot", kind: "note", text: "Team report fixture. Export stopped." };
   const title = (host: HTMLElement) => host.querySelector('[data-mid="note"] button[aria-expanded]')?.textContent;
@@ -326,19 +346,30 @@ describe("ChatView asker-side peer rows", () => {
     }
   });
 
-  it("folds a long body like a long message", async () => {
+  it("clips a long sent message and reply at 3 lines, and shows a short one whole", async () => {
     const long = Array.from({ length: 12 }, (_, i) => `step ${i}`).join("\n");
-    const { host } = await mount(bot([sent, { ...reply, text: long }]));
-    const fold = () => body(host, "reply")?.firstElementChild?.className ?? "";
-    const toggle = () => body(host, "reply")?.querySelector("button");
+    fullLines.set("sent", 12);
+    fullLines.set("reply", 12);
+    const { host } = await mount(bot([{ ...sent, text: long }, { ...reply, text: long }]));
+    for (const id of ["sent", "reply"]) {
+      const fold = () => body(host, id)?.querySelector("[data-fold]")?.className ?? "";
+      const toggle = () => body(host, id)?.querySelector<HTMLButtonElement>("[data-fold] + button");
+      expect(fold()).toContain("max-h-[3lh]");
+      expect(fold()).not.toContain("max-h-40");
+      expect(toggle()?.textContent).toBe("Show full message");
+      await act(async () => { toggle()?.click(); });
+      expect(fold()).not.toContain("max-h-");
+      expect(toggle()?.textContent).toBe("Show less");
+      await act(async () => { toggle()?.click(); });
+      expect(fold()).toContain("max-h-[3lh]");
+    }
+  });
+
+  it("shows a 3 line sent message whole, with no button", async () => {
+    fullLines.set("sent", 3);
+    const { host } = await mount(bot([{ ...sent, text: "a\nb\nc" }]));
+    expect(body(host, "sent")?.querySelector("[data-fold]")?.className).not.toContain("mask-image");
     expect(body(host, "sent")?.querySelector("button")).toBeNull();
-    expect(fold()).toContain("max-h-40");
-    expect(toggle()?.textContent).toBe("Show full message");
-    await act(async () => { toggle()?.click(); });
-    expect(fold()).not.toContain("max-h-40");
-    expect(toggle()?.textContent).toBe("Show less");
-    await act(async () => { toggle()?.click(); });
-    expect(fold()).toContain("max-h-40");
   });
 
   it("keeps a handoff chip's status label over its message", async () => {
@@ -357,6 +388,7 @@ describe("ChatView asker-side peer rows", () => {
   it("translates the fold labels of a long peer message into Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
     const long = Array.from({ length: 12 }, (_, i) => `step ${i}`).join("\n");
+    fullLines.set("reply", 12);
     const { host } = await mount(bot([{ ...reply, text: long }]));
     const toggle = () => body(host, "reply")?.querySelector("button");
     expect(toggle()?.textContent).toBe("전체 메시지 보기");
@@ -535,26 +567,6 @@ describe("ChatView bot-to-bot clip", () => {
   const table = ["| file | hash |", "| --- | --- |", ...Array.from({ length: 8 }, (_, i) => `| a${i}.ts | ${i}f3c |`)].join("\n");
   const clip = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-mid="${id}"] [data-fold]`);
   const toggle = (host: HTMLElement, id: string) => host.querySelector<HTMLButtonElement>(`[data-mid="${id}"] [data-fold] + button`);
-  const fullLines = new Map<string, number>();
-
-  // happy-dom has no layout: a clipped box is 3 lines tall, an open one shows all of its lines
-  beforeEach(() => {
-    fullLines.clear();
-    const lineOf = (el: HTMLElement) => fullLines.get(el.closest("[data-mid]")?.getAttribute("data-mid") ?? "") ?? 1;
-    Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-fold") ? lineOf(this) * 20 : 0; } });
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (!this.hasAttribute("data-fold")) return 0;
-        return Math.min(lineOf(this), this.className.includes("max-h-[3lh]") ? 3 : Infinity) * 20;
-      },
-    });
-  });
-  afterEach(() => {
-    Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
-    Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
-  });
-
   it("clips an incoming bot message at 3 lines and opens it from the toggle", async () => {
     fullLines.set("inbound", 12);
     const { host } = await mount(bot([received, { ...inbound, text: lines(12) }]));
