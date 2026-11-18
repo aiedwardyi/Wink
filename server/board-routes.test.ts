@@ -138,6 +138,16 @@ describe("Forum replies and helped", () => {
     expect((await call(routes.reply, { parent_id: stuck.id, body: "  " })).status).toBe(400);
   });
 
+  it("a retried reply with the same client id is one post; another id is another post", async () => {
+    const { board, routes } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:2" });
+    const first = await call(routes.reply, { parent_id: stuck.id, body: "Same words.", client_id: "c-11111111" });
+    const again = await call(routes.reply, { parent_id: stuck.id, body: "Same words.", client_id: "c-11111111" });
+    expect(again.body.post.id).toBe(first.body.post.id);
+    await call(routes.reply, { parent_id: stuck.id, body: "Same words.", client_id: "c-22222222" });
+    expect(board.list().filter((post) => post.parent_id === stuck.id)).toHaveLength(2);
+  });
+
   it("deletes the user's own reply for real and nothing else", async () => {
     const { board, routes } = setup();
     const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:3" });

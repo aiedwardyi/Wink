@@ -6,7 +6,7 @@ import { location, parseSource, readSource, runCheck, testFile, trackedFiles, wa
 // Each screen uses the shared parts in docs/ui-kit.md; a hand-rolled copy drifts from the rest of the app.
 const allowedUrl = new URL("./ui-kit.json", import.meta.url);
 const uiFile = /^src\/.+\.(?:tsx?|css)$/;
-const rules = ["motion", "back", "menu", "button", "switch", "segmented", "press"];
+const rules = ["motion", "back", "menu", "button", "switch", "segmented", "press", "row"];
 const tokenFiles = new Set(["src/motion.css", "src/lib/motion.ts", "src/lib/motion-character.ts", "src/lib/phone-swipe.ts"]);
 
 const fix = {
@@ -16,6 +16,7 @@ const fix = {
   button: "use PRIMARY_BUTTON from src/lib/button-style.ts (docs/ui-kit.md#buttons)",
   switch: "use <DetailsSwitch> or <SwitchRow> from src/components/BotDetailsRows.tsx (docs/ui-kit.md#settings-row)",
   segmented: "use <Segmented> or <SegmentedRow> from src/components/Segmented.tsx (docs/ui-kit.md#settings-row)",
+  row: "a list row hovers with hover:bg-raised/50 (docs/ui-kit.md#hover-and-press)",
   press: "buttons get the shared press and hover fade from src/motion.css; drop the button's own transition-* (bare transition if it also moves) and active: classes, and make a clickable element a <button> (docs/ui-kit.md#hover-and-press)",
 };
 
@@ -191,6 +192,8 @@ function tsHits(file, text) {
       if (className) walk(className, (child) => looked.add(child));
     }
     if (/^menuitem(?:radio|checkbox)?$/.test(role) && !/\bMENU_ITEM_HOVER\b/.test(cls)) hit("menu", node, "hand-rolled menu row");
+    const rowHover = classes.has("w-full") && classes.has("text-left") && [...classes].find((name) => /^hover:bg-raised\/\d+$/.test(name) && name !== "hover:bg-raised/50");
+    if (rowHover) hit("row", node, `list row hover ${rowHover}`);
     const tag = nameOf(node.tagName);
     if (/^(?:div|span|li|img|p|td|tr|section|article)$/.test(tag) && attr("onClick") && role !== "separator" && role !== "button" && [...classes].some((name) => /(?:^|:)hover:/.test(name))) hit("press", node, `clickable <${tag}> with a hover`);
     if ((tag === "button" || role === "button") && [...classes].some((name) => !name.startsWith("motion-reduce:") && /^transition-(?:colors|opacity|shadow|transform|none|\[.+\])$/.test(utility(name)))) hit("press", node, "own transition class on a button");
