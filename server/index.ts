@@ -4976,6 +4976,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
+store.holdThreads(() => dispatchedThreads.values());
 const roomLanes = createRoomLanes();
 const laneHandoffs = createLaneHandoffs();
 

@@ -79,7 +79,7 @@ export const WARM_ROW_CAP = 5_000;
 
 /** Loads the chats' transcripts after the first paint, one per task and the open chat first, so a switch or send rarely waits on a load. */
 export function warmChats(
-  store: Pick<Store, "loaded" | "messagesFor">,
+  store: Pick<Store, "loaded" | "warm">,
   chats: () => ReadonlyArray<{ id: string; threadId: string }>,
   afterPaint: (start: () => Promise<void>) => void,
 ): (open: string) => void {
@@ -95,7 +95,7 @@ export function warmChats(
       tried.add(chat.threadId);
       await new Promise((resolve) => setImmediate(resolve));
       try {
-        if (!store.loaded(chat.threadId) && !threadOver(chat.threadId, WARM_ROW_CAP)) store.messagesFor(chat.threadId);
+        if (!store.loaded(chat.threadId) && !threadOver(chat.threadId, WARM_ROW_CAP)) store.warm(chat.threadId);
       } catch (error) {
         // a failed thread stays cold, and loads (or fails) on its own request
         console.error("warm chats failed", chat.threadId, error);

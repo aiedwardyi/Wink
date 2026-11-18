@@ -99,8 +99,8 @@ export interface ThreadRows {
   activeLeafId: string | null;
 }
 
-/** Read one thread, importing its legacy JSON file on first touch. */
-export function readThread(threadId: string, legacyFile: string): ThreadRows {
+/** Read one thread, importing its legacy JSON file on first touch; `chars` is the rows' stored JSON size, which the thread cache weighs. */
+export function readThread(threadId: string, legacyFile: string): ThreadRows & { chars: number } {
   const rows = db()
     .prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid")
     .all(threadId) as Array<{ json: string }>;
@@ -108,9 +108,10 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows {
     const state = db()
       .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
       .get(threadId) as { active_leaf_id: string | null } | undefined;
-    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null, chars: rows.reduce((sum, row) => sum + row.json.length, 0) };
   }
-  return importLegacy(threadId, legacyFile);
+  const legacy = importLegacy(threadId, legacyFile);
+  return { ...legacy, chars: legacy.messages.reduce((sum, message) => sum + JSON.stringify(message).length, 0) };
 }
 
 /** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
@@ -295,11 +296,11 @@ export function applySyncedRows(
 }
 
 /** One stored row by key, without loading its thread. */
-/** Rows whose text contains `needle` (ASCII case-insensitive) or an escape that may spell it, oldest first; the thread's other rows are never parsed. */
+/** Rows whose text contains `needle` (ASCII case-insensitive) or an escape that may spell its characters (%2E, &#46;), oldest first; the thread's other rows are never parsed. */
 export function textRows(threadId: string, needle: string): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
   // SAFETY: This projection selects TEXT id, role and text, and a nullable TEXT bot id from the stored JSON.
   return db()
-    .prepare("SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND (text LIKE ? ESCAPE '\\' OR instr(text, '%') > 0 OR instr(text, '&#') > 0) ORDER BY rowid")
+    .prepare("SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND (text LIKE ? ESCAPE '\\' OR text GLOB '*%[2-7][0-9A-Fa-f]*' OR text GLOB '*&#[0-9]*') ORDER BY rowid")
     .all(threadId, `%${needle.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`) as Array<{ id: string; role: string; text: string; fromBotId: string | null }>;
 }
 

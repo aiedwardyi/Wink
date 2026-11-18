@@ -2,16 +2,19 @@ import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
-import { Store } from "./store.ts";
+import { readThread } from "./message-db.ts";
+import { Store, type Message } from "./store.ts";
+import type { SyncChange } from "./thread-sync-v2.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
+const size = (threadId: string) => readThread(threadId, "").chars;
 
 /** Chats of `rows` rows each, written by one store; the store under test reads them cold. */
-function chats(count: number, rows: number): string[] {
+function chats(count: number, rows: number, text = (index: number) => `row ${index}`): string[] {
   const setup = new Store(selection);
   return Array.from({ length: count }, () => {
     const { threadId } = setup.createBot({}, { seedMessages: false });
-    for (let index = 0; index < rows; index++) setup.appendMessage(threadId, { role: "user", kind: "text", text: `row ${index}` });
+    for (let index = 0; index < rows; index++) setup.appendMessage(threadId, { role: "user", kind: "text", text: text(index) });
     return threadId;
   });
 }
@@ -19,9 +22,9 @@ function chats(count: number, rows: number): string[] {
 describe("thread cache", () => {
   beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
 
-  it("drops the least recently used chats once their rows pass the budget", () => {
+  it("drops the least recently used chats once their size passes the budget", () => {
     const [a, b, c, d] = chats(4, 4);
-    const store = new Store(selection, { threadCacheRows: 10 });
+    const store = new Store(selection, { threadCacheChars: size(a!) * 2.5 });
     for (const threadId of [a!, b!, c!]) store.messagesFor(threadId);
     expect([a, b, c].map((threadId) => store.loaded(threadId!))).toEqual([false, true, true]);
     store.messagesFor(b!);
@@ -31,18 +34,44 @@ describe("thread cache", () => {
 
   it("keeps the two newest chats even when one alone is over the budget", () => {
     const [a, b] = chats(2, 4);
-    const store = new Store(selection, { threadCacheRows: 3 });
+    const store = new Store(selection, { threadCacheChars: size(a!) / 2 });
     store.messagesFor(a!);
     store.messagesFor(b!);
     expect([store.loaded(a!), store.loaded(b!)]).toEqual([true, true]);
   });
 
-  it("drops an idle chat once the loaded ones grow past the budget", () => {
+  it("weighs a chat by its rows' size, not their count", () => {
+    const [long, b, c] = chats(3, 2, (index) => `${index}${"x".repeat(32_768)}`);
+    const store = new Store(selection, { threadCacheChars: size(long!) * 2.5 });
+    for (const threadId of [long!, b!, c!]) store.messagesFor(threadId);
+    expect([long, b, c].map((threadId) => store.loaded(threadId!))).toEqual([false, true, true]);
+  });
+
+  it("drops an idle chat once a patch grows the loaded ones past the budget", () => {
     const [a, b, c] = chats(3, 1);
-    const store = new Store(selection, { threadCacheRows: 3 });
+    const store = new Store(selection, { threadCacheChars: size(a!) * 3.5 });
     for (const threadId of [a!, b!, c!]) store.messagesFor(threadId);
-    for (let index = 0; index < 10; index++) store.appendMessage(c!, { role: "user", kind: "text", text: `more ${index}` });
+    expect(store.loaded(a!)).toBe(true);
+    store.patchMessage(c!, store.activeLeaf(c!)!, { text: "x".repeat(size(a!) * 2) });
     expect([a, b, c].map((threadId) => store.loaded(threadId!))).toEqual([false, true, true]);
+  });
+
+  it("drops an idle chat once synced rows grow the loaded ones past the budget", () => {
+    const setup = new Store(selection);
+    const bots = Array.from({ length: 3 }, () => setup.createBot({}, { seedMessages: false }));
+    for (const bot of bots) setup.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    const [a, b, c] = bots.map((bot) => bot.threadId);
+    const store = new Store(selection, { threadCacheChars: size(a!) * 3.5 });
+    for (const threadId of [a!, b!, c!]) store.messagesFor(threadId);
+    let parent = store.activeLeaf(c!);
+    const changes: SyncChange[] = Array.from({ length: 10 }, (_, index) => {
+      const message: Message = { id: `synced-${index}`, parentId: parent, at: index + 1, role: "bot", kind: "text", text: `synced ${index}` };
+      parent = message.id;
+      return { cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false };
+    });
+    store.applySyncChanges(bots[2]!.id, c!, changes);
+    expect(store.loaded(a!)).toBe(false);
+    expect(store.messagesFor(c!).map((message) => message.id)).toContain("synced-9");
   });
 
   it("never drops a chat a turn is running in", () => {
@@ -50,7 +79,7 @@ describe("thread cache", () => {
     const busy = setup.createBot({}, { seedMessages: false });
     setup.appendMessage(busy.threadId, { role: "user", kind: "text", text: "go" });
     const others = chats(3, 4);
-    const store = new Store(selection, { threadCacheRows: 6 });
+    const store = new Store(selection, { threadCacheChars: size(others[0]!) * 1.5 });
     store.setActivity(busy.id, "working");
     store.messagesFor(busy.threadId);
     for (const threadId of others) store.messagesFor(threadId);
@@ -58,9 +87,34 @@ describe("thread cache", () => {
     expect(store.loaded(others[0]!)).toBe(false);
   });
 
+  it("keeps a chat its driver still owns after Stop marked the bot idle", () => {
+    const [held, ...others] = chats(4, 4);
+    const store = new Store(selection, { threadCacheChars: size(held!) * 1.5 });
+    store.holdThreads(() => [held!]);
+    for (const threadId of [held!, ...others]) store.messagesFor(threadId);
+    expect(store.loaded(held!)).toBe(true);
+    expect(store.loaded(others[0]!)).toBe(false);
+  });
+
+  it("warms a chat only into spare room, and drops it before the chats in use", () => {
+    const [open, other, warmed, fits, later] = chats(5, 4);
+    const store = new Store(selection, { threadCacheChars: size(open!) * 2.5 });
+    store.messagesFor(open!);
+    store.messagesFor(other!);
+    store.warm(warmed!);
+    expect([store.loaded(open!), store.loaded(other!), store.loaded(warmed!)]).toEqual([true, true, false]);
+    store.messagesFor(other!);
+    const roomy = new Store(selection, { threadCacheChars: size(open!) * 3.5 });
+    roomy.messagesFor(open!);
+    roomy.warm(fits!);
+    roomy.messagesFor(other!);
+    roomy.messagesFor(later!);
+    expect([open, fits, other, later].map((threadId) => roomy.loaded(threadId!))).toEqual([true, false, true, true]);
+  });
+
   it("a dropped chat reads back whole and takes new rows on its branch", () => {
     const [a, b, c] = chats(3, 4);
-    const store = new Store(selection, { threadCacheRows: 8 });
+    const store = new Store(selection, { threadCacheChars: size(a!) * 2.5 });
     const before = store.messagesFor(a!).map((message) => message.id);
     store.messagesFor(b!);
     store.messagesFor(c!);

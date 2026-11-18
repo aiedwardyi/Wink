@@ -1,7 +1,8 @@
 import { readFileSync, rmSync } from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
+import { messageDatabase } from "./message-db.ts";
 import { Store } from "./store.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
@@ -20,6 +21,7 @@ const rowsModule = () => import("./linked-rows.ts");
 
 describe("linked file rows", () => {
   beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
+  afterEach(() => vi.restoreAllMocks());
 
   it("reads only the rows naming the file and leaves the chat unloaded", async () => {
     const { linkedRows } = await rowsModule();
@@ -32,15 +34,51 @@ describe("linked file rows", () => {
     expect(store.loaded(threadId)).toBe(false);
   });
 
-  it("answers again without a read until the chat changes", async () => {
+  it("answers again without a database read until the chat changes", async () => {
     const { linkedRows } = await rowsModule();
     const { threadId } = chat();
     const store = new Store(selection);
     const rows = linkedRows(store);
     expect([...rows(threadId, picture)]).toHaveLength(1);
-    expect(rows(threadId, picture)).toBe(rows(threadId, picture));
+    const prepare = vi.spyOn(messageDatabase(), "prepare");
+    expect([...rows(threadId, picture)]).toHaveLength(1);
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRestore();
     const later = store.patchRow(threadId, store.activeLeaf(threadId)!, { text: `Again: [shot](<${picture}>)` })!;
     expect([...rows(threadId, picture)].map((row) => row.text)).toEqual([later.text]);
+  });
+
+  it("keeps a room's activity from dropping another chat's answers", async () => {
+    const { linkedRows } = await rowsModule();
+    const { threadId } = chat();
+    const store = new Store(selection);
+    const room = store.createGroup("Team", [store.createBot({}, { seedMessages: false }).id]);
+    const rows = linkedRows(store);
+    expect([...rows(threadId, picture)]).toHaveLength(1);
+    store.patchGroup(room.id, { unread: true });
+    const prepare = vi.spyOn(messageDatabase(), "prepare");
+    expect([...rows(threadId, picture)]).toHaveLength(1);
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("skips percent signs that spell no name character", async () => {
+    const { linkedRows } = await rowsModule();
+    const { threadId, link } = chat();
+    const setup = new Store(selection);
+    for (let index = 0; index < 20; index++) setup.appendMessage(threadId, { role: "bot", kind: "text", text: `${index * 5}% complete` });
+    expect([...linkedRows(new Store(selection))(threadId, picture)].map((row) => row.id)).toEqual([link.id]);
+  });
+
+  it("reads a huge answer again instead of keeping it", async () => {
+    const { linkedRows } = await rowsModule();
+    const setup = new Store(selection);
+    const { threadId } = setup.createBot({}, { seedMessages: false });
+    setup.appendMessage(threadId, { role: "bot", kind: "text", text: `[shot](<${picture}>) ${"x".repeat(4_000_001)}` });
+    const rows = linkedRows(new Store(selection));
+    expect([...rows(threadId, picture)]).toHaveLength(1);
+    const prepare = vi.spyOn(messageDatabase(), "prepare");
+    expect([...rows(threadId, picture)]).toHaveLength(1);
+    expect(prepare.mock.calls.some(([sql]) => sql.includes(" LIKE "))).toBe(true);
   });
 
   it("keeps a link that escapes letters of the name", async () => {
