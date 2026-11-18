@@ -312,8 +312,11 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "select": {
       if (action.reveal) state = { ...state, ...appSettingsNavigation(state, { open: false }), pluginsOpen: false, createBotOpen: false, revealed: state.revealed + 1 };
-      // the slot's panels belong to the chat being left
-      if (action.id !== state.selectedId) state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
+      // the slot's panels belong to the chat being left, and so does a jump still loading there: a fresh phone page would replay it
+      if (action.id !== state.selectedId) {
+        state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
+        if (state.focusMessage) state = reducer(state, { type: "focusMessageConsumed", nonce: state.focusMessage.nonce });
+      }
       // reselecting the conversation a workspace covers does not reveal it
       const covered = state.workspaceOpen && state.selectedId === action.id;
       if (state.groups.some((g) => g.id === action.id)) {
