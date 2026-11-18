@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { closeMessageDb, messageDatabase } from "../message-db.ts";
 import { Store, type BotRecord, type Message, type StoreChange, type TaskRecord } from "../store.ts";
+import { syncHold } from "../sync-hold.ts";
 import { CONFLICT_NOTICE, loadThreadSyncLedger, pullThread, saveThreadSyncLedger, uploadThread, type ThreadSyncHost } from "../thread-sync.ts";
 import { ThreadSyncV2 } from "../thread-sync-v2.ts";
 import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
@@ -27,6 +28,7 @@ export interface TestArgs {
   leaf?: string | null;
   at?: number;
   compaction?: ContextCompactionV1;
+  botSyncId?: string;
 }
 
 export interface Snapshot {
@@ -180,7 +182,14 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
       case "flush": value = await sync?.flush(threadId); break;
       case "settle": value = await sync?.settle(threadId); break;
       case "saved": value = await sync?.saved(threadId); break;
-      case "pull": await sync?.pull(threadId); break;
+      case "savedDuring": {
+        const saving = sync?.saved(threadId);
+        value = store.appendMessage(threadId, { role: "bot", kind: "text", text: args.text, at: Date.now() });
+        await saving;
+        break;
+      }
+      case "hold": value = syncHold.until(threadId) === undefined ? "free" : "held"; break;
+      case "pull": await sync?.pull(threadId, args.botSyncId); break;
       case "note": value = sync?.notes(threadId)[0] ?? null; break;
       case "consumeForkByWriter": {
         const scope = { botSyncId: "bot", threadId };

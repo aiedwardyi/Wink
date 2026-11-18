@@ -2223,8 +2223,8 @@ function publishSavedSend(threadId: string): void {
 }
 
 /** Runs before a route answers, so the user never types on a stale copy. */
-function pullSyncedThread(threadId: string): void | Promise<void> {
-  if (threadSyncGate.enabled) return threadSyncV2?.pull(threadId).catch((error) => console.warn("chat sync v2: pull failed", error));
+function pullSyncedThread(threadId: string, botSyncId?: string): void | Promise<void> {
+  if (threadSyncGate.enabled) return threadSyncV2?.pull(threadId, botSyncId).catch((error) => console.warn("chat sync v2: pull failed", error));
   const target = threadSyncTarget(threadId);
   if (!target) return;
   try {
@@ -2316,7 +2316,7 @@ function initializeThreadSyncV2() {
     rooms: roomThreads,
     bootReads,
     painted: () => syncPainted,
-    published: () => void googleSync.kick(),
+    published: () => googleSync.poked(),
     watch: () => !googleSync.mirrored(),
   });
   return threadSyncV2;

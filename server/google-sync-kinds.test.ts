@@ -17,6 +17,7 @@ import { syncHold } from "./sync-hold.ts";
 import { createStartupTiming } from "./startup-timing.ts";
 import { createDriveMirror as oldMirror } from "./testing/drive-mirror-1.0.213.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
+import { publicationWake } from "./testing/publication-wake.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
 
 const OWNER = { issuer: "https://accounts.google.com", sub: "account-a" } as const;
@@ -345,6 +346,23 @@ describe("Google reader kind recovery", () => {
     expect(value(join(dataDir, "google-drive"))).toBe("icon-36");
     poking = false;
     for (let s = 0; s < 5; s++) await step();
+  });
+
+  it("runs the due inventory while this PC publishes a chat every five seconds", async () => {
+    const dataDir = await joined();
+    const path = await skipStyle(dataDir);
+    const sync = boot(dataDir, () => true);
+    sync.resume();
+    await settle(sync);
+    const published = publicationWake(sync);
+    for (let n = 0; n < 12; n++) {
+      published();
+      await sync.idle();
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await sync.idle();
+    expect(existsSync(join(dataDir, "google-drive", path))).toBe(true);
+    expect(value(join(dataDir, "google-drive"))).toBe("icon-36");
   });
 
   it("records a wake when a poke runs before the overdue timer", async () => {

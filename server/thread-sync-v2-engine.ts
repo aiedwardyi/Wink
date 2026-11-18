@@ -567,9 +567,13 @@ export function createSyncEngine(input: SyncOptions) {
   }
 
   function document(scope: SyncScope, generation: number, cut: number, versions: SyncPacket[]): SyncHead {
+    const lastSeq = versions.at(-1)?.seq ?? cut;
+    const known = seen(scope.threadId);
+    // A bounded head must not claim this writer's packets it leaves out; peers would wait for them.
+    if ((known[writerId] ?? 0) > lastSeq) known[writerId] = lastSeq;
     return {
       v: 2, threadId: scope.threadId, writerId, generation, sealedThrough: cut,
-      firstSeq: cut + 1, lastSeq: versions.at(-1)?.seq ?? cut, seen: seen(scope.threadId), versions,
+      firstSeq: cut + 1, lastSeq, seen: known, versions,
     };
   }
 

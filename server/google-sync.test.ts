@@ -20,6 +20,7 @@ import { FakeGoogle, WEB_CLIENT } from "./phone-relay/testing/google-issuer.ts";
 import { StatusLog, enroll, rig, type Rig } from "./phone-relay/testing/harness.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
+import { publicationWake } from "./testing/publication-wake.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -746,6 +747,42 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
       requests.mockRestore();
       schedule.mockRestore();
     }
+  });
+
+  it("leaves a rate-limit wait standing when this PC publishes a chat", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const published = publicationWake(home.sync);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return url.pathname === `/drive/v3/files/${drive.root().id}` ? Promise.resolve(new Response(null, { status: 429 })) : fetch(input, init);
+    });
+    try {
+      await settle(home);
+      const sent = requests.mock.calls.length;
+      published();
+      await home.sync.idle();
+      expect(requests.mock.calls.length).toBe(sent);
+    } finally {
+      requests.mockRestore();
+    }
+  });
+
+  it("pulls a downloaded peer head by its chat and bot", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const work = makePC("work");
+    await startOn(home);
+    await startOn(work);
+    const pull = vi.fn();
+    work.sync.stop();
+    work.sync = boot(work, { pull });
+    write(home.folder!, `threads-v2/${home.bots[0].syncId}/thread-new/${home.writerId}/head.json`, JSON.stringify({ thread: "thread-new", cut: 1 }));
+    await settle(home);
+    await settle(work);
+    expect(pull).toHaveBeenCalledWith("thread-new", home.bots[0].syncId);
   });
 
   it("a poke on a PC signed in to another account reads nothing from either Drive", async () => {

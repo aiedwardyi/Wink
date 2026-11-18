@@ -321,11 +321,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }).catch((error: unknown) => console.warn("chat sync v2: boot notice cleanup failed", error)).finally(() => cleaning.clear());
   // the cleanup is awaited outside serial(): a task in it flushes when it lands, not on a retry timer, and other tasks don't queue behind it
   let closed = false;
-  const flushNow = async (threadId: string, through?: number) => {
+  const flushNow = async (threadId: string, through?: number, wake = false) => {
     if (cleaning.has(threadId)) await cleaned;
     // close() drained the queue without this flush; running it now would reopen the worker
     if (closed) return "skipped" as const;
-    return serial(() => flush(threadId, through));
+    return serial(() => flush(threadId, through, wake));
   };
 
   function project(threadId: string, target: Target, mutations: SyncMutation[]): SyncMutation[] {
@@ -424,8 +424,8 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return next;
   }
 
-  /** `through` publishes only versions committed before a turn started, so it may run during that turn. */
-  async function flush(threadId: string, through?: number): Promise<"running" | "written" | "skipped"> {
+  /** `through` publishes only versions committed before a turn started, so it may run during that turn; `wake` tells the host when files changed. */
+  async function flush(threadId: string, through?: number, wake = false): Promise<"running" | "written" | "skipped"> {
     if ((through === undefined && host.running(threadId)) || cleaning.has(threadId)) return "running";
     const task = stored(threadId);
     if (!task?.eligible) return "skipped";
@@ -434,14 +434,18 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (through === undefined && host.running(threadId)) return "running";
     // A settle queued first may have published past it already.
     if (through !== undefined && through <= publishedSeq(threadId)) return "written";
+    let pictured = false;
     for (;;) {
       const pictures = withMessageTransaction((db) => z.array(z.object({ id: z.number(), json: z.string() })).parse(
         db.prepare("SELECT id, json FROM sync_v2_pictures WHERE thread = ? ORDER BY id LIMIT 128").all(threadId)));
       if (!pictures.length) break;
+      pictured = true;
       publishThreadPictures({ folder: workerFolder!, dataDir: host.dataDir, messages: pictures.map((row): Message => JSON.parse(row.json)) });
       withMessageTransaction((db) => db.prepare("DELETE FROM sync_v2_pictures WHERE thread = ? AND id <= ?").run(threadId, pictures.at(-1)!.id));
     }
-    bytesPublished += (await transport.flush(task, undefined, through ?? engine.seen(task.threadId)[writer] ?? 0)).bytesWritten;
+    const { bytesWritten } = await transport.flush(task, undefined, through ?? engine.seen(task.threadId)[writer] ?? 0);
+    bytesPublished += bytesWritten;
+    if (wake && (bytesWritten || pictured)) host.published?.();
     return "written";
   }
 
@@ -450,8 +454,8 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return Number(row?.seq ?? 0);
   }
 
-  function publish(threadId: string): Promise<"running" | "written" | "skipped"> {
-    return flushNow(threadId).then((result) => {
+  function publish(threadId: string, wake = false): Promise<"running" | "written" | "skipped"> {
+    return flushNow(threadId, undefined, wake).then((result) => {
       if (result === "running") schedule(threadId);
       else if (result === "written") retry.delete(threadId);
       return result;
@@ -465,9 +469,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (timers.has(threadId)) return;
     const timer = setTimeout(() => {
       timers.delete(threadId);
-      void publish(threadId).then((result) => {
-        if (result === "written") host.published?.();
-      });
+      void publish(threadId, true);
     }, FLUSH_DELAY_MS);
     timer.unref?.();
     timers.set(threadId, timer);
@@ -476,6 +478,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   let watcher: FSWatcher | undefined;
   let watched: string | null = null;
   const waking = new Set<string>();
+
+  /** A head names its bot or room scope, so a chat this PC has not seen yet resolves as discovery does. */
+  function scoped(threadId: string, botSyncId: string): Target | null {
+    return host.target(threadId) ?? [...host.bots(), ...host.rooms?.scopes() ?? []].find((target) => target.botSyncId === botSyncId) ?? null;
+  }
 
   /** Another PC's head landing in the folder pulls its chat now; the poll stays the backup. */
   function watchFolder(): void {
@@ -487,12 +494,12 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (!folder) return;
     try {
       watcher = watch(folder, { recursive: true }, (_event, name) => {
-        const [root, , threadId, writerId, file, ...rest] = String(name ?? "").split(/[\\/]/);
+        const [root, botSyncId, threadId, writerId, file, ...rest] = String(name ?? "").split(/[\\/]/);
         if (file !== "head.json" || rest.length || writerId === writer || !/^threads-v2(?: \([1-9]\d*\))?$/.test(root) || waking.has(threadId)) return;
         waking.add(threadId);
         void serial(() => {
           waking.delete(threadId);
-          return pull(threadId);
+          return pull(threadId, scoped(threadId, botSyncId));
         }).catch(() => {});
       });
       // a dropped watch is tried again on the next poll
@@ -782,15 +789,13 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     /** A saved send or edit publishes now, through what it committed, though its turn has started. */
     saved(threadId: string): Promise<"running" | "written" | "skipped"> {
       const through = engine.seen(threadId)[writer] ?? 0;
-      return flushNow(threadId, through).then((result) => {
-        if (result === "written") host.published?.();
-        return result;
-      }, () => {
+      return flushNow(threadId, through, true).catch(() => {
         retry.add(threadId);
         return "skipped" as const;
       });
     },
-    pull: (threadId: string) => serial(() => pull(threadId)),
+    /** `botSyncId` is the scope of a peer head that just landed. */
+    pull: (threadId: string, botSyncId?: string) => serial(() => pull(threadId, botSyncId === undefined ? host.target(threadId) : scoped(threadId, botSyncId))),
     poll: () => serial(poll),
     /** Sends every sealed segment and fresh picture again; files the folder already holds are kept. */
     republish(): void {

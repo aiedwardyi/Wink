@@ -1396,6 +1396,62 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await vi.waitFor(async () => expect((await b.snapshot()).rows.map((item) => item.id)).toEqual([row.id]), { timeout: 5_000, interval: 25 });
   });
 
+  it("lets the other PC send once it has every row a mid-turn head publishes", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    const prompt = await a.call<Message>("append", { text: "prompt" });
+    await a.call("live", { value: true });
+    await a.call("savedDuring", { text: "reply" });
+    await b.call("pull");
+    expect((await b.snapshot()).rows.map((row) => row.id)).toEqual([prompt.id]);
+    expect(await b.call("hold")).toBe("free");
+    await a.call("live", { value: false });
+    expect(await a.call("settle")).toBe("written");
+    await b.call("pull");
+    expect((await b.snapshot()).rows.map((row) => row.text)).toEqual(["prompt", "reply"]);
+    expect(await b.call("hold")).toBe("free");
+  });
+
+  it("pulls the first prompt of a task this PC has not seen the moment its head lands", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    await b.call("start");
+    const { threadId } = await a.call<TaskRecord>("create");
+    const row = await a.call<Message>("append", { threadId, text: "brand-new task" });
+    expect(await a.call("flush", { threadId })).toBe("written");
+    await vi.waitFor(async () => expect((await b.call<Snapshot>("snapshot", { threadId })).rows.map((item) => item.id)).toEqual([row.id]), { timeout: 5_000, interval: 25 });
+  });
+
+  it("pulls a new task by its head's bot, never into a running turn", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    const { threadId } = await a.call<TaskRecord>("create");
+    await a.call("append", { threadId, text: "brand-new task" });
+    expect(await a.call("flush", { threadId })).toBe("written");
+    await b.call("live", { value: true });
+    await b.call("pull", { threadId, botSyncId: "bot" });
+    expect((await b.call<Snapshot>("snapshot", { threadId })).rows).toEqual([]);
+    await b.call("live", { value: false });
+    await b.call("pull", { threadId, botSyncId: "bot" });
+    expect((await b.call<Snapshot>("snapshot", { threadId })).rows.map((item) => item.text)).toEqual(["brand-new task"]);
+  });
+
+  it("wakes Drive once for a saved prompt, not again when its timer finds the same head", async () => {
+    const a = pc(temp(), "a");
+    await a.call("clock");
+    await a.call("append", { text: "prompt" });
+    expect(await a.call("saved")).toBe("written");
+    expect((await a.snapshot()).published).toBe(1);
+    await a.call("tick", { at: 3_000 });
+    expect((await a.snapshot()).published).toBe(1);
+    await a.call("append", { text: "later" });
+    await a.call("tick", { at: 3_000 });
+    expect((await a.snapshot()).published).toBe(2);
+  });
+
   it("bounds worker publication to the versions captured while idle", async () => {
     const folder = temp();
     const a = new ThreadSyncV2({ folder, dataDir: temp(), deviceId: "a" });
