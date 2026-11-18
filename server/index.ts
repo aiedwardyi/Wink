@@ -5237,6 +5237,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (!opts?.cardContinuation && text.trim()) {
     const packet = priorTaskPacket
       ? recordTaskInstruction(priorTaskPacket, {
+          messages: store.messagesFor(threadId),
           text: opts?.transcriptText ?? text,
           messageId: userMessage.id,
           now: userMessage.at,
@@ -7461,6 +7462,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   const previousTaskRecord = taskPacketForWrite(threadId);
   const taskRecord = previousTaskRecord
     ? recordTaskInstruction(previousTaskRecord, {
+        messages: store.messagesFor(threadId),
         text,
         messageId: message.id,
         now: message.at,

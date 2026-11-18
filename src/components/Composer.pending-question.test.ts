@@ -327,8 +327,8 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await shrink();
     await act(async () => rowButton("Staging").click());
-    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number) }]);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number), sendId: expect.any(String) })]);
   });
 
   it("glows once when it arrives, then never again", async () => {
@@ -394,7 +394,7 @@ describe("pinned ask_user question", () => {
     expect(card()).toBeNull();
     expect(rowButton("Previous question").disabled).toBe(true);
     await act(async () => rowButton("Seoul").click());
-    expect(sent("PATCH", `/api/bots/asker/cards/${first.id}`).map((call) => call.body)).toEqual([{ answered: "Seoul" }]);
+    expect(sent("PATCH", `/api/bots/asker/cards/${first.id}`).map((call) => call.body)).toEqual([]);
     await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second]) });
     expect(row()!.textContent).toContain("Which plan?");
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
@@ -451,6 +451,42 @@ describe("pinned ask_user question", () => {
     await settle();
   });
 
+  it("folds a paged older card when its asker sends another reply", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const messages: Message[] = [first, { id: "earlier-chat", role: "user", kind: "text", at: 3, text: "One more thing" }, second];
+    await mount({ bot: bot(messages) });
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(card()?.getAttribute("data-pending-question")).toBe(first.id);
+    await rerender({ bot: bot([...messages, { id: "new-asker-reply", role: "bot", kind: "text", at: 5, text: "Another update" }]) });
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()?.getAttribute("data-pending-question")).toBe(first.id);
+  });
+
+  it("restores the selected question after a task remount", async () => {
+    const first = ask({ staysOpen: true, subtitle: "Which region?" });
+    const second = ask({ staysOpen: true, subtitle: "Which plan?" });
+    const original = bot([first, second]);
+    await mount({ bot: original });
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(pin()?.getAttribute("data-pending-question")).toBe(first.id);
+    await act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, { key: "other-task", bot: { ...bot([]), threadId: "other-task" } }))));
+    await act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, { key: original.threadId, bot: original }))));
+    await settle();
+    expect(pin()?.getAttribute("data-pending-question")).toBe(first.id);
+  });
+
+  it("never pins a question from an inactive branch", async () => {
+    const start: Message = { id: "branch-root", role: "user", kind: "text", at: 1, text: "Start here" };
+    const fork: Message = { id: "replacement-branch", parentId: start.id, role: "user", kind: "text", at: 4, text: "Different instructions" };
+    await mount({ bot: { ...bot([start, { ...question, parentId: start.id, card: { ...question.card!, staysOpen: true } }, fork]), activeLeafId: fork.id } });
+    expect(pin()).toBeNull();
+    expect(dot()).toBeNull();
+  });
+
   it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
@@ -478,23 +514,62 @@ describe("pinned ask_user question", () => {
     expect(textarea()?.placeholder).toBe("Message Ada");
   });
 
-  it("sends a tapped choice as the answer and persists answered, not dismissed", async () => {
+  it("sends a tapped choice without settling the card before delivery", async () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
-    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number) }]);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Prod", threadId: "asker-thread", cardId: question.id, actedAt: expect.any(Number), sendId: expect.any(String) })]);
+  });
+
+  it("never saves an undelivered card answer across a task switch", async () => {
+    await mount({ bot: bot([question]) });
+    let activeThread = "asker-thread";
+    let serverAnswered = false;
+    let releasePatch: (() => void) | undefined;
+    const delivered: Message[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      if (init?.method === "PATCH" && path.endsWith(`/cards/${question.id}`)) {
+        serverAnswered = body.answered !== undefined;
+        return new Promise<Response>((resolve) => { releasePatch = () => resolve(Response.json({ ok: true })); });
+      }
+      if (init?.method === "POST" && path.endsWith("/messages")) {
+        if (body.threadId !== activeThread) return Response.json({ error: "the bot switched tasks" }, { status: 409 });
+        const message: Message = { id: "accepted-card-answer", at: Date.now(), role: "user", kind: "text", text: body.text, answersCard: body.cardId };
+        delivered.push(message);
+        return Response.json({ ok: true, threadId: body.threadId, message, steered: true });
+      }
+      return Response.json({});
+    }));
+    await act(async () => pinButton("Prod").click());
+    activeThread = "other-task";
+    await act(async () => { releasePatch?.(); });
+    await settle();
+    expect(serverAnswered && delivered.length === 0).toBe(false);
+    if (delivered.length) expect(delivered[0]!.answersCard).toBe(question.id);
+  });
+
+  it("keeps a rejected tap open and reuses its send identity for rapid taps", async () => {
+    await mount({ bot: bot([question]) });
+    await act(async () => { pinButton("Prod").click(); pinButton("Prod").click(); });
+    const posts = sent("POST", "/api/bots/asker/messages");
+    expect(posts).toHaveLength(2);
+    for (const post of posts) expect(post.body).toMatchObject({ sendId: `card-answer-${question.id}` });
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`)).toEqual([]);
+    expect(pin()?.getAttribute("data-pending-question")).toBe(question.id);
   });
 
   it("sends a typed answer from the message box while the row shows", async () => {
     // its own thread, so the unsent answer restored to the box stays out of the next test's
-    await mount({ bot: { ...bot([ask({ options: [] })]), threadId: "answer-thread" } });
+    const typedQuestion = ask({ options: [], staysOpen: true });
+    await mount({ bot: { ...bot([ask({ staysOpen: true }), typedQuestion]), threadId: "answer-thread" } });
     const input = textarea()!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Staging");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "answer-thread" })]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "answer-thread", cardId: typedQuestion.id })]);
   });
 
   it("dismisses with the open card's x", async () => {
@@ -568,7 +643,7 @@ describe("pinned ask_user question", () => {
     expect(row()!.textContent).toContain("Ada asks");
     await expand();
     await act(async () => pinButton("Staging").click());
-    expect(sent("PATCH", `/api/groups/room/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
+    expect(sent("PATCH", `/api/groups/room/cards/${question.id}`).map((call) => call.body)).toEqual([]);
     expect(sent("POST", "/api/groups/room/messages").map((call) => call.body)).toEqual([
       expect.objectContaining({ text: "Staging", threadId: "room-thread", sendId: expect.any(String) }),
     ]);

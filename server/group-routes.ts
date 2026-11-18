@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { askUserCardPatchSchema, settledAsk } from "./ask-user.ts";
+import { canReceiveCardAnswer } from "./card-answer.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
@@ -478,6 +479,9 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
             throw Object.assign(new Error("the channel switched tasks before it could receive the message"), {
               status: 409,
             });
+          }
+          if (body.cardId !== undefined && (!answersCard || !canReceiveCardAnswer(store.messagesFor(threadId), answersCard, text, actedAt))) {
+            throw Object.assign(new Error("question already settled or unavailable"), { status: 409 });
           }
           const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard, roomFileIds, actedAt);
           // a Stop during the steer await hands the line back, as a 1:1 Send now

@@ -125,6 +125,8 @@ export interface Message {
   replyToId?: string;
   /** Stable client identity for at-most-once chat POST retries. */
   sendId?: string;
+  answersCard?: string;
+  actedAt?: number;
   /** rooms: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: MausColor };
   /** Team rooms: the room log entry this line mirrors, its author and files. */
@@ -641,6 +643,8 @@ export type Action =
       type: "send";
       botId: string;
       text: string;
+      cardId?: string;
+      actedAt?: number;
       sendId?: string;
       replyToId?: string;
       threadId?: string;

@@ -43,9 +43,9 @@ function harness(opts: { activeTurn?: boolean; steerConsumed?: boolean } = {}) {
 it("an idle tap starts the same turn and marks the line with its card", async () => {
   const h = harness();
   await h.send({ text: "Can't tonight", cardId: h.card.id });
-  await h.send({ text: "Can't tonight", cardId: "not-a-card" });
+  await expect(h.send({ text: "Can't tonight", cardId: "not-a-card" })).rejects.toMatchObject({ status: 409 });
   expect(h.startTurn.mock.calls[0]).toEqual([h.bot.id, "Can't tonight", expect.objectContaining({ answersCard: h.card.id })]);
-  expect(h.startTurn.mock.calls[1]![2]).not.toHaveProperty("answersCard", expect.anything());
+  expect(h.startTurn).toHaveBeenCalledTimes(1);
 });
 
 it("keeps the click time through idle, steering and queued delivery", async () => {
@@ -63,6 +63,15 @@ it("keeps the click time through idle, steering and queued delivery", async () =
   expect(busy.last()).toMatchObject({ actedAt });
 });
 
+it("coalesces rapid taps with the card's send identity", async () => {
+  const h = harness();
+  h.busy();
+  const body = { text: "Sure", cardId: h.card.id, sendId: `card-answer-${h.card.id}` };
+  await Promise.all([h.send(body), h.send(body)]);
+  expect(h.store.messagesFor(h.bot.threadId).filter((message) => message.answersCard === h.card.id)).toHaveLength(1);
+  expect(h.steer).toHaveBeenCalledTimes(1);
+});
+
 it.each([-1, "yesterday", null])("ignores an invalid client action time: %s", async (actedAt) => {
   const h = harness();
   await h.send({ text: "Sure", cardId: h.card.id, actedAt });
@@ -72,8 +81,9 @@ it.each([-1, "yesterday", null])("ignores an invalid client action time: %s", as
 it("a tap marks only a card on the active path", async () => {
   const h = harness();
   h.store.branchMessage(h.bot.threadId, h.card.id, "start over");
-  await h.send({ text: "Can't tonight", cardId: h.card.id });
-  expect(h.startTurn.mock.calls[0]![2]).not.toHaveProperty("answersCard", expect.anything());
+  await expect(h.send({ text: "Can't tonight", cardId: h.card.id })).rejects.toMatchObject({ status: 409 });
+  expect(await h.patchCard(h.card.id, { answered: "Can't tonight" })).toBe(404);
+  expect(h.startTurn).not.toHaveBeenCalled();
 });
 
 it.each([false, true])("a tap into a running turn carries its question only in the provider prompt (consumed: %s)", async (steerConsumed) => {
@@ -203,4 +213,12 @@ it.each([
   h.busy();
   expect((await h.send({ text })).steered).toBe(true);
   expect(await h.patchCard(asked.id, { answered: text })).toBe(settles ? 409 : 200);
+  if (settles) await expect(h.send({ text, cardId: asked.id })).rejects.toMatchObject({ status: 409 });
+});
+
+it("still receives an answer saved by an older client's card PATCH", async () => {
+  const h = harness();
+  expect(await h.patchCard(h.card.id, { answered: "Sure" })).toBe(200);
+  await h.send({ text: "Sure", cardId: h.card.id });
+  expect(h.startTurn).toHaveBeenCalledOnce();
 });

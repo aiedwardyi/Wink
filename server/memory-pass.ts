@@ -821,7 +821,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const row = rows.get(id);
       // a pasted tag cannot open or close a prompt block
       const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
-      return text ? [{ id, text, at: row!.actedAt ?? row!.at, tap: Boolean(row!.answersCard), files: attachedImages(row!.text ?? "") }] : [];
+      const question = row?.answersCard ? messages.find((message) => message.id === row.answersCard) : undefined;
+      const tap = !row?.call && Boolean(question?.card?.options.length);
+      return text ? [{ id, text, at: row!.actedAt ?? row!.at, tap, files: attachedImages(row!.text ?? "") }] : [];
     });
     const contexts = replyContexts(messages, typed.map(({ id }) => id));
     const shown = replyPictures(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));

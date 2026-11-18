@@ -6,7 +6,7 @@ import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
-import { promptWithCardAnswer } from "./card-answer.ts";
+import { canReceiveCardAnswer, promptWithCardAnswer } from "./card-answer.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -284,9 +284,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     patchCard: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      const existing = store.messagesFor(bot.threadId).find((msg) => msg.id === m![2]);
-      if (!existing?.card) return json(res, 404, { error: "no such card" });
       const body = await readBody(req);
+      const existing = store.activePath(bot.threadId).find((msg) => msg.id === m![2]);
+      if (!existing?.card) return json(res, 404, { error: "no such card" });
       const settled = body.answered !== undefined && settledAsk(store.activePath(bot.threadId), existing.id);
       if (settled) return json(res, 409, { error: "question already settled", message: clientMessage(settled) });
       const patched = store.patchMessage(bot.threadId, m[2], {
@@ -380,6 +380,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             throw Object.assign(new Error("the bot switched tasks before it could receive the message"), {
               status: 409,
             });
+          }
+
+          if (cardId !== undefined && (!answersCard || !store.activePath(threadId).some((message) => message.id === answersCard))) {
+            throw Object.assign(new Error("question is not on the active branch"), { status: 409 });
+          }
+          if (answersCard && !canReceiveCardAnswer(store.activePath(threadId), answersCard, text, actedAt)) {
+            throw Object.assign(new Error("question already settled"), { status: 409 });
           }
 
           const adapter = instanceForBot(currentAtStart, threadId)?.adapter;

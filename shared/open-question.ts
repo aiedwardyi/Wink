@@ -7,6 +7,7 @@ interface Row {
   role: string;
   kind: string;
   text?: string;
+  answersCard?: string;
   from?: { botId?: string };
   author?: { kind: string };
   call?: CallTag;
@@ -86,6 +87,15 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
     }
     if (!answersQuestion(message)) continue;
     const text = message.text ?? "";
+    if (message.answersCard) {
+      const linked = asked.find((card) => card.id === message.answersCard);
+      const state = linked && states.get(linked)?.state;
+      if (linked && state !== "answered" && state !== "dismissed") {
+        const prefix = answerPrefix(linked);
+        answer(linked, text.startsWith(prefix) ? text.slice(prefix.length) : text, message);
+      }
+      continue;
+    }
     const quoted = text.startsWith("Re: “") ? asked.findLast((card) => text.startsWith(answerPrefix(card))) : undefined;
     if (quoted) {
       if (open.includes(quoted)) answer(quoted, text.slice(answerPrefix(quoted).length), message);

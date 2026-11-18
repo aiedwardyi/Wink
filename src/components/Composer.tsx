@@ -12,6 +12,7 @@ import {
   markDraftEdited,
   recoverFailedComposerSend,
   restoreComposerDraft,
+  restoredSendContext,
   rememberFailedComposerSend,
   rememberQueuedDraft,
   returnSendsToComposer,
@@ -91,8 +92,9 @@ import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
+import { pickQuestion, useQuestionPick } from "@/lib/question-view";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { questionMovement, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -178,6 +180,8 @@ function roomHoldFromQueued(entry: QueuedGroupSend): PersistedRoomHold {
   return {
     text: entry.draft.text,
     requestText: entry.draft.requestText,
+    cardId: entry.draft.cardId,
+    actedAt: entry.draft.actedAt,
     sendId: entry.draft.sendId,
     threadId: entry.draft.threadId,
     revision: entry.draft.revision,
@@ -198,6 +202,8 @@ function queuedFromRoomHold(hold: PersistedRoomHold, draftId: string): QueuedGro
       sendId: hold.sendId,
       text: hold.text,
       requestText: hold.requestText,
+      cardId: hold.cardId,
+      actedAt: hold.actedAt,
       attachments: hold.attachments,
       reply: null,
       replyToId: hold.replyToId,
@@ -283,14 +289,14 @@ export function Composer({
   const repliedTo = (id?: string) => (id && threadMessages.find((message) => message.id === id)) || null;
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
-  const chatMessages = group ? group.messages : (bot?.messages ?? []);
+  const chatMessages = threadMessages;
   const pinned = pinnedQuestion(chatMessages, threadMessages);
   const questions = pinned ? openQuestions(chatMessages) : [];
   // the row's arrows show an older open question until a newer one arrives
-  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
+  const questionPick = useQuestionPick(group?.threadId ?? bot?.threadId);
   const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
-  const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
+  const movement = question ? questionMovement(chatMessages, question) : undefined;
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
@@ -696,7 +702,8 @@ export function Composer({
         sendId: entry.draft.sendId,
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
-        actedAt: entry.at,
+        cardId: entry.draft.cardId,
+        actedAt: entry.draft.actedAt ?? entry.at,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -783,6 +790,8 @@ export function Composer({
       sendId: failed.sendId,
       text: failed.requestText,
       replyToId: failed.replyToId,
+      cardId: failed.cardId,
+      actedAt: failed.actedAt,
       threadId: failed.threadId,
       after: failed.after,
       onError: () => {
@@ -791,6 +800,8 @@ export function Composer({
           text: failed.text,
           requestText: failed.requestText,
           replyToId: failed.replyToId,
+          cardId: failed.cardId,
+          actedAt: failed.actedAt,
           threadId: failed.threadId,
           after: failed.after,
         });
@@ -830,12 +841,15 @@ export function Composer({
     if (!t) return;
     markSent();
     hapticTick();
+    const restored = restoredSendContext(draftId);
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
       revision: draftRevision(draftId),
       sendId: takeRestoredSendId(draftId) ?? crypto.randomUUID(),
       text: liveText,
       requestText: t,
+      cardId: restored.cardId ?? (question?.card?.options.length === 0 ? question.id : undefined),
+      actedAt: restored.actedAt ?? Date.now(),
       attachments: [...attachments],
       reply: replyTo ?? null,
       replyToId: replyTo?.id,
@@ -863,6 +877,8 @@ export function Composer({
         groupId: group.id,
         text: t,
         sendId: sentDraft.sendId,
+        cardId: sentDraft.cardId,
+        actedAt: sentDraft.actedAt,
         replyToId: replyTo?.id,
         threadId,
         onError: () => restoreDraft(sentDraft),
@@ -874,6 +890,8 @@ export function Composer({
         botId: bot.id,
         text: t,
         sendId: sentDraft.sendId,
+        cardId: sentDraft.cardId,
+        actedAt: sentDraft.actedAt,
         replyToId: replyTo?.id,
         threadId,
         after,
@@ -970,7 +988,8 @@ export function Composer({
       sendId: next.draft.sendId,
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
-      actedAt: next.at,
+      cardId: next.draft.cardId,
+      actedAt: next.draft.actedAt ?? next.at,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1248,12 +1267,13 @@ export function Composer({
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;
               carryQuestionFold(question.id, next.id);
-              setQuestionPick({ id: next.id, newest: pinned.id });
+              pickQuestion(group?.threadId ?? bot?.threadId, { id: next.id, newest: pinned.id });
             }}
             typed={text}
             attached={attachments.length}
             replying={Boolean(replyTo)}
-            movedOn={questionMovedOn}
+            movedOn={Boolean(movement)}
+            movement={movement}
             paged={questionPick?.id === question.id}
             onPick={(choice) => {
               if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });

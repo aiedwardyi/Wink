@@ -330,6 +330,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "answerCard": {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
       const card = bot?.messages.find((message) => message.id === action.messageId)?.card;
+      if (card?.askUser && !card.requestId) return state;
       if (bot && !canAnswerCard(visibleMessages(bot), action.messageId)) return state;
       const patch: Partial<OptionCardData> = { answered: action.answer };
       // talking past the first-run quiz hides it; live asks stay until
@@ -341,6 +342,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "answerGroupCard": {
       const group = state.groups.find((candidate) => candidate.id === action.groupId);
+      if (group?.messages.find((message) => message.id === action.messageId)?.card?.askUser) return state;
       if (group && !canAnswerCard(group.messages, action.messageId)) return state;
       return patchGroupCard(state, action.groupId, action.messageId, { answered: action.answer });
     }
@@ -1434,7 +1436,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "send": {
-          const actedAt = Date.now();
+          const actedAt = action.actedAt ?? Date.now();
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
@@ -1454,6 +1456,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                cardId: action.cardId,
               }),
             });
           const settle = (body: any) => {
@@ -1606,8 +1609,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 message: behavior === "answer" ? action.answer : undefined,
               }),
             }).catch(showError);
-          } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
+          } else if (bot && canAnswerCard(visibleMessages(bot), action.messageId)) {
             const asked = bot?.messages.find((m) => m.id === action.messageId);
+            if (card?.askUser && asked) {
+              wrapped({ type: "send", botId: bot.id, text: answerText(visibleMessages(bot), asked, action.answer), threadId: bot.threadId, cardId: asked.id, sendId: `card-answer-${asked.id}`, actedAt: Date.now() });
+              break;
+            }
             const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined, actedAt: Date.now() });
             void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
               .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
@@ -1634,6 +1641,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
           const text = asked ? answerText(messages, asked, action.answer) : action.answer;
+          if (asked?.card?.askUser) {
+            wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: asked.id, sendId: `card-answer-${asked.id}`, actedAt });
+            break;
+          }
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
             .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId, actedAt }); }));
           break;
