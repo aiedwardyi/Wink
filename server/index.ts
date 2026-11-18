@@ -426,7 +426,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -2422,30 +2422,43 @@ function syncMemory(botId: string): void {
   void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
 }
 
-async function syncMemoryOnce(botId: string): Promise<void> {
-  // a missing workspace is restored from Drive, so a deleted bot must not be a target
-  if (!store.bot(botId)) return;
-  const folder = profileSyncSettings.folder;
-  const botSyncId = chatSyncBotId(profileSyncSettings, botId);
-  if (!folder || !botSyncId || !existsSync(folder)) return;
+let memoryLedgerUnsaved = false;
+
+function saveMemoryLedger(): void {
   try {
-    if (memorySyncUnchanged(folder, botSyncId, workspaceDir(botId), memorySyncLedger)) return;
-    const snapshots = await readMemorySnapshots(folder, botSyncId);
-    if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-    // the poll runs for every idle bot, so only changed files refresh the check
-    if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+    savedMemoryLedger = saveMemorySyncLedgerIfChanged(DATA_DIR, memorySyncLedger, savedMemoryLedger);
+    memoryLedgerUnsaved = false;
   } catch (error) {
-    console.warn("memory sync: failed", error);
-  }
-  const ledger = JSON.stringify(memorySyncLedger);
-  if (ledger === savedMemoryLedger) return;
-  try {
-    saveMemorySyncLedger(DATA_DIR, memorySyncLedger);
-    savedMemoryLedger = ledger;
-  } catch (error) {
+    memoryLedgerUnsaved = true;
     console.warn("memory sync: ledger save failed", error);
   }
+}
+
+// true when a pass ran; a poll that found nothing to do only retries a save that failed
+async function syncMemoryPass(botId: string): Promise<boolean> {
+  // a missing workspace is restored from Drive, so a deleted bot must not be a target
+  if (!store.bot(botId)) return false;
+  const folder = profileSyncSettings.folder;
+  const botSyncId = chatSyncBotId(profileSyncSettings, botId);
+  if (!folder || !botSyncId || !existsSync(folder)) return false;
+  if (memorySyncUnchanged(folder, botSyncId, workspaceDir(botId), memorySyncLedger)) return false;
+  const snapshots = await readMemorySnapshots(folder, botSyncId);
+  if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
+  const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
+  // the poll runs for every idle bot, so only changed files refresh the check
+  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+  return true;
+}
+
+async function syncMemoryOnce(botId: string): Promise<void> {
+  let ran = false;
+  try {
+    ran = await syncMemoryPass(botId);
+  } catch (error) {
+    ran = true;
+    console.warn("memory sync: failed", error);
+  }
+  if (ran || memoryLedgerUnsaved) saveMemoryLedger();
 }
 
 // the PC the user is talking to a bot on keeps its copy of the bot's memory when two PCs changed it at once

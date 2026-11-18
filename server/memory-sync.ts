@@ -84,6 +84,14 @@ export function saveMemorySyncLedger(dataDir: string, ledger: MemorySyncLedger):
   writeFileAtomic(join(dataDir, LEDGER_FILE), `${JSON.stringify(ledger, null, 2)}\n`, { mode: 0o600 });
 }
 
+/** Saves the ledger unless it equals `saved`, the text last written; returns what is now on disk. A failed save throws, so the caller still holds the old text and the next call retries. */
+export function saveMemorySyncLedgerIfChanged(dataDir: string, ledger: MemorySyncLedger, saved: string): string {
+  const text = JSON.stringify(ledger);
+  if (text === saved) return saved;
+  saveMemorySyncLedger(dataDir, ledger);
+  return text;
+}
+
 export function loadLegacyMemoryLedger(dataDir: string): LegacyMemoryLedger {
   try {
     return z.record(z.string(), z.string()).parse(JSON.parse(readFileSync(join(dataDir, LEGACY_LEDGER_FILE), "utf8")));

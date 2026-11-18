@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { memorySyncDir, memorySyncUnchanged, readMemorySnapshots, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
+import { memorySyncDir, memorySyncUnchanged, readMemorySnapshots, saveMemorySyncLedgerIfChanged, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
 
 vi.mock("node:fs", async (original) => {
@@ -116,6 +116,20 @@ describe("memory reads", () => {
     syncBotMemory(folder, "bot", workspace, mine, { now: later, snapshots: groups });
     expect(mine.bots.bot.seen).toBeUndefined();
     expect(syncBotMemory(folder, "bot", workspace, mine, { now: later })["MEMORY.md"]).toBe("pulled");
+  });
+
+  it("saves a ledger that failed to save as soon as the disk takes it", () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-ledger-"));
+    roots.push(root);
+    const blocked = join(root, "blocked");
+    writeFileSync(blocked, "a file where the data folder should be");
+    const ledger: MemorySyncLedger = { bots: { bot: { files: {} } } };
+    const saved = JSON.stringify({ bots: {} });
+    expect(() => saveMemorySyncLedgerIfChanged(join(blocked, "data"), ledger, saved)).toThrow();
+    const data = join(root, "data");
+    expect(saveMemorySyncLedgerIfChanged(data, ledger, saved)).toBe(JSON.stringify(ledger));
+    expect(JSON.parse(readFileSync(join(data, "memory-sync-v2.json"), "utf8"))).toEqual(ledger);
+    expect(saveMemorySyncLedgerIfChanged(join(blocked, "data"), ledger, JSON.stringify(ledger))).toBe(JSON.stringify(ledger));
   });
 
   it("retries a file it could not read, even though nothing about it changed", async () => {
