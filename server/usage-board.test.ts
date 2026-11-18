@@ -480,6 +480,9 @@ describe("usage board", () => {
     s.rows()[1].state = "ready";
     s.rows()[1].blocked = true;
     expect(account(await s.board.read(), added).signIn).toBe("unknown");
+    s.rows()[0].checking = true;
+    expect(account(await s.board.read(), "claude").signIn).toBe("unknown");
+    s.rows()[0].checking = false;
     s.rows()[0].status = undefined;
     expect(account(await s.board.read()).signIn).toBe("unknown");
     s.rows()[0].status = { state: "available", authenticated: false };

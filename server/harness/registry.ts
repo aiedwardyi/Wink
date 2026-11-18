@@ -285,6 +285,16 @@ export class ProviderRegistry {
   }
   /** Blocked for a reason that shows as signed out; an account whose check is still running is not. */
   accountStopped(id: string) { return this.blockedAccounts.has(id) && !this.checkingAccounts.has(id); }
+  accountChecking(id: string) { return this.checkingAccounts.has(id); }
+  /** A confirmed check stands as the account's probe, so its row settles without waiting for the startup refresh. */
+  recordAccountCheck(id: string, snapshot: ProviderSnapshot) {
+    if (!this.accounts.has(id) || this.probing.has(id) || this.accountBlocked(id)) return;
+    this.probed.set(id, { snapshot, cliCandidates: [] });
+    this.probeVersion += 1;
+    for (const listener of this.probedListeners) listener(id);
+  }
+  // An account under a check never shows an earlier probe: its sign-in may have changed since.
+  private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.probed.get(id); }
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
@@ -484,7 +494,7 @@ export class ProviderRegistry {
     const read = async () => {
       const candidatesFor = this.candidateScan();
       const rows = await Promise.all(
-        this.entries().map(async (entry) => this.row(entry, this.probed.get(entry.instanceId) ??
+        this.entries().map(async (entry) => this.row(entry, this.known(entry.instanceId) ??
           await (this.probing.get(entry.instanceId) ?? this.startProbe(entry, candidatesFor)))),
       );
       this.saveProbes();
@@ -498,7 +508,7 @@ export class ProviderRegistry {
   async describeKnown() {
     await this.refreshLogins();
     // A blocked account never probes, so it reads as startProbe() answers it.
-    const rows = this.entries().map((entry) => this.row(entry, this.probed.get(entry.instanceId)
+    const rows = this.entries().map((entry) => this.row(entry, this.known(entry.instanceId)
       ?? (this.accountStopped(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
     this.saveProbes();
     return this.currentAccountRows(rows);
@@ -582,7 +592,7 @@ export class ProviderRegistry {
   ): Promise<Probe> {
     const id = entry.instanceId;
     const since = this.holdSeq;
-    if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? (this.accountStopped(id) ? BLOCKED : CHECKING));
+    if (this.accountBlocked(id) && !retryAccount) return this.accountChecking(id) ? Promise.resolve(CHECKING) : this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? BLOCKED);
     const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
         this.probed.set(id, probe);

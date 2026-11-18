@@ -80,6 +80,7 @@ export class AccountLifecycle {
     await this.observe(id, snapshot ?? { state: "unavailable" }).catch(() => {
       console.error("Account restoration is waiting for recovery");
     });
+    if (snapshot) this.registry.recordAccountCheck(id, snapshot);
   }
 
   dispose() {
@@ -259,7 +260,7 @@ export class AccountLifecycle {
     const account = this.accounts.get(id);
     if (!account || this.accounts.drains[id] || (generation !== undefined && generation !== account.generation) || account.state !== "ready" || this.jobs.has(id)) return Promise.resolve();
     if (snapshot.authenticated !== false && !(snapshot.authenticated === true && snapshot.accountIdentity)) {
-      this.registry.blockAccount(id, true);
+      this.registry.checkAccount(id);
       this.retry(account);
       return Promise.resolve();
     }

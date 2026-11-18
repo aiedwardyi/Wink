@@ -533,6 +533,35 @@ describe("account lifecycle", () => {
     expect((await request(f, "GET", "/api/accounts")).body.accounts.find((row: { id: string }) => row.id === account.id)?.state).toBe("stopped");
   });
 
+  it("publishes a restore check's answer at once and never shows an earlier probe while checking", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    const landed = vi.fn();
+    f.registry.onProbed(landed);
+    await f.registry.describe({ refresh: true });
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("available");
+    let answer!: (snapshot: ProviderSnapshot) => void;
+    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    const restored = f.controller.restore();
+    await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("checking");
+    landed.mockClear();
+    answer({ state: "available", authenticated: true, accountIdentity: account.identity, account: "restored@example.test" });
+    await restored;
+    expect(landed).toHaveBeenCalledWith(account.id);
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toMatchObject({ authenticated: true, account: "restored@example.test" });
+  });
+
+  it("keeps a failed restore check reading as checking while it retries", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture CLI crashed"));
+    await f.controller.restore();
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("checking");
+  });
+
   it("retries a thrown restore probe without changing the account", async () => {
     const f = await fixture();
     const account = await f.add();

@@ -3207,10 +3207,10 @@ const usageBoard = createUsageBoard({
   codexPromo: codexPromoStatus,
   accounts: {
     list: () => [
-      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountStopped(row.id), status: providerSnapshots.get(row.id) })),
+      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountStopped(row.id), checking: registry.accountChecking(row.id), status: providerSnapshots.get(row.id) })),
       ...Object.entries(instanceConfigs(cfg)).flatMap(([id, entry]) => {
         const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
-        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountStopped(id), status: providerSnapshots.get(id) }] : [];
+        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountStopped(id), checking: registry.accountChecking(id), status: providerSnapshots.get(id) }] : [];
       }),
       ...codexCreditRows(codexCreditFor()),
     ],
