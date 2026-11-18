@@ -470,6 +470,8 @@ export const Transcript = memo(function Transcript({
               onRetry={onRetryFor(m.id)}
               onMessageMenu={readOnly ? undefined : onMessageMenu}
             />
+          ) : m.kind === "screen" && roomBase && m.roomFiles ? (
+            <ShownImage picture={roomPictures(roomBase, m.roomFiles)[0]} caption={m.text} messageId={m.id} />
           ) : m.kind === "screen" && m.image ? (
             <ShownImage name={m.image} caption={m.text} />
           ) : m.kind === "screen" && (m.png || m.hasImage) ? (
@@ -537,10 +539,12 @@ export const Transcript = memo(function Transcript({
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} threadId={group.threadId} className={cn(m.text && "mt-2")} />}
                       {(folded || unfolded.has(m.id)) && <FoldToggle expanded={!folded} onToggle={() => toggleFold(m.id)} />}
                     </>
-                  ) : markdownText.trim() ? (
+                  ) : markdownText.trim() || (roomBase && m.roomFiles) ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)} />
+                      {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className="justify-start" />}
+                      {markdownText.trim() && <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)} />}
                       {translation && <RoomTranslationText translation={translation} markdown />}
+                      {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} threadId={group.threadId} className={cn(m.text && "mt-2")} />}
                     </MessageBoundary>
                   ) : null}
                 </div>

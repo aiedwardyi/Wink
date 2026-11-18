@@ -474,7 +474,7 @@ const TOOLS = [
   {
     name: "show_image",
     description:
-      "Show a local image file (PNG, JPEG, GIF, or WebP, up to 10 MiB) to the user in this chat. Use it whenever you create or find an image the user should see, instead of ending with a file path. Returns the image's URL.",
+      "Show a local image file (PNG, JPEG, GIF, or WebP, up to 10 MiB) in this chat; in a team room everyone there sees it. Use it whenever you create or find an image the user should see, instead of ending with a file path. Returns the image's URL.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

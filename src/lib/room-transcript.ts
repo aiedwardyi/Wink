@@ -41,7 +41,9 @@ export function messageVisible(message: Message, showToolCalls: boolean, showAct
     case "compaction":
       return true;
     case "screen":
-      return Boolean(message.png || message.image || message.hasImage) && (message.shown || showToolCalls);
+      return (message.shown || showToolCalls) && Boolean(
+        message.png || message.image || message.hasImage || (message.roomFiles?.length && message.text) || message.roomFiles?.some((file) => !file.deleted),
+      );
     default:
       return false;
   }

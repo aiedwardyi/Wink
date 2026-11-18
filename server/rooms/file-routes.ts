@@ -1,7 +1,10 @@
 // Room files over HTTP: the door's file actions for guests, and /api/rooms/ for
 // the host (local only). Callers do the ACL; ids resolve only inside one room.
+import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 
+import { attachmentExists, ATTACHMENTS_DIR } from "../attachments.ts";
 import { json, readBody } from "../http-helpers.ts";
 import { isRelayRequest } from "../phone-relay/via.ts";
 import type { Store } from "../store.ts";
@@ -22,7 +25,7 @@ export const fileAction = (match: RegExpExecArray): FileAction => (match[3] ? "p
 const LINGER_BYTES = 64 * 1024 ** 2;
 const LINGER_MS = 10_000;
 
-function reply(res: ServerResponse, status: number, body: unknown, unread?: IncomingMessage): void {
+export function reply(res: ServerResponse, status: number, body: unknown, unread?: IncomingMessage): void {
   const text = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...(unread ? { connection: "close", "content-length": Buffer.byteLength(text) } : {}) });
   if (!unread) return void res.end(text);
@@ -103,8 +106,15 @@ export async function hostFileRoute(
         await deleteRoomFile(roomId!, file[2]);
         if (group.picture === file[2]) deps.store.patchGroup(group.id, { picture: undefined });
         for (const message of deps.store.messagesFor(group.threadId)) {
-          if (!message.roomFiles?.some((each) => each.id === file[2])) continue;
-          deps.store.patchMessage(group.threadId, message.id, { roomFiles: message.roomFiles.map((each) => each.id === file[2] ? { ...each, deleted: true } : each) });
+          const legacy = message.kind === "screen" && !message.roomFiles ? message.image : undefined;
+          const files = message.roomFiles ?? (legacy && message.roomEntryId
+            ? roomEntry(roomId!, message.roomEntryId)?.files : undefined);
+          if (!files?.some((each) => each.id === file[2])) continue;
+          if (legacy && attachmentExists(legacy)) rmSync(join(ATTACHMENTS_DIR, legacy), { force: true });
+          deps.store.patchMessage(group.threadId, message.id, {
+            roomFiles: files.map((each) => each.id === file[2] ? { ...each, deleted: true } : each),
+            ...(message.kind === "screen" ? { image: undefined, hasImage: false } : {}),
+          });
         }
         broadcastDoorDeleted(roomId!, [file[2]], deletedRoomFiles(roomId!).count);
         reply(res, 200, { ok: true });

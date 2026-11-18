@@ -107,6 +107,62 @@ async function refused(reason: string) {
   expect(readFileSync(path)).toEqual(pixels);
 }
 
+describe("a bot's picture in a team room", () => {
+  const shared = (roomPicture: (...args: unknown[]) => Promise<unknown>) => createInternalRoutes({
+    cfg: { imageGen: { key: "test-key" } }, store,
+    connectorThread: () => ({ group: { id: "group" } }),
+    botOutputRoots: () => [folder],
+    captureRoomPicture: () => roomPicture,
+  } as unknown as Parameters<typeof createInternalRoutes>[0]);
+  const refusal = () => vi.fn(async () => { throw Object.assign(new Error("this room is out of space for files"), { status: 507 }); });
+
+  it("answers with the room's row and keeps no local copy", async () => {
+    const before = attachments();
+    const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
+    const result = await call(shared(roomPicture).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path, caption: " Cat " });
+    expect(result).toMatchObject({ status: 201, body: { messageId: "room-row", url: "/api/rooms/r1/files/f/preview" } });
+    expect(roomPicture).toHaveBeenCalledWith(expect.any(String), "picture.gif", "Cat");
+    expect(appendMessage).not.toHaveBeenCalled();
+    expect(attachments()).toEqual(before);
+  });
+
+  it("posts only to the conversation the caller's own token names", async () => {
+    const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
+    const routes = createInternalRoutes({
+      cfg: { imageGen: { key: "test-key" } }, store,
+      connectorThread: () => ({ group: { id: "group" } }),
+      botOutputRoots: () => [folder],
+      resolveCommsCaller: () => ({ botId: bot.id, threadId: "another-thread" }),
+      captureRoomPicture: () => roomPicture,
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    expect(await call(routes.showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path })).toMatchObject({ status: 403 });
+    expect(await call(routes.generateImage, { fromBotId: bot.id, fromThreadId: bot.threadId, prompt: "picture" })).toMatchObject({ status: 403 });
+    expect(roomPicture).not.toHaveBeenCalled();
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("names why the room refused it and shows nothing", async () => {
+    const before = attachments();
+    const result = await call(shared(refusal()).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path });
+    expect(result).toMatchObject({ status: 507, body: { error: "the room refused it: this room is out of space for files" } });
+    expect(appendMessage).not.toHaveBeenCalled();
+    expect(attachments()).toEqual(before);
+  });
+
+  it("tells generate_image why the room refused it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: pixels.toString("base64") }] }))));
+    try {
+      const before = attachments();
+      const result = await call(shared(refusal()).generateImage, { fromBotId: bot.id, fromThreadId: bot.threadId, prompt: "picture" });
+      expect(result).toMatchObject({ status: 201, body: { path: expect.any(String), showError: "the room refused it: this room is out of space for files" } });
+      expect(appendMessage).not.toHaveBeenCalled();
+      expect(attachments()).toEqual(before);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("picture gate routes", () => {
   it.each(["working folder", "workspace"])("refuses stamps inside the bot's %s in PATCH", async (root) => {
     gate();
