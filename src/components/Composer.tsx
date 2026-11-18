@@ -1508,7 +1508,7 @@ export function Composer({
           )}
           {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
             <>
-              <CallGear bot={caller} />
+              <CallGear bot={caller} className="max-md:-my-1" />
               <button
                 type="button"
                 onClick={onCall}

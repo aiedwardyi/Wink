@@ -197,11 +197,11 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
 
 export const CALL_ICON = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
 
-export function CallGear({ bot }: { bot: Bot }) {
+export function CallGear({ bot, className }: { bot: Bot; className?: string }) {
   const { t } = useI18n();
   return (
     <CallSettingsHold bot={bot} tap>
-      <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(CALL_ICON, "text-ink-secondary hover:bg-control hover:text-ink")}>
+      <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(CALL_ICON, "text-ink-secondary hover:bg-control hover:text-ink", className)}>
         <Settings size={17} />
       </button>
     </CallSettingsHold>
