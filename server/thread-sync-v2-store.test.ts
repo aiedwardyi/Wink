@@ -26,8 +26,7 @@ const temp = () => {
   return root;
 };
 
-function pc(folder: string, deviceId: string, enabled = true, legacy = false, auto = false, writer?: string) {
-  const dataDir = temp();
+function pc(folder: string, deviceId: string, enabled = true, legacy = false, auto = false, writer?: string, dataDir = temp()) {
   const worker = new Worker(new URL("./testing/thread-sync-v2-pc.ts", import.meta.url), {
     workerData: { folder, dataDir, deviceId, enabled, legacy, auto, writer },
     env: { ...process.env, OMB_DATA_DIR: dataDir, OMB_THREAD_SYNC_V2: enabled ? "1" : "0" },
@@ -1806,5 +1805,150 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await peer.worker.terminate();
     await expect(pending).rejects.toThrow(/worker exited/);
     await expect(peer.call("snapshot")).rejects.toThrow(/worker exited/);
+  });
+});
+
+function identity(dataDir: string): string {
+  const db = new DatabaseSync(join(dataDir, "messages.db"), { readOnly: true });
+  try {
+    return String(db.prepare("SELECT writer FROM sync_v2_identity WHERE id = 1").get()!.writer);
+  } finally {
+    db.close();
+  }
+}
+
+// Copies a PC's closed data folder into a second install with the same device and writer ids.
+async function copy(source: ReturnType<typeof pc>, folder: string, deviceId: string) {
+  const dataDir = temp();
+  await source.call("restart", { copy: dataDir });
+  return pc(folder, deviceId, true, false, false, undefined, dataDir);
+}
+
+async function texts(peer: ReturnType<typeof pc>, threadId = "thread"): Promise<string[]> {
+  return (await peer.call<Snapshot>("snapshot", { threadId })).rows.map((row) => row.text ?? "");
+}
+
+async function rounds(peers: Array<ReturnType<typeof pc>>): Promise<void> {
+  for (let round = 0; round < 2; round++) {
+    for (const peer of peers) await peer.call("pull");
+    for (const peer of peers) await peer.call("flush");
+  }
+}
+
+describe("copied installs", { timeout: 180_000 }, () => {
+  it("keeps both rows when two installs share a device and writer id", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, false, false, LOW);
+    const b = pc(folder, "a", true, false, false, LOW);
+    await a.call("append", { text: "from A" });
+    await a.call("flush");
+    await b.call("pull");
+    await b.call("append", { text: "from B" });
+    await b.call("flush");
+    await a.call("pull");
+    await b.call("poll");
+    expect(await texts(a)).toEqual(["from A", "from B"]);
+    expect(await texts(b)).toEqual(["from A", "from B"]);
+    expect(identity(a.dataDir)).toBe(LOW);
+    expect(identity(b.dataDir)).not.toBe(LOW);
+  });
+
+  it("keeps a single install's writer id across a restart and an older head of its own", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, false, false, LOW);
+    await a.call("append", { text: "one" });
+    await a.call("flush");
+    const head = join(folder, "threads-v2", "bot", "thread", LOW, "head.json");
+    const older = readFileSync(head);
+    await a.call("append", { text: "two" });
+    await a.call("flush");
+    const newer = readFileSync(head);
+    await a.call("restart");
+    writeFileSync(head, older);
+    await a.call("pull");
+    expect(readFileSync(head).equals(newer)).toBe(true);
+    await a.call("append", { text: "three" });
+    await a.call("flush");
+    expect(identity(a.dataDir)).toBe(LOW);
+    expect(readdirSync(join(folder, "threads-v2", "bot", "thread"))).toEqual([LOW]);
+  });
+
+  it("converges three PCs when two are copies of one install", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, false, false, LOW);
+    const c = pc(folder, "c", true, false, false, HIGH);
+    await a.call("append", { text: "base" });
+    await a.call("flush");
+    await c.call("pull");
+    const b = await copy(a, folder, "a");
+    await a.call("append", { text: "from A" });
+    await a.call("flush");
+    await b.call("append", { text: "from B" });
+    await b.call("flush");
+    await c.call("append", { text: "from C" });
+    await c.call("flush");
+    await rounds([a, b, c]);
+    for (const peer of [a, b, c]) {
+      const rows = (await peer.call<Snapshot>("snapshot")).rows.filter((row) => row.kind === "text");
+      expect(rows.map((row) => row.text).sort()).toEqual(["base", "from A", "from B", "from C"]);
+    }
+    expect(new Set([a, b, c].map((peer) => identity(peer.dataDir))).size).toBe(3);
+  });
+
+  it("loses nothing from a copy made while a turn was running", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, false, false, LOW);
+    await a.call("append", { text: "prompt" });
+    await a.call("live", { value: true });
+    expect(await a.call("saved")).toBe("written");
+    await a.call("append", { role: "bot", text: "stream" });
+    const b = await copy(a, folder, "a");
+    await b.call("append", { text: "from B" });
+    await b.call("flush");
+    await a.call("append", { role: "bot", text: "more" });
+    await a.call("live", { value: false });
+    await a.call("flush");
+    await rounds([a, b]);
+    for (const peer of [a, b]) expect((await texts(peer)).sort()).toEqual(["from B", "more", "prompt", "stream"]);
+  });
+
+  it("splits a copy on a chat started after the copy", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, false, false, LOW);
+    await a.call("append", { text: "base" });
+    await a.call("flush");
+    const b = await copy(a, folder, "a");
+    const task = await a.call<TaskRecord>("create");
+    await a.call("append", { threadId: task.threadId, text: "from A" });
+    await a.call("flush", { threadId: task.threadId });
+    await b.call("poll");
+    await b.call("append", { threadId: task.threadId, text: "from B" });
+    await b.call("flush", { threadId: task.threadId });
+    await a.call("poll");
+    expect(await texts(a, task.threadId)).toEqual(["from A", "from B"]);
+    expect(await texts(b, task.threadId)).toEqual(["from A", "from B"]);
+  });
+
+  it("splits a copy of a heavy chat without publishing its history again", async () => {
+    const folder = temp();
+    const a = pc(folder, "a", true, false, false, LOW);
+    await a.call("batch", { count: 2000 });
+    await a.call("flush");
+    const b = await copy(a, folder, "a");
+    await a.call("append", { text: "from A" });
+    await a.call("flush");
+    await b.call("append", { text: "from B" });
+    await b.call("flush");
+    await rounds([a, b]);
+    for (const peer of [a, b]) {
+      const rows = await texts(peer);
+      expect(rows).toHaveLength(2002);
+      expect(new Set(rows).size).toBe(2002);
+      expect(rows).toEqual(expect.arrayContaining(["row 0", "row 1999", "from A", "from B"]));
+    }
+    const dir = join(folder, "threads-v2", "bot", "thread", identity(b.dataDir));
+    expect(readdirSync(join(folder, "threads-v2", "bot", "thread", LOW)).some((name) => name.startsWith("seg-"))).toBe(true);
+    expect(readdirSync(dir)).toEqual(["head.json"]);
+    expect(JSON.parse(readFileSync(join(dir, "head.json"), "utf8")).versions.length).toBeLessThan(8);
   });
 });

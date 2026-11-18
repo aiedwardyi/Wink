@@ -281,11 +281,13 @@ export function createDriveMirror(options: Options) {
     return drivePathRule(own, ids) === "own" ? own : null;
   }
 
-  function assertDownloadPath(path: string, ownPaths: string[]): void {
+  function assertDownloadPath(path: string, ownPaths: string[], own = false): void {
     assertSafePath(path);
     const target = join(mirrorPath, ...path.split("/"));
     const resolved = canonicalPath(target);
-    if (drivePathRule(relative(mirrorPath, resolved).split(sep).join("/"), ids) === "own") throw new DriveMirrorError("path-alias");
+    const at = relative(mirrorPath, resolved).split(sep).join("/");
+    if (own ? !samePath(at, path) : drivePathRule(at, ids) === "own") throw new DriveMirrorError("path-alias");
+    if (own) return;
     const identity = fileIdentity(target);
     const candidate = ownTargetPath(path);
     for (const own of candidate ? [...ownPaths, candidate] : ownPaths) {
@@ -294,7 +296,7 @@ export function createDriveMirror(options: Options) {
     }
   }
 
-  async function download(path: string, bytes: Buffer, once: boolean, check: () => void, ownPaths: string[]): Promise<boolean> {
+  async function download(path: string, bytes: Buffer, once: boolean, check: () => void, ownPaths: string[], own = false): Promise<boolean> {
     check();
     parents(path, true);
     const target = join(mirrorPath, ...path.split("/"));
@@ -308,8 +310,8 @@ export function createDriveMirror(options: Options) {
         closeSync(fd);
       }
       check();
-      assertDownloadPath(path, ownPaths);
-      if (!once) await renameDriveFile(tmp, target, () => { check(); assertDownloadPath(path, ownPaths); });
+      assertDownloadPath(path, ownPaths, own);
+      if (!once) await renameDriveFile(tmp, target, () => { check(); assertDownloadPath(path, ownPaths, own); });
       else {
         try {
           linkSync(tmp, target);
@@ -632,6 +634,9 @@ export function createDriveMirror(options: Options) {
         if (rule === "once" && copies.some((copy) => copy.md5Checksum !== file.md5Checksum || copy.size !== file.size) && !summary.conflicts.includes(path)) summary.conflicts.push(path);
       }
       const local = localHash(path);
+      const previous = table!.files[path];
+      // A copy of this install moved our chat head; landing it lets the chat engine split off instead of losing it.
+      const copied = !!file && rule === "own" && !!chatPart(path)?.head && (!previous || !same(file, previous));
       if (!file) {
         if (!local) { summary.skipped.push(path); return; }
         if (held()) return;
@@ -648,7 +653,7 @@ export function createDriveMirror(options: Options) {
         track(path, file);
       } else if (rule === "once" && local) {
         if (!summary.conflicts.includes(path)) summary.conflicts.push(path);
-      } else if (rule === "own") {
+      } else if (rule === "own" && !copied) {
         if (!local) { summary.skipped.push(path); return; }
         if (held()) return;
         const bytes = localBytes(path);
@@ -658,7 +663,6 @@ export function createDriveMirror(options: Options) {
         if (!hasContent(updated) || updated.id !== file.id || !matches(updated, bytes) || updated.trashed) throw new DriveMirrorError("invalid-remote");
         summary.uploaded.push(path);
         // Cloned owners can keep restoring the same bytes over each other.
-        const previous = table!.files[path];
         if (!previous || !same(updated, previous)) summary.uploadedForPeers = true;
         track(path, updated);
       } else {
@@ -668,7 +672,7 @@ export function createDriveMirror(options: Options) {
         });
         check();
         if (!matches(file, downloaded)) throw new DriveMirrorError("content-changed");
-        const written = await download(path, downloaded, rule === "once", check, ownPaths);
+        const written = await download(path, downloaded, rule === "once", check, ownPaths, copied);
         check();
         const current = localHash(path);
         if (current && same(file, current)) {

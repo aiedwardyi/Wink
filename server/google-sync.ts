@@ -82,7 +82,7 @@ type Options = {
   /** The engines are still writing what activate republished. */
   republishing?: () => boolean;
   kindsReady?: () => boolean;
-  /** Pulls a chat whose peer head a pass just downloaded. */
+  /** Pulls a chat whose head a pass just downloaded. */
   pull?: (threadId: string, botSyncId: string) => void | Promise<void>;
   /** A pass just downloaded pictures/<name>. */
   picture?: (name: string) => void;
@@ -141,7 +141,7 @@ function workspaceId(bytes: Buffer): string | null {
   }
 }
 
-const peerHead = (path: string, ids: DriveOwnIds) => path.startsWith("threads-v2") && path.endsWith("/head.json") && drivePathRule(path, ids) === "peer" ? [path.split("/").slice(1, 3)] : [];
+const chatHead = (path: string, ids: DriveOwnIds) => path.startsWith("threads-v2") && path.endsWith("/head.json") && drivePathRule(path, ids) !== "unknown" ? [path.split("/").slice(1, 3)] : [];
 const peerMemory = (path: string, ids: DriveOwnIds) => path.startsWith("memory-v2") && drivePathRule(path, ids) === "peer" ? [path.split("/")[1]] : [];
 const blocksJoin = (path: string) => path === PROFILE_SYNC_WORKSPACE_FILE || path.startsWith("changes/") || path.startsWith("devices/");
 
@@ -420,7 +420,7 @@ export function createGoogleSync(options: Options) {
           if (path.startsWith("pictures/")) options.picture?.(path.slice("pictures/".length));
           if (bound.phase !== "ready") return;
           for (const botSyncId of peerMemory(path, ids)) options.memory?.(botSyncId);
-          for (const [botSyncId, threadId] of peerHead(path, ids)) {
+          for (const [botSyncId, threadId] of chatHead(path, ids)) {
             const pulled = options.pull?.(threadId, botSyncId);
             if (!pulled || !chatFirst) continue;
             pulling.set(threadId, (pulling.get(threadId) ?? 0) + 1);

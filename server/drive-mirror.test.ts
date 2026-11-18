@@ -154,13 +154,27 @@ describe("Drive mirror", () => {
       for (const path of paths[index]) expect(read(pc, path)).toBe(`local-${index}`);
       for (const [peer, peerPaths] of paths.entries()) for (const path of peerPaths) expect(read(pc, path)).toBe(`local-${peer}`);
     }
-    const file = [...drive.records.values()].find(({ file }) => decodeDrivePath(file.name) === paths[0][2])!;
+    const file = [...drive.records.values()].find(({ file }) => decodeDrivePath(file.name) === paths[0][1])!;
     drive.edit(file.file.id, Buffer.from("late peer copy"));
     const summary = await pcs[0].mirror.syncOnce();
-    expect(summary.uploaded).toEqual([paths[0][2]]);
-    expect(summary.downloaded).not.toContain(paths[0][2]);
-    expect(read(pcs[0], paths[0][2])).toBe("local-0");
+    expect(summary.uploaded).toEqual([paths[0][1]]);
+    expect(summary.downloaded).not.toContain(paths[0][1]);
+    expect(read(pcs[0], paths[0][1])).toBe("local-0");
     expect(drive.records.get(file.file.id)!.bytes.toString()).toBe("local-0");
+  });
+
+  it("lands a copy's change to its own chat head instead of overwriting it", async () => {
+    const path = `threads-v2/bot/thread/${pcs[0].ids.writerId}/head.json`;
+    write(pcs[0], path, "local");
+    expect((await pcs[0].mirror.syncOnce()).uploaded).toEqual([path]);
+    const file = [...drive.records.values()].find(({ file }) => decodeDrivePath(file.name) === path)!;
+    drive.edit(file.file.id, Buffer.from("copy"));
+    write(pcs[0], path, "newer local");
+    const summary = await pcs[0].mirror.syncOnce();
+    expect(summary.uploaded).toEqual([]);
+    expect(summary.downloaded).toEqual([path]);
+    expect(read(pcs[0], path)).toBe("copy");
+    expect(drive.records.get(file.file.id)!.bytes.toString()).toBe("copy");
   });
 
   it.each(["assets/a.png", "pictures/a.png", "workspace.json", "threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "threads/bot/thread.json", "memory/bot/MEMORY.md", "changes/000000000001-device-work-op.json"])("never overwrites either differing copy of %s", async (path) => {
