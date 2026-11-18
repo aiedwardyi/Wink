@@ -163,7 +163,16 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
 }
 
 const SHOW_IMAGE = /(?:^|[_.])show_image$/;
-const IMAGE_PATH = /(?:[a-z]:[\\/]|\\\\|~[\\/]|(?<![:/])\/)?(?:[\w.-]+[\\/])*[\w.-]+\.(?:png|jpe?g|gif|webp|svg)\b/gi;
+const IMAGE_EXT = String.raw`\.(?:png|jpe?g|gif|webp|svg)\b`;
+const PATH_WORD = String.raw`[\w\p{L}\p{M}\p{N}.[\]~-]+`;
+const PATH_PART = `${PATH_WORD}(?: +${PATH_WORD})*?`;
+const PLAIN_IMAGE_PATH = new RegExp(String.raw`(?:[\w.-]+[\\/])*[\w.-]+${IMAGE_EXT}`, "gi");
+const IMAGE_PATH = new RegExp([
+  String.raw`(?:[a-z]:[\\/]|\\\\|~[\\/]|(?<![:/])\/)(?:${PATH_PART}[\\/])*?${PATH_PART}${IMAGE_EXT}(?![\\/])`,
+  String.raw`(?<=["'\x60])(?:${PATH_PART}[\\/])*?${PATH_PART}${IMAGE_EXT}(?=["'\x60])`,
+  String.raw`^((?:${PATH_PART}[\\/])+?${PATH_PART}${IMAGE_EXT})(?=[ \t]*$)`,
+  PLAIN_IMAGE_PATH.source,
+].join("|"), "gimu");
 const ATTACHED = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
 
 const shownImage = (message: Message) =>
@@ -214,8 +223,12 @@ export function replyPictures(messages: readonly Message[], ids: string[], attac
       if (path !== undefined) add(path, captions.get(message.id));
       else if (message.kind === "screen" && message.image && !(message.parentId && shown.has(message.parentId))) add(join(attachments, message.image), message.text);
       else if (message.kind === "text" && message.text) {
-        for (const named of message.text.match(IMAGE_PATH) ?? []) {
-          if (!originals.has(pathKey(named))) add(named);
+        for (const [named, standalone] of message.text.matchAll(IMAGE_PATH)) {
+          if (originals.has(pathKey(named!))) continue;
+          // A standalone relative path with spaces can also be prose naming a plain path.
+          for (const path of (standalone ? standalone.match(PLAIN_IMAGE_PATH) ?? [] : [named!])) {
+            if (!originals.has(pathKey(path))) add(path);
+          }
         }
       }
     }
@@ -763,7 +776,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       held.set(threadId, batch);
       log({ botId, threadId, lines: batch.source.length, ms, result: "error" });
       console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
-      return;
+      return arm(botId, threadId);
     }
     const accepted = acceptFacts(batch.facts, batch.source, memory.text, timeline);
     if (!accepted.length) {

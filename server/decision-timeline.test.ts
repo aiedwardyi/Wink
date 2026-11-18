@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBotRoutes } from "./bot-routes.ts";
@@ -313,7 +313,7 @@ describe("decision timeline", () => {
     expect(timeline()).toBe(text);
   });
 
-  it("keeps history and pending picks when the Timeline read fails just before writing", async () => {
+  it("keeps history and retries pending picks when the Timeline read fails just before writing", async () => {
     const earlier = "# Decision timeline\n\n## 2026-11-17 09:00 | forum | current\n- Picked: A - plain list\n";
     mkdirSync(join(workspaceDir(BOT), "memory"), { recursive: true });
     writeFileSync(timelinePath(), earlier);
@@ -328,7 +328,7 @@ describe("decision timeline", () => {
     expect(JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"))).toEqual({ threads: { t1: [line.id] } });
     expect(store.messagesFor("t1").some(({ tool }) => tool?.name === MEMORY_SAVE_TOOL)).toBe(false);
 
-    pass.onSettled(BOT, "t1", true);
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
     await pass.idle();
     expect(generate).toHaveBeenCalledOnce();
     expect(currentPicks(timeline()).map(({ key }) => key).sort()).toEqual(["forum", "header"]);
@@ -477,21 +477,26 @@ describe("decision timeline", () => {
     expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copy("A")} (A - plain list)\n${mock("B")} (B - tiles)\n${copy("C")} (C - Reddit cards)\n</pictures>`);
   });
 
-  it("keeps captioned copies when the bot also names all five original paths", async () => {
-    const originals = ["A", "B", "C", "D", "E"].map((name) => join(dataDir, `${name}.png`));
+  it.each([
+    String.raw`C:\Users\RUNNER~1\AppData\Local\Temp`,
+    String.raw`C:\Users\me\My Drive`,
+    String.raw`C:\Users\me\[designs]`,
+    String.raw`C:\Users\me\시안`,
+    "My Drive",
+  ])("keeps captioned copies when the bot also names five originals under %s", async (root) => {
+    const originals = ["A", "B", "C", "D", "E"].map((name) => win32.join(root, "mocks", `${name}.png`));
     const copies = originals.map((_, i) => join(dataDir, "attachments", `copy-${i}.png`));
     mkdirSync(join(dataDir, "attachments"), { recursive: true });
     for (const [i, original] of originals.entries()) {
-      writeFileSync(original, "");
       writeFileSync(copies[i]!, "");
       const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "show_image", summary: original } });
       store.appendMessage("t1", { role: "bot", kind: "screen", parentId: shown.id, image: `copy-${i}.png`, text: `Option ${i + 1}` });
     }
-    bot(originals.join("\n"));
+    bot([...originals, "See mocks/extra.png"].join("\n"));
     say("I choose Option 1");
     reply({ kind: "decision", key: "mock layout", fact: "Option 1", quote: "I choose Option 1", picture: copies[0] });
     await settle();
-    expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copies.map((copy, i) => `${copy} (Option ${i + 1})`).join("\n")}\n</pictures>`);
+    expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copies.map((copy, i) => `${copy} (Option ${i + 1})`).join("\n")}\nmocks/extra.png\n</pictures>`);
     expect(currentPicks(timeline())[0]?.picture?.path).toBe(copies[0]);
   });
 
