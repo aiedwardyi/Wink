@@ -568,16 +568,13 @@ function BotListItem({
             drag?.onMove?.(event.key === "ArrowUp" ? -1 : 1);
             return;
           }
-          if (event.key === "Enter") {
+          if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             select();
             focusComposerOnActivation({
               activatedElement: event.currentTarget,
               settingsOpen: state.settingsOpen || state.appSettingsOpen,
             });
-          } else if (event.key === " ") {
-            event.preventDefault();
-            select();
           }
         }}
         onContextMenu={onContextMenu}
