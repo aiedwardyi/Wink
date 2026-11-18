@@ -8009,7 +8009,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, taskPacket: taskPacketForWrite, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   firstTurnLaunch,
@@ -8964,7 +8964,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       usageStats.sent(store.bot(m[1]!)?.threadId, req.headers["user-agent"], isLoopbackHost(req.headers.host));
       return await botChatRoutes.send(req, res, m);
     }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|task-context|lines|end)$/);
     if (m && method === "POST") {
       if (m[2] === "token") botCalls.answered(m[1]!);
       return await liveCall(req, res, m);
