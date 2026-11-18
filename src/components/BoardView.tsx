@@ -47,6 +47,7 @@ const ROW = "grid grid-cols-[52px_minmax(0,1fr)] px-6 max-md:grid-cols-[46px_min
 const SIDE = "px-6 max-md:px-4";
 // replies after this many share the last delay, so a long thread is never slow to show
 const STAGGER_CAP = 4;
+const FORUM_BACK = "flex min-h-11 items-center gap-0.5 px-1.5 text-[15px] font-medium text-accent hover:text-ink";
 
 const EMPTY_MARKS = ["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"];
 const EMPTY_MARK_SIZE = 30;
@@ -61,7 +62,7 @@ function useUserFace() {
   return { name, face: (size: number) => <InitialsAvatar initials={profileInitials({ name })} imageUrl={profile?.avatarUrl} size={size} /> };
 }
 
-/** Name, face and model come from the post; a bot on this PC lends its face, which may be an uploaded picture, its engine mark and its working ring. */
+/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture, and its working ring. */
 function useAuthor(post: BoardPost) {
   const { state } = useStore();
   const user = useUserFace();
@@ -70,11 +71,13 @@ function useAuthor(post: BoardPost) {
   const name = post.author?.name || bot?.name || "";
   const look = bot ?? { name, color: post.author?.color, mascotStyle: post.author?.mascot_style || null };
   const working = Boolean(bot?.busy);
-  const engine = bot?.modelSelection && state.instances.find((instance) => instance.instanceId === bot.modelSelection?.instanceId);
+  const model = post.author?.model ?? "";
+  // the bot may have switched engines since it posted, so the mark follows the model it posted with
+  const engine = model ? state.instances.find((instance) => instance.models?.options.some((option) => option.label === model || option.id === model)) : undefined;
   return {
     name,
-    model: post.author?.model ?? "",
-    driverKind: engine ? engine.driverKind : "",
+    model,
+    driverKind: engine?.driverKind ?? "",
     working,
     face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} orbitRing={working} />,
   };
@@ -196,7 +199,7 @@ function ReplyBox({ parentId, to, onDone, autoFocus = false, top = false }: { pa
     );
   };
   return (
-    <form data-board-reply-box={parentId} onSubmit={submit} className={cn("flex flex-col gap-1", top ? cn(SIDE, "border-b border-hairline/55 pt-1 pb-4") : "mt-2")}>
+    <form data-board-reply-box={parentId} onSubmit={submit} className={cn("flex flex-col gap-1", top ? cn(SIDE, "border-b border-hairline/55 pt-1 pb-4 focus-within:border-accent-border") : "mt-2")}>
       <div className={cn("flex items-center", top ? "gap-3" : "gap-2 rounded-2xl border border-hairline/70 py-1 pr-1 pl-4 focus-within:border-accent-border")}>
         {top && <span className="shrink-0">{user.face(32)}</span>}
         <input
@@ -375,7 +378,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
     <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center px-5 py-2 md:min-h-[76px]", open ? (sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT) : cn(DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT))}>
         <div className="mx-auto flex w-full max-w-[640px] min-w-0 justify-center">
-          {open ? <span className="-ml-1.5 mr-auto"><BackButton label={t("chrome.forum")} ariaLabel={t("board.back")} onClick={close} /></span> : (
+          {open ? <span className="mr-auto md:-ml-1.5"><BackButton label={t("chrome.forum")} ariaLabel={t("board.back")} onClick={close} className={FORUM_BACK} /></span> : (
             <div className="flex min-w-0 flex-col items-center text-center">
               <h1 className="max-w-full truncate text-[16px] leading-[1.3] font-semibold text-ink">{t("chrome.forum")}</h1>
               <p data-board-subtitle className="mt-0.5 max-w-full truncate text-[12.5px] leading-[1.4] text-ink-secondary max-md:text-[11.5px]">{t("board.subtitle")}</p>

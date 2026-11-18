@@ -5704,6 +5704,7 @@ html[data-orbit-idle="hidden"] .needs-you-glow::after {
 
 /* A frozen ring reads as a hung turn; the elapsed timer carries it instead. */
 html[data-orbit-idle] [data-turn-mascot] .orbit-ring,
+html[data-orbit-idle] [data-board-view] .orbit-ring,
 html[data-orbit-idle] [data-idle-hide] {
   visibility: hidden;
 }

@@ -13,7 +13,7 @@ import type { Action, Bot } from "@/state/store";
 
 const mock = vi.hoisted(() => ({
   // SAFETY: the Forum reads only bots, the selection and the profile from state.
-  state: { bots: [] as Bot[], instances: [] as { instanceId: string; driverKind: string }[], selectedId: "", config: undefined as { profile: { name: string } } | undefined },
+  state: { bots: [] as Bot[], instances: [] as { instanceId: string; driverKind: string; models?: { default: string; options: { id: string; label: string }[] } }[], selectedId: "", config: undefined as { profile: { name: string } } | undefined },
   dispatched: [] as Action[],
 }));
 vi.mock("@/state/store", async (original) => ({
@@ -24,6 +24,7 @@ vi.mock("@/state/store", async (original) => ({
 import { I18nProvider } from "@/lib/i18n";
 import { BoardButton } from "./BoardButton";
 import { BoardView } from "./BoardView";
+import { ProviderMark } from "./ProviderIcons";
 
 const bot = (id: string, name: string): Bot => ({
   id, threadId: `${id}-thread`, name, title: "", description: "", notifications: true, color: "green", unread: false,
@@ -152,8 +153,15 @@ describe("Forum", () => {
 
   it("the back button sits clear of the phone menu badge: no negative margin below md", async () => {
     await openPost();
-    const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back to Forum"]')!;
-    expect([...back.classList]).not.toContain("-ml-2");
+    const header = host.querySelector("[data-board-view] > div")!;
+    const classes: string[] = [];
+    for (let node: Element | null = host.querySelector('button[aria-label="Back to Forum"]'); node && node !== header; node = node.parentElement) classes.push(...node.classList);
+    expect(classes.filter((name) => name.startsWith("-m"))).toEqual([]);
+  });
+
+  it("marks the top reply box while it has focus, like the inline box", async () => {
+    await openPost();
+    expect(host.querySelector('[data-board-reply-box="pesc"]')!.className).toContain("focus-within:border-accent-border");
   });
 
   it("an open post's back reads ‹ Forum on the shared back button", async () => {
@@ -183,6 +191,26 @@ describe("Forum", () => {
     expect(host.querySelector('[data-board-post="premote"]')!.textContent).toContain("Pokkey");
     expect(host.querySelector('[data-board-post="premote"]')!.textContent).toContain("GPT-6 Astra");
     expect(host.textContent).not.toContain("The bot");
+  });
+
+  it("takes the engine mark from the model the post ran, not the engine the bot runs today", async () => {
+    mock.state.instances = [
+      { instanceId: "codex-1", driverKind: "codex", models: { default: "gpt-6", options: [{ id: "gpt-6", label: "GPT-6" }] } },
+      { instanceId: "claude-1", driverKind: "claudeAgent", models: { default: "claude-opus-5-5", options: [{ id: "claude-opus-5-5", label: "Claude Opus 5.5" }] } },
+    ];
+    posts = [post("pold", { author: { name: "Astra", model: "Claude Opus 5.5", color: "green", mascot_style: "" } })];
+    await render(BoardView);
+    const mark = (driverKind: string) => {
+      const div = document.createElement("div");
+      const other = createRoot(div);
+      act(() => other.render(createElement(ProviderMark, { driverKind, size: 13 })));
+      const html = div.innerHTML;
+      act(() => other.unmount());
+      return html;
+    };
+    const shown = host.querySelector('[data-board-post="pold"] [data-board-model] svg')!.outerHTML;
+    expect(shown).toBe(mark("claudeAgent"));
+    expect(shown).not.toBe(mark("codex"));
   });
 
   it("sorts by Hot, New and Top", async () => {
@@ -253,7 +281,8 @@ describe("Forum", () => {
     expect(host.querySelector('[data-board-post="pr1"] [data-board-helped-chip]')!.textContent).toBe("Helped Astra");
     expect(host.querySelector('[data-board-post="pr3"] [data-board-helped-chip]')).toBeNull();
     expect([...host.querySelectorAll("[data-board-flair]")].map((chip) => chip.closest("[data-board-post]")!.getAttribute("data-board-post"))).toEqual(["pop", "pr1"]);
-    expect(host.querySelector('[data-board-post="pr2"] [data-board-working]')!.textContent).toBe("Working");    expect(host.querySelector('[data-board-post="pr3"] [data-board-working]')).toBeNull();
+    expect(host.querySelector('[data-board-post="pr2"] [data-board-working]')!.textContent).toBe("Working");
+    expect(host.querySelector('[data-board-post="pr3"] [data-board-working]')).toBeNull();
     expect(host.querySelector<HTMLInputElement>('[data-board-reply-box="pop"] input')!.placeholder).toBe("Reply to Astra…");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-reply-to="pr3"]')!.click());
     expect(host.querySelector<HTMLInputElement>('[data-board-reply-box="pr3"] input')!.placeholder).toBe("Reply to Carbon…");
@@ -275,6 +304,8 @@ describe("Forum", () => {
     expect(back.textContent).toBe("Forum");
     expect(back.className).toContain("text-accent");
     expect(back.className).not.toMatch(/(^|\s)(hover:)?bg-|rounded/);
+    expect(back.className).toContain("hover:text-ink");
+    expect(back.className).not.toContain("accent-border");
   });
 
   it("saves the user's reply and shows it as an ordinary row with their name", async () => {
