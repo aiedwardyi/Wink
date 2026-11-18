@@ -318,6 +318,86 @@
       "kind": "independent"
     },
     {
+      "model": "gpt-6.2-astra",
+      "effort": "low",
+      "value": 32.6629292929293,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-low",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "medium",
+      "value": 46.559797979798,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-medium",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "high",
+      "value": 47.1319444444444,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-high",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "xhigh",
+      "value": 48.9513383838384,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-xhigh",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "max",
+      "value": 45.3801767676768,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "low",
+      "value": 31.3682323232323,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-low",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "medium",
+      "value": 41.3984848484848,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-medium",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "high",
+      "value": 40.224898989899,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-high",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "xhigh",
+      "value": 42.7523484848485,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-xhigh",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "max",
+      "value": 44.3797727272727,
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol",
+      "retrieved_at": "2026-11-18T00:38:01.115Z",
+      "kind": "independent"
+    },
+    {
       "model": "gpt-6-astra",
       "effort": "low",
       "value": 26.2162878787879,

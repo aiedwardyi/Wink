@@ -363,7 +363,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       threadId: "t-happy",
       text: "list files",
       system: "You are Testy.",
-      model: "gpt-6-sol",
+      model: "gpt-6.2-sol",
     });
     await recorder.until((e) => e.type === "turn.completed");
 
@@ -407,7 +407,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     const turnStart = seen.calls.at(-1);
     expect(turnStart.params.input[0].text).toBe("list files");
     const threadStart = seen.calls.find((c: { method: string }) => c.method === "thread/start");
-    expect(threadStart.params).toMatchObject({ model: "gpt-6-sol", modelProvider: "openai" });
+    expect(threadStart.params).toMatchObject({ model: "gpt-6.2-sol", modelProvider: "openai" });
   });
 
   it.each([
@@ -811,7 +811,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     const dump = join(scratch, "warm.json");
     process.env.FAKE_CODEX_DUMP = dump;
     const turn = async (extra: Partial<SendTurnInput> = {}) => {
-      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-warm", text: "hi", model: "gpt-6-sol", cwd: scratch, ...extra });
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-warm", text: "hi", model: "gpt-6.2-sol", cwd: scratch, ...extra });
       return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
     };
     const methods = () => sentCalls(dump).map((call) => call.method);

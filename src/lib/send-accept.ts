@@ -14,6 +14,9 @@ export type AcceptedSend = {
   at?: number;
   /** Sent "after this turn": waits even on an engine that could steer it. */
   after?: boolean;
+  replyToId?: string;
+  /** The POST has not answered: an idle snapshot cannot say whether the server has this send yet. */
+  posting?: true;
 };
 
 export type AcceptedSends = Record<string, AcceptedSend[]>;
@@ -21,11 +24,12 @@ export type AcceptedSends = Record<string, AcceptedSend[]>;
 export function withAcceptedMessages(
   messages: Message[],
   accepted: readonly AcceptedSend[] = [],
-  pending: readonly { queueId: string; text: string; at?: number; sendId?: string }[] = [],
+  pending: readonly { queueId: string; text: string; at?: number; sendId?: string; replyToId?: string }[] = [],
 ): Message[] {
+  if (!accepted.length && !pending.length) return messages;
   const seen = new Set(messages.flatMap((message) => [message.id, message.sendId, message.queueId]));
   const waiting = [
-    ...pending.filter((entry) => !entry.sendId || !seen.has(entry.sendId)).map((entry) => ({ sendId: entry.queueId, text: entry.text, at: entry.at })),
+    ...pending.filter((entry) => !entry.sendId || !seen.has(entry.sendId)).map((entry) => ({ sendId: entry.queueId, text: entry.text, at: entry.at, replyToId: entry.replyToId })),
     ...accepted.filter((entry) => !pending.some((held) => held.sendId === entry.sendId)),
   ];
   const added: Message[] = [];
@@ -39,6 +43,7 @@ export function withAcceptedMessages(
       kind: "text",
       text: entry.text,
       at: entry.at ?? 0,
+      replyToId: entry.replyToId,
       placeholder: true,
     });
   }
@@ -122,13 +127,16 @@ export function settleAcceptedSend(
   queued = false,
 ): AcceptedSends {
   const entry = (accepted[threadId] ?? []).find((item) => item.sendId === sendId);
-  if (entry?.kind !== "sends-next" && !queued) return accepted;
+  if (entry?.kind !== "sends-next" && !queued) {
+    if (!entry?.posting) return accepted;
+    return { ...accepted, [threadId]: accepted[threadId].map((item) => item === entry ? { ...item, posting: undefined } : item) };
+  }
   return forgetAcceptedSend(accepted, threadId, sendId);
 }
 
-export function clearAcceptedThinking(accepted: AcceptedSends, threadId: string): AcceptedSends {
+export function clearAcceptedThinking(accepted: AcceptedSends, threadId: string, keepPosting = false): AcceptedSends {
   const prev = accepted[threadId] ?? [];
-  const next = prev.filter((entry) => entry.kind !== "thinking");
+  const next = prev.filter((entry) => entry.kind !== "thinking" || (keepPosting && entry.posting));
   if (next.length === prev.length) return accepted;
   const copy = { ...accepted };
   if (next.length) copy[threadId] = next;
@@ -143,7 +151,7 @@ export function dropIdleAcceptedThinking<T extends { threadId: string; busy?: bo
 ): AcceptedSends {
   return subjects.reduce(
     (next, subject) =>
-      subject.busy || subject.busyBotId ? next : clearAcceptedThinking(next, subject.threadId),
+      subject.busy || subject.busyBotId ? next : clearAcceptedThinking(next, subject.threadId, true),
     accepted,
   );
 }

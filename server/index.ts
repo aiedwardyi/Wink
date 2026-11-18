@@ -16,7 +16,8 @@ import {
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
-import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
+import { sameModelSelection } from "../shared/model-selection.ts";
+import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
@@ -426,7 +427,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -914,8 +915,26 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
   return required;
 }
 
+/** A bot saved on a model Wink replaced moves to the replacement before the send, with one plain line in its chat. */
 async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
-  if (bot.modelSelection.mode !== "automatic") return botAccounts.resolve(bot, automaticRequirements(bot));
+  const saved = bot.modelSelection;
+  const automatic = saved.mode === "automatic";
+  const chosen = automatic ? await automaticBotSelection(bot, task) : saved;
+  const selection = botAccounts.resolve({ modelSelection: chosen }, automatic ? undefined : automaticRequirements(bot));
+  const live = store.bot(bot.id);
+  if (!live || !sameModelSelection(live.modelSelection, saved)) return selection;
+  const kind = registry.get(botAccounts.catalogInstanceId(selection))?.driverKind;
+  const line = kind && selection.model !== saved.model && currentModel(kind, saved.model) === selection.model ? replacedModelLine(kind, saved.model) : null;
+  if (line) {
+    store.patchBot(bot.id, { modelSelection: { ...chosen, model: selection.model } });
+    store.appendMessage(task?.threadId ?? live.activeThreadId ?? live.threadId, { role: "bot", kind: "activity", tool: { name: line, ok: true } });
+  } else if (automatic && !sameModelSelection(chosen, saved)) {
+    store.patchBot(bot.id, { modelSelection: chosen });
+  }
+  return selection;
+}
+
+async function automaticBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
   const continuityId = task?.lastInstanceId && (accounts.get(task.lastInstanceId)?.of ?? task.lastInstanceId);
   const preferredIds = [...new Set([continuityId, bot.modelSelection.instanceId].filter(Boolean))];
   const preferred = preferredIds.flatMap((instanceId) => {
@@ -936,14 +955,7 @@ async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<
   if (!selection) {
     throw Object.assign(new Error("no working engine supports this bot's current tools"), { status: 409 });
   }
-  if (
-    selection.instanceId !== bot.modelSelection.instanceId ||
-    selection.model !== bot.modelSelection.model ||
-    selection.effort !== bot.modelSelection.effort
-  ) {
-    store.patchBot(bot.id, { modelSelection: selection });
-  }
-  return botAccounts.resolve({ modelSelection: selection });
+  return selection;
 }
 
 // New bots prefer working engines without cached exhaustion. Automatic keeps the choice
@@ -1141,12 +1153,10 @@ const teamReports = new TeamReports({
 });
 initializeSteerQueue(store, drainQueuedSends, () => threadSyncGate.enabled && profileSyncSettings.syncChats && !!profileSyncSettings.folder);
 if (store.botsFile === "unreadable") console.warn("bot sync: bots.json is there but did not load; not syncing bots until it does");
-store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAgent").map((i) => i.instanceId), "claude-sonnet-5", "claude-sonnet-5-5");
-store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAgent").map((i) => i.instanceId), "claude-haiku-4-5", "claude-haiku-5-5");
-store.renameModel(registry.instances().filter((i) => i.driverKind === "codex").map((i) => i.instanceId), "gpt-6-sol", "gpt-6.1-sol", { resetSession: true });
-store.renameModel(registry.instances().filter((i) => i.driverKind === "codex").map((i) => i.instanceId), "gpt-5.6-terra", "gpt-6.1-terra", { resetSession: true });
-const antigravityIds = registry.instances().filter((i) => i.driverKind === "antigravityAgent").map((i) => i.instanceId);
-for (const [from, to] of RETIRED_GEMINI_FLASH_IDS) store.renameModel(antigravityIds, from, to);
+for (const engine of ["claudeAgent", "codex", "antigravityAgent"] as const) {
+  const ids = registry.instances().filter((i) => i.driverKind === engine).map((i) => i.instanceId);
+  for (const { from, to, resetSession } of replacedModelMoves(engine)) store.renameModel(ids, from, to, resetSession ? { resetSession } : {});
+}
 const sendSequencer = new SendSequencer();
 
 type ChatLatencyStage =
@@ -1701,6 +1711,7 @@ function publishProfileChanges(): number {
 function instanceOffersModel(instanceId: string, model: string): boolean {
   if (accounts.get(instanceId)) return false;
   const instance = registry.get(instanceId);
+  if (instance) model = currentModel(instance.driverKind, model);
   return Boolean(instance && (model === instance.models.default || instance.models.options.some((option) => option.id === model)));
 }
 
@@ -1729,7 +1740,7 @@ function applySyncedBotFields(
   }
   if ("pinnedMessageId" in apply) patch.pinnedMessageId = typeof apply.pinnedMessageId === "string" ? apply.pinnedMessageId : undefined;
   if (["instanceId", "model", "effort", "modelMode"].some((field) => field in apply)) {
-    patch.modelSelection = mergeSyncedModelSelection(bot.modelSelection, apply, instanceOffersModel);
+    patch.modelSelection = mergeSyncedModelSelection(bot.modelSelection, apply, instanceOffersModel, (instanceId, model) => currentModel(registry.get(instanceId)?.driverKind ?? "", model));
   }
   if (Object.keys(patch).length) store.patchBot(bot.id, patch);
   if (!("avatarAsset" in apply || "avatarCrop" in apply)) return true;
@@ -2422,29 +2433,43 @@ function syncMemory(botId: string): void {
   void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
 }
 
-async function syncMemoryOnce(botId: string): Promise<void> {
-  // a missing workspace is restored from Drive, so a deleted bot must not be a target
-  if (!store.bot(botId)) return;
-  const folder = profileSyncSettings.folder;
-  const botSyncId = chatSyncBotId(profileSyncSettings, botId);
-  if (!folder || !botSyncId || !existsSync(folder)) return;
+let memoryLedgerUnsaved = false;
+
+function saveMemoryLedger(): void {
   try {
-    const snapshots = await readMemorySnapshots(folder, botSyncId);
-    if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return;
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-    // the poll runs for every idle bot, so only changed files refresh the check
-    if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+    savedMemoryLedger = saveMemorySyncLedgerIfChanged(DATA_DIR, memorySyncLedger, savedMemoryLedger);
+    memoryLedgerUnsaved = false;
   } catch (error) {
-    console.warn("memory sync: failed", error);
-  }
-  const ledger = JSON.stringify(memorySyncLedger);
-  if (ledger === savedMemoryLedger) return;
-  try {
-    saveMemorySyncLedger(DATA_DIR, memorySyncLedger);
-    savedMemoryLedger = ledger;
-  } catch (error) {
+    memoryLedgerUnsaved = true;
     console.warn("memory sync: ledger save failed", error);
   }
+}
+
+// true when a pass ran; a poll that found nothing to do only retries a save that failed
+async function syncMemoryPass(botId: string): Promise<boolean> {
+  // a missing workspace is restored from Drive, so a deleted bot must not be a target
+  if (!store.bot(botId)) return false;
+  const folder = profileSyncSettings.folder;
+  const botSyncId = chatSyncBotId(profileSyncSettings, botId);
+  if (!folder || !botSyncId || !existsSync(folder)) return false;
+  if (memorySyncUnchanged(folder, botSyncId, workspaceDir(botId), memorySyncLedger)) return false;
+  const snapshots = await readMemorySnapshots(folder, botSyncId);
+  if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
+  const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
+  // the poll runs for every idle bot, so only changed files refresh the check
+  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+  return true;
+}
+
+async function syncMemoryOnce(botId: string): Promise<void> {
+  let ran = false;
+  try {
+    ran = await syncMemoryPass(botId);
+  } catch (error) {
+    ran = true;
+    console.warn("memory sync: failed", error);
+  }
+  if (ran || memoryLedgerUnsaved) saveMemoryLedger();
 }
 
 // the PC the user is talking to a bot on keeps its copy of the bot's memory when two PCs changed it at once
@@ -8012,7 +8037,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, taskPacket: taskPacketForWrite, catalog: (instanceId) => registry.get(instanceId), settled: (botId, threadId) => memoryPass.onSettled(botId, threadId), roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   firstTurnLaunch,
@@ -8967,7 +8992,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       usageStats.sent(store.bot(m[1]!)?.threadId, req.headers["user-agent"], isLoopbackHost(req.headers.host));
       return await botChatRoutes.send(req, res, m);
     }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|task-context|lines|end)$/);
     if (m && method === "POST") {
       if (m[2] === "token") botCalls.answered(m[1]!);
       return await liveCall(req, res, m);

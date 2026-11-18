@@ -222,6 +222,42 @@
       ]
     }
   },
+  "gpt-6.2-astra": {
+    "provider": "openai",
+    "label": "GPT-6.2 Astra",
+    "sources": {
+      "vals": [
+        "openai/gpt-6.2-astra"
+      ],
+      "lmarena": [
+        "GPT-6.2 Astra"
+      ],
+      "list-prices": [
+        "gpt-6.2-astra"
+      ],
+      "aa": [
+        "gpt-6-2-astra"
+      ]
+    }
+  },
+  "gpt-6.2-sol": {
+    "provider": "openai",
+    "label": "GPT-6.2 Sol",
+    "sources": {
+      "vals": [
+        "openai/gpt-6.2-sol"
+      ],
+      "lmarena": [
+        "GPT-6.2 Sol"
+      ],
+      "list-prices": [
+        "gpt-6.2-sol"
+      ],
+      "aa": [
+        "gpt-6-2-sol"
+      ]
+    }
+  },
   "gpt-6-astra": {
     "provider": "openai",
     "label": "GPT-6 Astra",

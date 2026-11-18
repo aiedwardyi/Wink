@@ -28,6 +28,7 @@ import {
 } from "@/lib/drafts";
 import { BotAvatar, RoomBotAvatar } from "./Avatar";
 import { BotModelLine } from "./BotModelLine";
+import { CallGear } from "./CallSettings";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -1530,17 +1531,20 @@ export function Composer({
           </>
           )}
           {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <button
-              type="button"
-              onClick={onCall}
-              onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
-              onFocus={warmCallAudio}
-              aria-label={t("composer.call", { name: caller.name })}
-              title={t("composer.call", { name: caller.name })}
-              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
-            >
-              <Phone size={16} />
-            </button>
+            <>
+              <CallGear bot={caller} className="max-md:-my-1" />
+              <button
+                type="button"
+                onClick={onCall}
+                onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
+                onFocus={warmCallAudio}
+                aria-label={t("composer.call", { name: caller.name })}
+                title={t("composer.call", { name: caller.name })}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
+              >
+                <Phone size={16} />
+              </button>
+            </>
           ))}
           </div>
         </div>

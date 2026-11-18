@@ -342,7 +342,7 @@ function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message
   return (
     <div {...menuProps} tabIndex={-1}>
       {chip}
-      <PeerMessageBody text={message.text} />
+      <PeerMessageBody text={message.text} short />
       {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
     </div>
   );
@@ -783,6 +783,7 @@ const MessagesList = memo(function MessagesList({
         const m = item.message;
         const callId = m.call?.id;
         const callHere = callId && callAt.get(callId) === m.id;
+        const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -878,6 +879,7 @@ const MessagesList = memo(function MessagesList({
                   isLastBotText={m.id === lastBotTextId}
                   streaming={m === streamingMessage}
                   pictured={pictured.has(m.id)}
+                  peerReply={Boolean(replyComm)}
                   dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
@@ -892,7 +894,6 @@ const MessagesList = memo(function MessagesList({
         })();
         // a call line that opens a day keeps the divider, now that the card may sit further down
         if (!row && !callHere && !(callId && newDay)) return null;
-        const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
@@ -960,7 +961,7 @@ export function PinnedBanner({
   );
 }
 
-export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, findBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; findBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const preview = useChatPreview();
   const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
@@ -1028,7 +1029,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if (focusComposerBlocked || preview) return;
+      if (findBlocked || preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1036,7 +1037,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind, focusComposerBlocked, preview]);
+  }, [find.openFind, findBlocked, preview]);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const accepted = state.acceptedSends[bot.threadId];

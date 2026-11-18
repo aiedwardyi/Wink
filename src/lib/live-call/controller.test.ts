@@ -181,6 +181,26 @@ describe("CALL-YES", () => {
     await flush();
   });
 
+  it("c-93117b5a76ea a reply that lands after End is never spoken", async () => {
+    const audio = fakeAudio();
+    const play = vi.spyOn(audio, "play");
+    const { call, engine } = await started({}, audio);
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Animate the timeline and forum tiles." } }]);
+    await call.answer(true);
+    const before = engine().texts.length;
+    call.end();
+    call.observe({ busy: false, messages: [orderRow("o", "Animate the timeline and forum tiles."), botRow("r", "Quick update: the animated timeline and forum tiles are building now.")] });
+    await flush();
+    engine().events.answering();
+    engine().events.said("Quick update: the animated timeline and forum tiles are building now.");
+    engine().events.audio(new Int16Array([500]));
+    engine().events.turnDone();
+    await flush();
+    expect(engine().texts.slice(before)).toEqual([]);
+    expect(play).not.toHaveBeenCalled();
+    expect(call.state().status).toBe("ended");
+  });
+
   it("speaks a relayed reply's screen instruction after an accepted send", async () => {
     const audio = fakeAudio();
     const play = vi.spyOn(audio, "play");
@@ -2641,15 +2661,15 @@ describe("LiveCall back from the background", () => {
 const HEARD = "They already heard you answer: say nothing more.";
 
 describe("VOICE-HUSH: one line per answer", () => {
-  it("a spoken yes settled before the voice's turn tells it the yes was heard", async () => {
+  it("c-93117b5a76ea a spoken yes heard on the silence timer, with no voice turn, gets a plain result the voice answers", async () => {
     const { engine } = await started({ "/messages": ACCEPTED });
-    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Tell Rando to create a group for me." } }]);
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Animate both the timeline and forum tiles." } }]);
     vi.useFakeTimers();
-    engine().events.heard("Yeah.");
+    engine().events.heard("Yeah, in the What's New cards.");
     vi.advanceTimersByTime(LIVE_VAD.silenceDurationMs);
     vi.useRealTimers();
     await flush();
-    expect(engine().results).toEqual([{ id: "t1", result: `sent. ${HEARD}` }]);
+    expect(engine().results).toEqual([{ id: "t1", result: "sent" }]);
   });
 
   it("a spoken yes whose send lands before the voice's turn ends tells it the yes was heard", async () => {
@@ -2661,13 +2681,13 @@ describe("VOICE-HUSH: one line per answer", () => {
     expect(engine().results).toEqual([{ id: "t1", result: `sent. ${HEARD}` }]);
   });
 
-  it("a spoken no settled before the voice's turn tells it the no was heard", async () => {
+  it("a spoken no heard on the silence timer, with no voice turn, gets a plain result the voice answers", async () => {
     const { engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Look up Baji Kitchen." } }]);
     vi.useFakeTimers();
     engine().events.heard("No.");
     vi.advanceTimersByTime(LIVE_VAD.silenceDurationMs);
-    expect(engine().results).toEqual([{ id: "t1", result: `declined. ${HEARD}` }]);
+    expect(engine().results).toEqual([{ id: "t1", result: "declined" }]);
   });
 });
 

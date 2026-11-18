@@ -9,6 +9,7 @@ import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
+import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
@@ -219,6 +220,49 @@ describe("call button in the message box", () => {
     }
   });
 
+  it("puts the call settings gear before Call, opens the menu, and hides it while typing", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.title).toBe("Call settings");
+      expect(gear.compareDocumentPosition(button(frame(host), "Call Atlas")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      await act(async () => gear.click());
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
+      expect(tokens()).toBe(0);
+      await act(async () => gear.click());
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await type(host, "hi");
+      expect(button(host, "Call settings")).toBeNull();
+      await type(host, "");
+      expect(button(host, "Call settings")).not.toBeNull();
+      await connect(host);
+      expect(tokens()).toBe(1);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("uses the same gear in the message box as in the call, without changing the row height", async () => {
+    const rem = (className: string, prefix: string) => Number(className.match(new RegExp(`(?:^| )${prefix}(-?\\d+)(?: |$)`))?.[1] ?? 0);
+    const phone = (el: HTMLElement) => (rem(el.className, "max-md:size-") || rem(el.className, "size-")) - 2 * rem(el.className, "max-md:-my-");
+    const { host, unmount } = await mount();
+    try {
+      const gear = button(frame(host), "Call settings")!;
+      expect(rem(gear.className, "max-md:size-")).toBe(10);
+      await type(host, "hi");
+      const send = button(frame(host), "Send message")!;
+      expect(phone(gear)).toBe(phone(send));
+      await type(host, "");
+      await connect(host);
+      const live = button(frame(host), "Call settings")!;
+      expect(rem(live.className, "size-")).toBe(rem(gear.className, "size-"));
+      expect(rem(live.className, "max-md:size-")).toBe(10);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("labels Call in Korean", async () => {
     applyLocale("ko");
     const { host, unmount } = await mount();
@@ -261,7 +305,7 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("shows the call settings gear that opens the small menu, and a right-click on End still does", async () => {
+  it("shows the call settings gear that opens the small menu, and a right-click on End opens nothing", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
@@ -280,18 +324,63 @@ describe("live call in the message box", () => {
         gear.click();
       });
       await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
-      const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
-      await act(async () => button(frame(host), "End")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      const menu = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
-      expect(menu.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-      expect(parseFloat(menu.style.width)).toBeLessThanOrEqual(400);
-      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await act(async () => void button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       await act(async () => button(frame(host), "End")!.click());
       await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
     } finally {
+      await unmount();
+    }
+  });
+
+  it("c-93117b5a76ea a tap on End while the call menu is open ends the call", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      await act(async () => button(frame(host), "Call settings")!.click());
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
+      const end = button(frame(host), "End")!;
+      const touch = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 10, clientY: 10 }] });
+        end.dispatchEvent(event);
+      };
+      await act(async () => {
+        touch("touchstart");
+        touch("touchend");
+        end.click();
+      });
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("c-93117b5a76ea a hold on End ends the call and opens no settings", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      const end = button(frame(host), "End")!;
+      const touch = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 10, clientY: 10 }] });
+        end.dispatchEvent(event);
+        return event;
+      };
+      vi.useFakeTimers();
+      let lift: Event;
+      await act(async () => {
+        touch("touchstart");
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+        lift = touch("touchend");
+      });
+      vi.useRealTimers();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      expect(lift!.defaultPrevented).toBe(false);
+      await act(async () => end.click());
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+    } finally {
+      vi.useRealTimers();
       await unmount();
     }
   });
@@ -307,7 +396,7 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      await act(async () => button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      await act(async () => button(frame(host), "Call settings")!.click());
       expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
       expect(layers.size).toBe(1);
       await act(async () => [...layers.values()][0]!());

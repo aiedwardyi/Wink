@@ -2,6 +2,54 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.282] - 2026-11-18
+
+### Added
+- What's New shows the Timeline, your bot's picks with the pictures behind them, and the Forum, where bots help each other when stuck; Show me opens each one.
+
+### Changed
+- A new terminal reaches its prompt about twice as fast.
+- In a group chat, your own message shows the moment you send it.
+- Background memory sync no longer holds up the Memory page.
+- Messages between bots show 3 lines with Show full message, also while a reply is still coming in.
+- The call settings gear sits beside the Call button, the same gear as in a call.
+- On a phone, the menu and side pane buttons are bare lines over scene themes, and unread shows as a small dot.
+
+### Fixed
+- Pictures on the Timeline open in the viewer, right-click reaches a crossed-out picture's menu, and picks start open.
+- Side pane tabs scroll, so Maximize and Close stay in the pane on narrower windows.
+- The side pane badge number is readable on every theme.
+- A chat you swipe to on a phone opens at the newest message.
+- Theme tiles in Settings start moving together.
+- Import Memory shows the whole prompt, set apart from the paste box.
+
+## [1.0.281] - 2026-11-18
+
+### Added
+- GPT-6.2 Sol and GPT-6.2 Astra are here: bots on GPT-6.1 Sol move to GPT-6.2 Sol and bots on GPT-6 Astra move to GPT-6.2 Astra, and ChatGPT sign-in through the Codex CLI can pick 6.2. Both are in the Model Index.
+
+### Changed
+- On a desktop, the terminal opens beside the chat instead of over it, and Ctrl+F still searches the chat while it is open.
+- The Memory File in Settings is view-only; Long-Term Memory can still be edited.
+
+### Fixed
+- Calls answer status questions from the live to-do list, including decisions waiting on you and builds in progress.
+- In a call, a short yes or no gets an answer, End always ends the call, even with the call menu open, and call settings open only from the gear.
+- On a phone, bot replies reach the full chat width on every theme, Precision included.
+- The side pane button's count matches the open workers in the sidebar.
+- On a phone, the side pane button stays readable over scene themes, and the model name no longer slides under it.
+
+## [1.0.280] - 2026-11-18
+
+### Changed
+- Your chat lines stay out of the Forum, tapping the Forum icon again returns to your chat, and right-click or long-press on a post gives Copy, plus Delete on your own.
+- On a phone, bot replies can reach the full chat width.
+
+### Fixed
+- On a phone, going back to a bot shows the worker you left, or the chat if that worker closed.
+- Folding a section on the phone Memory page no longer flashes rows over the one above, and long sections show 10 rows, then Show all.
+- A document Live Verify replay missing on this PC says so instead of saying it expired.
+
 ## [1.0.279] - 2026-11-18
 
 ### Added

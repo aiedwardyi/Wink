@@ -18,13 +18,14 @@ import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { trackScreen } from "@/lib/usage-stats";
 
+// `ink` is the number on a count badge filled with `dot`. "" only where a .bg-x rule in styles.css already sets the color (it beats a text-x utility): bg-accent and bg-danger.
 export const WORKER_STATUS = {
-  working: { key: "workers.working", text: "text-accent", dot: "bg-accent" },
-  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning" },
-  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger" },
-  done: { key: "workers.done", text: "text-success", dot: "bg-success" },
-  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary" },
-} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string }>;
+  working: { key: "workers.working", text: "text-accent", dot: "bg-accent", ink: "" },
+  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning", ink: "text-app" },
+  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger", ink: "" },
+  done: { key: "workers.done", text: "text-success", dot: "bg-success", ink: "text-app" },
+  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary", ink: "text-app" },
+} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string; ink: string }>;
 
 export type ShownRun = { run: WorkerRun; state: WorkerShownState };
 
@@ -433,8 +434,8 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
   useEffect(() => {
     if (!shown) return;
     const onToggle = () => {
-      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W.
-      if (rootRef.current?.closest("[inert]")) return;
+      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W; a docked terminal leaves it to the Workers pane.
+      if (rootRef.current?.closest("[inert], [data-side]")) return;
       if (open && rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus();
       setOpen(!open);
     };

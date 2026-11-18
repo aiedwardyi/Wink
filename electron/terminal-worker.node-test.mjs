@@ -141,8 +141,8 @@ test("a trusted usage hold creates no shell", async (t) => {
 });
 
 test("no-accounts launch preserves shell, environment and command", async (t) => {
-  let called = 0;
-  const f = fixture(async () => { called++; throw new Error("unexpected account lookup"); }, { workerAccountsEnabled: false });
+  const calls = [];
+  const f = fixture(async (input) => { calls.push(input); throw new Error("launch service unavailable"); }, { workerAccountsEnabled: false });
   t.after(() => f.host.dispose());
   await f.host.openForBot("bot-1", { label: "worker", command: "codex 'task'" });
   assert.equal(f.children[0].shell, "/bin/sh");
@@ -150,8 +150,27 @@ test("no-accounts launch preserves shell, environment and command", async (t) =>
   assert.equal(f.children[0].options.env.CODEX_HOME, "inherited-wrong");
   assert.equal(f.children[0].options.env.CLAUDE_CONFIG_DIR, "inherited-wrong");
   assert.deepEqual(f.children[0].writes, ["codex 'task'\r"]);
-  assert.equal(called, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].unrouted, true);
 });
+
+for (const [platform, flag, replacement] of [
+  ["win32", "--model 'gpt-6-astra'", "--model 'gpt-6.2-astra'"],
+  ["win32", '-m "gpt-6-astra"', '-m "gpt-6.2-astra"'],
+  ["linux", "--model=gpt-6-astra", "--model=gpt-6.2-astra"],
+]) {
+  test(`no-accounts ${platform} pane updates only the model flag: ${flag}`, async (t) => {
+    assert.ok(policy, "trusted worker policy exists");
+    const unused = () => { throw new Error("unexpected account lookup"); };
+    const prepare = policy.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: unused });
+    const f = fixture(prepare, { platform, workerAccountsEnabled: false });
+    t.after(() => f.host.dispose());
+    const prompt = "'keep --model gpt-6-astra in this prompt'";
+    await f.host.openForBot("bot-1", { command: `codex ${flag} -c model_reasoning_effort=high ${prompt}` });
+    assert.deepEqual(f.children[0].writes, [`codex ${replacement} -c model_reasoning_effort=high ${prompt}\r`]);
+    assert.equal(f.children[0].options.env.CODEX_HOME, "inherited-wrong");
+  });
+}
 
 test("later managed engine input on a plain shell is refused before submission", async (t) => {
   const f = fixture(async (input) => {

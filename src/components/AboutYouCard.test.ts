@@ -78,10 +78,20 @@ describe("About You card", () => {
     await render();
     const copy = button("Copy Prompt");
     expect(copy.className).toContain("[@media(pointer:coarse)]:after:content-['']");
+    expect(copy.classList.contains("hover:bg-raised-hover")).toBe(true);
     const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
     expect(prompt.className).not.toMatch(/(^|\s)focus:outline-none/);
     expect(prompt.className).toContain("focus-visible:outline-none");
     expect(prompt.className).toContain("focus-visible:ring-2 focus-visible:ring-accent/50");
+  });
+
+  it("shows the whole prompt on a distinct surface", async () => {
+    await render();
+    const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
+    expect(prompt.textContent).toBe(en["aboutYou.prompt"]);
+    expect(prompt.className).not.toMatch(/\b(max-h-|overflow-)/);
+    expect(prompt.parentElement!.className).toContain("bg-raised");
+    expect(host.querySelector("textarea")!.className).toContain("bg-inset");
   });
 
   const type = (value: string) => act(async () => {

@@ -629,7 +629,7 @@ describe("ModelPicker friends chip", () => {
   });
 
   it.each([["MacIntel", "Option"], ["Win32", "Alt"]])("opens a modal with ordered model groups and %s keycap bindings", (platform, shortcut) => {
-    for (const [id, model] of [["antigravity", "gemini-3.8-flash-high"], ["codex", "gpt-6-astra"], ["muse", "muse-spark-1.3"]]) {
+    for (const [id, model] of [["antigravity", "gemini-3.8-flash-high"], ["codex", "gpt-6.2-astra"], ["muse", "muse-spark-1.3"]]) {
       mockInstances.find((instance) => instance.instanceId === id)!.models = { default: model!, options: [{ id: model!, label: model! }] };
     }
     const html = platformMarkup(platform, true);

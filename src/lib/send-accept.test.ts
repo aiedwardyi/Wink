@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
 import { nextTurnSignals, type TurnSignals } from "./turn-stage";
@@ -27,6 +27,21 @@ const composer = readFileSync(join(here, "../components/Composer.tsx"), "utf8");
 const settledReply: Message = { id: "a1", role: "bot", kind: "text", text: "done", at: 1 };
 
 describe("withAcceptedMessages", () => {
+  it("hands back the same list without scanning it when no send is waiting", () => {
+    const list = [settledReply];
+    const scan = vi.spyOn(list, "flatMap");
+    expect(withAcceptedMessages(list)).toBe(list);
+    expect(withAcceptedMessages(list, [], [])).toBe(list);
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it("carries the reply a waiting send answers", () => {
+    const [, held] = withAcceptedMessages([settledReply], [{ sendId: "s1", kind: "thinking", text: "yes", replyToId: "a1" }]);
+    expect(held.replyToId).toBe("a1");
+    const [, queued] = withAcceptedMessages([settledReply], [], [{ queueId: "q1", text: "yes", replyToId: "a1" }]);
+    expect(queued.replyToId).toBe("a1");
+  });
+
   it("paints a busy send before its POST completes and replaces it once confirmed", () => {
     const accepted = [{ sendId: "s1", kind: "sends-next" as const, text: "extra" }];
     const pending = withAcceptedMessages([settledReply], accepted);

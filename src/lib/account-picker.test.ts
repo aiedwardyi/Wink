@@ -55,7 +55,7 @@ it.each([1, 2])("keeps Claude and Codex base picker rows after server transforms
   mkdirSync(dir, { recursive: true });
   const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" } };
   const accounts = new AccountService(dir, () => bases);
-  const models = { claudeAgent: "claude-opus-5-5", codex: "gpt-6.1-sol" };
+  const models = { claudeAgent: "claude-opus-5-5", codex: "gpt-6.2-sol" };
   const drivers = (["claudeAgent", "codex"] as const).map((kind) => {
     const fake = makeFakeDriver({ kind }).driver;
     const create = fake.create;
@@ -101,14 +101,14 @@ it("projects Main's catalog without replacing either account's usage catalog", a
   const instances = await registry.describeCached();
   const base = instances.find((row) => row.instanceId === "codex")!;
   const main = instances.find((row) => row.instanceId === added.id)!;
-  base.models = { default: "gpt-6-astra", options: [{ id: "gpt-6-astra", label: "Base only" }] };
-  main.models = { default: "gpt-6.1-sol", options: [{ id: "gpt-6.1-sol", label: "Main only" }] };
+  base.models = { default: "gpt-6.2-astra", options: [{ id: "gpt-6.2-astra", label: "Base only" }] };
+  main.models = { default: "gpt-6.2-sol", options: [{ id: "gpt-6.2-sol", label: "Main only" }] };
   const before = JSON.stringify(instances);
   const projected = bots.pickerInstances(bots.accountInstances(instances));
-  const row = pickerRows(projected, { instanceId: "codex", model: "gpt-6.1-sol" })[0]!;
+  const row = pickerRows(projected, { instanceId: "codex", model: "gpt-6.2-sol" })[0]!;
   expect(row.instance.instanceId).toBe("codex");
   expect(row.instance.models).toEqual(main.models);
-  expect(row.cells.map((cell) => cell.options[0]!.id)).toEqual(["gpt-6.1-sol"]);
+  expect(row.cells.map((cell) => cell.options[0]!.id)).toEqual(["gpt-6.2-sol"]);
   expect(projected.find((instance) => instance.instanceId === "codex")!.models).toEqual(base.models);
   expect(JSON.stringify(instances)).toBe(before);
 });

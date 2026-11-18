@@ -15,6 +15,7 @@ import { useThreadMessage } from "@/lib/message-pages";
 import { detectChatOptions } from "@/lib/chat-options";
 import { ChatOptionChips } from "./ChatOptionChips";
 import { PeerMessageBody } from "./PeerMessage";
+import { FOLD_FADE, FoldClip, FoldToggle } from "./FoldClip";
 import { webhookMessageView } from "@/lib/webhook-message";
 import { editedMessageText, splitAttachedImages } from "@/lib/composer-attachments";
 import { placeTooltip } from "@/lib/tooltip-position";
@@ -25,19 +26,11 @@ import { localeTag, useI18n } from "@/lib/i18n";
  * bury the conversation; bots get full markdown. */
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
-export const USER_FOLD_CLASS = "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]";
+export const USER_FOLD_CLASS = `max-h-40 overflow-hidden ${FOLD_FADE}`;
+export { FoldToggle };
 
 export function userTextFolds(text: string): boolean {
   return text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES;
-}
-
-export function FoldToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
-  const { t } = useI18n();
-  return (
-    <button onClick={onToggle} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-      {t(expanded ? "chat.showLess" : "chat.showFullMessage")}
-    </button>
-  );
 }
 
 /** Hover/focus-revealed copy control shared by user + bot bubbles. */
@@ -266,6 +259,7 @@ const Bubble = memo(function Bubble({
   isLastBotText,
   streaming = false,
   pictured = false,
+  peerReply = false,
   dock,
   sendsNext = false,
   sendsAfterSync = false,
@@ -286,6 +280,8 @@ const Bubble = memo(function Bubble({
   isLastBotText: boolean;
   streaming?: boolean;
   pictured?: boolean;
+  /** the bot's answer to another bot's message */
+  peerReply?: boolean;
   dock?: ReplyDock;
   sendsNext?: boolean;
   sendsAfterSync?: boolean;
@@ -331,6 +327,7 @@ const Bubble = memo(function Bubble({
     );
   }
 
+  const markdown = <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />;
   const hasReactions = !message.placeholder && Boolean(message.reactions?.length);
   // "‹ 2/3 ›" under an edited message
   const switchTo = (messageId: string | undefined) => {
@@ -362,7 +359,7 @@ const Bubble = memo(function Bubble({
             {attachedImages && attachedImages.images.length > 0 && (
               <AttachedImageGallery paths={attachedImages.images} className="ml-3 max-w-[min(42rem,78%)] justify-start pl-3" />
             )}
-            <PeerMessageBody text={visibleText} />
+            <PeerMessageBody text={visibleText} short />
             {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className="mt-2 ml-3 max-w-[min(42rem,78%)] pl-3" />}
           </div>
           {!message.placeholder && <ReactionChips threadId={threadId} message={message} members={members} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
@@ -383,7 +380,7 @@ const Bubble = memo(function Bubble({
       <div
         data-orbit-message-body
         data-strip={hasReactions || dockShown ? "" : undefined}
-        className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !user && "max-sm:max-w-full")}
+        className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !user && "max-sm:max-w-full!")}
         style={dock?.wrap && !hasReactions ? { paddingBottom: "2.5rem" } : undefined}
       >
         {!user && <div className="orbit-message-speaker hidden">{botName}</div>}
@@ -475,7 +472,7 @@ const Bubble = memo(function Bubble({
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
               {callMark}
-              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />
+              {peerReply ? <FoldClip>{markdown}</FoldClip> : markdown}
             </MessageBoundary>
           ) : null}
         </div>

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { Download, ExternalLink, FileText, Folder, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
@@ -9,6 +9,7 @@ import { openOutside, saveFile } from "@/lib/open-file";
 import { lastShown, linkedFileSrc, linkedFolder, showCheck, showItem, showMap, showMedia, showName, showTimeline, showWorkers, takeFolder, usePanePulse, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
+import { edgeFade } from "./Segmented";
 import { MediaFiles, ShowMedia } from "./ShowMedia";
 import { TimelinePane } from "./TimelinePane";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
@@ -19,6 +20,8 @@ import "./ShowPane.css";
 
 const ShowPdf = lazy(() => import("./ShowPdf"));
 const MapPane = lazy(() => import("./MapPane").then(module => ({ default: module.MapPane })));
+// Matches Segmented's fade: the open tab keeps clear of it.
+const TAB_FADE = 24;
 const ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText, folder: Folder };
 // Past this a text file is a log to open in an editor, not something to read in the pane.
 const TEXT_MAX = 1_000_000;
@@ -63,10 +66,51 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     else if (card && source) openVerifyWatch({ threadId: source.threadId, owner: card.owner, live: action === "live" });
   };
   const ref = useRef<HTMLElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const placed = useRef(false);
+  const aim = useRef<number | null>(null);
+  const [fade, setFade] = useState<string>();
   const dock = useRef<number | undefined>(undefined);
   // The sidebar unfolds as this closes; its open width keeps the content from reflowing mid-exit.
   if (!closing) dock.current = undefined;
   else dock.current ??= ref.current?.getBoundingClientRect().width;
+
+  // The row scrolls when its tabs do not fit: the open tab glides to the middle, clear of the edge fade, and the edge with more tabs fades.
+  useLayoutEffect(() => {
+    const row = strip.current;
+    if (!row) return;
+    const place = () => {
+      const on = row.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (on && row.scrollWidth > row.clientWidth) {
+        const box = row.getBoundingClientRect();
+        const pick = on.getBoundingClientRect();
+        if (pick.left < box.left + TAB_FADE || pick.right > box.right - TAB_FADE) {
+          const glide = placed.current && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          row.scrollBy({ left: (pick.left + pick.right - box.left - box.right) / 2, behavior: glide ? "smooth" : "instant" });
+        }
+      }
+      placed.current = true;
+      setFade(edgeFade(row, TAB_FADE));
+    };
+    place();
+    const settle = () => { aim.current = null; };
+    row.addEventListener("scrollend", settle);
+    const observer = window.ResizeObserver ? new ResizeObserver(place) : undefined;
+    observer?.observe(row);
+    for (const button of row.querySelectorAll("button")) observer?.observe(button);
+    return () => { observer?.disconnect(); row.removeEventListener("scrollend", settle); };
+  }, [tab, hasWorkers, checkable, Boolean(source), Boolean(botId)]);
+
+  // A mouse wheel only turns up and down, so over the row it moves the row sideways; a trackpad's own sideways swipe is left alone.
+  const wheel = (event: WheelEvent<HTMLDivElement>) => {
+    const row = event.currentTarget;
+    if (event.deltaX) return;
+    const from = aim.current ?? row.scrollLeft;
+    const to = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, from + event.deltaY));
+    if (to === from) return;
+    aim.current = to;
+    row.scrollTo({ left: to, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  };
 
   useEffect(() => {
     if (closing) return;
@@ -82,7 +126,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
   const pane = (
     <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className={cn("verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", pulses !== pulsed && "arrival-glow")} onAnimationEnd={(event) => { if (event.animationName === "arrival-glow-once") setPulsed(pulses); }} data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
       <div className="show-pane-head">
-        <div role="tablist" className="show-pane-tabs">
+        <div ref={strip} role="tablist" className="show-pane-tabs" onScroll={(event) => setFade(edgeFade(event.currentTarget, TAB_FADE))} onWheel={wheel} style={{ maskImage: fade, WebkitMaskImage: fade }}>
           {source && (hasWorkers || tab === "workers") && <button type="button" role="tab" aria-selected={tab === "workers"} onClick={() => showWorkers(source.threadId)}>{t("show.workers")}</button>}
           <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}

@@ -58,6 +58,8 @@ const ledgerSchema = z.object({
     z.object({
       // per file: the versions this PC holds, the hash of the text they describe, when that text was edited, and the PC it came from
       files: z.record(z.string(), z.object({ vv: versionsSchema, hash: z.string().nullable(), at: time, by: rankSchema.optional() })),
+      // what the last pass read, so a bot nothing touched since skips reading every PC's copy
+      seen: z.string().optional(),
     }),
   ),
 });
@@ -80,6 +82,14 @@ export function loadMemorySyncLedger(dataDir: string): MemorySyncLedger {
 export function saveMemorySyncLedger(dataDir: string, ledger: MemorySyncLedger): void {
   mkdirSync(dataDir, { recursive: true });
   writeFileAtomic(join(dataDir, LEDGER_FILE), `${JSON.stringify(ledger, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Saves the ledger unless it equals `saved`, the text last written; returns what is now on disk. A failed save throws, so the caller still holds the old text and the next call retries. */
+export function saveMemorySyncLedgerIfChanged(dataDir: string, ledger: MemorySyncLedger, saved: string): string {
+  const text = JSON.stringify(ledger);
+  if (text === saved) return saved;
+  saveMemorySyncLedger(dataDir, ledger);
+  return text;
 }
 
 export function loadLegacyMemoryLedger(dataDir: string): LegacyMemoryLedger {
@@ -145,8 +155,13 @@ function readRaw(path: string): string | null {
   }
 }
 
+// partial: a snapshot file could not be read or parsed (a Drive placeholder), so a pass over it must not be taken as seen
+type Snapshots = Snapshot[] & { partial?: true };
+
+const partialOf = (snapshots: Snapshot[], partial: boolean): Snapshots => (partial ? Object.assign(snapshots, { partial: true as const }) : snapshots);
+
 // undefined when the folder cannot be listed; a snapshot Drive has not finished delivering is skipped until it parses
-function readSnapshots(dir: string): Snapshot[] | undefined {
+function readSnapshots(dir: string): Snapshots | undefined {
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -154,18 +169,48 @@ function readSnapshots(dir: string): Snapshot[] | undefined {
   } catch {
     return undefined;
   }
-  return names.sort().flatMap((name) => {
+  let partial = false;
+  const read = names.sort().flatMap((name) => {
     const device = SNAPSHOT_FILE.exec(name)?.[1];
     try {
       const parsed = device ? snapshotSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8"))) : undefined;
       return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
     } catch {
+      partial ||= Boolean(device);
       return [];
     }
   });
+  return partialOf(read, partial);
 }
 
-async function readSnapshotsAsync(dir: string): Promise<Snapshot[] | undefined> {
+// a file written within this of the pass may change again under the same time and size, so it is never taken as seen
+const RACY_MS = 2_000;
+
+// sizes and times of every file a pass reads, plus the state it compares them to; undefined when a folder cannot be listed or a file is too new to trust
+function passInputs(dirs: string[], workspace: string, local: string[], bot: MemorySyncLedger["bots"][string], talkedAt: number, me: string, now: number) {
+  const paths = local.map((file) => join(workspace, file));
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    try {
+      paths.push(...readdirSync(dir).sort().map((name) => join(dir, name)));
+    } catch {
+      return undefined;
+    }
+  }
+  const stats: string[] = [String(existsSync(workspace))];
+  for (const path of paths) {
+    try {
+      const stat = statSync(path);
+      if (Math.max(stat.mtimeMs, stat.ctimeMs) > now - RACY_MS) return undefined;
+      stats.push(`${path}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
+    } catch {
+      stats.push(`${path}:-`);
+    }
+  }
+  return hash(JSON.stringify([stats, bot.files, talkedAt, me])) ?? undefined;
+}
+
+async function readSnapshotsAsync(dir: string): Promise<Snapshots | undefined> {
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -173,24 +218,29 @@ async function readSnapshotsAsync(dir: string): Promise<Snapshot[] | undefined> 
   } catch {
     return undefined;
   }
+  let partial = false;
   const read = await Promise.all(names.sort().map(async (name) => {
     const device = SNAPSHOT_FILE.exec(name)?.[1];
     try {
       const parsed = device ? snapshotSchema.safeParse(JSON.parse(await readFile(join(dir, name), "utf8"))) : undefined;
       return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
     } catch {
+      partial ||= Boolean(device);
       return [];
     }
   }));
-  return read.flat();
+  return partialOf(read.flat(), partial);
 }
 
+type SnapshotsRead = Array<Snapshots | undefined> & { at?: number };
+
 /** One bot's snapshots per sync root, read off the event loop; pass them to syncBotMemory as `snapshots`. */
-export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<Array<Snapshot[] | undefined>> {
+export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<SnapshotsRead> {
+  const at = Date.now();
   try {
-    return await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId))));
+    return Object.assign(await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId)))), { at });
   } catch {
-    return [undefined];
+    return Object.assign([undefined], { at });
   }
 }
 
@@ -324,7 +374,20 @@ function dropMergedCopies(workspace: string, files: Iterable<string>): string[] 
   return dropped;
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshot[] | undefined> };
+/** True when nothing a pass reads has changed since the last one, so its snapshots need not be read at all. */
+export function memorySyncUnchanged(folder: string, botSyncId: string, workspace: string, ledger: MemorySyncLedger, { now = Date.now(), host = machine() }: MemorySyncOptions = {}): boolean {
+  const known = ledger.bots[botSyncId];
+  if (!known?.seen) return false;
+  try {
+    const local = memoryFiles(workspace);
+    const dirs = syncRoots(folder, MEMORY_SYNC_DIR).map((root) => join(root, botSyncId));
+    return Boolean(local) && known.seen === passInputs(dirs, workspace, local ?? [], known, ledger.talked?.[botSyncId] ?? 0, deviceId(ledger, host), now);
+  } catch {
+    return false;
+  }
+}
+
+export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: SnapshotsRead };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -337,17 +400,21 @@ export function syncBotMemory(
   memorySyncDir(folder, botSyncId);
   const me = deviceId(ledger, host);
   let dir: string;
-  let groups: Array<Snapshot[] | undefined>;
+  let dirs: string[];
   try {
     dir = join(syncWriteRoot(folder, MEMORY_SYNC_DIR, join(botSyncId, `${me}.json`)), botSyncId);
-    groups = read ?? syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshots(join(root, botSyncId)));
+    dirs = syncRoots(folder, MEMORY_SYNC_DIR).map((root) => join(root, botSyncId));
   } catch {
     return {};
   }
+  const localFiles = memoryFiles(workspace);
+  if (!localFiles) return {};
+  const talkedAt = ledger.talked?.[botSyncId] ?? 0;
+  const known = ledger.bots[botSyncId];
+  if (!read && known?.seen && known.seen === passInputs(dirs, workspace, localFiles, known, talkedAt, me, now)) return {};
+  const groups = read ?? dirs.map(readSnapshots);
   if (groups.some((group) => !group)) return {};
   const snapshots = groups.flatMap((group) => group ?? []);
-  const localFiles = memoryFiles(workspace);
-  if (!snapshots || !localFiles) return {};
   const firstSync = !ledger.bots[botSyncId];
   const bot = (ledger.bots[botSyncId] ??= { files: {} });
   // a wiped or never-created workspace has nothing to publish; forgetting it pulls instead of deleting everywhere, from this PC's own snapshot too
@@ -359,7 +426,6 @@ export function syncBotMemory(
   }
   const own = snapshots.find((snapshot) => snapshot.device === me);
   const remotes = snapshots.filter((snapshot) => restore || snapshot !== own);
-  const talkedAt = ledger.talked?.[botSyncId] ?? 0;
   const mine: Rank = { talkedAt, device: me };
   // a copy keeps its first PC's rank as other PCs relay it; this PC's own copies rank by its current talkedAt
   const from = (snapshot: Snapshot, entry: Snapshot["files"][string]): Rank | undefined => {
@@ -481,5 +547,10 @@ export function syncBotMemory(
     mkdirSync(dir, { recursive: true });
     writeFileAtomic(path, body, { mode: 0o600 });
   }
+  const after = memoryFiles(workspace);
+  // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen
+  const complete = !groups.some((group) => group?.partial) && !Object.values(results).includes("skipped");
+  // a file written after the snapshots were read may not be what was read, so the racy window starts at the read
+  bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files }, talkedAt, me, Math.min(now, read?.at ?? now)) : undefined;
   return results;
 }

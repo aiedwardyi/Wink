@@ -230,6 +230,8 @@ describe("queued message menu", () => {
   });
 
   it("shows a room hold as the 1:1 queued bubble", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T12:00:00"));
     const chat = await mount(false, false);
     await chat.send("held");
     const oneToOne = chat.host.querySelector("[data-orbit-message='user']")!.outerHTML;

@@ -1,12 +1,15 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, History, Paperclip, Pencil, Search, TextQuote, X } from "lucide-react";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
-import { linkedFileSrc } from "@/lib/show-pane";
+import type { PreviewImage } from "@/lib/media-viewer";
+import { openFile } from "@/lib/open-file";
+import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { Fold } from "./Fold";
+import { MediaViewer } from "./MediaViewer";
 import "./TimelinePane.css";
 
 const picture = z.object({ path: z.string(), caption: z.string().optional() });
@@ -35,6 +38,15 @@ const when = (stamp: string, now: Date) => (stamp.startsWith(`${now.getFullYear(
 // A picture shown in chat is copied to attachments, which any chat can load; a bot's own file loads only through a chat that links it.
 const pictureSrc = (threadId: string, path: string) => (/[\\/]attachments[\\/][^\\/]+$/.test(path) && attachmentImageUrl(path)) || linkedFileSrc(threadId, path);
 const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+// A tab switch unmounts the pane, so each pick's fold lives here for the session.
+const folds = new Map<string, boolean>();
+function useFold(key: string, initial: boolean) {
+  const [open, setOpen] = useState(() => folds.get(key) ?? initial);
+  return [open, () => { const next = !(folds.get(key) ?? initial); folds.set(key, next); setOpen(next); }] as const;
+}
+
+const ViewPicture = createContext<(path: string, threadId: string, opener: HTMLElement) => void>(() => {});
 
 // Captions name their option; uncaptioned pictures pair in order with the options left over, only when the counts match.
 function crossedOf({ over, overPictures }: Entry): { label: string; picture?: Picture }[] {
@@ -82,7 +94,23 @@ function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale
   return ago === 0 ? [t("chat.today"), `${weekday} ${shown}`] : ago === 1 ? [t("chat.yesterday"), `${weekday} ${shown}`] : [weekday, shown];
 }
 
-export function TimelinePane({ botId, threadId, maximized, profileName }: { botId: string; threadId: string; maximized: boolean; profileName?: string }) {
+type PaneProps = { botId: string; threadId: string; maximized: boolean; profileName?: string };
+
+export function TimelinePane(props: PaneProps) {
+  const [viewing, setViewing] = useState<PreviewImage | null>(null);
+  const view = useMemo(() => (path: string, threadId: string, opener: HTMLElement) => {
+    opener.focus({ preventScroll: true });
+    openFile({ path, threadId, src: pictureSrc(threadId, path) }, { view: setViewing });
+  }, []);
+  return (
+    <ViewPicture.Provider value={view}>
+      <Picks {...props} />
+      {viewing && <MediaViewer image={viewing} onClose={() => setViewing(null)} />}
+    </ViewPicture.Provider>
+  );
+}
+
+function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
   const { t, locale } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -141,7 +169,7 @@ export function TimelinePane({ botId, threadId, maximized, profileName }: { botI
                   return (
                     <section key={day}>
                       <h3 data-timeline-day={day} className="show-media-month"><b>{name}</b> · {date}</h3>
-                      {rows.map((row) => <TimelineRow key={row.id} row={row} threadId={threadId} you={you} />)}
+                      {rows.map((row) => <TimelineRow key={row.id} row={row} botId={botId} threadId={threadId} you={you} />)}
                     </section>
                   );
                 })}
@@ -152,9 +180,9 @@ export function TimelinePane({ botId, threadId, maximized, profileName }: { botI
   );
 }
 
-const TimelineRow = memo(function TimelineRow({ row, threadId, you }: { row: Row; threadId: string; you: string }) {
+const TimelineRow = memo(function TimelineRow({ row, botId, threadId, you }: { row: Row; botId: string; threadId: string; you: string }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useFold(`${botId}:${row.id}`, true);
   const crossed = crossedOf(row).length;
   const counts = [
     ...(crossed ? [t("timeline.crossed", { count: crossed })] : []),
@@ -163,7 +191,7 @@ const TimelineRow = memo(function TimelineRow({ row, threadId, you }: { row: Row
   const time = timeOf(row.id);
   return (
     <div data-timeline-row={row.id} className="timeline-row">
-      <button type="button" data-timeline-head aria-expanded={open} onClick={() => setOpen(!open)} className="timeline-head hover:bg-raised/50">
+      <button type="button" data-timeline-head aria-expanded={open} onClick={toggle} className="timeline-head hover:bg-raised/50">
         <Thumb picture={row.picture} threadId={threadId} />
         <span className="timeline-main">
           <span className="timeline-key">{row.key}</span>
@@ -173,19 +201,19 @@ const TimelineRow = memo(function TimelineRow({ row, threadId, you }: { row: Row
         <ChevronRight size={16} aria-hidden="true" className="timeline-chevron" />
       </button>
       <Fold open={open}><Detail entry={row} threadId={threadId} you={you} /></Fold>
-      {row.older.map((each) => <Replaced key={each.id} entry={each} newer={row} threadId={threadId} you={you} />)}
+      {row.older.map((each) => <Replaced key={each.id} entry={each} newer={row} botId={botId} threadId={threadId} you={you} />)}
     </div>
   );
 });
 
-function Replaced({ entry, newer, threadId, you }: { entry: Entry; newer: Entry; threadId: string; you: string }) {
+function Replaced({ entry, newer, botId, threadId, you }: { entry: Entry; newer: Entry; botId: string; threadId: string; you: string }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useFold(`${botId}:${entry.id}`, false);
   const time = timeOf(entry.id);
   const at = time && dayOf(entry.id) === dayOf(newer.id) ? time : when(stampOf(entry.id), new Date());
   return (
     <>
-      <button type="button" data-timeline-replaced aria-expanded={open} onClick={() => setOpen(!open)} className="timeline-replaced hover:bg-raised/50">
+      <button type="button" data-timeline-replaced aria-expanded={open} onClick={toggle} className="timeline-replaced hover:bg-raised/50">
         <History size={13} aria-hidden="true" />
         <span>{t("timeline.replaced", { when: at })} · <s>{entry.picked}</s></span>
         <ChevronRight size={14} aria-hidden="true" className="timeline-chevron" />
@@ -217,16 +245,22 @@ function Detail({ entry, threadId, you, old = false }: { entry: Entry; threadId:
       {entry.files.length > 0 && (
         <>
           <p className="timeline-section"><Paperclip size={12} aria-hidden="true" />{t("timeline.screenshots", { when: at })}</p>
-          <div className="timeline-shots">{entry.files.map((path) => <span key={path} className="timeline-pic"><Img path={path} threadId={threadId} /></span>)}</div>
+          <div className="timeline-shots">{entry.files.map((path) => <span key={path} className="timeline-pic"><Img path={path} threadId={threadId} viewable /></span>)}</div>
         </>
       )}
     </div>
   );
 }
 
-function Img({ path, threadId, onFail }: { path: string; threadId: string; onFail?: () => void }) {
+// Inside a button, a picture is opened by the viewer; the row's own thumb sits in one already.
+function Img({ path, threadId, onFail, viewable = false }: { path: string; threadId: string; onFail?: () => void; viewable?: boolean }) {
+  const { t } = useI18n();
+  const view = useContext(ViewPicture);
   const [loaded, setLoaded] = useState(false);
-  return <img src={pictureSrc(threadId, path)} alt="" loading="lazy" decoding="async" data-loaded={loaded || undefined} onLoad={() => setLoaded(true)} onError={onFail} />;
+  const img = <img src={pictureSrc(threadId, path)} alt="" loading="lazy" decoding="async" data-loaded={loaded || undefined} onLoad={() => setLoaded(true)} onError={onFail} />;
+  return viewable
+    ? <button type="button" className="timeline-open" aria-label={t("viewer.open", { name: showName(path) })} onClick={(event) => view(path, threadId, event.currentTarget)}>{img}</button>
+    : img;
 }
 
 function Thumb({ picture, threadId }: { picture?: Picture; threadId: string }) {
@@ -241,7 +275,7 @@ function Won({ entry, threadId }: { entry: Entry; threadId: string }) {
   const [failed, setFailed] = useState(false);
   const badge = <span className="timeline-badge"><Check size={11} aria-hidden="true" />{t("timeline.picked")}</span>;
   return entry.picture && !failed
-    ? <span className="timeline-pic timeline-won"><Img path={entry.picture.path} threadId={threadId} onFail={() => setFailed(true)} />{badge}</span>
+    ? <span className="timeline-pic timeline-won"><Img path={entry.picture.path} threadId={threadId} onFail={() => setFailed(true)} viewable />{badge}</span>
     : <span className="timeline-pic timeline-won" data-text>{badge}<span>{entry.picked}</span></span>;
 }
 
@@ -251,7 +285,7 @@ function Crossed({ label, picture, threadId }: { label: string; picture?: Pictur
   return (
     <span data-timeline-out className="timeline-out">
       <span className="timeline-pic">
-        <Img path={picture.path} threadId={threadId} onFail={() => setFailed(true)} />
+        <Img path={picture.path} threadId={threadId} onFail={() => setFailed(true)} viewable />
         <svg className="timeline-strike" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="14" y1="14" x2="86" y2="86" /><line x1="86" y1="14" x2="14" y2="86" /></svg>
       </span>
       <span>{label}</span>

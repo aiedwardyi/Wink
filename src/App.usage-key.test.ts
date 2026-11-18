@@ -50,6 +50,7 @@ const botOn = (instanceId: string): Bot => ({
   messages: [{ id: "q", at: usageBoardNow - MIN, role: "user", kind: "text", text: "Still going" }],
 });
 
+const phoneWidth = () => vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.assign(new EventTarget(), { matches: query.includes("max-width"), media: query, onchange: null, addListener() {}, removeListener() {} }));
 const quick = () => document.body.querySelector("[data-usage-quick]:not([data-closing])");
 const settings = () => h.store!.state.appSettingsOpen ? h.store!.state.appSettingsSection : null;
 const settle = () => act(async () => { for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); });
@@ -123,7 +124,8 @@ describe("Alt+U", () => {
     expect(keys.map((event) => event.cancelable)).toEqual([true]);
   });
 
-  it("opens all Usage on Alt+U while the terminal covers the chat", async () => {
+  it("opens all Usage on Alt+U while the terminal covers a phone's chat", async () => {
+    phoneWidth();
     await mount(botOn("claude"), instancesFor(usageBoardFixture));
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true, bubbles: true, cancelable: true })); });
     await settle();
@@ -133,7 +135,18 @@ describe("Alt+U", () => {
     expect(settings()).toBe("usage");
   });
 
-  it("shuts an open quick view when the terminal covers the chat and keeps it shut after", async () => {
+  it("opens the chat's quick view on Alt+U while the terminal sits beside the chat", async () => {
+    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true, bubbles: true, cancelable: true })); });
+    await settle();
+    expect(document.body.querySelector('.orbit-terminal-overlay[data-open="true"][data-side]'), "terminal docked").not.toBeNull();
+    await press();
+    expect(quick(), "quick view").not.toBeNull();
+    expect(settings()).toBeNull();
+  });
+
+  it("shuts an open quick view when the terminal covers a phone's chat and keeps it shut after", async () => {
+    phoneWidth();
     await mount(botOn("claude"), instancesFor(usageBoardFixture));
     await press();
     expect(quick(), "quick view").not.toBeNull();

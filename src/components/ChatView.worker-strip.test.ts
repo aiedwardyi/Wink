@@ -62,12 +62,12 @@ describe("chat header worker badge", () => {
     } finally { await unmount(); }
   });
 
-  it.each([false, true])("counts six working on the badge in the waiting color with phone=%s", async (phone) => {
+  it.each([false, true])("counts all seven open workers on the badge in the waiting color with phone=%s", async (phone) => {
     const { header, unmount } = await mount(7, phone);
     try {
       expect(header.querySelector("[data-worker-strip]")).toBeNull();
       const button = header.querySelector("[data-show-pane-button]")!;
-      expect(button.querySelector("[data-worker-badge]")?.textContent).toBe("6");
+      expect(button.querySelector("[data-worker-badge]")?.textContent).toBe("7");
       expect(button.querySelector("[data-worker-badge]")?.classList.contains("bg-warning")).toBe(true);
       expect(button.getAttribute("aria-label")).toBe("6 working, 1 waiting, 0 failed, 0 done. Show workers");
     } finally { await unmount(); }
