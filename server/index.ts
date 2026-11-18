@@ -16,7 +16,7 @@ import {
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
-import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
+import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
@@ -914,7 +914,20 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
   return required;
 }
 
+/** A bot saved on a model Wink replaced moves to the replacement before the send, with one plain line in its chat. */
 async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
+  const saved = bot.modelSelection;
+  const selection = await resolveBotSelection(bot, task);
+  if (selection.model === saved.model) return selection;
+  const kind = registry.get(botAccounts.catalogInstanceId(selection))?.driverKind;
+  const line = kind && currentModel(kind, saved.model) === selection.model ? replacedModelLine(kind, saved.model) : null;
+  if (!line) return selection;
+  store.patchBot(bot.id, { modelSelection: { ...saved, model: selection.model } });
+  store.appendMessage(task?.threadId ?? bot.activeThreadId ?? bot.threadId, { role: "bot", kind: "activity", tool: { name: line, ok: true } });
+  return selection;
+}
+
+async function resolveBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
   if (bot.modelSelection.mode !== "automatic") return botAccounts.resolve(bot, automaticRequirements(bot));
   const continuityId = task?.lastInstanceId && (accounts.get(task.lastInstanceId)?.of ?? task.lastInstanceId);
   const preferredIds = [...new Set([continuityId, bot.modelSelection.instanceId].filter(Boolean))];
@@ -1141,12 +1154,10 @@ const teamReports = new TeamReports({
 });
 initializeSteerQueue(store, drainQueuedSends, () => threadSyncGate.enabled && profileSyncSettings.syncChats && !!profileSyncSettings.folder);
 if (store.botsFile === "unreadable") console.warn("bot sync: bots.json is there but did not load; not syncing bots until it does");
-store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAgent").map((i) => i.instanceId), "claude-sonnet-5", "claude-sonnet-5-5");
-store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAgent").map((i) => i.instanceId), "claude-haiku-4-5", "claude-haiku-5-5");
-store.renameModel(registry.instances().filter((i) => i.driverKind === "codex").map((i) => i.instanceId), "gpt-6-sol", "gpt-6.1-sol", { resetSession: true });
-store.renameModel(registry.instances().filter((i) => i.driverKind === "codex").map((i) => i.instanceId), "gpt-5.6-terra", "gpt-6.1-terra", { resetSession: true });
-const antigravityIds = registry.instances().filter((i) => i.driverKind === "antigravityAgent").map((i) => i.instanceId);
-for (const [from, to] of RETIRED_GEMINI_FLASH_IDS) store.renameModel(antigravityIds, from, to);
+for (const engine of ["claudeAgent", "codex", "antigravityAgent"] as const) {
+  const ids = registry.instances().filter((i) => i.driverKind === engine).map((i) => i.instanceId);
+  for (const { from, to, resetSession } of replacedModelMoves(engine)) store.renameModel(ids, from, to, resetSession ? { resetSession } : {});
+}
 const sendSequencer = new SendSequencer();
 
 type ChatLatencyStage =
@@ -1701,6 +1712,7 @@ function publishProfileChanges(): number {
 function instanceOffersModel(instanceId: string, model: string): boolean {
   if (accounts.get(instanceId)) return false;
   const instance = registry.get(instanceId);
+  if (instance) model = currentModel(instance.driverKind, model);
   return Boolean(instance && (model === instance.models.default || instance.models.options.some((option) => option.id === model)));
 }
 
@@ -1729,7 +1741,7 @@ function applySyncedBotFields(
   }
   if ("pinnedMessageId" in apply) patch.pinnedMessageId = typeof apply.pinnedMessageId === "string" ? apply.pinnedMessageId : undefined;
   if (["instanceId", "model", "effort", "modelMode"].some((field) => field in apply)) {
-    patch.modelSelection = mergeSyncedModelSelection(bot.modelSelection, apply, instanceOffersModel);
+    patch.modelSelection = mergeSyncedModelSelection(bot.modelSelection, apply, instanceOffersModel, (instanceId, model) => currentModel(registry.get(instanceId)?.driverKind ?? "", model));
   }
   if (Object.keys(patch).length) store.patchBot(bot.id, patch);
   if (!("avatarAsset" in apply || "avatarCrop" in apply)) return true;

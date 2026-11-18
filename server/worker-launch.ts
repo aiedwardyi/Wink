@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { currentModel } from "../shared/replaced-models.ts";
 import { accountLaunch, canonicalAccountHome, type AccountContext } from "./account-policy.ts";
 import { ACCOUNT_DRIVERS } from "./accounts.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
@@ -67,6 +68,15 @@ function engineToken(token: string) {
   return token.split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|ps1)$/i, "").toLowerCase() ?? "";
 }
 
+/** A pane typed with an id Wink replaced starts on its replacement. */
+function withCurrentModel(driver: string, args: string[]): string[] {
+  return args.map((arg, index) => {
+    if (/^(?:--model|-m)$/.test(args[index - 1] ?? "")) return currentModel(driver, arg);
+    const inline = /^(--model=)(.+)$/.exec(arg);
+    return inline ? `${inline[1]}${currentModel(driver, inline[2])}` : arg;
+  });
+}
+
 export function workerCommand(command: string, unmanaged = false) {
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(command)) throw new Error("Ambiguous worker launch control input");
   let rest = command.trim();
@@ -92,7 +102,7 @@ export function workerCommand(command: string, unmanaged = false) {
   if (Object.keys(environment).some((name) => name !== "AGY_CLI_DISABLE_AUTO_UPDATE")) throw new Error("Conflicting worker environment override");
   const [executable, ...args] = tokens(rest);
   if (engineToken(executable) !== first.toLowerCase()) throw new Error("Ambiguous worker executable");
-  return { kind: "managed" as const, executable, args, environment, home, ...engine };
+  return { kind: "managed" as const, executable, args: withCurrentModel(engine.driver, args), environment, home, ...engine };
 }
 
 function withoutWorkerSettings(args: string[]) {

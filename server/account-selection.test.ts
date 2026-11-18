@@ -7,12 +7,13 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAutomaticSelection } from "./automatic-selection.ts";
 import type { AccountService } from "./accounts.ts";
 import { BotAccounts } from "./bot-accounts.ts";
+import { currentModel, replacedModelLine } from "../shared/replaced-models.ts";
 import type { ModelSelection, ProviderInstance } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import type { BotRecord, Store } from "./store.ts";
 
 const source = ts.createSourceFile("index.ts", readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8"), ts.ScriptTarget.Latest, true);
-const names = ["automaticCandidate", "liveAutomaticCandidate", "automaticRequirements", "resolvedBotSelection", "defaultSelection"];
+const names = ["automaticCandidate", "liveAutomaticCandidate", "automaticRequirements", "resolvedBotSelection", "resolveBotSelection", "defaultSelection"];
 const extracted = source.statements.flatMap((node) => {
   if (ts.isFunctionDeclaration(node) && node.name && names.includes(node.name.text)) return [node.getText(source)];
   if (ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => ts.isIdentifier(declaration.name) && names.includes(declaration.name.text))) return [node.getText(source)];
@@ -31,6 +32,7 @@ function fixture(useDefault = true) {
   const rates = new Map();
   const signedOut = new Set<string>();
   const patch = vi.fn();
+  const append = vi.fn();
   const accounts = { defaultFor: (of: string) => useDefault && of === "claude" ? "added" : undefined,
     get: (id: string) => ["added", "other"].includes(id) ? { of: "claude", state: "ready" } : undefined,
     drains: {},
@@ -43,7 +45,7 @@ function fixture(useDefault = true) {
   const globals = { accounts, botAccounts, registry,
     automaticAvailability: availability, rateLimitsByInstance: rates, resolveAutomaticSelection,
     providerSnapshots: { get: (id: string) => signedOut.has(id) ? { state: "available", authenticated: false } : undefined },
-    store: { patchBot: patch }, rememberAutomaticAvailability: () => {},
+    store: { patchBot: patch, appendMessage: append }, currentModel, replacedModelLine, rememberAutomaticAvailability: () => {},
     describeInstances: async () => instances.map((instance) => ({ ...instance, accountOf: instance.account?.of,
       snapshot: { state: availability.get(instance.instanceId) === false ? "unavailable" : "available", ...(signedOut.has(instance.instanceId) ? { authenticated: false } : {}) },
       capabilities: instance.adapter.capabilities })),
@@ -52,7 +54,7 @@ function fixture(useDefault = true) {
     resolvedBotSelection: (record: BotRecord, task?: { lastInstanceId: string; lastModel: string }) => Promise<ModelSelection>;
     defaultSelection: () => Promise<ModelSelection>;
   };
-  return { ...context, bot, instances, availability, rates, signedOut, patch };
+  return { ...context, bot, instances, availability, rates, signedOut, patch, append };
 }
 
 describe("server account selection paths", () => {
@@ -118,6 +120,25 @@ describe("server account selection paths", () => {
     f.availability.set("added", false);
     f.availability.set("codex", false);
     await expect(f.resolvedBotSelection(f.bot)).rejects.toThrow(/engine|account/i);
+  });
+
+  it.each([
+    ["gpt-6.1-sol", "gpt-6.2-sol", "GPT-6.1 Sol was replaced by GPT-6.2 Sol"],
+    ["gpt-6-astra", "gpt-6.2-astra", "GPT-6 Astra was replaced by GPT-6.2 Astra"],
+  ])("sends a bot saved on %s as %s, with one plain line", async (saved, current, line) => {
+    const f = fixture(false);
+    f.bot.modelSelection = { instanceId: "codex", model: saved, mode: "pinned", effort: "high" };
+    expect(await f.resolvedBotSelection(f.bot)).toEqual({ instanceId: "codex", model: current, mode: "pinned", effort: "high" });
+    expect(f.patch).toHaveBeenCalledWith("bot", { modelSelection: { instanceId: "codex", model: current, mode: "pinned", effort: "high" } });
+    expect(f.append).toHaveBeenCalledTimes(1);
+    expect(f.append.mock.calls[0]![1]).toMatchObject({ role: "bot", kind: "activity", tool: { name: line } });
+  });
+
+  it("says nothing for a model that was never replaced", async () => {
+    const f = fixture(false);
+    f.bot.modelSelection = { instanceId: "codex", model: "gpt-6.2-sol", mode: "pinned" };
+    await f.resolvedBotSelection(f.bot);
+    expect(f.append).not.toHaveBeenCalled();
   });
 
   it("returns the same pinned modelSelection object with no default", async () => {

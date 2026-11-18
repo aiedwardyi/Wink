@@ -128,7 +128,7 @@ describe("terminal proxy", () => {
     for (const [name, id] of [STATIC_CLAUDE_MODELS, STATIC_CODEX_MODELS, MSP_MUSE_MODELS, STATIC_GROK_MODELS].flatMap(names)) {
       expect(description, id).toContain(`${name} = ${id}`);
     }
-    expect(description).toContain("Astra = gpt-6-astra");
+    expect(description).toContain("Astra = gpt-6.2-astra");
     expect(description).not.toContain("Fable 5 = claude-fable-5");
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);

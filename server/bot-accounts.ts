@@ -1,4 +1,5 @@
 import { isEffortOffered } from "../shared/model-effort.ts";
+import { currentModel } from "../shared/replaced-models.ts";
 import { AccountError, type AccountService } from "./accounts.ts";
 import type { AutomaticCandidate, AutomaticCapability } from "./automatic-selection.ts";
 import type { ModelCatalog, ModelSelection, ProviderInstance, ProviderSnapshot } from "./contracts.ts";
@@ -25,7 +26,7 @@ export class BotAccounts {
   }
 
   resolve(bot: Pick<BotRecord, "modelSelection">, required: readonly AutomaticCapability[] = []): ModelSelection {
-    const selection = bot.modelSelection;
+    const selection = this.current(bot.modelSelection);
     const accountId = this.routedAccount(selection.instanceId);
     if (!accountId) {
       if (this.accounts.drains[selection.instanceId]) throw new AccountError("This account is draining. Use Set as Main on the Usage page");
@@ -76,7 +77,15 @@ export class BotAccounts {
     });
   }
 
+  /** A saved id Wink replaced runs as its replacement, whichever path carried it in. */
+  private current(selection: ModelSelection): ModelSelection {
+    const kind = this.registry.get(this.routedAccount(selection.instanceId) ?? selection.instanceId)?.driverKind;
+    const model = kind ? currentModel(kind, selection.model) : selection.model;
+    return model === selection.model ? selection : { ...selection, model };
+  }
+
   checkSelection(selection: ModelSelection): ModelSelection {
+    selection = this.current(selection);
     if (/^acct_[0-9a-f-]{36}$/.test(selection.instanceId)) throw new AccountError("Use Set as Main on the Usage page to choose this engine's account", 400);
     const accountId = this.routedAccount(selection.instanceId);
     if (accountId) this.validate(accountId, selection);

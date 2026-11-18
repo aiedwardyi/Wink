@@ -1,6 +1,7 @@
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { earlierModels } from "../../shared/replaced-models.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { spawnCli } from "../procs.ts";
@@ -23,9 +24,7 @@ function textCatalog(env: Record<string, string | undefined>, model: string, cwd
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Codex text model catalog unavailable");
   }
   const cached = JSON.parse(readFileSync(path, "utf8"));
-  const legacy = model === "gpt-6.1-sol" ? "gpt-6-sol" : model === "gpt-6.1-terra" ? "gpt-5.6-terra" : model;
-  const info = cached.models?.find((entry: { slug: string }) => entry.slug === model)
-    ?? cached.models?.find((entry: { slug: string }) => entry.slug === legacy);
+  const info = [model, ...earlierModels("codex", model)].map((slug) => cached.models?.find((entry: { slug: string }) => entry.slug === slug)).find(Boolean);
   if (!info) throw new Error("Codex text model catalog unavailable");
   const dir = mkdtempSync(join(cwd, "catalog-"));
   // Model metadata can force Code Mode and native tools despite disabled feature flags.

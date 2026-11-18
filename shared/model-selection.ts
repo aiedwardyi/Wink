@@ -9,7 +9,7 @@ const RETIRED_ENGINE_KINDS = new Map([
 ]);
 
 /** Never offered, but bots saved on them still run and the Model Index still charts them. */
-export const RETIRED_PICKER_MODEL_IDS: readonly string[] = ["claude-fable-5"];
+export const RETIRED_PICKER_MODEL_IDS: readonly string[] = ["claude-fable-5", "gpt-6.1-sol", "gpt-6-astra"];
 
 /** Gemini Flash ids dropped from the catalog; saved bots move to 3.8 Flash at the same effort. */
 export const RETIRED_GEMINI_FLASH_IDS: readonly (readonly [from: string, to: string])[] = ["3.7", "3.6", "3.5"].flatMap((version) =>

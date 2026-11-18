@@ -121,7 +121,7 @@ describe("POST /api/internal/create-bot", () => {
     const created = await createBot("Effort Operator", { effort: "low" });
     expect(created.status).toBe(201);
     expect(await listedBot(created.body.id!)).toMatchObject({
-      modelSelection: { instanceId: "claude", model: "claude-sonnet-5", effort: "low" },
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5-5", effort: "low" },
     });
   });
 
@@ -138,7 +138,7 @@ describe("POST /api/internal/create-bot", () => {
     const created = await createBot(`Settings Operator ${on}`);
     expect(created.status).toBe(201);
     expect(await listedBot(created.body.id!)).toMatchObject({
-      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5-5" },
       autoApprove: on,
       approvePeerComms: on,
       composio: on,
