@@ -30,20 +30,20 @@
 **1. Every coding subscription you pay for**<br>
 Give each bot its own engine and model. `Alt+M` switches mid-thread, and the thread carries over.
 
-<img src="./assets/readme/tour-models.png" width="780" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5 and Sonnet 5.5 above and below.">
+<img src="./assets/readme/tour-models.png" width="780" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5.1 and Sonnet 5.5 above and below.">
 
 **2. A lead bot runs your workers**<br>
 Ask once. It splits the job, picks each worker's engine, model and effort, and checks the work before it lands.
 
 <img src="./assets/readme/tour-workers.png" width="880" alt="Five worker rows, each with its engine's mark and model: three working, two done.">
 
-**3. Real terminals, one tab per worker**<br>
-Each worker runs its engine's own CLI in a separate git worktree. Press `` Ctrl+` `` to drive it yourself.
+**3. Real terminals**<br>
+Each worker is the vendor's own CLI in its own terminal. The lead bot is told to give each one its own git worktree. Pick one from the worker list, which shows its model and effort. Press `` Ctrl+` `` to drive it yourself.
 
 <img src="./assets/readme/tour-terminal.png" width="748" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
 
 **4. Never loses the plot**<br>
-One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models, PCs and your phone.
+One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
 
 <img src="./assets/readme/tour-memory.png" width="774" alt="Atlas's Memory box with its MEMORY.md notes on the Acme API.">
 
@@ -98,7 +98,6 @@ This is everything Wink listens on, sends and stores, usage stats included.
 **Listens** (this PC only)
 
 - `127.0.0.1:8799` for the app (falls back to 18799, then 28799), behind a per-launch token and a Host/Origin check. The token lives in memory, and in a Claude turn's temp config until that turn ends.
-- `127.0.0.1:8800` for webhooks (the app's port + 1, so 18800 or 28800 on a fallback), which rejects any request without a webhook's secret.
 - Random token-protected `127.0.0.1` ports for the terminal and browser bridges.
 
 **Sends with no setup**
@@ -107,6 +106,7 @@ This is everything Wink listens on, sends and stores, usage stats included.
 - Update checks to GitHub Releases (`aiedwardyi/orbit-releases`) 15 s after launch, then hourly. The stock updater adds a random per-install ID header (`x-user-staging-id`) for staged rollouts. Downloads start only when you press the button and are checked against the release's sha512 hash. The build isn't code-signed yet.
 - Your engine CLIs, which Wink starts to list models and check sign-in at launch, on refocus and in the model picker. Each talks to its own vendor with your login and keeps its own telemetry settings.
 - `tailscale serve --bg --https=443` at launch when Tailscale is installed and logged in, so your phone can reach Wink over your tailnet. Tailnet only, never Funnel, and the API still needs the phone link's sign-in key. The rule stays after Wink quits. `ORBIT_REMOTE_AUTO=0` turns it off.
+- Wink calls Anthropic's usage API with your Claude Code login when Settings or a usage view opens (if the last reading is over 5 minutes old), when a bot starts a worker, and on Refresh. If that login expired, Wink renews it and rewrites `~/.claude/.credentials.json`.
 - Electron's built-in spellchecker, which can fetch a dictionary for your language from Google's Chromium CDN.
 
 **Sends once you set something up**
@@ -120,7 +120,6 @@ This is everything Wink listens on, sends and stores, usage stats included.
 
 **Sends only when you act**
 
-- **Settings > Usage > Refresh** calls Anthropic's usage API with your Claude Code login. If that login expired, Wink renews it with Anthropic and rewrites `~/.claude/.credentials.json`.
 - Team Library fetches a pinned snapshot of `milind-soni/openmausbot-teams` from GitHub. Skill import and install links also fetch from GitHub. Project scout queries `api.botdirectory.ai`. The Connected Apps panel loads app icons from Google's favicon service.
 - Local VM and VPS setup pull images from Docker Hub and packages from PyPI, and reach your VPS over ssh.
 - Images in a bot's reply load from wherever they point (there is no CSP), so a reply can make Wink fetch any URL.
