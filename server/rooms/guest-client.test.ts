@@ -766,6 +766,21 @@ describe("bot lines", () => {
     expect(onStop).toHaveBeenCalledWith("r1");
   });
 
+  it("never posts a picture's caption to a host that can't take the picture", async () => {
+    const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 0, entries: [], state: STATE });
+      // an older door: bot-send takes the words and drops fileIds
+      if (req.url?.includes("/bot-send")) return reply(res, 200, { entry: { seq: 1, id: "e1", at: 1, author: mine, text: "A cat" } });
+      reply(res, 404, { error: "not found" });
+    };
+    const c = guest();
+    expect((await c.join(CODE)).ok).toBe(true);
+    expect(await c.botSend("r1", "tb-pete", "A cat", undefined, ["f".repeat(24)])).toMatchObject({ ok: false, status: 404 });
+    expect(seen.filter((row) => row.url.includes("/bot-send"))).toEqual([]);
+  });
+
   it("reads an older host's state with no bots as none", async () => {
     const { bots: _bots, ...older } = STATE;
     route = (req, res) => {

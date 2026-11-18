@@ -479,7 +479,7 @@ export class GuestClient {
     const body = JSON.stringify({ botId: id, text: text.slice(0, 20_000), ...(replyToId ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}), sendId: randomBytes(18).toString("base64url") });
     let reply: GuestResult<unknown> = unavailable();
     for (let tries = 0; tries < SEND_TRIES && !reply.ok && reply.status === 503; tries++) {
-      reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bot-send`, creds.key, body);
+      reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/${fileIds.length ? "bot-picture" : "bot-send"}`, creds.key, body);
     }
     if (!reply.ok) {
       if (reply.status === 401) this.end(roomId, creds.key);

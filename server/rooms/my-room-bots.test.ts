@@ -400,6 +400,13 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "@EdBot Peter is free after 7.", ask.id);
   });
 
+  it("starts no turn from another bot's picture caption", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line(mini, "Chart for @Pete-Coder", { ...now(), files: [{ ...FILE, name: "chart.png", type: "image/png" }] }));
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+  });
+
   it("wakes it for this PC's other bot", async () => {
     const two = { id: "tb-CCCCCCCCCCCCCCCC", name: "Pete-Two", color: "", owner: ME.id };
     setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [], teamBots: [PETE, two] });
@@ -598,20 +605,53 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
   });
 
-  it("names why the room refused its picture and posts no line", async () => {
-    const picture = join(DATA_DIR, "cat.png");
-    writeFileSync(picture, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const upload = vi.fn(async () => ({ ok: false, status: 507, error: "this room is out of space for files" }));
-    Object.assign(deps.client, { upload });
-    const turns = new MyRoomBotTurns(deps);
-    const ask = line(peter, "@Pete-Coder draw a cat");
-    turns.sent(ROOM, ask);
-    await settle();
-    await expect(turns.picture("private-task", picture, "cat.png", "")).resolves.toBeNull();
-    await expect(turns.picture("task-1", picture, "cat.png", "A cat")).rejects.toMatchObject({ status: 507, message: "this room is out of space for files" });
-    expect(deps.client.botSend).not.toHaveBeenCalled();
-    upload.mockResolvedValueOnce({ ok: true, value: FILE } as never);
-    await expect(turns.picture("task-1", picture, "cat.png", "A cat")).rejects.toMatchObject({ status: 409 });
-    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "A cat", ask.id, [FILE.id]);
+  describe("a picture it shows", () => {
+    const picture = () => {
+      const path = join(DATA_DIR, "cat.png");
+      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      return path;
+    };
+    const start = async () => {
+      const turns = new MyRoomBotTurns(deps);
+      const ask = line(peter, "@Pete-Coder draw a cat");
+      turns.sent(ROOM, ask);
+      await settle();
+      return { turns, ask };
+    };
+
+    it("posts as the room's own line and hands the bot its room URL", async () => {
+      Object.assign(deps.client, { upload: vi.fn(async () => ({ ok: true, value: FILE })) });
+      deps.client.botSend.mockResolvedValueOnce({ ok: true, value: { seq: 5, id: "e5", files: [FILE] } });
+      const { turns, ask } = await start();
+      await expect(turns.picture("private-task", picture(), "cat.png", "")).resolves.toBeNull();
+      await expect(turns.picture("task-1", picture(), "cat.png", "A cat")).resolves.toEqual({ messageId: "e5", url: `/api/joined/rooms/${ROOM}/files/${FILE.id}/preview` });
+      expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "A cat", ask.id, [FILE.id]);
+    });
+
+    it("names why the room refused it and posts no line", async () => {
+      const upload = vi.fn(async () => ({ ok: false, status: 507, error: "this room is out of space for files" }));
+      Object.assign(deps.client, { upload });
+      const { turns } = await start();
+      await expect(turns.picture("task-1", picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 507, message: "this room is out of space for files" });
+      expect(deps.client.botSend).not.toHaveBeenCalled();
+      upload.mockResolvedValueOnce({ ok: true, value: FILE } as never);
+      deps.client.botSend.mockResolvedValueOnce({ ok: false, status: 404, error: "not found" });
+      await expect(turns.picture("task-1", picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 404, message: "the host's Wink is too old for pictures from teammates' bots" });
+    });
+
+    it("posts nothing once its owner pressed Stop", async () => {
+      deps.interrupt = vi.fn(async () => {});
+      let release: (value: unknown) => void = () => {};
+      const upload = vi.fn(() => new Promise((resolve) => (release = resolve)));
+      Object.assign(deps.client, { upload });
+      deps.client.botSend.mockResolvedValue({ ok: true, value: { seq: 5, id: "e5", files: [FILE] } });
+      const { turns } = await start();
+      const showing = turns.picture("task-1", picture(), "cat.png", "A cat");
+      await vi.waitFor(() => expect(upload).toHaveBeenCalled());
+      await turns.stopMine(ROOM);
+      release({ ok: true, value: FILE });
+      await expect(showing).rejects.toMatchObject({ status: 409 });
+      expect(deps.client.botSend).not.toHaveBeenCalled();
+    });
   });
 });

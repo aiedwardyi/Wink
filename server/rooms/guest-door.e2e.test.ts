@@ -778,9 +778,11 @@ describe("bots in two homes hand work to each other", () => {
     });
     hostSays(home.group, "@스타줌 show me a cat");
     await until(() => home.log().includes("스타줌: Here's a cat."));
-    expect(shown).toMatchObject({ status: 201 });
     const entry = recentRoomEntries(home.roomId, 100).find((each) => each.author.name === "스타줌" && each.text === "A cat");
     expect(entry?.files?.map((file) => [file.name, file.type])).toEqual([["cat.png", "image/png"]]);
+    // the bot gets the room's own line, never a private copy in its hidden task
+    expect(shown).toEqual({ status: 201, body: { messageId: entry!.id, url: `/api/joined/rooms/${home.roomId}/files/${entry!.files![0]!.id}/preview` } });
+    expect(home.thread.some((message) => message.kind === "screen")).toBe(false);
     expect(store.messagesFor(home.group.threadId).find((message) => message.roomEntryId === entry!.id)?.roomFiles).toEqual(entry!.files);
     await until(() => Boolean(joinedEntries(home.roomId, 100).find((each) => each.id === entry!.id)));
     const held = await home.c.file(home.roomId, entry!.files![0]!.id);

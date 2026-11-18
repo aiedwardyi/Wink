@@ -81,9 +81,13 @@ type InternalRouteDeps = {
   botOutputRoots: (bot: BotRecord, threadId: string, groupId?: string) => string[];
   routineProposalPersistence: (botId: string, threadId: string) => { ok: false; status: number; error: string } | { ok: true };
   maybeResumeConnectors: (botId: string, threadId: string, resumeKey: string) => boolean;
-  /** Copies a shown picture into the team room `threadId` is in, for every member. Null: show it on the thread as usual. Throws the room's refusal. */
-  roomPicture?: (bot: BotRecord, threadId: string, path: string, name: string, caption: string) => Promise<{ messageId: string; url: string } | null>;
+  /** Copies a shown picture into the team room `threadId` is in, for every member: a hosted room's line the thread row links to, or a joined room's own line with no thread row. Null off a room. Throws the room's refusal. */
+  roomPicture?: (bot: BotRecord, threadId: string, path: string, name: string, caption: string) => Promise<{ roomEntryId: string } | { messageId: string; url: string } | null>;
 };
+
+/** A bot's token names its one conversation; only the boot token may speak for another. */
+const tokenMismatch = (claimed: { botId: string; threadId: string } | undefined, botId: string, threadId: string) =>
+  Boolean(claimed && (claimed.botId !== botId || claimed.threadId !== threadId));
 
 const roomRefusal = (e: unknown) => ({ status: (e as { status?: number }).status ?? 500, error: `the room refused it: ${(e as Error).message}` });
 
@@ -488,6 +492,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!fromThreadId) return json(res, 400, { error: "no active thread" });
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
       const roots = [
         store.taskByThread(from.id, fromThreadId)?.cwd,
         owner.group ? store.groupTaskByThread(owner.group.id, fromThreadId)?.pinnedCwd : undefined,
@@ -514,7 +519,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         const { status, error } = roomRefusal(e);
         return json(res, status, { error });
       }
-      if (shared) {
+      if (shared && "url" in shared) {
         try { unlinkSync(saved.path); } catch {}
         return json(res, 201, shared);
       }
@@ -525,6 +530,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         image: saved.name,
         shown: true,
         ...(caption ? { text: caption } : {}),
+        ...(shared ? { roomEntryId: shared.roomEntryId } : {}),
       });
       return json(res, 201, { messageId: message.id, url: `/api/attachments/${saved.name}` });
     },
@@ -537,6 +543,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!fromThreadId) return json(res, 400, { error: "no active thread" });
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
         return json(res, 400, { error: "needs a prompt and a supported size and quality" });
@@ -566,7 +573,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         try { unlinkSync(shown.path); } catch {}
         return json(res, 201, { path: generated.path, showError: roomRefusal(e).error });
       }
-      if (shared) {
+      if (shared && "url" in shared) {
         try { unlinkSync(shown.path); } catch {}
         return json(res, 201, { path: generated.path, ...shared });
       }
@@ -577,6 +584,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         ...(current.group ? { from: { botId: from.id, name: from.name, color: from.color } } : {}),
         image: name,
         shown: true,
+        ...(shared ? { roomEntryId: shared.roomEntryId } : {}),
       });
       return json(res, 201, { path: generated.path, messageId: message.id, url: `/api/attachments/${name}` });
     },

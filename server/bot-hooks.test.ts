@@ -126,6 +126,21 @@ describe("a bot's picture in a team room", () => {
     expect(attachments()).toEqual(before);
   });
 
+  it("posts only to the conversation the caller's own token names", async () => {
+    const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
+    const routes = createInternalRoutes({
+      cfg: { imageGen: { key: "test-key" } }, store,
+      connectorThread: () => ({ group: { id: "group" } }),
+      botOutputRoots: () => [folder],
+      resolveCommsCaller: () => ({ botId: bot.id, threadId: "another-thread" }),
+      roomPicture,
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    expect(await call(routes.showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path })).toMatchObject({ status: 403 });
+    expect(await call(routes.generateImage, { fromBotId: bot.id, fromThreadId: bot.threadId, prompt: "picture" })).toMatchObject({ status: 403 });
+    expect(roomPicture).not.toHaveBeenCalled();
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
   it("names why the room refused it and shows nothing", async () => {
     const before = attachments();
     const result = await call(shared(refusal()).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path });

@@ -9,8 +9,8 @@ import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import { sharableLocalFile } from "../attachments.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
-import { broadcastDoorStop } from "./door-streams.ts";
-import { committedRoomText, recentRoomEntries, roomById, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
+import { broadcastDoorEntry, broadcastDoorStop } from "./door-streams.ts";
+import { appendRoomEntry, committedRoomText, recentRoomEntries, roomById, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
 import { copyRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
@@ -116,7 +116,8 @@ export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot,
   const { entry } = writeRoomEntry(roomAskDeps().store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
   const people = roomPeople(roomId);
   const bots = groupBots(group);
-  const tagged = botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
+  // a picture's caption hands nothing off
+  const tagged = files.length ? null : botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
   // a handoff pings no one; the line that closes it does
   markPersonLine(group, entry, bot.name, !tagged);
   const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : tagged;
@@ -197,14 +198,15 @@ export async function hostRoomFiles(group: HostedGroup, text: string, sendId?: s
   return ids;
 }
 
-/** A host bot's picture on its room thread: a room file on a line of its own, mirrored as the thread's row. Null on any other thread. */
-export async function hostBotPicture(store: Store, bot: BotRecord, threadId: string, path: string, name: string, caption: string) {
+/** A host bot's picture on its room thread: a room file on a line of its own, linked to the show_image row the caller writes. Null on any other thread. */
+export async function hostBotPicture(store: Pick<Store, "groupByThread">, bot: BotRecord, threadId: string, path: string, name: string, caption: string) {
   const group = store.groupByThread(threadId);
   if (!group?.hosted || group.threadId !== threadId || !roomById(group.hosted.roomId) || peopleOnlyRoom(group.hosted.roomId)) return null;
   const roomId = group.hosted.roomId;
   const file = await copyRoomFile(path, roomId, { owner: "host", name, uploadId: randomBytes(18).toString("base64url") });
-  const { message } = writeRoomEntry(store, group as HostedGroup, { author: { kind: "bot", id: bot.id, name: bot.name }, text: caption, files: [file] });
-  return { messageId: message.id, url: `/api/rooms/${roomId}/files/${file.id}/preview` };
+  const entry = appendRoomEntry(roomId, { author: { kind: "bot", id: bot.id, name: bot.name }, text: caption, files: [file] });
+  broadcastDoorEntry(roomId, entry);
+  return { roomEntryId: entry.id };
 }
 
 /** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy, with `fileIds` from hostRoomFiles in place of the tags. */

@@ -103,7 +103,8 @@ export class MyRoomBotTurns {
     if (Date.now() - entry.at > DAY) return;
     if (entry.author.kind !== "bot") return entry.author.id === room?.me.id ? undefined : this.memberLine(roomId, entry);
     if (room?.status !== "joined" || !state?.teamBots || this.halted(roomId, entry.seq)) return;
-    const hit = botLineResponder(entry.text, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)], entry.author.id);
+    // a picture's caption hands nothing off, as on the host
+    const hit = entry.files?.length ? null : botLineResponder(entry.text, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)], entry.author.id);
     const own = hit && state.teamBots.some((bot) => bot.id === hit.id && bot.owner === room.me.id);
     this.queue(roomId, own ? myRoomBots(roomId).find((bot) => bot.id === hit.id) : undefined, entry);
   }
@@ -277,18 +278,17 @@ export class MyRoomBotTurns {
   }
 
   /** A picture this PC's bot shows on its room turn: uploaded like its owner's file, then posted as its own line. Null off a room turn. */
-  async picture(threadId: string, path: string, name: string, caption: string): Promise<null> {
+  async picture(threadId: string, path: string, name: string, caption: string): Promise<{ messageId: string; url: string } | null> {
     const run = this.running.get(threadId);
     if (!run) return null;
     const refused = (status: number, error: string) => Object.assign(new Error(error), { status });
     const bytes = await readFile(path);
     const uploaded = await this.deps.client.upload(run.roomId, bytes, name, randomBytes(18).toString("base64url"), String(bytes.length));
     if (!uploaded.ok) throw refused(uploaded.status, uploaded.error);
+    if (this.running.get(threadId) !== run || this.stopped.has(threadId)) throw refused(409, "the turn was stopped");
     const posted = await this.deps.client.botSend(run.roomId, run.id, caption, run.entry.id, [uploaded.value.id]);
-    if (!posted.ok) throw refused(posted.status, posted.error);
-    // an older host drops the file and keeps only the words
-    if (!posted.value.files?.length) throw refused(409, "the host's Wink is too old for pictures from teammates' bots");
-    return null;
+    if (!posted.ok) throw refused(posted.status, posted.status === 404 && posted.error === "not found" ? "the host's Wink is too old for pictures from teammates' bots" : posted.error);
+    return { messageId: posted.value.id, url: `/api/joined/rooms/${run.roomId}/files/${uploaded.value.id}/preview` };
   }
 
   /** Call on every settled turn; only a room task's posts. */
