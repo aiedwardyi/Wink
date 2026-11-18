@@ -13,7 +13,7 @@ import type { Action, Bot } from "@/state/store";
 
 const mock = vi.hoisted(() => ({
   // SAFETY: the Forum reads only bots, the selection and the profile from state.
-  state: { bots: [] as Bot[], selectedId: "", config: undefined as { profile: { name: string } } | undefined },
+  state: { bots: [] as Bot[], instances: [] as { instanceId: string; driverKind: string }[], selectedId: "", config: undefined as { profile: { name: string } } | undefined },
   dispatched: [] as Action[],
 }));
 vi.mock("@/state/store", async (original) => ({
@@ -52,7 +52,7 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  mock.state = { bots: [bot("astra", "Astra"), bot("carbon", "Carbon")], selectedId: "", config: undefined };
+  mock.state = { bots: [bot("astra", "Astra"), bot("carbon", "Carbon")], instances: [], selectedId: "", config: undefined };
   mock.dispatched = [];
   reduceMotion(true);
   posts = [];
@@ -90,7 +90,7 @@ describe("Forum", () => {
     await render(BoardView);
     expect(host.querySelector("[data-board-subtitle]")!.textContent).toBe("Made for your bots. You can read and reply too.");
     expect(rows()).toEqual(["pnew", "pold"]);
-    expect([...host.querySelectorAll("[data-board-helped]")].map((count) => count.textContent)).toEqual(["1", "0"]);
+    expect([...host.querySelectorAll("[data-board-helped]")].map((count) => count.getAttribute("data-board-helped"))).toEqual(["1", "0"]);
     expect([...host.querySelectorAll("[data-board-flair]")].map((chip) => chip.textContent)).toEqual(["Stuck", "Stuck"]);
     expect(host.querySelector('[data-board-post="pnew"]')!.textContent).toContain("1 reply");
     expect([...host.querySelectorAll("[data-board-solved]")].map((mark) => mark.closest("[data-board-post]")!.getAttribute("data-board-post"))).toEqual(["pnew"]);
@@ -238,6 +238,45 @@ describe("Forum", () => {
     expect(reply("pr1").textContent).toContain("Carbon");
   });
 
+  it("chains a reply to its own replies down one thread line, says whom it helped and who is working", async () => {
+    mock.state.bots = [{ ...bot("astra", "Astra"), busy: true }, bot("carbon", "Carbon")];
+    posts = [
+      post("pop", { kind: "stuck", created_at: 1 }),
+      post("pr1", { parent_id: "pop", author_bot_id: "carbon", kind: "fix", body: "Commit first.", helped_bot_ids: ["astra"], created_at: 2 }),
+      post("pr2", { parent_id: "pr1", kind: "tip", body: "Good call.", created_at: 3 }),
+      post("pr3", { parent_id: "pop", author_bot_id: "carbon", kind: "tip", body: "Check the reset time.", created_at: 4 }),
+    ];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pop"] button')!.click());
+    const chained = (id: string) => host.querySelector(`[data-board-post="${id}"] > div [data-board-chain]`) !== null;
+    expect(["pr1", "pr2", "pr3"].map(chained)).toEqual([true, false, false]);
+    expect(host.querySelector('[data-board-post="pr1"] [data-board-helped-chip]')!.textContent).toBe("Helped Astra");
+    expect(host.querySelector('[data-board-post="pr3"] [data-board-helped-chip]')).toBeNull();
+    expect([...host.querySelectorAll("[data-board-flair]")].map((chip) => chip.closest("[data-board-post]")!.getAttribute("data-board-post"))).toEqual(["pop", "pr1"]);
+    expect(host.querySelector('[data-board-post="pr2"] [data-board-working]')!.textContent).toBe("Working");    expect(host.querySelector('[data-board-post="pr3"] [data-board-working]')).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('[data-board-reply-box="pop"] input')!.placeholder).toBe("Reply to Astra…");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-reply-to="pr3"]')!.click());
+    expect(host.querySelector<HTMLInputElement>('[data-board-reply-box="pr3"] input')!.placeholder).toBe("Reply to Carbon…");
+  });
+
+  it("fades the replies in one after another down the line, from the motion token", async () => {
+    posts = [post("pop", { created_at: 1 }), ...[1, 2, 3, 4, 5, 6].map((n) => post(`pr${n}`, { parent_id: "pop", body: `reply ${n}`, created_at: 1 + n }))];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pop"] button')!.click());
+    const delays = [...host.querySelectorAll<HTMLElement>('[role="list"] [data-board-post] > div')].map((row) => row.style.animationDelay);
+    expect(delays).toEqual(["", ...[1, 2, 3, 4, 4].map((n) => `calc(var(--motion-fast) * ${n})`)]);
+  });
+
+  it("goes back with a plain accent ‹ Forum, no box behind it", async () => {
+    posts = [post("pesc", {})];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pesc"] button')!.click());
+    const back = host.querySelector<HTMLButtonElement>("[data-back-button]")!;
+    expect(back.textContent).toBe("Forum");
+    expect(back.className).toContain("text-accent");
+    expect(back.className).not.toMatch(/(^|\s)(hover:)?bg-|rounded/);
+  });
+
   it("saves the user's reply and shows it as an ordinary row with their name", async () => {
     mock.state.config = { profile: { name: "Edward" } };
     posts = [post("pop", { kind: "tip", created_at: 1 })];
@@ -282,12 +321,13 @@ describe("Forum", () => {
     afterAll(() => temps.remove());
     await render(BoardView);
     expect(rows()).toEqual([stuck.id]);
-    expect(host.querySelector("[data-board-helped]")!.textContent).toBe("0");
+    expect(host.querySelector("[data-board-helped]")!.getAttribute("data-board-helped")).toBe("0");
     expect(host.textContent).toContain("0 replies");
     await act(async () => host.querySelector<HTMLButtonElement>(`[data-board-post="${stuck.id}"] button`)!.click());
     expect(rows()).toEqual([stuck.id]);
     expect(host.querySelector("[data-board-fix]")).toBeNull();
-    expect(host.textContent).not.toMatch(/Edward|EY|coool|push it/);
+    // the reply box shows the user's own face; nothing they said in chat shows
+    expect([...host.querySelectorAll("article, [role=list]")].map((part) => part.textContent).join(" ")).not.toMatch(/Edward|EY|coool|push it/);
   });
 
   it("right-click opens the chat's menu: Copy on bot posts, Copy and Delete on the user's own reply", async () => {
