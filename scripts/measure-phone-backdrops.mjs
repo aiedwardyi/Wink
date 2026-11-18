@@ -33,16 +33,27 @@ for (const skin of skins) for (const side of ["left", "right"]) for (const width
   await page.goto(state.url);
   await page.locator("[data-phone-menu]").waitFor({ state: "visible", timeout: 30000 });
   await page.locator("main[data-scene]").waitFor({ state: "attached", timeout: 30000 });
+  await page.locator("[data-menu-unread]").waitFor({ state: "attached", timeout: 30000 });
   await page.waitForTimeout(3500);
   const boxes = await page.evaluate(() => {
     const rect = (s) => { const b = document.querySelector(s).getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
-    return { menu: rect("[data-phone-menu]"), toggle: rect("[data-show-pane-button]") };
+    return { menu: rect("[data-phone-menu]"), toggle: rect("[data-show-pane-button]"), dot: rect("[data-menu-unread]") };
   });
-  await page.addStyleTag({ content: "[data-phone-menu],[data-show-pane-button]{visibility:hidden !important}" });
+  const seen = await page.evaluate(() => {
+    const dot = document.querySelector("[data-menu-unread]");
+    const style = getComputedStyle(dot);
+    const d = dot.getBoundingClientRect();
+    const t = document.querySelector("[data-show-pane-button]").getBoundingClientRect();
+    const apart = d.right <= t.left || t.right <= d.left || d.bottom <= t.top || t.bottom <= d.top;
+    return { opacity: Number(style.opacity), visibility: style.visibility, size: Math.min(d.width, d.height), apart };
+  });
+  if (seen.opacity !== 1 || seen.visibility !== "visible" || seen.size < 8 || !seen.apart) throw new Error(`${skin} ${side} ${width}px: the unread dot is not visibly clear of the side pane button: ${JSON.stringify(seen)}`);
+  await page.addStyleTag({ content: "[data-phone-menu],[data-show-pane-button],[data-menu-unread]{visibility:hidden !important}" });
   await page.waitForTimeout(300);
   const spots = {};
   for (const [name, clip] of Object.entries(boxes)) {
     const { data, info } = await sharp(await page.screenshot({ clip })).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    if (!info.width || !info.height) throw new Error(`${skin} ${side} ${width}px: no pixels sampled for ${name}`);
     const pixels = Array.from({ length: info.width * info.height }, (_, i) => [data[i * 3], data[i * 3 + 1], data[i * 3 + 2]]).sort((a, b) => lum(a) - lum(b));
     spots[name] = hex(pixels[Math.floor((pixels.length - 1) / 2)]);
   }

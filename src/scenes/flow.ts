@@ -73,7 +73,8 @@ export function flowScene(spec: FlowSpec): SceneModule {
         ready = true;
       } else gl.deleteProgram(prog);
     }
-    if (!ready) api.layer.style.background = "linear-gradient(180deg, var(--color-app), var(--color-panel))";
+    if (ready) main?.setAttribute("data-scene-painted", "");
+    else api.layer.style.background = "linear-gradient(180deg, var(--color-app), var(--color-panel))";
 
     const render = () => {
       if (!gl || !ready) return;
@@ -159,6 +160,7 @@ export function flowScene(spec: FlowSpec): SceneModule {
         sizes.disconnect();
         gl?.getExtension("WEBGL_lose_context")?.loseContext();
         canvas.remove();
+        main?.removeAttribute("data-scene-painted");
         api.layer.style.background = "";
       },
     } satisfies ReturnType<SceneModule["create"]>;

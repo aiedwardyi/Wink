@@ -59,6 +59,15 @@ describe("phone drawer menu button", () => {
     expect(backed.map(([, selector]) => selector.trim())).toEqual([]);
   });
 
+  it("keeps the unread dot visible, and tells the scene rules when the terminal covers the menu", () => {
+    const button = menuButtonSource();
+    const dot = button.match(/<span data-menu-unread[^>]*className=\{`([^`]*)`\}/)?.[1] ?? "";
+    expect(dot).toContain("absolute ${DRAWER_BADGE}");
+    expect(dot.split(/\s+/)).toEqual(expect.arrayContaining(["h-2.5", "w-2.5", "rounded-full", "bg-accent"]));
+    expect(dot).not.toMatch(/opacity|invisible|hidden|sr-only/);
+    expect(button).toContain("data-terminal-covers={terminalCovers || undefined}");
+  });
+
   it("leaves the side pane toggle a bare icon on the phone", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const scenes = readFileSync(join(dir, "scenes", "scenes.css"), "utf8");

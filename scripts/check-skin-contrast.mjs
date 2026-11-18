@@ -237,8 +237,9 @@ function iconBacking(source, marker) {
 // Header icons that float straight on the scene on the phone.
 // `spot` names the box in scripts/phone-backdrops.json that the icon sits over: measured on the live scenes at 360 and 390 for each side the drawer opens from, because a still cannot say where a scene puts its moon on a phone.
 const SCENE_ICONS = [
-  { name: "phone menu", marker: "[data-phone-menu]", spot: "menu", ink: "--color-ink-secondary", min: 3 },
-  { name: "side pane toggle", marker: "[data-show-pane-button]", spot: "toggle", ink: "--color-ink-secondary", min: 3 },
+  { name: "phone menu", marker: "[data-phone-menu]", spot: "menu", paint: "color", ink: "--color-ink-secondary", min: 3 },
+  { name: "side pane toggle", marker: "[data-show-pane-button]", spot: "toggle", paint: "color", ink: "--color-ink-secondary", min: 3 },
+  { name: "unread dot", marker: "[data-menu-unread]", spot: "dot", paint: "background", ink: "--color-accent", min: 3 },
 ];
 
 function sharpPath() {
@@ -268,18 +269,42 @@ function splitSelectors(list) {
   return parts;
 }
 
-/** The ink token a scene rule gives the icon `marker` on skin `id` and drawer side `side` (`color: var(--x)`). Like the cascade: a rule naming `[data-side]` applies to that side only and beats a general one, and among equals the later rule wins. */
-function iconInk(source, marker, id, side) {
+/** What a scene rule's selector asks of the icon: the drawer side it names and whether it needs a painted scene or a closed terminal. A condition this check cannot evaluate throws, so a rule can never be matched by text alone. */
+function ruleConditions(selector, marker, id) {
+  const sceneFollows = ":is(:has(~ main[data-scene]), :has(~ * main[data-scene]))";
+  const rest = selector
+    .replaceAll("[data-scene-painted]", "")
+    .replaceAll(":not([data-terminal-covers])", "")
+    .replaceAll(marker, "")
+    .replaceAll(`[data-skin="${id}"]`, "")
+    .replace(/\[data-side="(?:left|right)"\]/, "")
+    .replaceAll(sceneFollows, "")
+    .replaceAll("main[data-scene]", "")
+    .replace(/>\s*svg/, "");
+  if (/[[:]/.test(rest)) throw new Error(`scene rule "${selector.trim()}" has a condition scripts/check-skin-contrast.mjs cannot evaluate: add it to ruleConditions or drop it`);
+  return {
+    side: selector.match(/\[data-side="(left|right)"\]/)?.[1] ?? null,
+    painted: selector.includes("[data-scene-painted]"),
+    closedTerminal: selector.includes(":not([data-terminal-covers])"),
+  };
+}
+
+/** The token a scene rule paints the icon `marker` with on skin `id`, drawer side `side` and `state` ({painted, covers}): its `color`, or its `background` for a filled mark. Like the cascade: a rule naming `[data-side]` applies to that side only and beats a general one, and among equals the later rule wins. */
+function iconInk(source, marker, id, side, paint = "color", state = { painted: true, covers: false }) {
+  const property = paint === "background" ? "background(?:-color)?" : "color";
+  const declared = new RegExp(`(?:^|[;\\s])${property}:\\s*var\\((--color-[\\w-]+)\\)`);
   let general = null;
   let sided = null;
   for (const [, list, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const token = body.match(/(?:^|[;\s])color:\s*var\((--color-[\w-]+)\)/)?.[1];
+    const token = body.match(declared)?.[1];
     if (!token) continue;
     for (const selector of splitSelectors(list)) {
       if (!selector.includes(marker) || !selector.includes(`[data-skin="${id}"]`)) continue;
-      const onlySide = selector.match(/\[data-side="(left|right)"\]/)?.[1];
-      if (onlySide && onlySide !== side) continue;
-      if (onlySide) sided = token;
+      const need = ruleConditions(selector, marker, id);
+      if (need.side && need.side !== side) continue;
+      if (need.painted && !state.painted) continue;
+      if (need.closedTerminal && state.covers) continue;
+      if (need.side) sided = token;
       else general = token;
     }
   }
@@ -308,7 +333,16 @@ function phoneCss(source) {
   return out;
 }
 
-/** Icon ink over what sits behind it on the phone, per drawer side and phone width: the backing the scene paints, else the median pixel measured there. */
+const DRAWER_SIDES = ["left", "right"];
+const PHONE_WIDTHS = [360, 390];
+// Beyond the painted scene: its WebGL gradient fallback (and the moments before it paints) runs from the app to the panel color, and the phone terminal covers the chat in the panel color.
+const STATES = [
+  { label: "scene", painted: true, covers: false },
+  { label: "scene not painted", painted: false, covers: false },
+  { label: "terminal open", painted: true, covers: true, only: ["phone menu", "unread dot"] },
+];
+
+/** Icon ink over what sits behind it on the phone, per drawer side, phone width and state: the backing the scene paints, else the median pixel measured there (the painted scene) or the skin's own colors. Every drawer side and phone width must be measured. */
 function sceneIconProblems(id, tokens, stills, source, backdrops) {
   if (!stills.get(id)) return [];
   const measured = backdrops[id];
@@ -316,14 +350,26 @@ function sceneIconProblems(id, tokens, stills, source, backdrops) {
   const phone = phoneCss(source);
   const problems = [];
   for (const icon of SCENE_ICONS) {
-    const backingToken = iconBacking(phone, icon.marker);
-    for (const drawer of ["left", "right"]) {
-      const inkToken = iconInk(phone, icon.marker, id, drawer) ?? icon.ink;
-      for (const [width, spots] of Object.entries(measured[drawer] ?? {})) {
-        const behind = backingToken ? tokenHex(tokens, backingToken, id) : spots[icon.spot];
-        if (!behind) throw new Error(`${id} (drawer ${drawer}, ${width}px) has no ${icon.spot} backdrop in scripts/phone-backdrops.json`);
-        const ratio = contrast(tokenHex(tokens, inkToken, id), behind);
-        if (ratio < icon.min) problems.push({ icon: `${icon.name} (drawer ${drawer}, ${width}px)`, ink: inkToken, behind: backingToken ?? `scene pixel ${behind}`, ratio, min: icon.min });
+    const backingToken = icon.paint === "color" ? iconBacking(phone, icon.marker) : null;
+    for (const drawer of DRAWER_SIDES) {
+      for (const state of STATES) {
+        if (state.only && !state.only.includes(icon.name)) continue;
+        const inkToken = iconInk(phone, icon.marker, id, drawer, icon.paint, state) ?? icon.ink;
+        const behinds = [];
+        if (backingToken) behinds.push([`${backingToken}`, tokenHex(tokens, backingToken, id)]);
+        else if (!state.painted) for (const token of ["--color-app", "--color-panel"]) behinds.push([token, tokenHex(tokens, token, id)]);
+        else if (state.covers) behinds.push(["--color-panel", tokenHex(tokens, "--color-panel", id)]);
+        else {
+          for (const width of PHONE_WIDTHS) {
+            const behind = measured[drawer]?.[width]?.[icon.spot];
+            if (!behind) throw new Error(`${id} (drawer ${drawer}, ${width}px) has no ${icon.spot} backdrop in scripts/phone-backdrops.json: run scripts/measure-phone-backdrops.mjs`);
+            behinds.push([`scene pixel ${behind} at ${width}px`, behind]);
+          }
+        }
+        for (const [behindName, behind] of behinds) {
+          const ratio = contrast(tokenHex(tokens, inkToken, id), behind);
+          if (ratio < icon.min) problems.push({ icon: `${icon.name} (drawer ${drawer}, ${state.label})`, ink: inkToken, behind: behindName, ratio, min: icon.min });
+        }
       }
     }
   }

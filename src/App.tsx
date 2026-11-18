@@ -780,6 +780,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       data-menu-needs-you={menuAsking || undefined}
       data-phone-menu={!preview || undefined}
       data-side={sidebarOnRight ? "right" : "left"}
+      data-terminal-covers={terminalCovers || undefined}
       data-arrival-glow={menuArrival.playing || undefined}
       onAnimationEnd={preview ? undefined : menuArrival.onAnimationEnd}
       className={`absolute z-30 rounded-md p-1.5 text-ink-secondary hover:text-ink md:hidden ${sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT}${menuAsking ? " needs-you-glow" : ""}${menuArrival.playing ? " arrival-glow" : ""}`}
