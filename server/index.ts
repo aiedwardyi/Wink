@@ -4458,6 +4458,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // channel that only ever shows requests is half a record. Mirror the
       // reply on success; mirror a failed/stopped terminal chip otherwise.
       finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? "");
+      store.trimThreadCache();
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
@@ -4989,6 +4990,7 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
   if (owned === undefined || owned === threadId) return false;
   if (threadHasLiveTurn(owned)) return true;
   dispatchedThreads.delete(botId);
+  store.trimThreadCache();
   return false;
 }
 

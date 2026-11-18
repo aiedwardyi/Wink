@@ -2,7 +2,8 @@ import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
-import { readThread } from "./message-db.ts";
+import { readThread, replaceThread } from "./message-db.ts";
+import { bootPaneWakes } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
 
@@ -94,6 +95,59 @@ describe("thread cache", () => {
     for (const threadId of [held!, ...others]) store.messagesFor(threadId);
     expect(store.loaded(held!)).toBe(true);
     expect(store.loaded(others[0]!)).toBe(false);
+  });
+
+  it("evicts eligible chats when turns settle without another cache write", () => {
+    const ids = chats(4, 4);
+    const store = new Store(selection, { threadCacheChars: size(ids[0]!) * 2.5 });
+    const bots = ids.map((id) => store.botByThread(id)!);
+    const held = new Set(ids);
+    store.holdThreads(() => held);
+    for (const bot of bots) {
+      store.setActivity(bot.id, "working");
+      store.messagesFor(bot.threadId);
+    }
+    expect(ids.map((id) => store.loaded(id))).toEqual([true, true, true, true]);
+    for (const bot of bots) {
+      held.delete(bot.threadId);
+      store.setActivity(bot.id, "idle");
+    }
+    expect(ids.map((id) => store.loaded(id))).toEqual([false, false, true, true]);
+  });
+
+  it("evicts a stopped chat only after the driver releases it", () => {
+    const [held, b, c] = chats(3, 4);
+    const store = new Store(selection, { threadCacheChars: size(b!) + size(c!) });
+    const bot = store.botByThread(held!)!;
+    const driverThreads = new Set([held!]);
+    store.holdThreads(() => driverThreads);
+    store.setActivity(bot.id, "working");
+    for (const id of [held!, b!, c!]) store.messagesFor(id);
+    store.setActivity(bot.id, "idle");
+    expect(store.loaded(held!)).toBe(true);
+    driverThreads.delete(held!);
+    store.trimThreadCache();
+    expect([held, b, c].map((id) => store.loaded(id!))).toEqual([false, true, true]);
+  });
+
+  it("finds a pending pane wake after evicting legacy rows with a stored head", () => {
+    const [legacy, b, c] = chats(3, 4);
+    replaceThread(legacy!, [
+      { id: "user", at: 1, role: "user", kind: "text", text: "Watch the worker" },
+      { id: "note", at: 2, role: "bot", kind: "note", text: "Worker finished", origin: "home" },
+      { id: "activity", at: 3, role: "bot", kind: "activity", text: "Reviewing" },
+    ], "activity");
+    const store = new Store(selection, { threadCacheChars: size(b!) + size(c!) });
+    const bot = store.botByThread(legacy!)!;
+    store.markPaneNotesDelivered(bot.id, bot.threadId, undefined);
+    const wake = { botId: bot.id, threadId: bot.threadId };
+    store.messagesFor(legacy!);
+    expect(bootPaneWakes(store, "home")).toEqual([wake]);
+    store.messagesFor(b!);
+    store.messagesFor(c!);
+    expect(store.loaded(legacy!)).toBe(false);
+    expect(bootPaneWakes(store, "home")).toEqual([wake]);
+    expect(store.loaded(legacy!)).toBe(false);
   });
 
   it("warms a chat only into spare room, and drops it before the chats in use", () => {

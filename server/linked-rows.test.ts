@@ -82,7 +82,7 @@ describe("linked file rows", () => {
     const added = store.appendMessage(threadId, { role: "bot", kind: "text", text: "New: [clip](</tmp/clip.mp4>)" });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "no link here" });
     expect([...rows(threadId, "/tmp/clip.mp4")].map((row) => row.id)).toContain(added.id);
-    expect(prepare.mock.calls.some(([sql]) => sql.includes(" LIKE "))).toBe(false);
+    expect(prepare.mock.calls.some(([sql]) => sql.includes(" AS fromBotId"))).toBe(false);
   });
 
   it("reads a huge answer again instead of keeping it", async () => {
@@ -94,7 +94,7 @@ describe("linked file rows", () => {
     expect([...rows(threadId, picture)]).toHaveLength(1);
     const prepare = vi.spyOn(messageDatabase(), "prepare");
     expect([...rows(threadId, picture)]).toHaveLength(1);
-    expect(prepare.mock.calls.some(([sql]) => sql.includes(" LIKE "))).toBe(true);
+    expect(prepare.mock.calls.some(([sql]) => sql.includes(" AS fromBotId"))).toBe(true);
   });
 
   it("keeps a link that escapes letters of the name", async () => {
@@ -105,6 +105,26 @@ describe("linked file rows", () => {
     expect([...linkedRows(new Store(selection))(threadId, "/tmp/report.pdf")].map((row) => row.id)).toEqual([link.id]);
   });
 
+  it("keeps the full text of cold link rows containing NULs", async () => {
+    const { linkedRows } = await rowsModule();
+    const setup = new Store(selection);
+    const { threadId } = setup.createBot({}, { seedMessages: false });
+    setup.appendMessage(threadId, { role: "bot", kind: "text", text: "Log\0with no link" });
+    const text = "Log\0tail\n\n[chart](</tmp/chart.png>)";
+    const chart = setup.appendMessage(threadId, { role: "bot", kind: "text", text });
+    const beforeNul = "<FILE:///tmp/table.png>\0tail";
+    const table = setup.appendMessage(threadId, { role: "bot", kind: "text", text: beforeNul });
+    const afterNul = "Log\0<FILE:///tmp/figure.png>";
+    const figure = setup.appendMessage(threadId, { role: "bot", kind: "text", text: afterNul });
+    const store = new Store(selection);
+    expect([...linkedRows(store)(threadId, "/tmp/chart.png")]).toEqual([
+      { id: chart.id, role: "bot", text },
+      { id: table.id, role: "bot", text: beforeNul },
+      { id: figure.id, role: "bot", text: afterNul },
+    ]);
+    expect(store.loaded(threadId)).toBe(false);
+  });
+
   it("uses the loaded thread when there is one", async () => {
     const { linkedRows } = await rowsModule();
     const { threadId, link } = chat();
@@ -113,14 +133,27 @@ describe("linked file rows", () => {
     expect([...linkedRows(store)(threadId, picture)].map((row) => row.id)).toContain(link.id);
   });
 
-  it("the linked-file route never loads the whole thread", () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  function linkedFileRoute(source: string): string {
     const start = source.indexOf("/linked-(file(?:\\/.*)?|folder)$/");
-    const end = source.indexOf("serveLinkedFolder : serveLinkedFile", start);
+    const end = source.indexOf("\n    m = path.match(", start);
     expect(start).toBeGreaterThan(0);
     expect(end - start).toBeGreaterThan(0);
     expect(end - start).toBeLessThan(1500);
-    const route = source.slice(start, end);
+    return source.slice(start, end);
+  }
+
+  it("the linked-file route never loads the whole thread", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const route = linkedFileRoute(source);
+    expect(route).toContain("messages: (target) => linkedMessages(threadId, target)");
     expect(route).not.toMatch(/store\.(messagesFor|activePath)\(/);
+  });
+
+  it("checks for whole-thread reads inside the route's messages callback", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const callback = "messages: (target) => linkedMessages(threadId, target)";
+    expect(source).toContain(callback);
+    const mutated = source.replace(callback, "messages: () => store.messagesFor(threadId)");
+    expect(linkedFileRoute(mutated)).toMatch(/store\.(messagesFor|activePath)\(/);
   });
 });

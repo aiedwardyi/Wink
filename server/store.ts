@@ -1178,8 +1178,10 @@ export class Store {
   patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
+    const wasBusy = Boolean(group.busyBotId);
     if (patch.unread === false) group.readAt = Date.now();
     Object.assign(group, patch);
+    if (wasBusy && !group.busyBotId) this.threads.trim();
     if (!group.dm && Object.prototype.hasOwnProperty.call(patch, "pinnedMessageId")) {
       const active = this.activeGroupTask(group.id);
       if (active) active.pinnedMessageId = patch.pinnedMessageId;
@@ -1355,9 +1357,13 @@ export class Store {
     return busy;
   }
 
-  /** The server's live driver turns, which outlast `busy` through a stop's cancel grace. */
+  /** Driver turns survive Stop's cancel grace. Call trimThreadCache after a driver releases its thread. */
   holdThreads(held: () => Iterable<string>): void {
     this.heldThreads = held;
+  }
+
+  trimThreadCache(): void {
+    this.threads.trim();
   }
 
   messagesFor(threadId: string): Message[] {
@@ -1721,6 +1727,7 @@ export class Store {
   setActivity(botId: string, activity: BotActivity, activeThreadId?: ThreadId): BotRecord | null {
     const bot = this.bot(botId);
     if (!bot) return null;
+    const previousThreadId = bot.busy ? bot.activeThreadId ?? bot.threadId : undefined;
     const busy = ACTIVITY_BUSY.has(activity);
     const nextThreadId = busy ? activeThreadId ?? bot.activeThreadId : undefined;
     const settled = !busy && bot.pendingModelSelection !== undefined;
@@ -1736,6 +1743,7 @@ export class Store {
     applyPendingModel(bot);
     if (nextThreadId) bot.activeThreadId = nextThreadId;
     else delete bot.activeThreadId;
+    if (previousThreadId && (!busy || previousThreadId !== (nextThreadId ?? bot.threadId))) this.threads.trim();
     this.saveBotsSoon();
     this.emit({ type: "bot", botId });
     return bot;

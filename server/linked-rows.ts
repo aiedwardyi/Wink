@@ -1,14 +1,12 @@
 // The rows a linked-file request checks: only a row with link syntax can link a file, and the 237k-row Wink chat has 521 (loading all of it took 952 ms and kept 146 MB).
 import type { LinkedMessage } from "./linked-files.ts";
-import { linkRows, storedHead } from "./message-db.ts";
+import { LINK_MARKS, linkRows, storedHead } from "./message-db.ts";
 import type { Message, Store } from "./store.ts";
 
-/** Every form linkingMessages reads a link from: markdown links and images, reference definitions, file: autolinks, attached-file tags. */
-export const LINK_MARKS = ["](", "]:", "<file:", "<attached-file"] as const;
 /** Link-row text kept across chats; a chat with more is read again on each request instead. */
 const MEMO_CHARS = 4_000_000;
 
-/** Matches what the SQL LIKE in linkRows keeps (ASCII case-insensitive). */
+/** Matches the link markers kept by linkRows. */
 export function linkish(text: string): boolean {
   const lower = text.toLowerCase();
   return LINK_MARKS.some((mark) => lower.includes(mark));
@@ -61,7 +59,7 @@ export function linkedRows(store: Pick<Store, "loaded" | "messagesFor" | "onChan
     if (hit) return hit.rows;
     // no stored rows: the store imports a legacy file on read
     if (store.loaded(threadId) || storedHead(threadId) === undefined) return fromThread(store.messagesFor(threadId));
-    const rows = linkRows(threadId, LINK_MARKS).map((row) => ({ id: row.id, role: row.role, text: row.text, fromBotId: row.fromBotId ?? undefined }));
+    const rows = linkRows(threadId).map((row) => ({ id: row.id, role: row.role, text: row.text, fromBotId: row.fromBotId ?? undefined }));
     const chars = rows.reduce((sum, row) => sum + row.text.length, 0);
     if (chars > MEMO_CHARS) return rows;
     memo.set(threadId, { rows, chars });

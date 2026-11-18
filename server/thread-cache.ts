@@ -103,7 +103,7 @@ export class ThreadCache<T extends { readonly messages: readonly Message[] }> {
     return total;
   }
 
-  private trim(): void {
+  trim(): void {
     let total = this.total();
     if (total <= this.chars) return;
     const keep = new Set([...this.entries.keys()].slice(-KEEP_NEWEST));
