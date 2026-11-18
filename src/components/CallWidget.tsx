@@ -57,7 +57,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
   );
   const note = notice && <p data-live-call-notice={snap.notice?.kind} role={failed ? "alert" : "status"} className="px-1 pb-1.5 text-xs text-ink-secondary">{notice}</p>;
   const hangUp = (
-    <button type="button" data-call-end="" aria-label={words.end} title={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
+    <button type="button" aria-label={words.end} title={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
       <PhoneOff size={16} />
     </button>
   );

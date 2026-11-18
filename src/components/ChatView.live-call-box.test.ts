@@ -9,6 +9,7 @@ import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
+import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
@@ -261,7 +262,7 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("shows the call settings gear that opens the small menu, and a right-click on End still does", async () => {
+  it("shows the call settings gear that opens the small menu, and a right-click on End opens nothing", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
@@ -280,15 +281,8 @@ describe("live call in the message box", () => {
         gear.click();
       });
       await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
-      const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
-      await act(async () => button(frame(host), "End")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      const menu = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
-      expect(menu.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-      expect(parseFloat(menu.style.width)).toBeLessThanOrEqual(400);
-      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await act(async () => void button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       await act(async () => button(frame(host), "End")!.click());
       await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
     } finally {
@@ -319,6 +313,35 @@ describe("live call in the message box", () => {
     }
   });
 
+  it("c-93117b5a76ea a hold on End ends the call and opens no settings", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      const end = button(frame(host), "End")!;
+      const touch = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 10, clientY: 10 }] });
+        end.dispatchEvent(event);
+        return event;
+      };
+      vi.useFakeTimers();
+      let lift: Event;
+      await act(async () => {
+        touch("touchstart");
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+        lift = touch("touchend");
+      });
+      vi.useRealTimers();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      expect(lift!.defaultPrevented).toBe(false);
+      await act(async () => end.click());
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+    } finally {
+      vi.useRealTimers();
+      await unmount();
+    }
+  });
+
   it("Back closes the call menu first", async () => {
     const layers = new Map<string, () => void>();
     const layer = (event: Event) => {
@@ -330,7 +353,7 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      await act(async () => button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      await act(async () => button(frame(host), "Call settings")!.click());
       expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
       expect(layers.size).toBe(1);
       await act(async () => [...layers.values()][0]!());
