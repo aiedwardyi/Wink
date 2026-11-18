@@ -84,6 +84,15 @@ describe("About You card", () => {
     expect(prompt.className).toContain("focus-visible:ring-2 focus-visible:ring-accent/50");
   });
 
+  it("shows the whole prompt on a distinct surface", async () => {
+    await render();
+    const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
+    expect(prompt.textContent).toBe(en["aboutYou.prompt"]);
+    expect(prompt.className).not.toMatch(/\b(max-h-|overflow-)/);
+    expect(prompt.parentElement!.className).toContain("bg-raised");
+    expect(host.querySelector("textarea")!.className).toContain("bg-inset");
+  });
+
   const type = (value: string) => act(async () => {
     const box = host.querySelector("textarea")!;
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);
