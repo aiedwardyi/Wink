@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Loader2, Mic, MicOff, PhoneOff, Settings } from "lucide-react";
+import { Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -7,7 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import type { CallState } from "@/lib/live-call/controller";
 import { useCallCaptions } from "@/lib/live-call/captions";
 import { reducedMotion } from "@/lib/phone-swipe";
-import { CallSettingsHold } from "./CallSettings";
+import { CALL_ICON, CallGear } from "./CallSettings";
 import { clock, SoundPill, useLive, WORDS, type Live } from "./LiveCallBar";
 
 const BARS = [0.55, 1, 0.75, 0.45];
@@ -55,7 +55,7 @@ function CaptionLine({ caption, who }: { caption: NonNullable<CallState["caption
 }
 
 function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boolean }) {
-  const { locale, t } = useI18n();
+  const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
@@ -69,7 +69,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
   }, [snap.startedAt]);
 
   const talking = snap.status === "listening" || snap.status === "speaking" || snap.status === "working";
-  const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
+  const icon = CALL_ICON;
   const [beforeLink, afterLink] = words.micSilent.split(words.soundInput);
   // Only the Windows and macOS apps have a sound input pane to open.
   const soundPane = afterLink !== undefined && window.ogb?.permOpenSettings && (window.ogb.platform === "win32" || window.ogb.platform === "darwin");
@@ -89,11 +89,7 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
             </>}
         </p>}
         <span className="ml-auto" />
-        <CallSettingsHold bot={bot} tap>
-          <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(icon, "text-ink-secondary hover:bg-control hover:text-ink")}>
-            <Settings size={17} />
-          </button>
-        </CallSettingsHold>
+        <CallGear bot={bot} />
         {talking && (
           <button type="button" aria-pressed={snap.muted} aria-label={snap.muted ? words.unmute : words.mute} title={snap.muted ? words.unmute : words.mute} onClick={() => call.mute(!snap.muted)} className={cn(icon, snap.muted ? "bg-control text-ink" : "text-ink-secondary hover:bg-control hover:text-ink")}>
             {snap.muted ? <MicOff size={17} /> : <Mic size={17} />}

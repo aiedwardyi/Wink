@@ -243,6 +243,17 @@ describe("call button in the message box", () => {
     }
   });
 
+  it("uses the same gear in the message box as in the call", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const before = button(frame(host), "Call settings")!.className;
+      await connect(host);
+      expect(button(frame(host), "Call settings")!.className).toBe(before);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("labels Call in Korean", async () => {
     applyLocale("ko");
     const { host, unmount } = await mount();

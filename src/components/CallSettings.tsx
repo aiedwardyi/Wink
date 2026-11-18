@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Pause, Play } from "lucide-react";
+import { Pause, Play, Settings } from "lucide-react";
 
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -192,6 +192,19 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
         </div>
       )}
     </div>
+  );
+}
+
+export const CALL_ICON = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
+
+export function CallGear({ bot }: { bot: Bot }) {
+  const { t } = useI18n();
+  return (
+    <CallSettingsHold bot={bot} tap>
+      <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(CALL_ICON, "text-ink-secondary hover:bg-control hover:text-ink")}>
+        <Settings size={17} />
+      </button>
+    </CallSettingsHold>
   );
 }
 
