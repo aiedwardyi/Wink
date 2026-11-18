@@ -579,6 +579,39 @@ it("draws the newest picks first and the rest a batch a frame", async () => {
   raf.mockRestore();
 });
 
+it("starts a new search at the top, even after one with no results", async () => {
+  pickList();
+  await openTimeline("b-stale");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  await act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 100 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, -56px) scale(0.86)");
+  const search = host.querySelector<HTMLInputElement>(".timeline-pane input")!;
+  await type(search, "zzzz");
+  expect(host.querySelector(".timeline-canvas")).toBeNull();
+  await type(search, "reddit");
+  await until(() => picked().length > 0);
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+});
+
+it("gives every pick a keyboard stop, and a mouse let go outside the canvas does not drag on its way back", async () => {
+  pickList();
+  await openTimeline("b-keys");
+  await until(() => picked().length > 0);
+  expect(picked().map((pick) => pick.querySelector<HTMLElement>("[data-label]")!.tabIndex)).toEqual(picked().map(() => 0));
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = () => host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform;
+  const before = sheet();
+  await act(async () => {
+    canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1, pointerType: "mouse" }));
+    canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, button: -1, buttons: 0, clientX: 180, clientY: 160, pointerId: 1, pointerType: "mouse" }));
+    canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, button: -1, buttons: 0, clientX: 220, clientY: 200, pointerId: 1, pointerType: "mouse" }));
+  });
+  expect(sheet()).toBe(before);
+});
+
 it("stops a fling at the sheet's edges", async () => {
   pickList();
   await openTimeline("b-edge");

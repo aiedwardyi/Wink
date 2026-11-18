@@ -43,7 +43,7 @@ const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase
 const folds = new Map<string, boolean>();
 const queries = new Map<string, string>();
 type View = { x: number; y: number; scale: number };
-const views = new Map<string, View>();
+const views = new Map<string, View & { needle: string }>();
 
 const ViewPicture = createContext<(path: string, threadId: string, opener: HTMLElement) => void>(() => {});
 const Redraw = createContext<() => void>(() => {});
@@ -172,6 +172,7 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
   const box = (el: HTMLElement) => {
     let x = 0;
     let y = 0;
+    // SAFETY: an HTML element's offsetParent is an HTML element, or null past the root.
     for (let node: HTMLElement | null = el; node && node !== sheet; node = node.offsetParent as HTMLElement | null) {
       x += node.offsetLeft;
       y += node.offsetTop;
@@ -316,7 +317,7 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
   const ink = useRef<SVGSVGElement>(null);
   const zoom = useRef<HTMLElement>(null);
   const view = useRef<View | null>(views.get(botId) ?? null);
-  const searched = useRef(needle);
+  const searched = useRef(views.get(botId)?.needle ?? needle);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const dragged = useRef(false);
   const [touch] = useState(() => window.matchMedia?.("(pointer: coarse)").matches ?? false);
@@ -355,7 +356,7 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
       ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, START.x), y: edge(height, box.clientHeight, next.y, START.y) }
       : next;
     view.current = kept;
-    views.set(botId, kept);
+    views.set(botId, { ...kept, needle: searched.current });
     sheet.current!.style.transform = `translate(${kept.x}px, ${kept.y}px) scale(${kept.scale})`;
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, [botId]);
@@ -376,9 +377,9 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
     // the newest picks sit under the search box at the top left
     const top = START;
     // a kept view may sit below picks that have not mounted yet, so only gestures clamp
-    if (!view.current) show({ ...top, scale: Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1)) }, true);
-    else show(searched.current === needle ? view.current : { ...top, scale: view.current.scale }, true);
+    const next = !view.current ? { ...top, scale: Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1)) } : searched.current === needle ? view.current : { ...top, scale: view.current.scale };
     searched.current = needle;
+    show(next, true);
   }, [drawn, needle, opened, redraw, show]);
 
   useEffect(() => {
@@ -420,9 +421,15 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
     if (!last) return;
     const point = spot(event);
     const at = view.current!;
+    if (event.pointerType === "mouse" && !event.buttons) {
+      pointers.current.delete(event.pointerId);
+      return;
+    }
     if (pointers.current.size >= 2) {
+      // SAFETY: two or more pointers are down, so the first two exist before and after this move.
       const [a, b] = [...pointers.current.values()] as [typeof point, typeof point];
       pointers.current.set(event.pointerId, point);
+      // SAFETY: the same pointers, one of them moved.
       const [c, d] = [...pointers.current.values()] as [typeof point, typeof point];
       if (!dragged.current) {
         dragged.current = true;
@@ -525,7 +532,7 @@ function Pick({ entry, threadId, you, chips, old = false }: { entry: Entry; thre
   return (
     <div className="timeline-detail" data-timeline-pick={entry.id} data-old={old || undefined}>
       <div className="timeline-left">
-        <div className="timeline-label" data-label>
+        <div className="timeline-label" data-label tabIndex={0}>
           <span className="timeline-key">{old ? entry.picked : entry.key}</span>
           <time>{old ? t("timeline.replacedAt", { when: at }) : at}</time>
           {chips}
