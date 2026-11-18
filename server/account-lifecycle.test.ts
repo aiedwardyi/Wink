@@ -587,25 +587,57 @@ describe("account lifecycle", () => {
     expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toMatchObject({ authenticated: true, account: "restored@example.test" });
   });
 
-  it("keeps a failed restore check reading as checking while it retries", async () => {
+  it.each([3_000, 0])("offers sign-in after an unanswered restore check (%i ms) while keeping sends blocked", async (deadline) => {
+    const f = await fixture();
+    const account = await f.add();
+    await f.registry.describe();
+    f.statuses.set(account.id, { state: "available" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    if (deadline) vi.spyOn(f.registry.get(account.id)!, "snapshot").mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve({ state: "available" }), deadline)),
+    );
+    const restored = f.controller.restore();
+    if (deadline) {
+      expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "checking" });
+      await vi.advanceTimersByTimeAsync(deadline);
+    }
+    await restored;
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "available", authChecked: true });
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+    expect(f.providers.started("unverified", account.id)).toBeNull();
+    expect(f.accounts.get(account.id)).toEqual(account);
+
+    f.start.mockRejectedValueOnce(new Error("fixture login failed to start"));
+    await expect(f.controller.signIn(account.id)).rejects.toThrow("fixture login failed to start");
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+
+    f.changed.mockClear();
+    f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+    expect(f.changed).toHaveBeenCalledOnce();
+  });
+
+  it("shows an unavailable restore check while it retries", async () => {
     const f = await fixture();
     const account = await f.add();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture CLI crashed"));
     await f.controller.restore();
     expect(f.registry.accountAvailable(account.id)).toBe(false);
-    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("checking");
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot.state).toBe("unavailable");
   });
 
-  it.each([{ refresh: true }, { rescan: true }])("keeps a failed restore checking during an explicit %j", async (options) => {
+  it.each([{ refresh: true }, { rescan: true }])("keeps a failed restore from showing an earlier sign-in during an explicit %j", async (options) => {
     const f = await fixture();
     const account = await f.add();
     f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity, account: "old@example.test" });
     expect((await f.registry.describeCached()).find((row) => row.instanceId === account.id)?.snapshot.account).toBe("old@example.test");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture CLI crashed"));
+    f.statuses.set(account.id, { state: "available" });
     await f.controller.restore();
-    expect((await f.registry.describe(options)).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "checking" });
+    expect((await f.registry.describe(options)).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "available", authChecked: true });
     expect(f.registry.accountAvailable(account.id)).toBe(false);
   });
 

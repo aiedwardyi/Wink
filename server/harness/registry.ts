@@ -112,7 +112,7 @@ export class ProviderRegistry {
   private modelRefreshAt = new Map<InstanceId, number>();
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
   private probed = new Map<InstanceId, Probe>();
-  private signedOutChecks = new Map<InstanceId, Probe>();
+  private blockedChecks = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
   private probedListeners = new Set<(instanceId: InstanceId) => void>();
   private helperWork = new Map<InstanceId, number>();
@@ -279,7 +279,7 @@ export class ProviderRegistry {
     if (blocked) this.blockedAccounts.add(id);
     else {
       this.blockedAccounts.delete(id);
-      this.signedOutChecks.delete(id);
+      this.blockedChecks.delete(id);
     }
     this.get(id)?.setAccountBlocked?.(blocked);
   }
@@ -287,25 +287,31 @@ export class ProviderRegistry {
   /** Blocked like blockAccount until its check answers, but reads as checking: the saved sign-in is not known to be gone. */
   checkAccount(id: string) {
     this.probing.delete(id);
-    this.signedOutChecks.delete(id);
+    this.blockedChecks.delete(id);
     this.blockAccount(id, true);
     this.checkingAccounts.add(id);
   }
   /** Blocked for a reason that shows as signed out; an account whose check is still running is not. */
   accountStopped(id: string) { return this.blockedAccounts.has(id) && !this.checkingAccounts.has(id); }
   accountChecking(id: string) { return this.checkingAccounts.has(id); }
+  recordUnverifiedAccountCheck(id: string, snapshot: ProviderSnapshot) {
+    this.probing.delete(id);
+    this.blockAccount(id, true);
+    this.recordAccountCheck(id, { ...snapshot, authenticated: undefined, account: undefined,
+      accountIdentity: undefined, accountAuthenticated: undefined, authChecked: snapshot.state === "available" });
+  }
   recordAccountCheck(id: string, snapshot: ProviderSnapshot) {
     if (!this.accounts.has(id) || this.probing.has(id)) return;
     const probe = { snapshot, cliCandidates: [] };
-    // A restore-confirmed sign-out only describes the blocked account's row.
-    if (snapshot.authenticated === false && this.accountStopped(id)) this.signedOutChecks.set(id, probe);
+    // A blocked account's last check only describes its row.
+    if (snapshot.authenticated !== true && this.accountStopped(id)) this.blockedChecks.set(id, probe);
     else if (snapshot.authenticated === true && !this.accountBlocked(id)) this.probed.set(id, probe);
     else return;
     this.probeVersion += 1;
     for (const listener of this.probedListeners) listener(id);
   }
   // An account under a check never shows an earlier probe: its sign-in may have changed since.
-  private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.signedOutChecks.get(id) ?? this.probed.get(id); }
+  private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.blockedChecks.get(id) ?? this.probed.get(id); }
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
@@ -640,7 +646,7 @@ export class ProviderRegistry {
 
   private forget(instanceId: InstanceId) {
     this.probed.delete(instanceId);
-    this.signedOutChecks.delete(instanceId);
+    this.blockedChecks.delete(instanceId);
     this.probing.delete(instanceId);
     this.cacheKeys.delete(instanceId);
     this.probeVersion += 1;
@@ -776,7 +782,7 @@ export class ProviderRegistry {
     this.modelRefreshAt.clear();
     this.modelRefreshInFlight.clear();
     this.probed.clear();
-    this.signedOutChecks.clear();
+    this.blockedChecks.clear();
     this.probing.clear();
     this.cacheKeys.clear();
   }

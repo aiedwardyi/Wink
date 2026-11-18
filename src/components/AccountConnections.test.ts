@@ -54,7 +54,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("shows an account whose first check is still running as checking, never signed out", async () => {
+it.each([{ authenticated: false }, { authChecked: true }])("offers sign-in only after the first check completes (%j)", async (status) => {
   await render(3);
   state.instances = state.instances.map((account) => account.instanceId === "account-1" ? { ...account, snapshot: { state: "checking" } } : account);
   await update();
@@ -62,9 +62,11 @@ it("shows an account whose first check is still running as checking, never signe
   expect(row.textContent).toContain("Checking");
   expect(row.textContent).not.toContain("Signed out.");
   expect([...row.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Sign In");
-  state.instances = state.instances.map((account) => account.instanceId === "account-1" ? { ...account, snapshot: { state: "available", authenticated: false } } : account);
+  state.instances = state.instances.map((account) => account.instanceId === "account-1" ? { ...account, snapshot: { state: "available", ...status } } : account);
   await update();
-  expect(host.querySelector("[data-connection-account=\"account-1\"]")!.textContent).toContain("Signed out.");
+  const signedOut = host.querySelector("[data-connection-account=\"account-1\"]")!;
+  expect(signedOut.textContent).toContain("Signed out.");
+  expect([...signedOut.querySelectorAll("button")].map((button) => button.textContent)).toContain("Sign In");
 });
 
 it("keeps each Connections email bound to its account id when Main and order change", async () => {
