@@ -8,6 +8,7 @@ import type { Message } from "@/state/store";
 
 const row = (i: number): Message => ({ id: `m${i}`, parentId: i ? `m${i - 1}` : null, at: i, role: "user", kind: "text", text: `row ${i};` });
 const rows = (start: number, end: number) => Array.from({ length: end - start }, (_, i) => row(start + i));
+const focus = { threadId: "thread-a", messageId: "m20", nonce: 1, consumed: false };
 
 describe("mergeForwardPage", () => {
   it("appends only newer rows and dedupes both overlap and repeated ids", () => {
@@ -45,13 +46,13 @@ describe("useJumpWindow forward paging", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { release = resolve; })));
     let jump!: ReturnType<typeof useJumpWindow>;
     function Probe() {
-      jump = useJumpWindow(vi.fn(), "a", "thread-a", rows(300, 500), "m499", undefined, 0);
+      jump = useJumpWindow(vi.fn(), "a", "thread-a", rows(300, 500), "m499", undefined, 0, focus);
       return null;
     }
     const root = createRoot(document.createElement("div"));
     try {
       await act(async () => root.render(createElement(Probe)));
-      await act(async () => jump.open("m20"));
+      await act(async () => jump.open(focus.messageId, focus.nonce));
       expect(jump.pending).toBe(true);
       await act(async () => jump.close());
       expect(jump.pending).toBe(false);
@@ -69,13 +70,13 @@ describe("useJumpWindow forward paging", () => {
     const dispatch = vi.fn();
     let jump!: ReturnType<typeof useJumpWindow>;
     function Probe() {
-      jump = useJumpWindow(dispatch, "a", "thread-a", rows(250, 500), "m499", undefined, 0);
+      jump = useJumpWindow(dispatch, "a", "thread-a", rows(250, 500), "m499", undefined, 0, focus);
       return null;
     }
     const root = createRoot(document.createElement("div"));
     try {
       await act(async () => root.render(createElement(Probe)));
-      await act(async () => jump.open("m20"));
+      await act(async () => jump.open(focus.messageId, focus.nonce));
       const beforeCommit = vi.fn();
       await act(async () => { jump.newer(beforeCommit); jump.newer(beforeCommit); });
       expect(fetch).toHaveBeenCalledTimes(2);
@@ -96,13 +97,13 @@ describe("useJumpWindow forward paging", () => {
     const dispatch = vi.fn();
     let jump!: ReturnType<typeof useJumpWindow>;
     function Probe({ view }: { view: string }) {
-      jump = useJumpWindow(dispatch, view, `thread-${view}`, rows(300, 500), "m499", undefined, 0);
+      jump = useJumpWindow(dispatch, view, `thread-${view}`, rows(300, 500), "m499", undefined, 0, focus);
       return null;
     }
     const root = createRoot(document.createElement("div"));
     try {
       await act(async () => root.render(createElement(Probe, { view: "a" })));
-      await act(async () => jump.open("m20"));
+      await act(async () => jump.open(focus.messageId, focus.nonce));
       const beforeCommit = vi.fn();
       await act(async () => jump.newer(beforeCommit));
       await act(async () => root.render(createElement(Probe, { view: "b" })));

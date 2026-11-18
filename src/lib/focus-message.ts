@@ -73,8 +73,7 @@ export function restoreChatChrome(
   if (doc.body) doc.body.scrollTop = 0;
 }
 
-// Rapid landings race: only the latest click may replace the transcript.
-let landGeneration = 0;
+let searchLanding: AbortController | undefined;
 
 /** Select and prepare the exact conversation represented by a search hit. */
 export async function landOnSearchHit(
@@ -83,14 +82,15 @@ export async function landOnSearchHit(
   dispatch: React.Dispatch<Action>,
   query?: string,
 ): Promise<void> {
-  const generation = ++landGeneration;
-  const stale = () => generation !== landGeneration;
+  searchLanding?.abort();
+  const request = searchLanding = new AbortController();
+  const stale = () => request.signal.aborted;
   const ownerId = hit.botId ?? hit.groupId;
   const bot = hit.botId ? state.bots.find((candidate) => candidate.id === hit.botId) : undefined;
   const group = hit.groupId ? state.groups.find((candidate) => candidate.id === hit.groupId) : undefined;
   if (!ownerId || (!bot && !group)) throw new Error("That conversation is no longer available.");
 
-  dispatch({ type: "select", id: ownerId });
+  dispatch({ type: "select", id: ownerId, searchLanding: request });
   if (bot && bot.threadId !== hit.threadId) {
     const result = await api(`/api/bots/${bot.id}/tasks/${hit.threadId}`, { method: "POST" });
     if (stale()) return;

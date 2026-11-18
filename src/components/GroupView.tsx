@@ -1071,7 +1071,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   // its thread) changes. Working dots below stay on the FULL list's tail.
   const transcriptKey = `${group.id}:${group.threadId}`;
   // an old jump shows its own window; the live pages below keep taking arrivals
-  const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots);
+  const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots, state.focusMessage);
   const shown = jump.messages ?? group.messages;
   // rooms have no pane liveness, so a run without a report stays Working
   const workers = useMemo(() => workerRuns(group.messages).map((run) => ({ run, state: shownState(run, null) })), [group.messages]);
@@ -1191,7 +1191,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     if (targetIndex < 0) {
       if (group.hasMore && requestedFocus.current !== focus.nonce) {
         requestedFocus.current = focus.nonce;
-        openJump(focus.messageId);
+        openJump(focus.messageId, focus.nonce);
       }
       return;
     }
