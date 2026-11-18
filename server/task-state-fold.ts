@@ -62,8 +62,11 @@ export function seedTaskResumePacket(input: {
 
 export function recordTaskInstruction(
   packet: TaskResumePacket,
-  input: { text: string; messageId: string } & StampInput,
+  input: { text: string; messageId: string; messages?: readonly { id: string; at: number; actedAt?: number }[] } & StampInput,
 ): TaskResumePacket {
+  const previous = input.messages?.find((message) => message.id === packet.instructionId);
+  const current = input.messages?.find((message) => message.id === input.messageId);
+  if (previous && current && (current.actedAt ?? current.at) < (previous.actedAt ?? previous.at)) return packet;
   const next = stamped(packet, "progress", input);
   next.instructionId = input.messageId;
   const action = firstLine(input.text);

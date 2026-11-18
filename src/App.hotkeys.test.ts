@@ -105,7 +105,7 @@ describe("phone drawer menu button", () => {
 
   it("glows while another chat has a question or an open approval", () => {
     expect(menuButtonSource()).toContain('${menuAsking ? " needs-you-glow" : ""}');
-    expect(app).toContain("anyChatNeedsYou(menuChats, menuExceptId)");
+    expect(app).toContain("anyChatNeedsYou(menuChats, menuExceptId, state.acceptedSends, state.pendingQueued)");
     expect(app).toContain("anyRoutineRinging(state.routineRuns, menuChats, menuExceptId)");
   });
 

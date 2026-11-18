@@ -20,6 +20,8 @@ import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
 import { answerText } from "../../shared/open-question";
 import { canAnswerCard } from "@/lib/open-question";
+import { answerableCard } from "@/lib/pending-card-answers";
+import { actionTime } from "@/lib/action-clock";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -333,6 +335,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "answerCard": {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
       const card = bot?.messages.find((message) => message.id === action.messageId)?.card;
+      if (card?.askUser && !card.requestId) return state;
       if (bot && !canAnswerCard(visibleMessages(bot), action.messageId)) return state;
       const patch: Partial<OptionCardData> = { answered: action.answer };
       // talking past the first-run quiz hides it; live asks stay until
@@ -344,6 +347,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "answerGroupCard": {
       const group = state.groups.find((candidate) => candidate.id === action.groupId);
+      if (group?.messages.find((message) => message.id === action.messageId)?.card?.askUser) return state;
       if (group && !canAnswerCard(group.messages, action.messageId)) return state;
       return patchGroupCard(state, action.groupId, action.messageId, { answered: action.answer });
     }
@@ -760,7 +764,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, answersCard: action.answersCard, reason: action.reason }],
         },
       };
     }
@@ -807,6 +811,7 @@ export function reducer(state: AppState, action: Action): AppState {
           kind: paint.kind,
           text: action.text,
           at: Date.now(),
+          cardId: action.cardId,
           after: action.after,
         }),
       };
@@ -830,6 +835,7 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
+          cardId: action.cardId,
           at: Date.now(),
           replyToId: action.replyToId,
           posting: true,
@@ -1440,7 +1446,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "send": {
-          const actedAt = Date.now();
+          const actedAt = action.actedAt ?? actionTime();
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
@@ -1460,6 +1466,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                cardId: action.cardId,
               }),
             });
           const settle = (body: any) => {
@@ -1514,6 +1521,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 sendId,
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
+                answersCard: action.cardId,
               });
               if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
             }
@@ -1600,7 +1608,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
-          const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
+          const asked = bot && answerableCard(bot.messages, visibleMessages(bot), action.messageId, action.question, stateRef.current.acceptedSends[bot.threadId], stateRef.current.pendingQueued[bot.threadId]);
+          const card = asked?.card;
           if (card?.requestId) {
             const behavior =
               action.answer === "Allow" ? "allow" : action.answer === "Deny" ? "deny" : "answer";
@@ -1612,9 +1621,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 message: behavior === "answer" ? action.answer : undefined,
               }),
             }).catch(showError);
-          } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
-            const asked = bot?.messages.find((m) => m.id === action.messageId);
-            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined, actedAt: Date.now() });
+          } else if (bot && asked) {
+            if (card?.askUser && asked) {
+              wrapped({ type: "send", botId: bot.id, text: answerText(visibleMessages(bot), asked, action.answer), threadId: bot.threadId, cardId: asked.id, actedAt: actionTime() });
+              break;
+            }
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined, actedAt: actionTime() });
             void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
               .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
@@ -1634,12 +1646,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerGroupCard": {
-          const actedAt = Date.now();
+          const actedAt = actionTime();
           const room = stateRef.current.groups.find((group) => group.id === action.groupId);
           const messages = room?.messages ?? [];
-          if (!canAnswerCard(messages, action.messageId)) break;
-          const asked = messages.find((m) => m.id === action.messageId);
+          const asked = answerableCard(messages, messages, action.messageId, action.question, room && stateRef.current.acceptedSends[room.threadId], room && stateRef.current.pendingQueued[room.threadId]);
+          if (!asked) break;
           const text = asked ? answerText(messages, asked, action.answer) : action.answer;
+          if (asked?.card?.askUser) {
+            wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: asked.id, actedAt });
+            break;
+          }
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
             .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId, actedAt }); }));
           break;
@@ -1790,7 +1806,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? Date.now() }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? actionTime() }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -2001,7 +2017,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const draftId = `group:${group.id}:${group.threadId}`;
       const hold = takeClosedRoomHold(draftId);
       if (!hold) continue;
-      const { text, requestText, sendId, threadId, revision, replyToId, attachments, at } = hold;
+      const { text, requestText, sendId, threadId, revision, replyToId, attachments, at, cardId, actedAt } = hold;
       dispatch({
         type: "sendGroup",
         groupId: group.id,
@@ -2009,8 +2025,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         sendId,
         replyToId,
         threadId,
-        actedAt: at,
-        onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
+        cardId,
+        actedAt: actedAt ?? at,
+        onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments, cardId, actedAt }),
       });
     }
   }, [dispatch, state.hydrated, state.groups, state.acceptedSends]);

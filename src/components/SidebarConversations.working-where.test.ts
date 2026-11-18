@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { JoinedView } from "@/lib/team-rooms";
-import type { Bot, Group } from "@/state/store";
+import { initialState, type Bot, type Group } from "@/state/store";
 import { BotListItem } from "./SidebarConversations";
 
 const store = vi.hoisted(() => ({ state: {} as Record<string, unknown>, dispatch: vi.fn() }));
@@ -19,7 +19,7 @@ const rando = (workingThreadId: string | null) => ({ id: "rando", name: "Rando",
 const group = (patch: Partial<Group> = {}) => ({ id: "g1", threadId: "g1-thread", name: "test", memberIds: ["rando"], messages: [], ...patch }) as Group;
 
 async function row(bot: Bot, state: { groups?: Group[]; routineRuns?: unknown[] } = {}) {
-  store.state = { bots: [bot], instances: [{ instanceId: "muse", driverKind: "museAgent", models: { options: [{ id: "muse-spark-1.3", label: "Muse 1.3" }] } }], config: {}, terminalAttention: {}, terminalPanes: {}, groups: [], routineRuns: [], selectedId: null, ...state };
+  store.state = { ...initialState, bots: [bot], instances: [{ instanceId: "muse", driverKind: "museAgent", models: { options: [{ id: "muse-spark-1.3", label: "Muse 1.3" }] } }], config: {}, terminalAttention: {}, terminalPanes: {}, groups: [], routineRuns: [], selectedId: null, ...state };
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   await act(async () => root.render(createElement(BotListItem, { bot, density: "comfortable", onMenu: () => {} })));

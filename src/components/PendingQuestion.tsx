@@ -6,7 +6,7 @@
 // it never takes the composer over: the bot keeps working, and typing a reply
 // answers it only when it has no choices. The row's x or a sideways swipe only
 // hides it here; the bot still waits, and a count on the composer brings it back.
-import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
@@ -17,28 +17,8 @@ import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
 
-// Per question id, outside the store, so each chat's question stays as it was left.
-const rowQuestions = new Set<string>();
-const shrunkQuestions = new Set<string>();
-const hiddenQuestions = new Set<string>();
-const glowedQuestions = new Set<string>();
-const watchers = new Set<() => void>();
-function subscribe(notify: () => void) {
-  watchers.add(notify);
-  return () => { watchers.delete(notify); };
-}
-function mark(questions: Set<string>, id: string, value: boolean) {
-  if (value) questions.add(id);
-  else questions.delete(id);
-  for (const notify of watchers) notify();
-}
-const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
-
-/** Shows a question as its row from now on; it never shrinks by itself after that. */
-export function foldQuestion(id: string) {
-  shrunkQuestions.add(id);
-  mark(rowQuestions, id, true);
-}
+import { carryQuestionFold, foldQuestion, markQuestion, questionFlag, useQuestionFlag } from "@/lib/question-view";
+export { carryQuestionFold, foldQuestion };
 
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
 let stepFocus = 0;
@@ -65,6 +45,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   attached = 0,
   replying = false,
   movedOn = false,
+  movement,
+  paged = false,
   onPick,
   onDismiss,
 }: {
@@ -82,24 +64,28 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   replying?: boolean;
   /** the person sent a message, or the asker replied, after the question */
   movedOn?: boolean;
+  movement?: string;
+  paged?: boolean;
   onPick: (choice: string) => void;
   onDismiss: () => void;
 }) {
   const { t } = useI18n();
   const drafting = Boolean(typed.trim()) || attached > 0 || replying;
   // read in render so a question arriving over a draft never paints as the card first
-  const folded = useMarked(rowQuestions, message.id) || (drafting && !shrunkQuestions.has(message.id));
-  const hidden = useMarked(hiddenQuestions, message.id);
-  const [glowing, setGlowing] = useState(() => !glowedQuestions.has(message.id) && !reducedMotion());
-  useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
-  const draft = useRef({ typed, attached });
+  const folded = useQuestionFlag(message.id, "row") || (drafting && !questionFlag(message.id, "shrunk"));
+  const hidden = useQuestionFlag(message.id, "hidden");
+  const [glowing, setGlowing] = useState(() => !questionFlag(message.id, "glowed") && !reducedMotion());
+  useEffect(() => { markQuestion(message.id, "glowed", true); }, [message.id]);
+  const draft = useRef({ typed, attached, drafting, movedOn, movement });
   useEffect(() => {
     const was = draft.current;
-    draft.current = { typed, attached };
-    if (shrunkQuestions.has(message.id) || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
+    draft.current = { typed, attached, drafting, movedOn, movement };
+    // Paging already chose this fold; old chat movement must not undo it at mount.
+    if (paged && typed === was.typed && attached === was.attached && drafting === was.drafting && movedOn === was.movedOn && movement === was.movement) return;
+    if (questionFlag(message.id, "shrunk") || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
     setGlowing(false);
     foldQuestion(message.id);
-  }, [typed, attached, drafting, movedOn, message.id]);
+  }, [typed, attached, drafting, movedOn, movement, paged, message.id]);
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
   const rowButton = useRef<HTMLButtonElement>(null);
@@ -126,11 +112,11 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     setGlowing(false);
     moveFocus.current = keyboard;
     if (value) foldQuestion(message.id);
-    else mark(rowQuestions, message.id, false);
+    else markQuestion(message.id, "row", false);
   };
   const hide = () => {
     setGlowing(false);
-    mark(hiddenQuestions, message.id, true);
+    markQuestion(message.id, "hidden", true);
   };
   const step = (by: number) => {
     stepFocus = by;
@@ -371,13 +357,13 @@ function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (c
 /** A hidden question's count on the composer's edge: a tap brings its row back. */
 export function HiddenQuestionDot({ id, count }: { id: string; count: number }) {
   const { t } = useI18n();
-  const hidden = useMarked(hiddenQuestions, id);
+  const hidden = useQuestionFlag(id, "hidden");
   if (!hidden) return null;
   return (
     <button
       type="button"
       data-hidden-question={id}
-      onClick={() => mark(hiddenQuestions, id, false)}
+      onClick={() => markQuestion(id, "hidden", false)}
       aria-label={t("ask.showQuestion")}
       title={t("ask.showQuestion")}
       className={cn(BADGE, "absolute -left-0.5 -top-0.5 z-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5")}

@@ -647,6 +647,19 @@ describe("memory pass", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])("keeps a newer linked correction from speech or a choice-free question (speech: %s)", async (speech) => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for repo indent?" });
+    say("t1", "tabs");
+    generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs" }]));
+    await settle("t1", 3 * MINUTE);
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toContain("- Picked: Repo uses tabs");
+    const question = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Question", subtitle: "Tabs or spaces for repo indent?", options: speech ? ["tabs", "spaces"] : [], askUser: true, staysOpen: true } });
+    say("t1", "spaces", { answersCard: question.id, ...(speech ? { call: { id: "c-0123456789ab", ask: true as const } } : {}) });
+    generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses spaces", quote: "spaces" }]));
+    await settle("t1", 3 * MINUTE);
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toContain("- Picked: Repo uses spaces");
+  });
+
   it("lands a pick after the bot's options in the timeline with the user's words, with the bot's text as context only", async () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: `${"Some setup. ".repeat(60)}Should the picker follow the app theme, or stay dark always?` });
     say("t1", "the first one");

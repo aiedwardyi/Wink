@@ -97,6 +97,7 @@ describe("open ask_user question", () => {
     expect(pinnedQuestion([question, approval()])).toBeNull();
     expect(pinnedQuestion([question, approval({ answered: "allow" })])).toBe(question);
     expect(pinnedQuestion([question, approval()], [question])).toBe(question);
+    expect(pinnedQuestion([question], [])).toBeNull();
     expect(pinnedQuestion([question, ask("q2", { requestId: "native-1", askUser: undefined })])).toBe(question);
     expect(pinnedQuestion([question, typed("u1")])).toBeNull();
   });

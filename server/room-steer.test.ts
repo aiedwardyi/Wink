@@ -14,7 +14,7 @@ function setup(opts: { queueing?: boolean; steered?: boolean; settles?: boolean 
   const bots = [bot("scout", "Scout", true), bot("pixel", "Pixel", false)];
   let group = { id: "g", threadId: "room-t", memberIds: ["scout", "pixel"], busyBotId: "scout", defaultResponder: { kind: "everyone" } } as GroupRecord;
   const rows: Message[] = [];
-  const steer = vi.fn(async () => {
+  const steer = vi.fn<NonNullable<ProviderInstance["adapter"]["steer"]>>(async () => {
     if (opts.settles) group = { ...group, busyBotId: null };
     return opts.steered ?? true;
   });
@@ -28,6 +28,7 @@ function setup(opts: { queueing?: boolean; steered?: boolean; settles?: boolean 
         return saved;
       },
       patchMessage: () => null,
+      messagesFor: () => rows,
     },
     instanceForBot: () => ({ adapter: { capabilities: { queueing: opts.queueing ?? true }, steer } }) as unknown as ProviderInstance,
     userName: () => "Edward",
@@ -36,6 +37,17 @@ function setup(opts: { queueing?: boolean; steered?: boolean; settles?: boolean 
 }
 
 describe("steerRoomSend", () => {
+  it("sends a card's id and full question behind a room answer", async () => {
+    const { deps, group, rows, steer } = setup();
+    const question = "Which release?\n" + "Exact question. ".repeat(20);
+    rows.push({ id: "question-1", at: 1, role: "bot", kind: "options", card: { title: "Q", subtitle: question, options: ["Yes"], askUser: true } });
+    const answer = await steerRoomSend(deps, group, "Yes", undefined, "send-1", "question-1");
+    const prompt = steer.mock.calls[0]![1];
+    expect(prompt).toContain("question-1");
+    expect(prompt).toContain(question);
+    expect(answer).toMatchObject({ text: "Yes", answersCard: "question-1" });
+  });
+
   it("steers a plain line into the busy member's turn and records it as sent mid-turn", async () => {
     const { deps, group, rows, steer } = setup();
     const row = await steerRoomSend(deps, group, "also the tests", undefined, "send-1");

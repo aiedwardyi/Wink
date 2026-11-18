@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { CallTag } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
+import { promptWithCardAnswer } from "./card-answer.ts";
 import { newId } from "./contracts.ts";
 import { parseJson } from "./schema.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -512,7 +513,7 @@ export function foldQueuedSends(
       });
       rows?.push(row);
       appended.add(item.id);
-      return item.prompt;
+      return promptWithCardAnswer(item.prompt, row.answersCard ? store.messagesFor(threadId).find((message) => message.id === row.answersCard) : undefined);
     });
     if (entry) saveQueueAfterAppend();
     return prompts;
@@ -530,15 +531,15 @@ export function queuedSteeredMessage(
   botId: string,
   threadId: string,
   sendId: string,
-): { id: string; text: string; replyToId?: string; reason?: "sync"; actedAt?: number } | null {
+): { id: string; text: string; replyToId?: string; answersCard?: string; reason?: "sync"; actedAt?: number } | null {
   const entry = queues.get(entryKey(botId, threadId));
   if (!entry || entry.botId !== botId) return null;
   const item = entry.items.find((candidate): candidate is SteerItem => !isRoomItem(candidate) && candidate.sendId === sendId);
-  return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}), ...(item.actedAt !== undefined ? { actedAt: item.actedAt } : {}) } : null;
+  return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.answersCard ? { answersCard: item.answersCard } : {}), ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}), ...(item.actedAt !== undefined ? { actedAt: item.actedAt } : {}) } : null;
 }
 
 /** Every thread's waiting sends, as the window that sent them shows them. */
-export function waitingSends(): Record<string, Array<{ queueId: string; text: string; sendId?: string; replyToId?: string; reason?: "sync" }>> {
+export function waitingSends(): Record<string, Array<{ queueId: string; text: string; sendId?: string; replyToId?: string; answersCard?: string; reason?: "sync" }>> {
   const waiting: Record<string, Array<SteerItem & { threadId: string }>> = {};
   for (const entry of queues.values()) {
     for (const item of entry.items) {
@@ -553,6 +554,7 @@ export function waitingSends(): Record<string, Array<{ queueId: string; text: st
       text: item.text,
       sendId: item.sendId,
       replyToId: item.replyToId,
+      ...(item.answersCard ? { answersCard: item.answersCard } : {}),
       ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}),
     })),
   ]));

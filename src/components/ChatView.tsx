@@ -88,6 +88,7 @@ import { usePresence } from "@/lib/use-presence";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
+import { withPendingCardAnswers } from "@/lib/pending-card-answers";
 import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -802,10 +803,10 @@ const MessagesList = memo(function MessagesList({
                 return (
                   <AskUserRecord
                     message={m}
-                    transcript={transcript}
+                    transcript={withPendingCardAnswers(transcript, state.acceptedSends[bot.threadId], state.pendingQueued[bot.threadId], bot.messages)}
                     askerName={bot.name}
                     pinned={pinned}
-                    onPick={(answer) => dispatch({ type: "answerCard", botId: bot.id, messageId: m.id, answer })}
+                    onPick={(answer) => dispatch({ type: "answerCard", botId: bot.id, messageId: m.id, answer, question: m })}
                   />
                 );
               }

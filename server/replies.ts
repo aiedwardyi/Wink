@@ -5,6 +5,7 @@ import {
   type ReactionMessage,
 } from "../shared/reactions.ts";
 import type { Message } from "./store.ts";
+import { promptWithCardAnswer } from "./card-answer.ts";
 
 const MAX_REPLY_EXCERPT = 900;
 
@@ -54,6 +55,7 @@ export function transcriptText(message: Message, messagesById: ReadonlyMap<strin
       body = `[replying to ${replySpeaker(target, userName)}: “${summaryLabel(target)}${replyExcerpt(target.text, 220)}”]\n${message.text}`;
     }
   }
+  body = promptWithCardAnswer(body, message.answersCard ? messagesById.get(message.answersCard) : undefined);
   const annotation = formatReactionAnnotation(message, userName, messagesById.values());
   if (!annotation) return body;
   return body ? `${body}\n${annotation}` : annotation;
@@ -91,7 +93,8 @@ function reactionIdsAlreadyInTranscript(
 
 type UserTurnOpts = {
   replyTo?: Message;
-  messages: readonly ReactionMessage[];
+  messages: readonly (ReactionMessage & Partial<Pick<Message, "card">>)[];
+  answersCard?: string;
   userName?: string;
   replayedTranscript?: readonly { text: string }[];
   delivered?: readonly string[];
@@ -113,7 +116,7 @@ function reactionOpts(opts: UserTurnOpts) {
 export function composeUserTurnPrompt(text: string, opts: UserTurnOpts): string {
   const userName = opts.userName ?? "User";
   return promptWithReactions(
-    promptWithReply(text, opts.replyTo, userName),
+    promptWithReply(promptWithCardAnswer(text, opts.messages.find((message) => message.id === opts.answersCard)), opts.replyTo, userName),
     opts.messages,
     userName,
     reactionOpts(opts),

@@ -917,7 +917,7 @@ describe("LiveCall", () => {
     expect(call.state().pending).toBeUndefined();
     await flush();
     const sends = posts.filter((p) => p.path === "/api/bots/b1/messages");
-    expect(sends.map((p) => p.body)).toEqual([{ text: "Re: “Restart at 8:15 PM instead?”\nYeah, that's better.", sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
+    expect(sends.map((p) => p.body)).toEqual([{ text: "Re: “Restart at 8:15 PM instead?”\nYeah, that's better.", sendId: "send-1", cardId: ask.id, call: { id: "c-0123456789ab", ask: true } }]);
     expect(posts.some((p) => p.path.endsWith("/call/lines") && p.body.lines[0].who === "user")).toBe(false);
     engine().events.heard("Also open my Desktop folder.");
     engine().events.answering();
@@ -1917,7 +1917,7 @@ describe("VOICE-KNOWS: cards aloud", () => {
     engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body)).toEqual([{ text: `Re: “${question}”\nYes.`, sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
+    expect(messagesOf(posts).map((p) => p.body)).toEqual([{ text: `Re: “${question}”\nYes.`, sendId: "send-1", cardId: card.id, call: { id: "c-0123456789ab", ask: true } }]);
   });
 
   it("a card with no options still reads its question", async () => {

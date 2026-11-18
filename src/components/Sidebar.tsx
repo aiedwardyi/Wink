@@ -107,7 +107,7 @@ import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { ArchivedBotsPanel, BotListItem, RecentlyDeletedPanel, type MenuState, type SidebarRowDrag, type TrashedBot } from "./SidebarConversations";
-import { anyChatNeedsYou } from "@/lib/open-question";
+import { anyChatNeedsYou } from "@/lib/pending-card-answers";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { BoardButton } from "./BoardButton";
@@ -647,7 +647,7 @@ export function Sidebar({
   const collapsedUnreadBadge = formatCollapsedUnreadBadge(collapsedUnread);
   const collapsedChats = [...state.bots, ...listedGroups(state.groups)];
   const collapsedExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
-  const collapsedQuestion = anyChatNeedsYou(collapsedChats, collapsedExceptId);
+  const collapsedQuestion = anyChatNeedsYou(collapsedChats, collapsedExceptId, state.acceptedSends, state.pendingQueued);
   const collapsedRoutine = anyRoutineRinging(state.routineRuns, collapsedChats, collapsedExceptId);
   const collapsedAsking = sidebarCollapsed && (collapsedQuestion || collapsedRoutine);
   const collapsedBadgeRef = useRef<HTMLSpanElement>(null);
@@ -1803,7 +1803,7 @@ export function Sidebar({
               hiddenItems.flatMap((item) => item.group ? [item.group] : []),
             );
             const hiddenChats = hiddenItems.flatMap((item) => item.bot ?? item.group ?? []);
-            const hiddenAsking = anyChatNeedsYou(hiddenChats) || anyRoutineRinging(state.routineRuns, hiddenChats);
+            const hiddenAsking = anyChatNeedsYou(hiddenChats, undefined, state.acceptedSends, state.pendingQueued) || anyRoutineRinging(state.routineRuns, hiddenChats);
             return (
               <div
                 key={id}

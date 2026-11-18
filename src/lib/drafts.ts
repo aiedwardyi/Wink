@@ -27,6 +27,8 @@ export interface FailedComposerSend {
   sendId: string;
   text: string;
   requestText: string;
+  cardId?: string;
+  actedAt?: number;
   replyToId?: string;
   threadId: string;
   after?: boolean;
@@ -40,6 +42,7 @@ export interface ComposerSendSnapshot extends FailedComposerSendInput {
 const failedSends = new Map<string, FailedComposerSend[]>();
 const failedSendListeners = new Map<string, Set<(sends: FailedComposerSend[]) => void>>();
 const restoredSendIds = new Map<string, string>();
+const restoredContexts = new Map<string, { cardId?: string; actedAt?: number }>();
 let failedSendSequence = 0;
 
 type Values = Record<string, unknown>;
@@ -102,6 +105,8 @@ export function updateDraftAttachment(id: string, chipId: string, update: (attac
 export interface PersistedRoomHold {
   text: string;
   requestText: string;
+  cardId?: string;
+  actedAt?: number;
   sendId: string;
   threadId: string;
   revision: number;
@@ -120,6 +125,8 @@ function isPersistedRoomHold(value: unknown): value is PersistedRoomHold {
     typeof hold.threadId === "string" &&
     typeof hold.revision === "number" &&
     (hold.replyToId === undefined || typeof hold.replyToId === "string") &&
+    (hold.cardId === undefined || typeof hold.cardId === "string") &&
+    (hold.actedAt === undefined || typeof hold.actedAt === "number") &&
     (hold.at === undefined || typeof hold.at === "number") &&
     Array.isArray(hold.attachments)
   );
@@ -134,6 +141,8 @@ export function getRoomHolds(store: Store, id: string): PersistedRoomHold[] {
     holds.push({
       text: item.text,
       requestText: item.requestText,
+      cardId: item.cardId,
+      actedAt: item.actedAt,
       sendId: item.sendId,
       threadId: item.threadId,
       revision: item.revision,
@@ -283,6 +292,7 @@ export function draftRevision(draftId: string): number {
 
 export function markDraftEdited(draftId: string): void {
   restoredSendIds.delete(draftId);
+  restoredContexts.delete(draftId);
   setStoredSendId(getStore(), draftId, undefined);
   draftRevisions.set(draftId, draftRevision(draftId) + 1);
 }
@@ -291,9 +301,18 @@ export function restoredSendId(draftId: string): string | undefined {
   const memory = restoredSendIds.get(draftId);
   if (memory) return memory;
   const stored = read(getStore(), SEND_IDS_KEY)[draftId];
-  if (typeof stored !== "string") return undefined;
-  restoredSendIds.set(draftId, stored);
-  return stored;
+  const sendId = typeof stored === "string" ? stored : stored && typeof stored === "object" && "sendId" in stored ? stored.sendId : undefined;
+  if (typeof sendId !== "string") return undefined;
+  restoredSendIds.set(draftId, sendId);
+  return sendId;
+}
+
+export function restoredSendContext(draftId: string): { cardId?: string; actedAt?: number } {
+  if (!restoredSendId(draftId)) return {};
+  const stored = restoredContexts.get(draftId) ?? read(getStore(), SEND_IDS_KEY)[draftId];
+  if (!stored || typeof stored !== "object") return {};
+  const value = stored as Record<string, unknown>;
+  return { cardId: typeof value.cardId === "string" ? value.cardId : undefined, actedAt: typeof value.actedAt === "number" ? value.actedAt : undefined };
 }
 
 /** One-shot retry identity. A second Enter in the same tick must not reuse
@@ -302,13 +321,14 @@ export function takeRestoredSendId(draftId: string): string | undefined {
   const sendId = restoredSendId(draftId);
   if (!sendId) return undefined;
   restoredSendIds.delete(draftId);
+  restoredContexts.delete(draftId);
   setStoredSendId(getStore(), draftId, undefined);
   return sendId;
 }
 
-function setStoredSendId(store: Store, draftId: string, sendId: string | undefined): void {
+function setStoredSendId(store: Store, draftId: string, sendId: string | undefined, context?: { cardId?: string; actedAt?: number }): void {
   const ids = read(store, SEND_IDS_KEY);
-  if (sendId) ids[draftId] = sendId;
+  if (sendId) ids[draftId] = context ? { sendId, ...context } : sendId;
   else delete ids[draftId];
   try {
     store?.setItem(SEND_IDS_KEY, JSON.stringify(ids));
@@ -435,6 +455,8 @@ export function recoverFailedComposerSend(sent: ComposerSendSnapshot): "restored
       sendId: sent.sendId,
       text: sent.text,
       requestText: sent.requestText,
+      cardId: sent.cardId,
+      actedAt: sent.actedAt,
       replyToId: sent.replyToId,
       threadId: sent.threadId,
       after: sent.after,
@@ -449,7 +471,9 @@ export function recoverFailedComposerSend(sent: ComposerSendSnapshot): "restored
   // If the response vanished after server acceptance, the next Send must
   // reuse this identity instead of starting a duplicate turn.
   restoredSendIds.set(sent.draftId, sent.sendId);
-  setStoredSendId(getStore(), sent.draftId, sent.sendId);
+  const context = { cardId: sent.cardId, actedAt: sent.actedAt };
+  restoredContexts.set(sent.draftId, context);
+  setStoredSendId(getStore(), sent.draftId, sent.sendId, context);
   return "restored";
 }
 

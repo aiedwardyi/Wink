@@ -196,6 +196,13 @@ describe("closed ask_user card note", () => {
     expect(memberClosedAskNotes(room, "bot-g")).toEqual([]);
   });
 
+  it("does not call an older linked free-text answer two unanswered questions", () => {
+    const older = askCard("older", "Which day?", {}, { options: [], staysOpen: true });
+    const newer = askCard("newer", "Which region?", {}, { staysOpen: true });
+    const answer = said("answer", "Friday", { answersCard: older.id });
+    expect(closedAskNotes([older, newer, answer], answer.text!, answer.id)).toEqual([]);
+  });
+
   it("tells only the asking room member, until it next speaks", () => {
     const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
     const card = askCard("c1", "Ship it?", { from: ada });

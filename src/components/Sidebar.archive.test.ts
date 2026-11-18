@@ -91,6 +91,7 @@ vi.mock("@/state/store", async (importOriginal) => {
     },
     useStore: () => ({
       state: {
+        ...actual.initialState,
         bots,
         groups,
         selectedId: "ada",

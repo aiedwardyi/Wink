@@ -16,7 +16,7 @@ import {
   type TerminalAttention,
 } from "@/state/store";
 import { collapsedUnreadCount, unreadConversationCount } from "@/lib/unread";
-import { anyChatNeedsYou } from "@/lib/open-question";
+import { anyChatNeedsYou } from "@/lib/pending-card-answers";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { listedGroups, preferredStartupSelectionId } from "@/lib/sidebar-order";
@@ -155,7 +155,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const menuUnread = collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms) > 0;
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
   const menuExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
-  const menuQuestion = anyChatNeedsYou(menuChats, menuExceptId);
+  const menuQuestion = anyChatNeedsYou(menuChats, menuExceptId, state.acceptedSends, state.pendingQueued);
   const menuRoutine = anyRoutineRinging(state.routineRuns, menuChats, menuExceptId);
   const menuAsking = menuQuestion || menuRoutine;
   // Mobile-only drawer state. Above md, none of these properties are emitted

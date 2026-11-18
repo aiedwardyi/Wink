@@ -47,20 +47,23 @@ function isOpenApproval(message: Message): boolean {
   return isOpenRequest(message) && Boolean(message.card?.tool);
 }
 
-/** The question pinned above the composer. `visible` is the shown branch,
- * where an approval waits; the question comes from the whole chat. */
+/** The question pinned above the composer on the shown branch. */
 export function pinnedQuestion(messages: readonly Message[], visible: readonly Message[] = messages): Message | null {
-  return visible.some(isOpenApproval) ? null : openQuestion(messages);
+  return visible.some(isOpenApproval) ? null : openQuestion(visible);
 }
 
 /** The chat moved on from `question`: the person sent a message after it (a queued line landing by itself is not one), or its asker replied. */
 export function chatMovedOn(messages: readonly Message[], question: Message): boolean {
+  return Boolean(questionMovement(messages, question));
+}
+
+export function questionMovement(messages: readonly Message[], question: Message): string | undefined {
   const at = messages.indexOf(question);
   const asker = question.from?.botId;
-  return at >= 0 && messages.slice(at + 1).some((message) =>
+  return at >= 0 ? messages.slice(at + 1).findLast((message) =>
     message.role === "bot"
       ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
-      : isSentByPerson(message) && !message.queueId);
+      : isSentByPerson(message) && !message.queueId)?.id : undefined;
 }
 
 /** True when a sidebar row for this chat should glow. */
@@ -81,10 +84,10 @@ export function askUserStatus(messages: readonly Message[], message: Message): A
   return status.state === "answered" ? { state: "answered", reply: status.reply } : status;
 }
 
-/** False only for an ask_user card that already settled, so a stale tap cannot answer it again. */
+/** Only a visible card can be answered; settled questions reject stale taps. */
 export function canAnswerCard(messages: readonly Message[], messageId: string): boolean {
   const message = messages.find((candidate) => candidate.id === messageId);
-  return !message || !isAskUserCard(message) || askUserStatus(messages, message).state === "waiting";
+  return Boolean(message && (!isAskUserCard(message) || askUserStatus(messages, message).state === "waiting"));
 }
 
 /** For the control hiding the rows (drawer button, collapsed sidebar or

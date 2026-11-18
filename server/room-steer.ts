@@ -1,5 +1,6 @@
 // A busy room's plain send joins the working member's turn, the same steer a 1:1 send makes.
 import type { ProviderInstance } from "./contracts.ts";
+import { promptWithCardAnswer } from "./card-answer.ts";
 import { promptWithReply } from "./replies.ts";
 import type { HostedGroup } from "./rooms/asks.ts";
 import { hostSend } from "./rooms/send.ts";
@@ -7,7 +8,7 @@ import { steersSend } from "./send-deliver.ts";
 import { roomResponders, type BotRecord, type GroupRecord, type Message, type Store } from "./store.ts";
 
 export type RoomSteerDeps = {
-  store: Pick<Store, "bot" | "group" | "appendMessage" | "patchMessage">;
+  store: Pick<Store, "bot" | "group" | "appendMessage" | "patchMessage" | "messagesFor">;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   userName: () => string;
 };
@@ -31,7 +32,8 @@ export async function steerRoomSend(
   const threadId = group.threadId;
   const adapter = instanceForBot?.(busy, threadId)?.adapter;
   if (!steersSend(adapter, busy.busy, false)) return null;
-  const steered = await adapter.steer(threadId, promptWithReply(text, replyTo, userName()), undefined, { fromUser: true }).catch(() => false);
+  const question = answersCard ? store.messagesFor(threadId).find((message) => message.id === answersCard) : undefined;
+  const steered = await adapter.steer(threadId, promptWithReply(promptWithCardAnswer(text, question), replyTo, userName()), undefined, { fromUser: true }).catch(() => false);
   if (!steered) return null;
   const current = store.group(group.id);
   if (current?.threadId !== threadId || current.busyBotId !== busy.id) {

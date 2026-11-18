@@ -5262,6 +5262,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (!opts?.cardContinuation && text.trim()) {
     const packet = priorTaskPacket
       ? recordTaskInstruction(priorTaskPacket, {
+          messages: store.messagesFor(threadId),
           text: opts?.transcriptText ?? text,
           messageId: userMessage.id,
           now: userMessage.at,
@@ -5330,7 +5331,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const summaryGrace: SummaryGrace = {
     knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
     requestText: composeUserTurnPrompt(text, {
-      replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
+      replyTo: opts?.replyTo, answersCard: userMessage.answersCard ?? opts?.answersCard, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
     }),
     fresh: selectionChanged || engineIsFresh({
       instanceId, model, lastInstanceId: task.lastInstanceId, lastModel: task.lastModel,
@@ -5573,6 +5574,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   }
   const turnOpts = {
     replyTo: opts?.replyTo,
+    answersCard: userMessage.answersCard ?? opts?.answersCard,
     messages: store.activePath(threadId),
     userName: cfg.profile?.name?.trim() || "User",
     replayedTranscript: replaysTranscript ? transcript : undefined,
@@ -7485,6 +7487,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   const previousTaskRecord = taskPacketForWrite(threadId);
   const taskRecord = previousTaskRecord
     ? recordTaskInstruction(previousTaskRecord, {
+        messages: store.messagesFor(threadId),
         text,
         messageId: message.id,
         now: message.at,

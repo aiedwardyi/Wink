@@ -31,6 +31,19 @@ it("brings a failed send back after a reload with its sendId", async () => {
   expect(after.failedComposerSends("bot:b1:t1")).toMatchObject([{ sendId: "send-1", text: "hello", threadId: "t1", after: true }]);
 });
 
+it.each([false, true])("keeps the card and action time on a failed send after reload (outbox: %s)", async (after) => {
+  const before = await page();
+  before.recoverFailedComposerSend(sent(before, { after, cardId: "question-1", actedAt: 100 }));
+  const reloaded = await page();
+  if (after) {
+    expect(reloaded.failedComposerSends("bot:b1:t1")).toMatchObject([{ cardId: "question-1", actedAt: 100 }]);
+  } else {
+    expect(reloaded.restoredSendContext("bot:b1:t1")).toEqual({ cardId: "question-1", actedAt: 100 });
+    expect(reloaded.takeRestoredSendId("bot:b1:t1")).toBe("send-1");
+    expect(reloaded.restoredSendContext("bot:b1:t1")).toEqual({});
+  }
+});
+
 it("drops a row from storage on retry or dismiss", async () => {
   const before = await page();
   before.recoverFailedComposerSend(sent(before));

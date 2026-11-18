@@ -1020,11 +1020,11 @@ export class LiveCall {
     void run.then((result) => this.toolResult(ids, tool, question, result));
   }
 
-  private send(text: string, tag: { order: true } | { ask: true }, sendId = crypto.randomUUID()): Promise<string> {
+  private send(text: string, tag: { order: true } | { ask: true }, sendId = crypto.randomUUID(), cardId?: string): Promise<string> {
     this.turnSent = true;
     const req = this.req;
     const upto = this.stats.userLines;
-    const run = this.deliver(text, tag, sendId);
+    const run = this.deliver(text, tag, sendId, cardId);
     // A lost receipt may have reached the bot, so a hang-up never sends it again.
     void run.then((result) => {
       if (reached(result)) req.accepted = true;
@@ -1036,11 +1036,11 @@ export class LiveCall {
   }
 
   // A negative 202 or a 4xx never reached the bot; only a lost receipt is retried, with the same body.
-  private async deliver(text: string, tag: { order: true } | { ask: true }, sendId: string): Promise<string> {
+  private async deliver(text: string, tag: { order: true } | { ask: true }, sendId: string, cardId?: string): Promise<string> {
     const threadId = this.threadId;
     // The bot reads the call lines before the prompt, so the heard line must land first.
     await Promise.all([...this.writes]);
-    const body = { text, sendId, ...(threadId ? { threadId } : {}), call: { id: this.callId, ...tag } };
+    const body = { text, sendId, threadId, cardId, call: { id: this.callId, ...tag } };
     const landed = new Promise<"landed">((resolve) => this.landing.set(sendId, () => resolve("landed")));
     let reason = "";
     try {
@@ -1237,7 +1237,7 @@ export class LiveCall {
       this.justAnswered = true;
       // a card answer that does not land is said again on the card, never resent bare at hang-up
       const at = this.now();
-      void this.send(`${card.prefix}${text}`, { ask: true }).then((result) => {
+      void this.send(`${card.prefix}${text}`, { ask: true }, undefined, card.id).then((result) => {
         if (reached(result)) {
           this.askAnswered.add(card.id);
           if (this.card === card) this.card = undefined;

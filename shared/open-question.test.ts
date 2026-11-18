@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ANSWERED_IN_CHAT, answerText, isSentByPerson, scanQuestion } from "./open-question.ts";
+import { ANSWERED_IN_CHAT, answerText, askStates, isSentByPerson, scanQuestion } from "./open-question.ts";
 
 const ask = { role: "bot", kind: "options", card: { askUser: true as const } };
 
@@ -26,6 +26,30 @@ describe("team room rows and open questions", () => {
 });
 
 describe("an answer to an older question", () => {
+  it("settles a superseded question by ID without answering its replacement", () => {
+    const older = { id: "older", role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship?", options: ["Yes"] } };
+    const newer = { ...older, id: "newer", card: { ...older.card, subtitle: "Delete?" } };
+    const answer = { role: "user", kind: "text", text: "Yes", answersCard: older.id };
+    expect(askStates([older, newer, answer]).get(older)).toMatchObject({ state: "answered" });
+    expect(scanQuestion([older, newer, answer])).toBe(newer);
+  });
+
+  it.each([false, true])("a delayed linked Yes closes only its question (saved patch: %s)", (patched) => {
+    const older = { id: "older", role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship?", options: ["Yes"], staysOpen: true as const, ...(patched ? { answered: "Yes" } : {}) } };
+    const newer = { id: "newer", role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Delete?", options: ["Yes"], staysOpen: true as const } };
+    const answer = { id: "answer", role: "user", kind: "text", text: "Yes", answersCard: older.id };
+    const messages = [older, newer, answer];
+    expect(askStates(messages).get(older)).toMatchObject({ state: "answered", reply: "Yes" });
+    expect(askStates(messages).get(newer)).toEqual({ state: "waiting" });
+    expect(scanQuestion(messages)).toBe(newer);
+  });
+
+  it("a linked answer to an absent question never closes the latest card", () => {
+    const newer = { id: "newer", role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Delete?", options: ["Yes"], staysOpen: true as const } };
+    const answer = { role: "user", kind: "text", text: "Yes", answersCard: "absent" };
+    expect(scanQuestion([newer, answer])).toBe(newer);
+  });
+
   it("names its question only when a newer question follows", () => {
     const older = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship\n it?", staysOpen: true as const } };
     const newer = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const } };

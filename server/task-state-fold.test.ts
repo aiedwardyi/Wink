@@ -38,6 +38,15 @@ const botSets = (packet: TaskResumePacket, nextAction: string): TaskResumePacket
 });
 
 describe("task state folding", () => {
+  it("keeps the newer action as the recovery instruction when an older tap arrives late", () => {
+    const latest = recordTaskInstruction(seed(), { text: "Use Tokyo instead", messageId: "tokyo", now: 200 });
+    const delayed = {
+      text: "Seoul", messageId: "seoul", now: 300,
+      messages: [{ id: "tokyo", at: 200 }, { id: "seoul", at: 300, actedAt: 100 }],
+    };
+    expect(recordTaskInstruction(latest, delayed)).toEqual(latest);
+  });
+
   it("seeds a task from the first persisted user instruction", () => {
     expect(seed()).toMatchObject({
       goal: "Prepare a weekly competitor brief\nInclude primary sources.",

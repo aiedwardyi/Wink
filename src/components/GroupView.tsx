@@ -86,6 +86,7 @@ import { useSearchFindSeed } from "@/lib/chat-find";
 import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
+import { withPendingCardAnswers } from "@/lib/pending-card-answers";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -441,10 +442,10 @@ export const Transcript = memo(function Transcript({
             <div className="flex justify-start empty:hidden">
               <AskUserRecord
                 message={m}
-                transcript={transcript}
+                transcript={withPendingCardAnswers(transcript, state.acceptedSends[group.threadId], state.pendingQueued[group.threadId], group.messages)}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
                 pinned={pinnedQuestion(group.messages)?.id === m.id}
-                onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
+                onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer, question: m })}
               />
             </div>
           ) : m.kind === "compaction" ? (
