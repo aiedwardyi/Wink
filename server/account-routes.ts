@@ -75,7 +75,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
           const named = deps.names?.get(account.id);
           return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
             ...(named ? { number: named.number, nickname: named.nickname, name: named.name } : {}),
-            state: account.existing && registry.accountBlocked(account.id) ? "stopped" : account.state,
+            state: account.existing && registry.accountStopped(account.id) ? "stopped" : account.state,
             models: instance?.models, effortLevels: instance?.capabilities.effortLevels,
             ...(lifecycle.accounts.drains[account.id] ? { drain: lifecycle.accounts.drains[account.id] } : {}),
           };
