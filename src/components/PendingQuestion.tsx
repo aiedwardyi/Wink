@@ -73,6 +73,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   attached = 0,
   replying = false,
   movedOn = false,
+  paged = false,
   onPick,
   onDismiss,
 }: {
@@ -90,6 +91,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   replying?: boolean;
   /** the person sent a message, or the asker replied, after the question */
   movedOn?: boolean;
+  paged?: boolean;
   onPick: (choice: string) => void;
   onDismiss: () => void;
 }) {
@@ -100,14 +102,16 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   const hidden = useMarked(hiddenQuestions, message.id);
   const [glowing, setGlowing] = useState(() => !glowedQuestions.has(message.id) && !reducedMotion());
   useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
-  const draft = useRef({ typed, attached });
+  const draft = useRef({ typed, attached, drafting, movedOn });
   useEffect(() => {
     const was = draft.current;
-    draft.current = { typed, attached };
+    draft.current = { typed, attached, drafting, movedOn };
+    // Paging already chose this fold; old chat movement must not undo it at mount.
+    if (paged && typed === was.typed && attached === was.attached && drafting === was.drafting && movedOn === was.movedOn) return;
     if (shrunkQuestions.has(message.id) || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
     setGlowing(false);
     foldQuestion(message.id);
-  }, [typed, attached, drafting, movedOn, message.id]);
+  }, [typed, attached, drafting, movedOn, paged, message.id]);
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
   const rowButton = useRef<HTMLButtonElement>(null);

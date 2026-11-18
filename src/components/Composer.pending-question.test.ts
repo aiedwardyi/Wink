@@ -436,6 +436,21 @@ describe("pinned ask_user question", () => {
     expect(card()!.textContent).toContain("Which region?");
   });
 
+  it("keeps an expanded card open when paging back past a typed chat line", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, { id: "typed-between", role: "user", kind: "text", at: 3, text: "One more thing before I answer" }, second]) });
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    await type("A new draft");
+    await settle();
+    expect(card()).toBeNull();
+    await type("");
+    await settle();
+  });
+
   it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;

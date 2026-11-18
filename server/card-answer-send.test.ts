@@ -13,7 +13,7 @@ import { Store } from "./store.ts";
 
 afterEach(() => { _resetSteerQueue(); });
 
-function harness(opts: { activeTurn?: boolean } = {}) {
+function harness(opts: { activeTurn?: boolean; steerConsumed?: boolean } = {}) {
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({}, { seedMessages: false });
   const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Dinner?", options: ["Can't tonight", "Sure"], askUser: true, staysOpen: true } });
@@ -21,7 +21,7 @@ function harness(opts: { activeTurn?: boolean } = {}) {
   const startTurn = vi.fn<Parameters<typeof createBotChatRoutes>[0]["startTurn"]>(async () => ({}));
   const noop = () => {};
   const routes = createBotChatRoutes({
-    cfg: {}, threadSyncGate: { enabled: false }, store, registry: new Map([["claude", { adapter: { capabilities: { queueing: true }, steer, interruptTurn: async () => {} } }]]),
+    cfg: {}, threadSyncGate: { enabled: false }, store, registry: new Map([["claude", { adapter: { capabilities: { queueing: true, steerConsumed: opts.steerConsumed }, steer, interruptTurn: async () => {} } }]]),
     wireBot: () => ({}), wireTask: () => ({}), sendSequencer: new SendSequencer(), startTurn, noteTalked: noop, pullSyncedThread: noop,
     resolveReplyTarget: () => undefined, ensureChatLatency: noop, markChatLatency: noop, broadcast: noop, clearUnattended: noop, resumePaneWakes: noop,
     botHasActiveTurn: () => Boolean(opts.activeTurn || store.bot(bot.id)?.busy), paneNoteTurnThreads: new Set(), busyResumeThreads: new Set(), drainQueuedSends: noop,
@@ -76,8 +76,9 @@ it("a tap marks only a card on the active path", async () => {
   expect(h.startTurn.mock.calls[0]![2]).not.toHaveProperty("answersCard", expect.anything());
 });
 
-it("a tap into a running turn carries its question only in the provider prompt", async () => {
-  const h = harness();
+it.each([false, true])("a tap into a running turn carries its question only in the provider prompt (consumed: %s)", async (steerConsumed) => {
+  const h = harness({ steerConsumed });
+  h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Earlier plan", reactions: [{ emoji: "👎", by: "user" }] });
   h.busy();
   expect((await h.send({ text: "Can't tonight", cardId: h.card.id })).steered).toBe(true);
   expect(h.last()).toMatchObject({ role: "user", kind: "text", text: "Can't tonight", steered: true, answersCard: h.card.id });
@@ -86,7 +87,9 @@ it("a tap into a running turn carries its question only in the provider prompt",
   const prompts = h.steer.mock.calls.map((call) => call[1]);
   expect(prompts[0]).toContain(h.card.id);
   expect(prompts[0]).toContain("Dinner?");
-  expect(prompts[1]).toBe("Can't tonight");
+  expect(prompts[1]).not.toContain(h.card.id);
+  expect(prompts[0].includes("reject/negative")).toBe(steerConsumed);
+  if (!steerConsumed) expect(prompts[1]).toBe("Can't tonight");
 });
 
 it("a queued tap keeps its card through drain and fold", async () => {

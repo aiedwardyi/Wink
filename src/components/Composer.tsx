@@ -1254,6 +1254,7 @@ export function Composer({
             attached={attachments.length}
             replying={Boolean(replyTo)}
             movedOn={questionMovedOn}
+            paged={questionPick?.id === question.id}
             onPick={(choice) => {
               if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });
               else if (bot) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
