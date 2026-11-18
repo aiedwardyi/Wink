@@ -18,13 +18,14 @@ import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { trackScreen } from "@/lib/usage-stats";
 
+// `ink` is the number on a count badge filled with `dot`: bg-accent and bg-danger carry their own ink (styles.css), the other fills do not.
 export const WORKER_STATUS = {
-  working: { key: "workers.working", text: "text-accent", dot: "bg-accent" },
-  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning" },
-  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger" },
-  done: { key: "workers.done", text: "text-success", dot: "bg-success" },
-  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary" },
-} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string }>;
+  working: { key: "workers.working", text: "text-accent", dot: "bg-accent", ink: "" },
+  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning", ink: "text-app" },
+  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger", ink: "" },
+  done: { key: "workers.done", text: "text-success", dot: "bg-success", ink: "text-app" },
+  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary", ink: "text-app" },
+} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string; ink: string }>;
 
 export type ShownRun = { run: WorkerRun; state: WorkerShownState };
 

@@ -53,7 +53,7 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
     >
       {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
       {badge && (
-        <span aria-hidden data-worker-badge={total} data-worker-state={first.state} className={cn(COUNT_BADGE, WORKER_STATUS[first.state].dot, "ring-panel")}>
+        <span aria-hidden data-worker-badge={total} data-worker-state={first.state} className={cn(COUNT_BADGE, WORKER_STATUS[first.state].dot, WORKER_STATUS[first.state].ink, "ring-panel")}>
           {counts.working > 0 ? total : null}
         </span>
       )}
