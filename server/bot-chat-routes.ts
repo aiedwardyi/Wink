@@ -451,7 +451,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 404, { error: "no such queued message" });
       }
       if (result.send) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: [result.send] });
-      return json(res, 200, { ok: true, cancelled: true });
+      return json(res, 200, { ok: true, cancelled: true, send: result.send });
     },
     edit: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const messageId = m[2];
