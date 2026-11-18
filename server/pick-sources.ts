@@ -39,12 +39,15 @@ function botTurn(messages: readonly Message[], start: number, parent: (index: nu
 }
 
 const isQuestionCard = (row: Message) => row.kind === "options" && row.role === "bot" && row.card?.askUser && !row.card.requestId;
+const asks = (row: Message) => isQuestionCard(row) || (row.kind === "text" && /[?？]/.test(row.text ?? ""));
 
 function picturesIn(turn: Message[], attachments: string, answered?: Message): PictureTurn | undefined {
   const tools = new Map(turn.filter((row) => row.kind === "activity" && row.tool?.ok !== false && SHOW_IMAGE.test(row.tool?.name ?? "")).map((row) => [row.id, row.tool?.summary]));
   const pictures: ShownPicture[] = [];
   let lastScreen: string | undefined;
-  for (const row of turn) {
+  // with two questions in one turn, a screen shown before the last one may be either's
+  const asked = turn.filter(asks);
+  for (const row of asked.length > 1 ? turn.slice(turn.indexOf(asked.at(-1)!) + 1) : turn) {
     if (row.kind !== "screen" || !row.image || basename(row.image) !== row.image) continue;
     const path = join(attachments, row.image);
     const caption = row.text?.replace(/\s+/g, " ").trim().slice(0, CAPTION_MAX);
@@ -138,4 +141,34 @@ export function validatePickBinding(claim: PickClaim, source: PickSource | undef
     at: source.at, messageId: source.id, questionId, thread: source.thread, picture,
     overPictures: [...overPictures.values()].filter((value): value is Picture => value !== null), files,
   };
+}
+
+const sourcesOf = (entry: PickEntry) => new Set([
+  ...(entry.messageId ? [JSON.stringify([entry.thread, entry.messageId, entry.questionId])] : []),
+  ...[entry.picture, ...entry.overPictures].flatMap((picture) => picture ? [picture.path] : []),
+  ...entry.files,
+]);
+
+/** Picks on different questions that claim one answer or screenshot, less the one pick bound to it by its own message id and action time, when only one is. */
+export function sharedSources(entries: readonly PickEntry[]): Set<PickEntry> {
+  const claims = new Map<string, PickEntry[]>();
+  for (const entry of entries) {
+    if (entry.binding === "unbound") continue;
+    for (const source of sourcesOf(entry)) claims.set(source, [...(claims.get(source) ?? []), entry]);
+  }
+  const shared = new Set<PickEntry>();
+  for (const claimants of claims.values()) {
+    if (new Set(claimants.map(({ key }) => pickKey(key))).size < 2) continue;
+    const exact = claimants.filter((entry) => entry.binding === "verified" && entry.messageId && entry.at !== undefined);
+    for (const entry of claimants) if (exact.length !== 1 || entry !== exact[0]) shared.add(entry);
+  }
+  return shared;
+}
+
+export function holdSources(entry: PickEntry): void {
+  delete entry.picture;
+  entry.overPictures = [];
+  entry.files = [];
+  delete entry.at;
+  entry.binding = "unbound";
 }

@@ -149,7 +149,7 @@ describe("memory pass", () => {
       `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects", memoryBotId: "bot-t1" });
     expect(stored()).toEqual({ threads: {} });
   });
 
@@ -166,7 +166,7 @@ describe("memory pass", () => {
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects", memoryBotId: "bot-t1" });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -321,7 +321,7 @@ describe("memory pass", () => {
       "# Memory\n- Prefers pnpm\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Hates drama (noted 2026-10-15)\n",
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama", memoryBotId: "bot-t1" });
   });
 
   it("starts an empty file from the seed", async () => {

@@ -1,7 +1,7 @@
 // The user's picks, one timeline per bot in memory/decisions.md: plain markdown, oldest first.
 import { createHash } from "node:crypto";
 import { entryTime, pickStamp } from "../shared/timeline-time.ts";
-import type { PickBinding } from "./pick-sources.ts";
+import { holdSources, sharedSources, type PickBinding } from "./pick-sources.ts";
 
 export const PICKS_FILE = "decisions.md";
 /** Estimated tokens of the current-picks block in the prompt, header included. */
@@ -228,7 +228,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const evidence: Partial<PickBinding> = change.binding === "unbound" ? {} : change.binding ?? change;
     if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
     if (current && sameOption(current.picked, picked)) {
-      if (overTap || (current.binding === "unbound" && binding === "verified")) {
+      if (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped)))) {
         // pinned first: the identity hashes the time, and a merge must still find the tap
         current.source = identity(current);
         delete current.tapped;
@@ -274,6 +274,10 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (binding !== "unbound" && (evidence.messageId || change.at % 60_000)) entry.at = change.at;
     entries.push(entry);
     picks += 1;
+  }
+  for (const entry of sharedSources(entries)) {
+    entry.source = identity(entry);
+    holdSources(entry);
   }
   if (!picks && !tweaks && !retyped) return null;
   return { text: renderTimeline({ head: timelineHead(head), entries }), picks, tweaks, replaced };

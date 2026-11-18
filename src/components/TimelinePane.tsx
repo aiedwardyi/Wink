@@ -6,6 +6,7 @@ import { request } from "@/lib/api-request";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
+import { watchMemorySave } from "@/lib/memory-clean-events";
 import { openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { entryTime, pickStamp } from "../../shared/timeline-time";
@@ -43,6 +44,12 @@ const when = (stamp: string, now: Date) => (stamp.startsWith(`${now.getFullYear(
 // A picture shown in chat is copied to attachments, which any chat can load; a bot's own file loads only through a chat that links it.
 const pictureSrc = (threadId: string, path: string) => (/[\\/]attachments[\\/][^\\/]+$/.test(path) && attachmentImageUrl(path)) || linkedFileSrc(threadId, path);
 const same = (a = "", b = "") => a.trim().toLowerCase() === b.trim().toLowerCase();
+const LABEL = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
+// a caption may drop its option's letter, as the server accepts; two letters must agree
+const names = (caption: string, label: string) => {
+  const [a, b] = [LABEL.exec(caption.trim())?.[1], LABEL.exec(label.trim())?.[1]];
+  return (!a || !b || same(a, b)) && same(caption.trim().replace(LABEL, ""), label.trim().replace(LABEL, ""));
+};
 
 // A tab switch unmounts the pane, so each replaced pick's fold and the search live here for the session.
 const folds = new Map<string, boolean>();
@@ -55,7 +62,7 @@ const Redraw = createContext<() => void>(() => {});
 // Captions name their option; uncaptioned pictures pair in order with the options left over, only when the counts match.
 function crossedOf({ over, overPictures }: Entry): { label: string; picture?: Picture }[] {
   if (!over.length) return overPictures.map((each) => ({ label: each.caption ?? "", picture: each }));
-  const named = over.map((label) => overPictures.find((each) => same(each.caption, label)));
+  const named = over.map((label) => overPictures.find((each) => each.caption && names(each.caption, label)));
   const loose = overPictures.filter((each) => !each.caption);
   const paired = loose.length === named.filter((each) => !each).length;
   let next = 0;
@@ -258,11 +265,14 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   const { t } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [saves, setSaves] = useState(0);
   const [query, setTyped] = useState(() => queries.get(botId) ?? "");
   const setQuery = (next: string) => {
     queries.set(botId, next);
     setTyped(next);
   };
+
+  useEffect(() => watchMemorySave(botId, () => setSaves((count) => count + 1)), [botId]);
 
   useEffect(() => {
     let alive = true;
@@ -270,17 +280,21 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
       (body) => {
         if (!alive) return;
         const parsed = topic.safeParse(body);
-        if (parsed.success) setEntries(parsed.data.entries);
-        else setFailed(true);
+        if (parsed.success) {
+          setEntries(parsed.data.entries);
+          setFailed(false);
+        } else setFailed(true);
       },
       (error: { status?: number }) => {
         if (!alive) return;
-        if (error.status === 404) setEntries([]);
-        else setFailed(true);
+        if (error.status === 404) {
+          setEntries([]);
+          setFailed(false);
+        } else setFailed(true);
       },
     );
     return () => { alive = false; };
-  }, [botId]);
+  }, [botId, saves]);
 
   const days = useMemo(() => timelineDays(entries ?? []), [entries]);
   const needle = query.trim().toLowerCase();
@@ -289,7 +303,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
 
   return (
     <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined}>
-      {failed
+      {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
         : entries?.length === 0
           ? <p className="show-media-empty">{t("timeline.empty")}</p>

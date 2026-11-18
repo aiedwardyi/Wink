@@ -173,6 +173,35 @@ it("holds files and time on previously saved picks that claim the same answer", 
   expect(readFileSync(file, "utf8")).toBe(saved);
 });
 
+it("keeps the screenshot of an old minute-only pick when its minute holds only its own reply", async () => {
+  const { file, threadId, say, read } = timelineRoute("bot-legacy-one-minute");
+  say(threadId, MINUTE + 20_000, "/shots/solo.png");
+  writeFileSync(file, ["# Decision timeline", "", "## 2026-11-17 10:00 | Menu | current", "- Picked: B", '- Said: "I choose B"', "- Files: /shots/solo.png", ""].join("\n"));
+  expect((await read()).body.entries.map(({ files, at, binding }) => [files, at, binding])).toEqual([[["/shots/solo.png"], undefined, undefined]]);
+});
+
+it("drops a saved time that points at another message, with the screenshot", async () => {
+  const { store, file, threadId, read } = timelineRoute("bot-legacy-wrong-time");
+  store.appendMessage(threadId, { role: "user", kind: "text", at: MINUTE, text: 'keep the red menu\n\n<attached-image path="/shots/menu.png"/>' });
+  store.appendMessage(threadId, { role: "user", kind: "text", at: MINUTE + 60_000, text: "open the settings page" });
+  writeFileSync(file, ["# Decision timeline", "", "## 2026-11-17 10:00 | Menu | current", "- Picked: Red menu", '- Said: "keep the red menu"', "- Files: /shots/menu.png", `- At: ${MINUTE + 60_000}`, ""].join("\n"));
+  const [pick] = (await read()).body.entries;
+  expect(pick).toMatchObject({ binding: "unbound", files: [] });
+  expect(pick?.at).toBeUndefined();
+});
+
+it("holds the answer two verified picks claim, as an earlier build saved them", async () => {
+  const { file, threadId, say, read } = timelineRoute("bot-verified-shared-answer");
+  const answer = say(threadId, MINUTE, "/shots/settings.png");
+  writeFileSync(file, ["# Decision timeline", "", ...["Forum", "Settings"].flatMap((key, i) => [
+    `## 2026-11-17 10:00${i ? " (2)" : ""} | ${key} | current`, "- Picked: B", '- Said: "I choose B"', "- Files: /shots/settings.png", `- At: ${answer.at}`,
+    `- Thread: ${threadId}`, `- Message: ${answer.id}`, `- Question: ${answer.id}`, "- Binding: verified", "",
+  ])].join("\n"));
+  expect((await read()).body.entries.map(({ key, binding, files, at }) => [key, binding, files, at])).toEqual([
+    ["Forum", "unbound", [], undefined], ["Settings", "unbound", [], undefined],
+  ]);
+});
+
 it("resolves an untagged legacy thumbnail to its room's thread from direct chat", async () => {
   const id = "bot-legacy-room";
   const { store, file, say, read } = timelineRoute(id);

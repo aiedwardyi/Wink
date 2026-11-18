@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
@@ -776,6 +777,72 @@ it("leaves right-click on a picture to the image's own menu, with nothing drawn 
   const css = readFileSync("src/components/TimelinePane.css", "utf8");
   expect(css).toMatch(/\.timeline-ink \{[^}]*pointer-events: none/);
   expect(css).not.toMatch(/\.timeline-canvas\[data-grabbing\] \{/);
+});
+
+it("pairs a crossed picture whose caption drops its option's letter", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Forum | current\n- Picked: B - blue cards\n- Over: A - red cards\n- Over pictures: C:\\Users\\me\\.orbit\\attachments\\red.png (red cards)\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-pair-bare");
+  await until(() => picked().length > 0);
+  expect([...picked()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - red cards", "red.png"]]);
+});
+
+it("shows a pick Auto Notes saves while the pane is open", async () => {
+  picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
+  await openTimeline("b-live");
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  expect(picked()).toHaveLength(0);
+  pickList();
+  const saved = { id: "save-1", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message: saved }, { hydrated: true, bots: [{ id: "b-live", threadId: "t1" }] }));
+  await until(() => picked().length === 5);
+  expect(picked()).toHaveLength(5);
+});
+
+it.each([
+  ["a room save for this bot", "room", false, "b-refresh"],
+  ["a save on an earlier task", "earlier", false, undefined],
+  ["a save replayed after reconnect", "t1", true, undefined],
+] as const)("refreshes the open Timeline after %s", async (_label, threadId, replayed, memoryBotId) => {
+  const botId = "b-refresh";
+  const bots = [{ id: botId, threadId: "t1", tasks: [{ threadId: "earlier" }] }];
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  const save = (id: string, owner?: string) => ({ id, tool: { name: "memory.save", ok: true, memoryBotId: owner } });
+  await act(async () => noteMemoryFrame({ kind: "message", threadId, replayed, message: save("other-save", "other-bot") }, { hydrated: true, bots }));
+  expect(picked()).toHaveLength(0);
+  await act(async () => noteMemoryFrame({ kind: "message", threadId, replayed, message: save("bot-save", memoryBotId) }, { hydrated: true, bots }));
+  await until(() => picked().length === 5);
+  expect(picked()).toHaveLength(5);
+});
+
+it("refreshes the open Timeline when its bot receives a synced pick", async () => {
+  const botId = "b-peer-sync";
+  const bots = [{ id: botId, threadId: "t1" }];
+  const sync = (id: string) => act(async () => noteMemoryFrame({ kind: "memory.changed", botId: id }, { hydrated: true, bots }));
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  await sync("other-bot");
+  expect(picked()).toHaveLength(0);
+  await sync(botId);
+  await until(() => picked().length === 5);
+  expect(picked()).toHaveLength(5);
+});
+
+it("keeps the loaded Timeline rows when a save refresh fails", async () => {
+  pickList();
+  await openTimeline("b-failed-refresh");
+  await until(() => picked().length === 5);
+  const refresh = vi.fn(() => new Response(null, { status: 503 }));
+  picks(refresh);
+  const message = { id: "fact-save", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message }, { hydrated: true, bots: [{ id: "b-failed-refresh", threadId: "t1" }] }));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(picked()).toHaveLength(5);
 });
 
 it("says so in one line when the bot has no picks yet", async () => {

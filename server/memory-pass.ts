@@ -717,7 +717,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     deps.store.appendMessage(sourceThread(threadId), {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)) },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)), memoryBotId: botId },
     });
     log({
       botId, threadId, lines: batch.source.length, facts: text === null ? 0 : facts.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
