@@ -65,7 +65,7 @@ import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
-import { trackFeature, trackScreen } from "@/lib/usage-stats";
+import { trackFeature, trackScreen, usageStatsSwitched } from "@/lib/usage-stats";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
@@ -961,22 +961,44 @@ function setOnboardingDone() {
 }
 
 export default function App() {
-  const [onboardingOpen, setOnboardingOpen] = useState(() => !onboardingDone());
+  const desktop = Boolean(window.ogb);
+  const [onboarding, setOnboarding] = useState(() => onboardingDone() ? "done" : desktop ? "checking" : "open");
+  const onboardingOpen = onboarding !== "done";
+  const cover = desktop ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null;
   useEffect(() => markColdOpen("mount"), []);
   useEffect(() => startIdleMotion(), []);
+  useEffect(() => {
+    if (!desktop) return;
+    if (onboardingDone()) {
+      void api("/api/onboarding", { method: "PUT", body: "{}" }).catch(() => {});
+      return;
+    }
+    let active = true;
+    void api("/api/onboarding").then(({ done }) => {
+      if (!active) return;
+      if (done === true) setOnboardingDone();
+      setOnboarding(done === false ? "open" : "done");
+    }).catch(() => { if (active) setOnboarding("done"); });
+    return () => { active = false; };
+  }, [desktop]);
+  const finishOnboarding = (enabled?: boolean) => {
+    if (desktop || enabled !== undefined) {
+      if (enabled === false) usageStatsSwitched(false);
+      void api("/api/onboarding", { method: "PUT", body: JSON.stringify({ enabled }), keepalive: true })
+        .then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
+    }
+    setOnboardingDone();
+    setOnboarding("done");
+  };
   return (
     <I18nProvider>
       <DesktopCapabilitiesProvider>
       <StoreProvider>
         <Shell onboardingOpen={onboardingOpen} />
-        {onboardingOpen && (
-          <LazyView overlay fallback={window.ogb ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null}>
-            <Onboarding
-              onDone={() => {
-                setOnboardingDone();
-                setOnboardingOpen(false);
-              }}
-            />
+        {onboarding === "checking" && cover}
+        {onboarding === "open" && (
+          <LazyView overlay fallback={cover}>
+            <Onboarding onDone={finishOnboarding} />
           </LazyView>
         )}
       </StoreProvider>

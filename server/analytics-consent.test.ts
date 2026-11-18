@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
+import { completeOnboarding, hasCompletedOnboarding, loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 
 let root: string;
 
@@ -42,5 +42,25 @@ describe("analytics consent", () => {
     const nested = join(root, "fresh");
     saveAnalyticsConsent(nested, true);
     expect(loadAnalyticsConsent(nested)).toBe(true);
+  });
+
+  it("keeps a saved opt-out when a stale welcome screen submits the default", () => {
+    saveAnalyticsConsent(root, false);
+    expect(hasCompletedOnboarding(root)).toBe(true);
+    expect(completeOnboarding(root, true)).toBeUndefined();
+    expect(loadAnalyticsConsent(root, true)).toBe(false);
+  });
+
+  it("remembers completion even without a usage sharing choice", () => {
+    expect(hasCompletedOnboarding(root)).toBe(false);
+    expect(completeOnboarding(root)).toBeUndefined();
+    expect(hasCompletedOnboarding(root)).toBe(true);
+    expect(loadAnalyticsConsent(root)).toBe(false);
+    expect(loadAnalyticsConsent(root, true)).toBe(true);
+    expect(completeOnboarding(root, true)).toBeUndefined();
+    expect(loadAnalyticsConsent(root)).toBe(false);
+    saveAnalyticsConsent(root, true);
+    expect(hasCompletedOnboarding(root)).toBe(true);
+    expect(loadAnalyticsConsent(root)).toBe(true);
   });
 });

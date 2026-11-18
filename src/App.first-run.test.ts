@@ -9,6 +9,8 @@ let host: HTMLDivElement;
 let root: Root;
 let fetchMock: ReturnType<typeof vi.fn>;
 let bots: { id: string }[];
+let profileDone: boolean;
+let sharing: boolean | undefined;
 
 const claude = {
   instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
@@ -21,8 +23,8 @@ async function until<T>(found: () => T | null | undefined) {
 }
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((node) => node.textContent === text);
 const star = () => [...document.querySelectorAll<HTMLAnchorElement>('[role="dialog"] a')].find((node) => node.textContent === "Star on GitHub");
-const analyticsPuts = () => fetchMock.mock.calls.filter(([url, init]) => url === "/api/analytics" && init?.method === "PUT");
-const sent = () => analyticsPuts().map(([, init]) => JSON.parse(String(init.body)));
+const onboardingPuts = () => fetchMock.mock.calls.filter(([url, init]) => url === "/api/onboarding" && init?.method === "PUT");
+const sent = () => onboardingPuts().map(([, init]) => JSON.parse(String(init.body)));
 const cover = () => document.querySelector(".orbit-inset-aware.fixed.inset-0.z-50.bg-app");
 const checkbox = () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!;
 
@@ -33,16 +35,31 @@ async function toFinalStep() {
   expect(await until(star)).toBeDefined();
 }
 
+function profileRequest(url: string, init?: RequestInit) {
+  if (url.startsWith("/api/instances")) return Promise.resolve(Response.json({ instances: [claude] }));
+  if (url === "/api/bots?messages=0") return Promise.resolve(Response.json({ bots }));
+  if (url === "/api/analytics") {
+    if (init?.method === "PUT") sharing = JSON.parse(String(init.body)).enabled;
+    return Promise.resolve(Response.json({ enabled: sharing ?? false }));
+  }
+  if (url === "/api/onboarding") {
+    if (init?.method === "PUT") {
+      const { enabled } = JSON.parse(String(init.body));
+      if (!profileDone && !bots.length) sharing ??= enabled;
+      profileDone = true;
+    }
+    return Promise.resolve(Response.json({ done: profileDone || bots.length > 0 || sharing !== undefined, enabled: sharing ?? false }));
+  }
+  return new Promise<Response>(() => {});
+}
+
 beforeEach(() => {
   localStorage.clear();
   bots = [];
+  profileDone = false;
+  sharing = undefined;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  fetchMock = vi.fn((url: string, init?: RequestInit) => {
-    if (url.startsWith("/api/instances")) return Promise.resolve(new Response(JSON.stringify({ instances: [claude] })));
-    if (url === "/api/bots?messages=0") return Promise.resolve(new Response(JSON.stringify({ bots })));
-    if (url === "/api/analytics") return Promise.resolve(new Response(init?.method === "PUT" ? String(init.body) : JSON.stringify({ enabled: false })));
-    return new Promise<Response>(() => {});
-  });
+  fetchMock = vi.fn(profileRequest);
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
   host = document.body.appendChild(document.createElement("div"));
@@ -57,6 +74,46 @@ afterEach(async () => {
 });
 
 describe("first run end", () => {
+  it.each([true, false])("skips Welcome on a fallback port after opting out (has bots: %s)", async (hasBots) => {
+    vi.stubGlobal("ogb", {});
+    if (hasBots) bots = [{ id: "existing" }];
+    sharing = false;
+    expect(localStorage.getItem("omb-onboarding-done")).toBeNull();
+    await act(async () => root.render(createElement(App)));
+    const gate = await until(() => button("Continue") ?? localStorage.getItem("omb-onboarding-done"));
+    expect(gate).toBe("true");
+    expect(document.querySelector('[aria-labelledby="onboarding-title"]')).toBeNull();
+    expect(sharing).toBe(false);
+    expect(onboardingPuts()).toHaveLength(0);
+  });
+
+  it("keeps engine-free completion across ports on the same desktop profile", async () => {
+    vi.stubGlobal("ogb", {});
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => url.startsWith("/api/instances")
+      ? Promise.resolve(Response.json({ instances: [{ ...claude, snapshot: { state: "unavailable" } }] }))
+      : profileRequest(url, init));
+    await act(async () => root.render(createElement(App)));
+    const connect = await until(() => button("Connect an Engine"));
+    await act(async () => connect!.click());
+    await act(async () => button("Open Wink")!.click());
+    expect(await until(() => localStorage.getItem("omb-onboarding-done"))).toBe("true");
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    localStorage.clear();
+    await act(async () => root.render(createElement(App)));
+    expect(await until(() => button("Connect an Engine") ?? localStorage.getItem("omb-onboarding-done"))).toBe("true");
+    expect(sharing).toBeUndefined();
+  });
+
+  it("carries a legacy same-port completion into the desktop profile without setting consent", async () => {
+    vi.stubGlobal("ogb", {});
+    localStorage.setItem("omb-onboarding-done", "true");
+    await act(async () => root.render(createElement(App)));
+    expect(sent()).toEqual([{}]);
+    expect(profileDone).toBe(true);
+    expect(sharing).toBeUndefined();
+    expect(document.querySelector('[aria-labelledby="onboarding-title"]')).toBeNull();
+  });
   it("skips setup for a configured browser and remembers completion", async () => {
     bots = [{ id: "existing" }];
     await act(async () => root.render(createElement(App)));
@@ -103,20 +160,22 @@ describe("first run end", () => {
     expect(star()).toBeUndefined();
   });
 
-  it("checks usage stats by default and saves it on Open Wink", async () => {
+  it.each([false, true])("checks usage stats by default and saves it on Open Wink (desktop %s)", async (desktop) => {
+    if (desktop) vi.stubGlobal("ogb", {});
     await toFinalStep();
     expect(checkbox().checked).toBe(true);
     expect(document.activeElement?.getAttribute("role")).toBe("dialog");
-    expect(analyticsPuts()).toHaveLength(0);
+    expect(onboardingPuts()).toHaveLength(0);
     await act(async () => button("Open Wink")!.click());
     expect(sent()).toEqual([{ enabled: true }]);
+    expect(sharing).toBe(true);
   });
 
   it("saves false after one tap to uncheck", async () => {
     await toFinalStep();
     await act(async () => checkbox().click());
     expect(checkbox().checked).toBe(false);
-    expect(analyticsPuts()).toHaveLength(0);
+    expect(onboardingPuts()).toHaveLength(0);
     await act(async () => button("Open Wink")!.click());
     expect(sent()).toEqual([{ enabled: false }]);
   });

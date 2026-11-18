@@ -49,7 +49,7 @@ import "./avatar-image.ts";
 import "./bot-profile.ts";
 import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
-import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
+import { completeOnboarding, hasCompletedOnboarding, loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
@@ -8110,6 +8110,17 @@ const threadRoutes = createThreadRoutes({
 });
 const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
 const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
+const analyticsStatus = (enabled = loadAnalyticsConsent(DATA_DIR, snagUserData !== undefined && readErrorReportConsent(snagUserData))) => ({
+  enabled,
+  capture: usageStats.capturing(), period: usageStats.period(),
+});
+const applyAnalyticsConsent = (enabled: boolean) => {
+  usageStats.setEnabled(enabled);
+  // One switch: off on any screen turns crash reports off on this PC too.
+  if (enabled) keepErrorReports();
+  else void turnOffErrorReports(terminalBridgeAccess);
+};
+const profileHasBots = () => store.bots.length > 0 || store.botsFile !== "missing";
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -8520,18 +8531,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }));
     }
 
-    if (method === "GET" && path === "/api/analytics") {
-      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR, snagUserData !== undefined && readErrorReportConsent(snagUserData)), capture: usageStats.capturing(), period: usageStats.period() });
-    }
+    if (method === "GET" && path === "/api/analytics") return json(res, 200, analyticsStatus());
     if (method === "PUT" && path === "/api/analytics") {
       const body = await readBody(req);
       if (typeof body?.enabled !== "boolean") return json(res, 400, { error: "enabled must be a boolean" });
       const enabled = saveAnalyticsConsent(DATA_DIR, body.enabled);
-      usageStats.setEnabled(enabled);
-      // One switch: off on any screen turns crash reports off on this PC too.
-      if (enabled) keepErrorReports();
-      else void turnOffErrorReports(terminalBridgeAccess);
-      return json(res, 200, { enabled, capture: usageStats.capturing(), period: usageStats.period() });
+      applyAnalyticsConsent(enabled);
+      return json(res, 200, analyticsStatus(enabled));
+    }
+    if (method === "GET" && path === "/api/onboarding") {
+      return json(res, 200, { done: profileHasBots() || hasCompletedOnboarding(DATA_DIR) });
+    }
+    if (method === "PUT" && path === "/api/onboarding") {
+      const body = z.object({ enabled: z.boolean().optional() }).safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "enabled must be a boolean" });
+      const saved = completeOnboarding(DATA_DIR, profileHasBots() ? undefined : body.data.enabled);
+      if (saved !== undefined) applyAnalyticsConsent(saved);
+      return json(res, 200, analyticsStatus(saved));
     }
     if (method === "POST" && path === "/api/stats") {
       return usageStats.ingest(await readBody(req, 64 * 1024)) ? json(res, 200, { ok: true }) : json(res, 409, { error: "stats are off" });

@@ -17,6 +17,7 @@ vi.mock("@/state/store", async (original) => ({
   useStore: () => ({ state, dispatch: vi.fn(), refreshInstances }),
 }));
 import { EnginesSettings } from "./EnginesSettings";
+import { EngineConnect } from "./EngineConnect";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 
 let root: Root;
@@ -67,6 +68,31 @@ it("keeps each Connections email bound to its account id when Main and order cha
     const row = host.querySelector(`[data-connection-account="${account.instanceId}"]`);
     expect(row?.querySelector("[data-account-email]")?.textContent).toBe(account.snapshot.account);
   }
+});
+
+it("shows an installed engine with an unanswered auth probe as checking in both surfaces", async () => {
+  const updateBoth = () => act(async () => root.render(createElement(I18nProvider, null,
+    createElement(EnginesSettings), createElement(EngineConnect, { instances: state.instances, onRefresh: refreshInstances }))));
+  state.instances = [{ ...engine("claude"), snapshot: { state: "available", authChecked: true } }];
+  await updateBoth();
+  const setup = host.querySelector('[data-engine-connect="claude"]')!;
+  const connection = host.querySelector('[data-connection-account="claude"]')!;
+  expect({ setup: setup.querySelector("button")?.textContent, connection: connection.textContent }).toEqual({
+    setup: "Checking...", connection: expect.stringContaining("Checking..."),
+  });
+  expect(setup.hasAttribute("data-onboarding-ready")).toBe(false);
+  expect(connection.textContent).not.toContain("Signed out.");
+  expect(buttons("Sign In")).toHaveLength(0);
+
+  state.instances = [engine("claude", false)];
+  await updateBoth();
+  expect(setup.textContent).toContain("Sign in to Claude");
+  expect(connection.textContent).toContain("Signed out.");
+
+  state.instances = [engine("claude")];
+  await updateBoth();
+  expect(setup.hasAttribute("data-onboarding-ready")).toBe(true);
+  expect(connection.textContent).toContain("claude@example.com");
 });
 
 it.each(["en", "ko"] as const)("points a duplicate add to its existing row in %s", async (locale) => {

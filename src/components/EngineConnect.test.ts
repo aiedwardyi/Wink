@@ -148,6 +148,47 @@ describe("first engine connection", () => {
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
   });
 
+  it.each(["running", "opened"] as const)("keeps the engine list during a %s install poll", async (result) => {
+    Object.assign(window.ogb!, { openEngineInstall: vi.fn(async () => result) });
+    instances[1]!.snapshot = { state: "available", authenticated: false };
+    await render();
+    await click("Continue");
+    await click("Install", host.querySelector('[data-engine-connect="claude"]')!);
+    const panel = host.querySelector("[data-engine-connect-panel]")!;
+    const hint = result === "opened" ? "Paste the command in Terminal and press Enter." : "Finish in the window that opened.";
+    expect(panel.textContent).toContain(hint);
+
+    let answer!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    await advance(5000);
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
+    expect(host.querySelector("[data-engine-connect-panel]")).toBe(panel);
+    expect(panel.textContent).toContain("Sign in to Codex");
+    expect(panel.textContent).toContain(hint);
+
+    await act(async () => answer(Response.json({ instances })));
+    expect(host.querySelector("[data-engine-connect-panel]")).toBe(panel);
+    expect(panel.textContent).toContain("Open Again");
+    expect(panel.textContent).toContain(hint);
+    if (result === "opened") expect(panel.querySelector("[data-engine-connect-commands] code")).not.toBeNull();
+  });
+
+  it("keeps keyboard focus and scroll on an engine refresh", async () => {
+    await connect();
+    const panel = host.querySelector("[data-engine-connect-panel]")!;
+    const scroll = panel.firstElementChild!;
+    const lower = panel.querySelector<HTMLButtonElement>('[data-engine-connect="muse"] button')!;
+    lower.focus();
+    scroll.scrollTop = 160;
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    instances = instances.map((instance) => ({ ...instance }));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
+    expect(document.activeElement).toBe(lower);
+    expect(scroll.scrollTop).toBe(160);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
   it("shows each engine once with four Claude and two Codex accounts", async () => {
     const bases = fleet().map((instance) => ({ ...instance, accountOf: instance.instanceId,
       snapshot: { state: "available" as const, authenticated: true } }));

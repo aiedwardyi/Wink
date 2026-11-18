@@ -1,20 +1,17 @@
 import { useState } from "react";
 import { Star } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import { api } from "@/state/store";
 import { OrbitMark } from "./OrbitMark";
-import { trackFeature, trackOnboard, usageStatsSwitched } from "@/lib/usage-stats";
+import { trackFeature, trackOnboard } from "@/lib/usage-stats";
 
 const REPO = "https://github.com/aiedwardyi/Wink";
 
-export function OnboardingFinish({ onDone }: { onDone: () => void }) {
+export function OnboardingFinish({ onDone }: { onDone: (enabled: boolean) => void }) {
   const { t } = useI18n();
   const [share, setShare] = useState(true);
   const open = () => {
     trackOnboard("finish");
-    if (!share) usageStatsSwitched(false);
-    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
-    onDone();
+    onDone(share);
   };
   return (
     <div className="flex flex-col">

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
+import { engineAuthState, setupEngine } from "@/lib/accounts";
+import { baseInstances } from "@/lib/cross-model-picker";
 import { OrbitMark } from "./OrbitMark";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { EngineConnect } from "./EngineConnect";
@@ -9,14 +10,7 @@ import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
 import { trackOnboard } from "@/lib/usage-stats";
 
-function engineReady(instance: InstanceInfo): boolean {
-  return (
-    instance.snapshot.state === "available" &&
-    (instance.access === "custom" || instance.snapshot.authenticated !== false)
-  );
-}
-
-export function Onboarding({ onDone }: { onDone: () => void }) {
+export function Onboarding({ onDone }: { onDone: (enabled?: boolean) => void }) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [connectSession, setConnectSession] = useState(false);
@@ -27,6 +21,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const refreshInstancesRef = useRef<() => Promise<void>>(async () => {});
   const dialogRef = useRef<HTMLDivElement>(null);
   const welcomed = useRef(false);
+  const hidden = browser && instances === null && !signedOut && !instancesError;
+  const welcomeChecking = step === 0 && !instances && !instancesError && !signedOut;
 
   useEffect(() => {
     let active = true;
@@ -85,10 +81,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const controls = () => [...dialog.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )];
-    const primary = step === 1 && instances?.some(engineReady)
-      ? dialog.querySelector<HTMLElement>("[data-engine-connect-primary]:not([disabled])") : null;
     // The last step takes focus itself, so a held Enter cannot skip it.
-    (step === 2 ? dialog : primary ?? controls()[0])?.focus();
+    (step === 2 && !signedOut ? dialog : controls()[0] ?? dialog).focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const focusable = controls();
@@ -105,9 +99,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     };
     dialog.addEventListener("keydown", onKey);
     return () => dialog.removeEventListener("keydown", onKey);
-  }, [step, instances, instancesError, signedOut]);
+  }, [step, hidden, welcomeChecking, signedOut]);
 
-  const hidden = browser && instances === null && !signedOut && !instancesError;
   // A browser on a PC that already has bots closes setup before showing it.
   useEffect(() => {
     if (hidden || welcomed.current) return;
@@ -117,14 +110,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   if (hidden) return null;
 
-  const emptyConnect = connectSession || instances !== null && isEmptyEngineLaunch(instances);
-
-  const retryInstances = () => {
-    // Keep setup visible while an install probe runs.
-    if (!emptyConnect) setInstances(null);
-    setInstancesError(null);
-    return refreshInstancesRef.current();
-  };
+  const emptyConnect = step === 0 ? instances !== null && isEmptyEngineLaunch(instances) : connectSession;
+  const retryInstances = () => refreshInstancesRef.current();
 
   const finish = () => {
     if (!hasReadyEngine) return onDone();
@@ -132,8 +119,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setStep(2);
   };
 
-  const live = (instances ?? []).filter((instance) => !isRetiredEngineKind(instance.driverKind));
-  const hasReadyEngine = live.some(engineReady);
+  const hasReadyEngine = instances !== null && baseInstances(instances).some((instance) =>
+    !isRetiredEngineKind(instance.driverKind) && engineAuthState(setupEngine(instance, instances)) === "ready");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app/95 p-6 backdrop-blur-xl">
@@ -204,31 +191,20 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 <p className="mt-0.5 text-[12.5px] text-ink-secondary">{emptyConnect ? t("noEngines.body") : t("onboarding.enginesFound")}</p>
               </div>
             </div>
-            {emptyConnect && instances ? <div className="mt-5 flex min-h-0 flex-col">
-              <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false} footer={{ back: () => { setConnectSession(false); setStep(0); }, open: finish }} />
-            </div> : <>
-            <div className="mt-5 flex min-h-0 flex-col gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]">
-              {instancesError ? (
+            <div className={`mt-5 flex min-h-0 flex-col ${emptyConnect ? "" : "gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]"}`}>
+              {!emptyConnect && instancesError && (
                 <div role="alert" className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12.5px] text-danger">
                   {instancesError} {t("onboarding.enginesErrorHint")}
                 </div>
-              ) : !instances ? (
-                <div className="flex items-center justify-center gap-2 py-12 text-[13px] text-ink-secondary">
-                  <Loader2 size={15} className="animate-spin" /> {t("onboarding.checking")}
-                </div>
-              ) : (
-                <>
-                  <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
-                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine, skip: hasReadyEngine ? undefined : onDone }} />
-                  <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>
-                </>
               )}
+              {instances && <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
+                footer={emptyConnect ? { back: () => setStep(0), open: finish } : {
+                  back: () => setStep(0), open: instancesError ? retryInstances : finish,
+                  label: instancesError ? "onboarding.tryAgain" : "onboarding.continue",
+                  disabled: !instancesError && !hasReadyEngine, skip: hasReadyEngine || instancesError ? undefined : () => onDone(),
+                }} />}
+              {!emptyConnect && <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>}
             </div>
-            {(instancesError || !instances) && <div className="mt-5 flex shrink-0 items-center gap-2.5">
-              <button type="button" onClick={() => setStep(0)} className="rounded-xl px-4 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>
-              <button type="button" onClick={instancesError ? retryInstances : finish} disabled={!instancesError && !hasReadyEngine} className="rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{instancesError ? t("onboarding.tryAgain") : t("onboarding.continue")}</button>
-            </div>}
-            </>}
           </div>
         )}
       </div>
