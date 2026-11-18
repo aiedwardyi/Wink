@@ -4,8 +4,12 @@ import { cachedSignIn } from "./auth-status.ts";
 
 type KeyringExec = (file: string, args: string[], options: ExecFileOptionsWithStringEncoding, done: (error: ExecFileException | null, stdout: string) => void) => void;
 
+export function supportsAntigravitySignInProbe(platform = process.platform): boolean {
+  return platform === "win32" || platform === "darwin";
+}
+
 export function probeAntigravitySignIn(platform = process.platform, run: KeyringExec = execFile): Promise<boolean | undefined> {
-  if (platform !== "win32" && platform !== "darwin") return Promise.resolve(undefined);
+  if (!supportsAntigravitySignInProbe(platform)) return Promise.resolve(undefined);
   const file = platform === "win32" ? "cmdkey.exe" : "security";
   const args = platform === "win32" ? ["/list"] : ["find-generic-password", "-s", "gemini", "-a", "antigravity"];
   return new Promise((resolve) => {

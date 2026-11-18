@@ -65,7 +65,7 @@ import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
-import { trackFeature, trackScreen } from "@/lib/usage-stats";
+import { trackFeature, trackScreen, usageStatsSwitched } from "@/lib/usage-stats";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
@@ -961,22 +961,61 @@ function setOnboardingDone() {
 }
 
 export default function App() {
-  const [onboardingOpen, setOnboardingOpen] = useState(() => !onboardingDone());
+  const desktop = Boolean(window.ogb);
+  const [onboarding, setOnboarding] = useState(() => onboardingDone() ? "done" : desktop ? "checking" : "open");
+  const [savingOnboarding, setSavingOnboarding] = useState(false);
+  const [onboardingSaveError, setOnboardingSaveError] = useState(false);
+  const savePending = useRef(false);
+  const showOnboarding = onboarding === "open" || onboarding === "error";
+  const cover = desktop ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null;
   useEffect(() => markColdOpen("mount"), []);
   useEffect(() => startIdleMotion(), []);
+  useEffect(() => {
+    if (desktop && onboardingDone()) {
+      void api("/api/onboarding", { method: "PUT", body: "{}" }).catch(() => {});
+    }
+  }, [desktop]);
+  useEffect(() => {
+    if (onboarding !== "checking") return;
+    const check = new AbortController();
+    void api("/api/onboarding", { signal: check.signal }).then(({ done }) => {
+      if (check.signal.aborted) return;
+      if (done === true) setOnboardingDone();
+      setOnboarding(done === true ? "done" : done === false ? "open" : "error");
+    }).catch(() => { if (!check.signal.aborted) setOnboarding("error"); });
+    return () => check.abort();
+  }, [onboarding]);
+  const finishOnboarding = async (enabled?: boolean) => {
+    if (savePending.current) return;
+    if (desktop || enabled !== undefined) {
+      savePending.current = true;
+      setSavingOnboarding(true);
+      setOnboardingSaveError(false);
+      try {
+        if (enabled === false) usageStatsSwitched(false);
+        const body = await api("/api/onboarding", { method: "PUT", body: JSON.stringify({ enabled }), keepalive: true });
+        usageStatsSwitched(body.capture === true, body.period);
+      } catch {
+        setOnboardingSaveError(true);
+        return;
+      } finally {
+        savePending.current = false;
+        setSavingOnboarding(false);
+      }
+    }
+    setOnboardingDone();
+    setOnboarding("done");
+  };
   return (
     <I18nProvider>
       <DesktopCapabilitiesProvider>
       <StoreProvider>
-        <Shell onboardingOpen={onboardingOpen} />
-        {onboardingOpen && (
-          <LazyView overlay fallback={window.ogb ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null}>
-            <Onboarding
-              onDone={() => {
-                setOnboardingDone();
-                setOnboardingOpen(false);
-              }}
-            />
+        <Shell onboardingOpen={onboarding !== "done"} />
+        {onboarding === "checking" && cover}
+        {showOnboarding && (
+          <LazyView overlay fallback={cover}>
+            <Onboarding onDone={finishOnboarding} saving={savingOnboarding} saveError={onboardingSaveError}
+              retryProfile={onboarding === "error" ? () => setOnboarding("checking") : undefined} />
           </LazyView>
         )}
       </StoreProvider>

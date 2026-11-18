@@ -4,7 +4,7 @@ import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/st
 import { EngineMark } from "./EngineMark";
 import { AccountConnections, AccountHead, ConnectionRow, SignInRow } from "./AccountConnections";
 import { ROW_BUTTON } from "./SettingsPrimitives";
-import { groupAccounts } from "@/lib/accounts";
+import { engineAuthState, groupAccounts } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { engineChecking, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
@@ -13,8 +13,8 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { Fold } from "./Fold";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
 
-export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boolean {
-  return instance.snapshot.state === "available" && instance.snapshot.authenticated === true;
+export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot" | "access" | "install">): boolean {
+  return engineAuthState(instance) === "ready";
 }
 
 export function EngineRow({ instance, onConnected, onUpdated }: { instance: InstanceInfo; onConnected?: () => void; onUpdated?: (instance: InstanceInfo) => void }) {

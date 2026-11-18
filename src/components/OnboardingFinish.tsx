@@ -1,20 +1,17 @@
 import { useState } from "react";
 import { Star } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import { api } from "@/state/store";
 import { OrbitMark } from "./OrbitMark";
-import { trackFeature, trackOnboard, usageStatsSwitched } from "@/lib/usage-stats";
+import { trackFeature, trackOnboard } from "@/lib/usage-stats";
 
 const REPO = "https://github.com/aiedwardyi/Wink";
 
-export function OnboardingFinish({ onDone }: { onDone: () => void }) {
+export function OnboardingFinish({ onDone, saving, saveError }: { onDone: (enabled: boolean) => void; saving?: boolean; saveError?: boolean }) {
   const { t } = useI18n();
   const [share, setShare] = useState(true);
   const open = () => {
     trackOnboard("finish");
-    if (!share) usageStatsSwitched(false);
-    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
-    onDone();
+    onDone(share);
   };
   return (
     <div className="flex flex-col">
@@ -24,7 +21,8 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
           <OrbitMark size={82} />
         </div>
         <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t("onboarding.doneTitle")}</h1>
-        <button type="button" onClick={open} className="mt-7 w-full max-w-60 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110">{t("onboarding.openOrbit")}</button>
+        {saveError && <p role="alert" className="mt-4 text-[13px] text-danger">{t("errors.request")}</p>}
+        <button type="button" onClick={open} disabled={saving} className="mt-7 w-full max-w-60 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110">{t(saveError ? "onboarding.tryAgain" : "onboarding.openOrbit")}</button>
         <a
           href={REPO}
           target="_blank"
@@ -45,7 +43,7 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
       <div className="@container flex justify-center border-t border-hairline/50 px-6 py-1.5">
         <label className="flex cursor-pointer flex-col items-center gap-0.5 rounded-lg p-2 text-[12.5px] text-ink-secondary hover:text-ink has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-focus @md:flex-row @md:gap-2">
           <span className="flex items-center gap-2">
-            <input type="checkbox" checked={share} onChange={() => setShare(!share)} className="size-3.5 shrink-0 accent-accent" />
+            <input type="checkbox" checked={share} onChange={() => setShare(!share)} disabled={saving} className="size-3.5 shrink-0 accent-accent" />
             {t("onboarding.analyticsLabel")}
           </span>
           <span aria-hidden className="hidden @md:inline">·</span>

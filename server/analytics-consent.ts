@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -6,16 +6,35 @@ import { writeFileAtomic } from "./atomic.ts";
 
 // Its own file: profile-sync.json and the Google binding are parsed strictly by older builds.
 const ANALYTICS_FILE = "analytics.json";
+const ONBOARDING_FILE = "onboarding-done";
+const analyticsSettings = z.object({ enabled: z.boolean() });
+
+function readAnalyticsSettings(dataDir: string) {
+  try {
+    return analyticsSettings.safeParse(JSON.parse(readFileSync(join(dataDir, ANALYTICS_FILE), "utf8")));
+  } catch {
+    return undefined;
+  }
+}
 
 export function loadAnalyticsConsent(dataDir: string, unset = false): boolean {
-  let saved: unknown;
-  try {
-    saved = JSON.parse(readFileSync(join(dataDir, ANALYTICS_FILE), "utf8"));
-  } catch {
-    return unset;
+  const saved = readAnalyticsSettings(dataDir);
+  return saved ? saved.success && saved.data.enabled : unset;
+}
+
+export function hasCompletedOnboarding(dataDir: string): boolean {
+  return existsSync(join(dataDir, ONBOARDING_FILE)) || readAnalyticsSettings(dataDir)?.success === true;
+}
+
+export function completeOnboarding(dataDir: string, enabled?: boolean): boolean | undefined {
+  if (enabled !== undefined) {
+    const saved = readAnalyticsSettings(dataDir);
+    if (saved?.success && (enabled || saved.data.enabled === false)) return;
+    return saveAnalyticsConsent(dataDir, enabled);
   }
-  const parsed = z.object({ enabled: z.boolean() }).safeParse(saved);
-  return parsed.success && parsed.data.enabled;
+  if (hasCompletedOnboarding(dataDir)) return;
+  mkdirSync(dataDir, { recursive: true });
+  writeFileAtomic(join(dataDir, ONBOARDING_FILE), "true");
 }
 
 export function saveAnalyticsConsent(dataDir: string, enabled: boolean): boolean {

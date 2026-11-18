@@ -148,6 +148,145 @@ describe("first engine connection", () => {
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
   });
 
+  it("keeps an installed engine usable when its host has no sign-in probe", async () => {
+    const engine = instances.find((row) => row.instanceId === "antigravity")!;
+    engine.snapshot = { state: "available", authChecked: true };
+    const install = { ...engine.install, signInProbeUnsupported: true };
+    instances = [{ ...engine, install }];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="antigravity"]')!;
+    expect(row.textContent).toContain(`Sign in to ${engine.displayName}`);
+    await click("Show Commands");
+    expect(host.querySelector("[data-engine-connect-commands]")?.textContent).toContain(engine.displayName);
+
+    engine.snapshot = { state: "available", authChecked: true, authenticated: false };
+    instances = [{ ...engine, install }];
+    await render();
+    await click("Continue");
+    expect([...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")?.disabled).toBe(true);
+
+    engine.snapshot = { state: "available", authChecked: true };
+    instances = [{ ...engine, install }];
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await click("Continue");
+    expect(host.textContent).toContain("You're all set");
+  });
+
+  it.each(["running", "opened"] as const)("keeps the engine list during a %s install poll", async (result) => {
+    Object.assign(window.ogb!, { openEngineInstall: vi.fn(async () => result) });
+    instances[1]!.snapshot = { state: "available", authenticated: false };
+    await render();
+    await click("Continue");
+    await click("Install", host.querySelector('[data-engine-connect="claude"]')!);
+    const panel = host.querySelector("[data-engine-connect-panel]")!;
+    const hint = result === "opened" ? "Paste the command in Terminal and press Enter." : "Finish in the window that opened.";
+    expect(panel.textContent).toContain(hint);
+
+    let answer!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    await advance(5000);
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
+    expect(host.querySelector("[data-engine-connect-panel]")).toBe(panel);
+    expect(panel.textContent).toContain("Sign in to Codex");
+    expect(panel.textContent).toContain(hint);
+
+    await act(async () => answer(Response.json({ instances })));
+    expect(host.querySelector("[data-engine-connect-panel]")).toBe(panel);
+    expect(panel.textContent).toContain("Open Again");
+    expect(panel.textContent).toContain(hint);
+    if (result === "opened") expect(panel.querySelector("[data-engine-connect-commands] code")).not.toBeNull();
+  });
+
+  it.each([false, true])("rechecks slow sign-in without refocus (after install: %s)", async (afterInstall) => {
+    const claude = instances[0]!;
+    const unknown = { state: "available", authChecked: true } as const;
+    if (afterInstall) {
+      instances[1]!.snapshot = { state: "available", authenticated: false };
+      await render();
+      await click("Continue");
+      await click("Install", host.querySelector('[data-engine-connect="claude"]')!);
+      fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => {
+        setTimeout(() => {
+          claude.snapshot = unknown;
+          resolve(Response.json({ instances }));
+        }, 3000);
+      }));
+      await advance(8000);
+      expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
+    } else {
+      claude.snapshot = unknown;
+      await render();
+      await click("Continue");
+    }
+    const next = () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(next().disabled).toBe(true);
+    expect(host.querySelector('[data-engine-connect="claude"] button')?.textContent).toBe("Checking...");
+    fetchMock.mockClear();
+    fetchMock.mockImplementationOnce((url: string) => new Promise<Response>((resolve) => {
+      setTimeout(() => {
+        if (url === "/api/instances?refresh=1") claude.snapshot = { ...unknown, authenticated: true };
+        resolve(Response.json({ instances }));
+      }, 1000);
+    }));
+    await advance(500);
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/instances?refresh=1");
+    expect(next().disabled).toBe(true);
+    await advance(1000);
+    expect(next().disabled).toBe(false);
+    await click("Continue");
+    expect(host.textContent).toContain("You're all set");
+  });
+
+  it("keeps keyboard focus and scroll on an engine refresh", async () => {
+    await connect();
+    const panel = host.querySelector("[data-engine-connect-panel]")!;
+    const scroll = panel.firstElementChild!;
+    const lower = panel.querySelector<HTMLButtonElement>('[data-engine-connect="muse"] button')!;
+    lower.focus();
+    scroll.scrollTop = 160;
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    instances = instances.map((instance) => ({ ...instance }));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
+    expect(document.activeElement).toBe(lower);
+    expect(scroll.scrollTop).toBe(160);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("keeps the focused install control when another engine moves into the installed group", async () => {
+    await connect();
+    const selector = '[data-engine-connect="claude"] button';
+    const button = host.querySelector<HTMLButtonElement>(selector)!;
+    button.focus();
+    instances[1]!.snapshot = { state: "available", authenticated: false };
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(host.querySelector(selector)).toBe(button);
+    expect(document.activeElement).toBe(button);
+
+    instances[0]!.snapshot = { state: "available", authenticated: true };
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(document.activeElement).toBe(host.querySelector('[role="dialog"]'));
+  });
+
+  it("keeps a pending sign-in code when a refresh has no auth answer", async () => {
+    const claude = {
+      ...instances[0]!, snapshot: { state: "available" as const, authenticated: false },
+      loginState: "pending" as const, loginCapture: { inputGeneration: 7 },
+    };
+    instances = [claude];
+    const renderConnect = () => render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    await renderConnect();
+    const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () => {
+      input.value = "pending-code";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    instances = [{ ...claude, snapshot: { state: "available", authChecked: true } }];
+    await renderConnect();
+    expect(host.querySelector('input[type="password"]')).toBe(input);
+    expect(input.value).toBe("pending-code");
+  });
+
   it("shows each engine once with four Claude and two Codex accounts", async () => {
     const bases = fleet().map((instance) => ({ ...instance, accountOf: instance.instanceId,
       snapshot: { state: "available" as const, authenticated: true } }));

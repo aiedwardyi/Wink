@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { InstanceInfo } from "@/state/store";
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
+import { engineAuthState, setupEngine } from "@/lib/accounts";
+import { baseInstances } from "@/lib/cross-model-picker";
 import { OrbitMark } from "./OrbitMark";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { EngineConnect } from "./EngineConnect";
@@ -9,14 +10,12 @@ import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
 import { trackOnboard } from "@/lib/usage-stats";
 
-function engineReady(instance: InstanceInfo): boolean {
-  return (
-    instance.snapshot.state === "available" &&
-    (instance.access === "custom" || instance.snapshot.authenticated !== false)
-  );
-}
-
-export function Onboarding({ onDone }: { onDone: () => void }) {
+export function Onboarding({ onDone, retryProfile, saving, saveError }: {
+  onDone: (enabled?: boolean) => void;
+  retryProfile?: () => void;
+  saving?: boolean;
+  saveError?: boolean;
+}) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [connectSession, setConnectSession] = useState(false);
@@ -26,14 +25,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const browser = !window.ogb;
   const refreshInstancesRef = useRef<() => Promise<void>>(async () => {});
   const dialogRef = useRef<HTMLDivElement>(null);
+  const lastFocused = useRef<HTMLElement>(null);
   const welcomed = useRef(false);
+  const hidden = browser && instances === null && !signedOut && !instancesError;
+  const welcomeChecking = step === 0 && !instances && !instancesError && !signedOut;
 
   useEffect(() => {
+    if (retryProfile) return;
     let active = true;
     let pending: Promise<void> | undefined;
     let recheck: ReturnType<typeof setTimeout> | undefined;
     const refresh = (probe: boolean) => {
       if (pending) return pending;
+      clearTimeout(recheck);
       setInstancesError(null);
       pending = fetch(probe ? "/api/instances?refresh=1" : "/api/instances")
         .then((response) => {
@@ -56,9 +60,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           }
           if (!active) return;
           setSignedOut(!data);
-          if (data) setInstances(data.instances ?? []);
-          // Setup reads no instances frames; ask again until every first check lands.
-          if ((data?.instances as InstanceInfo[] | undefined)?.some((row) => row.snapshot.state === "checking")) recheck = setTimeout(() => void refresh(false), 500);
+          if (!data) return;
+          const rows = (data.instances ?? []) as InstanceInfo[];
+          setInstances(rows);
+          const checkingSignIn = baseInstances(rows).some((row) => row.snapshot.state === "available"
+            && !isRetiredEngineKind(row.driverKind) && engineAuthState(setupEngine(row, rows)) === "checking");
+          // A cached read won't restart a finished probe with an unknown sign-in answer.
+          if (checkingSignIn || rows.some((row) => row.snapshot.state === "checking")) recheck = setTimeout(() => void refresh(checkingSignIn), 500);
         })
         .catch(() => {
           if (active) {
@@ -77,7 +85,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       clearTimeout(recheck);
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [retryProfile]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -85,10 +93,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const controls = () => [...dialog.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )];
-    const primary = step === 1 && instances?.some(engineReady)
-      ? dialog.querySelector<HTMLElement>("[data-engine-connect-primary]:not([disabled])") : null;
     // The last step takes focus itself, so a held Enter cannot skip it.
-    (step === 2 ? dialog : primary ?? controls()[0])?.focus();
+    (step === 2 && !signedOut ? dialog : controls()[0] ?? dialog).focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const focusable = controls();
@@ -105,26 +111,28 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     };
     dialog.addEventListener("keydown", onKey);
     return () => dialog.removeEventListener("keydown", onKey);
-  }, [step, instances, instancesError, signedOut]);
+  }, [step, hidden, welcomeChecking, signedOut]);
 
-  const hidden = browser && instances === null && !signedOut && !instancesError;
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    const previous = lastFocused.current;
+    const active = document.activeElement;
+    if (step !== 1 || !dialog || !previous) return;
+    if (active && active !== document.body && (active !== previous || !previous.matches(":disabled"))) return;
+    (dialog.contains(previous) && !previous.matches(":disabled") ? previous : dialog).focus({ preventScroll: true });
+  }, [instances, step]);
+
   // A browser on a PC that already has bots closes setup before showing it.
   useEffect(() => {
-    if (hidden || welcomed.current) return;
+    if (hidden || retryProfile || welcomed.current) return;
     welcomed.current = true;
     trackOnboard("welcome");
-  }, [hidden]);
+  }, [hidden, retryProfile]);
 
   if (hidden) return null;
 
-  const emptyConnect = connectSession || instances !== null && isEmptyEngineLaunch(instances);
-
-  const retryInstances = () => {
-    // Keep setup visible while an install probe runs.
-    if (!emptyConnect) setInstances(null);
-    setInstancesError(null);
-    return refreshInstancesRef.current();
-  };
+  const emptyConnect = step === 0 ? instances !== null && isEmptyEngineLaunch(instances) : connectSession;
+  const retryInstances = () => refreshInstancesRef.current();
 
   const finish = () => {
     if (!hasReadyEngine) return onDone();
@@ -132,13 +140,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setStep(2);
   };
 
-  const live = (instances ?? []).filter((instance) => !isRetiredEngineKind(instance.driverKind));
-  const hasReadyEngine = live.some(engineReady);
+  const hasReadyEngine = instances !== null && baseInstances(instances).some((instance) => {
+    if (isRetiredEngineKind(instance.driverKind)) return false;
+    const state = engineAuthState(setupEngine(instance, instances));
+    return state === "ready" || state === "unverified";
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app/95 p-6 backdrop-blur-xl">
       <div
         ref={dialogRef}
+        onFocusCapture={(event) => { lastFocused.current = event.target; }}
         role="dialog"
         tabIndex={-1}
         aria-modal="true"
@@ -163,16 +175,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </button>
           </div>
         ) : step === 2 ? (
-          <OnboardingFinish onDone={onDone} />
+          <OnboardingFinish onDone={onDone} saving={saving} saveError={saveError} />
         ) : step === 0 ? (
           <div className="flex flex-col items-center px-8 py-9">
             <div className="relative">
               <div className="absolute inset-2 rounded-full bg-accent/20 blur-2xl" />
               <OrbitMark size={82} />
             </div>
-            <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t("onboarding.welcomeTitle")}</h1>
+            <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t(retryProfile ? "onboarding.enginesError" : "onboarding.welcomeTitle")}</h1>
             <p className="mt-1.5 max-w-[420px] text-center text-[13.5px] leading-relaxed text-ink-secondary">
-              {t("onboarding.welcomeBody")}
+              {t(retryProfile ? "onboarding.enginesErrorHint" : "onboarding.welcomeBody")}
             </p>
 
             {instancesError && (
@@ -182,8 +194,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             )}
             <button
               type="button"
-              disabled={!instances && !instancesError}
+              disabled={!instances && !instancesError && !retryProfile}
               onClick={() => {
+                if (retryProfile) return retryProfile();
                 if (instancesError) return retryInstances();
                 if (hasReadyEngine) return finish();
                 setConnectSession(emptyConnect);
@@ -192,7 +205,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               }}
               className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40`}
             >
-              {instancesError ? t("onboarding.tryAgain") : !instances ? t("onboarding.checking") : emptyConnect ? t("noEngines.title") : t("onboarding.continue")}
+              {instancesError || retryProfile ? t("onboarding.tryAgain") : !instances ? t("onboarding.checking") : emptyConnect ? t("noEngines.title") : t("onboarding.continue")}
             </button>
           </div>
         ) : (
@@ -204,31 +217,21 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 <p className="mt-0.5 text-[12.5px] text-ink-secondary">{emptyConnect ? t("noEngines.body") : t("onboarding.enginesFound")}</p>
               </div>
             </div>
-            {emptyConnect && instances ? <div className="mt-5 flex min-h-0 flex-col">
-              <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false} footer={{ back: () => { setConnectSession(false); setStep(0); }, open: finish }} />
-            </div> : <>
-            <div className="mt-5 flex min-h-0 flex-col gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]">
-              {instancesError ? (
+            <div className={`mt-5 flex min-h-0 flex-col ${emptyConnect ? "" : "gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]"}`}>
+              {(instancesError || saveError) && (
                 <div role="alert" className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12.5px] text-danger">
-                  {instancesError} {t("onboarding.enginesErrorHint")}
+                  {instancesError ? <>{instancesError} {t("onboarding.enginesErrorHint")}</> : t("errors.request")}
                 </div>
-              ) : !instances ? (
-                <div className="flex items-center justify-center gap-2 py-12 text-[13px] text-ink-secondary">
-                  <Loader2 size={15} className="animate-spin" /> {t("onboarding.checking")}
-                </div>
-              ) : (
-                <>
-                  <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
-                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine, skip: hasReadyEngine ? undefined : onDone }} />
-                  <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>
-                </>
               )}
+              {instances && <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
+                footer={emptyConnect && !instancesError && !saveError ? { back: () => setStep(0), open: finish, disabled: saving } : {
+                  back: () => setStep(0), open: instancesError ? retryInstances : finish,
+                  label: instancesError || (emptyConnect && saveError) ? "onboarding.tryAgain" : "onboarding.continue",
+                  disabled: saving || (!instancesError && !emptyConnect && !hasReadyEngine),
+                  skip: saving || hasReadyEngine ? undefined : emptyConnect ? (instancesError ? finish : undefined) : () => onDone(),
+                }} />}
+              {!emptyConnect && <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>}
             </div>
-            {(instancesError || !instances) && <div className="mt-5 flex shrink-0 items-center gap-2.5">
-              <button type="button" onClick={() => setStep(0)} className="rounded-xl px-4 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>
-              <button type="button" onClick={instancesError ? retryInstances : finish} disabled={!instancesError && !hasReadyEngine} className="rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{instancesError ? t("onboarding.tryAgain") : t("onboarding.continue")}</button>
-            </div>}
-            </>}
           </div>
         )}
       </div>

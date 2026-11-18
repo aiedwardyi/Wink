@@ -1070,6 +1070,10 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
 });
 
 describe("Antigravity snapshot", () => {
+  it("advertises whether the host can check sign-in in the install descriptor", () => {
+    expect(AntigravityDriver.install?.signInProbeUnsupported).toBe(process.platform !== "win32" && process.platform !== "darwin");
+  });
+
   it("marks an unsupported Linux authentication probe as complete", async () => {
     vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(() => auth.probeAntigravitySignIn("linux")));
     const registry = new ProviderRegistry([AntigravityDriver]);

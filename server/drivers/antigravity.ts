@@ -48,7 +48,7 @@ import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { antigravitySignIn } from "./antigravity-auth.ts";
+import { antigravitySignIn, supportsAntigravitySignInProbe } from "./antigravity-auth.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -530,6 +530,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     },
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
     signInCommand: "agy",
+    signInProbeUnsupported: !supportsAntigravitySignInProbe(),
   },
   models: STATIC_ANTIGRAVITY_MODELS,
   decodeConfig,

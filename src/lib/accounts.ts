@@ -2,6 +2,14 @@ import type { InstanceInfo } from "@/state/store";
 
 export type UsageAccount = InstanceInfo;
 
+export function engineAuthState(instance: Pick<InstanceInfo, "snapshot" | "access" | "install">) {
+  const { state, authenticated } = instance.snapshot;
+  if (state !== "available") return state;
+  if (instance.access === "custom" || authenticated === true) return "ready";
+  if (authenticated === false) return "signed-out";
+  return instance.install?.signInProbeUnsupported ? "unverified" : "checking";
+}
+
 export function usageAccount(instances: InstanceInfo[], instanceId: string): UsageAccount | undefined {
   const selected = instances.find((instance) => instance.instanceId === instanceId);
   const account = selected?.accountOf && selected.accountOf !== instanceId ? selected
@@ -11,8 +19,17 @@ export function usageAccount(instances: InstanceInfo[], instanceId: string): Usa
     ? instances.find((instance) => instance.instanceId === drain.destinationId) : account;
 }
 
+export function setupEngine(instance: InstanceInfo, instances: InstanceInfo[]): InstanceInfo {
+  const picker = instance.pickerSnapshot;
+  if (!picker || instance.snapshot.state !== "available") return instance;
+  const main = usageAccount(instances, instance.instanceId);
+  const checking = picker.state === "checking" || (main !== undefined && main !== instance && engineAuthState(main) === "checking");
+  return { ...instance, snapshot: { ...instance.snapshot, authenticated: checking ? undefined
+    : picker.state === "available" ? picker.authenticated : false } };
+}
+
 export function accountReady(account: UsageAccount): boolean {
-  return account.snapshot.state === "available" && account.snapshot.authenticated === true
+  return engineAuthState(account) === "ready"
     && (!account.accountState || account.accountState === "ready") && !account.drain;
 }
 

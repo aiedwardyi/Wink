@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { execCli } from "../procs.ts";
 import { createTempDirs } from "../testing/cleanup.ts";
+import { cachedSignIn } from "./auth-status.ts";
 import { claudeAuthStatus, claudeSignedIn } from "./claude.ts";
 
 const temp = createTempDirs();
@@ -47,6 +48,63 @@ describe("claudeSignedIn", () => {
 });
 
 describe("claudeAuthStatus deadline", () => {
+  it.each([[3200, 0], [3200, 1000], [3400, 0]])("delivers a %i ms probe after a %i ms setup refresh", async (probeMs, serverMs) => {
+    vi.useFakeTimers();
+    try {
+      const env = { CLAUDE_CONFIG_DIR: `setup-${probeMs}-${serverMs}` };
+      let active = 0;
+      let peak = 0;
+      const run = vi.fn<typeof execCli>((_cli, _args, _options, callback) => {
+        peak = Math.max(peak, ++active);
+        setTimeout(() => {
+          active--;
+          callback(null, '{"loggedIn":true,"email":"test@example.com"}');
+        }, probeMs);
+      });
+      const check = cachedSignIn(() => claudeAuthStatus("claude", env, run), (status) => status.signedIn === true);
+      const end = Date.now() + 300_000;
+      const reads: Awaited<ReturnType<typeof check>>[] = [];
+      const setup = async () => {
+        while (Date.now() < end) {
+          const refresh = reads.length > 0;
+          if (refresh) await new Promise((resolve) => setTimeout(resolve, 500 + serverMs));
+          const status = await check(refresh);
+          reads.push(status);
+          if (status.signedIn !== undefined) return;
+        }
+      };
+
+      const finished = setup();
+      await vi.advanceTimersByTimeAsync(305_000);
+      await finished;
+      expect({ reads: reads.length, status: reads.at(-1), launches: run.mock.calls.length, peak }).toEqual({
+        reads: 2, status: { signedIn: true, account: "test@example.com" }, launches: 1, peak: 1,
+      });
+      expect(reads[0]).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes an expired late answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = vi.fn<typeof execCli>()
+        .mockImplementationOnce((_cli, _args, _options, callback) => {
+          setTimeout(() => callback(null, '{"loggedIn":true}'), 3200);
+        })
+        .mockImplementationOnce((_cli, _args, _options, callback) => callback(null, '{"loggedIn":false}'));
+      const status = () => claudeAuthStatus("claude", { CLAUDE_CONFIG_DIR: "expired-late-answer" }, run);
+      const first = status();
+      await vi.advanceTimersByTimeAsync(33_200);
+      expect(await first).toEqual({});
+      expect(await status()).toMatchObject({ signedIn: false });
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops waiting at its deadline but never kills a token renewal", { timeout: 30_000 }, async () => {
     const dir = temp.make(join(tmpdir(), "claude-auth-"));
     const script = join(dir, "claude.cjs");
@@ -73,9 +131,9 @@ describe("claudeAuthStatus deadline", () => {
     expect(await again).toEqual({});
     expect(readFileSync(runs, "utf8")).toBe(".");
     expect(waited).toBeLessThan(2000);
-    await vi.waitFor(async () => {
-      expect(await status(5000)).toMatchObject({ signedIn: true });
-      expect(readFileSync(runs, "utf8").length).toBeGreaterThan(1);
-    }, { timeout: 10_000 });
+    expect(await status(5000)).toMatchObject({ signedIn: true });
+    expect(readFileSync(runs, "utf8")).toBe(".");
+    expect(await status(5000)).toMatchObject({ signedIn: true });
+    expect(readFileSync(runs, "utf8")).toBe("..");
   });
 });

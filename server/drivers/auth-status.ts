@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 
 const fileChecks = new Map<string, { identity: string; authenticated: boolean }>();
 const fileAccounts = new Map<string, { identity: string; account?: string }>();
+export const SIGN_IN_CACHE_MS = 30_000;
 
 function fileIdentity(path: string): string {
   const stat = statSync(path);
@@ -57,7 +58,7 @@ export function cachedSignIn<T = boolean | undefined>(
       cached = current;
       reuseUntil = Infinity;
       void current.then((result) => {
-        if (cached === current) reuseUntil = signedIn(result) ? Date.now() + 30_000 : 0;
+        if (cached === current) reuseUntil = signedIn(result) ? Date.now() + SIGN_IN_CACHE_MS : 0;
       });
     }
     return cached;

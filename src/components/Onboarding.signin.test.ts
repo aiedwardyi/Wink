@@ -60,7 +60,7 @@ describe("Onboarding engine check", () => {
     vi.useFakeTimers();
     try {
       vi.stubGlobal("ogb", { platform: "win32" });
-      const row = (state: string) => ({ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state }, models: { default: "", options: [] } });
+      const row = (state: string) => ({ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state, authenticated: state === "available" ? false : undefined }, models: { default: "", options: [] } });
       const answers = [row("checking"), row("checking"), row("available")];
       vi.stubGlobal("fetch", vi.fn(async () => Response.json({ instances: [answers.shift() ?? row("available")] })));
       const host = document.createElement("div");
@@ -186,7 +186,7 @@ describe("Onboarding engine check", () => {
     expect(next().disabled).toBe(true);
   });
 
-  it.each(["claude", "codex"])("focuses Continue when %s becomes ready on the engine step", async (readyId) => {
+  it.each(["claude", "codex"])("enables Continue without moving focus when %s becomes ready", async (readyId) => {
     localStorage.setItem("omb-locale", "en");
     const instances = [
       { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
@@ -197,7 +197,10 @@ describe("Onboarding engine check", () => {
         install: { docsUrl: "https://example.com/codex", command: { win32: "install-codex" } } },
     ];
     const host = await renderWith(200, vi.fn(), { instances });
+    document.body.append(host);
     await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!.click());
+    const back = [...host.querySelectorAll("button")].find((button) => button.textContent === "Back")!;
+    back.focus();
     const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
     expect(next.disabled).toBe(true);
     const ready = instances.map((instance) => ({ ...instance,
@@ -206,7 +209,7 @@ describe("Onboarding engine check", () => {
     vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ instances: ready })));
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(next.disabled).toBe(false);
-    expect(document.activeElement).toBe(next);
+    expect(document.activeElement).toBe(back);
     expect(host.textContent).not.toContain("You're all set");
   });
 

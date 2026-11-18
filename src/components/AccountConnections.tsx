@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Ellipsis } from "lucide-react";
 import { api, useStore, type InstanceInfo } from "@/state/store";
-import { accountReady, type UsageAccount } from "@/lib/accounts";
+import { accountReady, engineAuthState, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { useI18n } from "@/lib/i18n";
@@ -59,14 +59,16 @@ export function AccountHead({ name, email, control }: { name: ReactNode; email?:
 export function SignInRow({ instance, mark, name, after, onUpdated }: { instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode; onUpdated?: (instance: InstanceInfo) => void }) {
   const { t } = useI18n();
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
+  const checking = !connected && !waiting && !failed && !instance.loginState && engineAuthState(instance) === "checking";
   const status = waiting ? t(copyFallback ? "engine.pasteAndEnter" : capture.code ? "engines.enterCode" : "engines.finishInBrowser")
     : failed ? t(failed) : "";
   const steps = waiting && (copyFallback || capture.code || capture.inputGeneration || failed);
   return (
     <div aria-live="polite">
       <ConnectionRow mark={mark}
-        label={name ?? (!loading && <><span className="min-w-0 break-words">{connected ? t("connections.connected") : status || t("accounts.signedOut")}</span>{after}</>)}
-        actions={<>{loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
+        label={name ?? (checking ? t("engines.checking") : !loading && <><span className="min-w-0 break-words">{connected ? t("connections.connected") : status || t("accounts.signedOut")}</span>{after}</>)}
+        actions={<>{checking && name && <span>{t("engines.checking")}</span>}
+        {loading && !checking || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
         </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>
