@@ -519,6 +519,16 @@ it("pairs a crossed picture by its caption, and an uncaptioned one only with the
   expect([...picked()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
 });
 
+it("loads a room pick's own file through the room it was picked in", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Picture: C:\\w\\c.png (C - big title)\n- Over: A - no title\n- Over pictures: C:\\w\\a.png (A - no title)\n- Files: C:\\w\\shot.png\n- Thread: room1\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-room");
+  await until(() => picked().length > 0);
+  expect([...picked()[0]!.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual(
+    ["C:\\w\\a.png", "C:\\w\\c.png", "C:\\w\\shot.png"].map((path) => `/api/threads/room1/linked-file?path=${encodeURIComponent(path)}`),
+  );
+});
+
 it("keeps the search text and an open replaced pick after a tab switch and back", async () => {
   pickList();
   await openTimeline("b-switch");
@@ -662,7 +672,7 @@ it("leaves right-click on a picture to the image's own menu, with nothing drawn 
 });
 
 it("says so in one line when the bot has no picks yet", async () => {
-  picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text: "", entries: [] }), { status: 200 }));
   await openTimeline();
   await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
   expect(host.querySelector(".timeline-pane")!.textContent).toBe("No picks yet");

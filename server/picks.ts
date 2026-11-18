@@ -24,7 +24,7 @@ const HEADER = `Current picks, newest first: the user's own, each beating older 
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -47,6 +47,8 @@ export type PickEntry = {
   /** Picked by tapping a card; a typed pick on the question always beats it. */
   tapped?: boolean;
   files: string[];
+  /** The room it was picked in, which links its files; unset for the bot's own chat. */
+  thread?: string;
   tweaks: Tweak[];
   extra: string[];
 };
@@ -63,6 +65,7 @@ export type PickChange =
       picture?: Picture;
       overPictures?: Picture[];
       files?: string[];
+      thread?: string;
       tapped?: boolean;
       legacy?: { day: string; line: string };
     }
@@ -138,6 +141,7 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Files") entry.files = list(value);
     else if (field === "Source" && /^[a-f0-9]{64}$/.test(value)) entry.source = value;
     else if (field === "Tapped" && value === "yes") entry.tapped = true;
+    else if (field === "Thread" && /^[\w-]+$/.test(value)) entry.thread = value;
     else if (field === "At" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) entry.at = Number(value);
     else entry.extra.push(line);
   }
@@ -158,6 +162,7 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.source ? [`- Source: ${entry.source}`] : []),
       ...(entry.at === undefined ? [] : [`- At: ${entry.at}`]),
       ...(entry.tapped ? ["- Tapped: yes"] : []),
+      ...(entry.thread ? [`- Thread: ${entry.thread}`] : []),
       ...entry.tweaks.map(({ at, said }) => `- Tweak ${at}: "${said}"`),
       ...entry.extra,
     ].join("\n"),
@@ -242,6 +247,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     };
     if (change.picture) entry.picture = change.picture;
     if (tapped) entry.tapped = true;
+    if (change.thread) entry.thread = change.thread;
     if (change.at % 60_000) entry.at = change.at;
     entries.push(entry);
     picks += 1;

@@ -23,6 +23,7 @@ const entry = z.object({
   overPictures: z.array(picture),
   said: z.string().optional(),
   files: z.array(z.string()),
+  thread: z.string().optional(),
   tweaks: z.array(z.object({ at: z.string(), said: z.string() })),
 });
 const topic = z.object({ entries: z.array(entry) });
@@ -522,8 +523,10 @@ function Decision({ row, opened, toggle, threadId, you }: { row: Row; opened: Re
   );
 }
 
-function Pick({ entry, threadId, you, chips, old = false }: { entry: Entry; threadId: string; you: string; chips?: ReactNode; old?: boolean }) {
+function Pick({ entry, threadId: viewing, you, chips, old = false }: { entry: Entry; threadId: string; you: string; chips?: ReactNode; old?: boolean }) {
   const { t } = useI18n();
+  // a room pick's own files load through the room that links them
+  const threadId = entry.thread ?? viewing;
   const now = new Date();
   const at = when(stampOf(entry.id), now);
   const options = crossedOf(entry).map((each, n) => <Option key={n} label={each.label} picture={each.picture} threadId={threadId} />);

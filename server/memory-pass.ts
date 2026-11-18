@@ -200,8 +200,9 @@ export function replyPictures(messages: readonly Message[], ids: string[], attac
       pictures.push(label ? { path: clean, caption: label } : { path: clean });
     };
     for (const message of turn) {
-      // a show_image summary is a display line cut at 120 characters, and a bot may delete the copy it showed
-      if (shownImage(message)) add(existsSync(message.tool!.summary!) ? message.tool!.summary! : (copies.get(message.id) ?? ""), captions.get(message.id));
+      // the saved copy keeps what was shown after the file is overwritten; a show_image summary is a display line cut at 120 characters
+      const copy = copies.get(message.id);
+      if (shownImage(message)) add(copy && existsSync(copy) ? copy : existsSync(message.tool!.summary!) ? message.tool!.summary! : (copy ?? ""), captions.get(message.id));
       else if (message.kind === "screen" && message.image && !(message.parentId && tools.has(message.parentId))) add(join(attachments, message.image), message.text);
       else if (message.kind === "text" && message.text) for (const path of message.text.match(IMAGE_PATH) ?? []) add(path);
     }
@@ -527,7 +528,14 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const listed = replaceable(replaces, lines, claims) && (inSection(replaces) || legacyLine(thing, [replaces], taken) === replaces) && !taken.has(replaces) ? replaces : undefined;
       const target = listed ?? legacyLine(thing, lines, taken);
       if (target) taken.add(target);
-      const shown = [...sources.flatMap(({ pictures }) => pictures ?? []), ...recorded];
+      // the same short answer can sit on two questions; the one whose question names the pick most says how and when it was chosen
+      const asked = [...new Set([...contentWords(line), ...contentWords(thing)])];
+      const hits = ({ context }: UserLine) => asked.filter((stem) => contentWords(context ?? "").some((word) => sameStem(stem, word))).length;
+      const best = Math.max(0, ...own.map(hits));
+      const source = best ? own.filter((each) => hits(each) === best) : own;
+      // a reply answers the latest pictures shown at or before it, never another question's
+      const answered = source.length ? sources.indexOf(source.at(-1)!) : -1;
+      const shown = [...(sources.slice(0, answered + 1).findLast(({ pictures }) => pictures?.length)?.pictures ?? []), ...recorded];
       let picture = shownPicture(fact.picture, shown);
       // a switch to an option the pick beat keeps that option's picture, copied or not
       if (!picture) picture = recorded.find(({ caption }) => caption !== undefined && sameOption(caption, line));
@@ -540,9 +548,6 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
         if (found && found.path !== picture?.path && !overPictures.some((other) => other.path === found.path)) overPictures.push(found);
       }
       if (picture && !overPictures.length && recorded.includes(picture)) overPictures.push(...recorded.filter((other) => other.path !== picture.path));
-      // the same short answer can sit on two questions; the one whose question names the pick says how and when it was chosen
-      const asked = own.filter(({ context }) => contentWords(line).some((stem) => contentWords(context ?? "").some((word) => sameStem(stem, word))));
-      const source = asked.length ? asked : own;
       const files = source.at(-1)?.files ?? [];
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
@@ -757,6 +762,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const changes = accepted.flatMap(({ pick }) => {
       if (!pick) return [];
       const change = { ...pick, at: pick.at || now() };
+      // the bot's own chat links only its own files, so a room pick names the room
+      if (change.kind === "pick" && roomSource(threadId)) change.thread = sourceThread(threadId);
       if (full && change.kind === "pick") delete change.legacy;
       return [change];
     });

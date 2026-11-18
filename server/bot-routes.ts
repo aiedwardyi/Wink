@@ -526,6 +526,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
       }
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
       const text = readMemoryTopic(m[1], name);
+      // a bot with no picks yet has an empty timeline, not a missing one
+      if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
       if (text === null) return json(res, 404, { error: "no such topic file" });
       return json(res, 200, name === PICKS_FILE ? { name, text, entries: parseTimeline(text).entries } : { name, text });
     },
