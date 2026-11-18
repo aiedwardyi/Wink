@@ -828,9 +828,18 @@ export class LiveCall {
   }
 
   private runTool(call: LiveToolCall) {
+    if (call.name === "task_context") return void this.readTaskContext(call.id);
     const run = TOOLS[call.name];
     if (run) run(this, call.args, call.id);
     else this.engine?.sendToolResult([call.id], call.name, "unknown tool");
+  }
+
+  private async readTaskContext(id: string) {
+    const engine = this.engine;
+    const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/task-context`, {}).catch(() => null);
+    if (!engine || this.ended || engine !== this.engine || this.cancelled.has(id)) return;
+    const text = posted?.status === 200 ? posted.data.taskContext : undefined;
+    engine.sendToolResult([id], "task_context", typeof text === "string" ? text : "TASK RECORD: unavailable.");
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */

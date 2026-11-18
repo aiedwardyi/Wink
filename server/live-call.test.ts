@@ -15,6 +15,9 @@ import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_T
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
+import { mergeTaskAsks } from "./task-asks.ts";
+import { seedTaskResumePacket } from "./task-state-fold.ts";
+import type { TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
 import { markRelaySocket } from "./phone-relay/via.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
@@ -24,7 +27,7 @@ const KEY = "AIzaTEST-not-a-real-key-0123456789";
 const dirs: string[] = [];
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"]; roomTail?: (...args: any[]) => any; settled?: (botId: string, threadId: string) => void } = {}) {
+function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"]; roomTail?: (...args: any[]) => any; settled?: (botId: string, threadId: string) => void; taskPacket?: (threadId: string) => TaskResumePacket | null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "live-call-")); dirs.push(dir);
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({ name: "Juno" }, { seedMessages: false });
@@ -32,10 +35,10 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
-  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, ...{ roomTail: opts.roomTail, settled: opts.settled } });
+  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, taskPacket: opts.taskPacket ?? ((threadId) => store.taskPacket(threadId)), ...{ roomTail: opts.roomTail, settled: opts.settled } });
   let routes = open();
   const restart = () => { routes = open(); };
-  async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id, relay = false) {
+  async function post(route: "token" | "task-context" | "lines" | "end", body: object = {}, botId = bot.id, relay = false) {
     let status = 0;
     let raw = "";
     const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
@@ -49,6 +52,69 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
 }
 
 describe("call token", () => {
+  it("gives the voice the live waiting asks and forbids an empty to-do answer", async () => {
+    const h = harness();
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const asks = mergeTaskAsks(packet, [
+      { status: "waiting-for-user", ask: "Choose the billing plan" },
+      { status: "waiting-for-user", ask: "Decide whether to move Dot" },
+      { status: "building", ask: "Terminal pane fix" },
+      { status: "building", ask: "Ctrl+F fix" },
+    ], now);
+    if ("error" in asks) throw new Error(asks.error);
+    expect(h.store.writeTaskPacket({ ...packet, asks: asks.asks, lastAskId: asks.lastAskId })).toBeTruthy();
+    expect((await h.post("token")).status).toBe(200);
+    const setup = h.sent().bidiGenerateContentSetup;
+    const brief = setup.systemInstruction.parts[0].text as string;
+    console.log(`Call start: ${Buffer.byteLength(brief, "utf8")} system prompt bytes, ${Buffer.byteLength(JSON.stringify(setup.tools), "utf8")} tool definition bytes`);
+    expect(brief).toContain('waiting-for-user: "Choose the billing plan"');
+    expect(brief).toContain('waiting-for-user: "Decide whether to move Dot"');
+    expect(brief).toContain('building: "Terminal pane fix"');
+    expect(brief).toContain('building: "Ctrl+F fix"');
+    expect(brief).toContain('never say "nothing needs you" while any are waiting');
+  });
+
+  it("reads pending task changes through the same source on refresh and resume", async () => {
+    let pending: TaskResumePacket | null = null;
+    const read = vi.fn(() => pending);
+    const h = harness({ taskPacket: read });
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const first = await h.post("token");
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("TASK RECORD: unavailable.");
+
+    pending = packet;
+    expect((await h.post("task-context")).data.taskContext).toContain("no ask history recorded");
+
+    pending = {
+      ...packet,
+      asks: [
+        { id: "A1", ask: "Already shipped", status: "done", at: now, changedAt: now },
+        ...Array.from({ length: 11 }, (_, i) => ({ id: `A${i + 2}`, ask: `빌드 ${"가".repeat(70)} ${i}`, status: "building" as const, at: now, changedAt: now })),
+        { id: "A13", ask: "Review billing", status: "waiting-for-user", at: now, changedAt: now },
+      ],
+      blockers: [{ kind: "login", note: "Session expired" }],
+      nextAction: "Rerun tests after sign-in",
+    };
+    const { status, data: { taskContext } } = await h.post("task-context", { threadId: "other-thread" });
+    expect(status).toBe(200);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenLastCalledWith(h.bot.threadId);
+    expect(taskContext).toContain('1 waiting-for-user, 12 active asks total');
+    expect(taskContext).toContain('waiting-for-user: "Review billing"');
+    expect(taskContext).toContain('blocker login: "Session expired"');
+    expect(taskContext).toContain('Next action: "Rerun tests after sign-in"');
+    expect(taskContext).toMatch(/\+\d+ more asks omitted/);
+    expect(taskContext).not.toMatch(/Already shipped|�/);
+    expect(Buffer.byteLength(taskContext, "utf8")).toBeLessThan(1_700);
+
+    await h.post("token", { callId: first.data.callId, resume: true });
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain(taskContext);
+  });
+
   it("settles saved user lines for Auto Notes, excluding voice-only batches", async () => {
     const settled = vi.fn();
     const h = harness({ settled });
@@ -262,13 +328,12 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" }), expect.objectContaining({ name: "task_context" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
       sessionResumption: {},
     });
-    expect(body.bidiGenerateContentSetup.tools[0].functionDeclarations.map((tool: { name: string }) => tool.name)).toEqual(["propose_work", "ask"]);
     const brief = body.bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("You are Juno");
     expect(brief).toContain("fix the login page");
@@ -388,7 +453,7 @@ describe("call token", () => {
     expect(brief).toContain("Ideas, general knowledge, is it possible, how would it work: answer from what you know.");
     expect(brief).toContain("WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic");
     expect(brief).toContain("Told you're not answering or repeating: answer it now, never restate your last line.");
-    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; else call ask.");
   });
 
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
@@ -559,7 +624,7 @@ describe("brief STATUS", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
-    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; else call ask.");
     expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
     expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
