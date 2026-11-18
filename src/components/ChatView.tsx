@@ -782,6 +782,7 @@ const MessagesList = memo(function MessagesList({
         const m = item.message;
         const callId = m.call?.id;
         const callHere = callId && callAt.get(callId) === m.id;
+        const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -877,6 +878,7 @@ const MessagesList = memo(function MessagesList({
                   isLastBotText={m.id === lastBotTextId}
                   streaming={m === streamingMessage}
                   pictured={pictured.has(m.id)}
+                  peerReply={Boolean(replyComm)}
                   dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
@@ -891,7 +893,6 @@ const MessagesList = memo(function MessagesList({
         })();
         // a call line that opens a day keeps the divider, now that the card may sit further down
         if (!row && !callHere && !(callId && newDay)) return null;
-        const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
