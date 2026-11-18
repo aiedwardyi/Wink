@@ -18,6 +18,7 @@ import { json, readBody } from "./http-helpers.ts";
 import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
+import { pickFiles } from "./memory-pass.ts";
 import { modelPickPatch } from "./pending-model.ts";
 import { parseTimeline, PICKS_FILE } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
@@ -529,7 +530,13 @@ export function createBotRoutes(deps: BotRouteDeps) {
       // a bot with no picks yet has an empty timeline, not a missing one
       if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
       if (text === null) return json(res, 404, { error: "no such topic file" });
-      return json(res, 200, name === PICKS_FILE ? { name, text, entries: parseTimeline(text).entries } : { name, text });
+      if (name !== PICKS_FILE) return json(res, 200, { name, text });
+      const threads = new Map<string, Message[]>();
+      const messages = (thread: string) => threads.get(thread) ?? threads.set(thread, store.messagesFor(thread)).get(thread)!;
+      const own = store.bot(m[1])!.threadId;
+      // an older pick may list another message's screenshots; it is shown without them and the file stays as saved
+      const entries = parseTimeline(text).entries.map((entry) => (entry.files.length ? { ...entry, files: pickFiles(entry, messages(entry.thread ?? own)) } : entry));
+      return json(res, 200, { name, text, entries });
     },
   };
 }

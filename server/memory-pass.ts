@@ -211,6 +211,20 @@ export function replyPictures(messages: readonly Message[], ids: string[], attac
   return found;
 }
 
+/** A saved pick's screenshots, only those on the user's message holding its quote, the last one by the pick's time; all of them when no message holds it. */
+export function pickFiles(entry: Pick<PickEntry, "id" | "at" | "said" | "files">, messages: readonly Message[]): string[] {
+  // a long quote is saved cut short with "..."
+  const said = entry.said?.replace(/\.\.\.$/, "").trim();
+  if (!entry.files.length || !said) return entry.files;
+  const stamp = entry.id.replace(/ \(\d+\)$/, "");
+  const until = entry.at ?? new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime() + 59_999;
+  const holding = messages.filter((message) => sentByPerson(message) && quotes(userTyping(message.text ?? "", false), said));
+  const message = holding.findLast((each) => (each.actedAt ?? each.at) <= until) ?? holding.at(-1);
+  if (!message) return entry.files;
+  const attached = new Set(attachedImages(message.text ?? "").map((path) => path.toLowerCase()));
+  return entry.files.filter((path) => attached.has(path.toLowerCase()));
+}
+
 const promptLine = ({ text, context, pictures }: UserLine) =>
   [
     ...(context ? [`<context>${context}</context>`] : []),

@@ -165,6 +165,16 @@ describe("decision timeline", () => {
     expect(currentPicks(timeline())[0]?.files).toEqual(["/shots/forum.png"]);
   });
 
+  it("stores every screenshot on the message that holds the quote and none from another", async () => {
+    bot("The settings page is done.");
+    say('the Reddit cards on the settings page look off\n\n<attached-image path="/shots/settings.png"/>');
+    bot("Forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    say('Reddit cards, both screens below\n\n<attached-image path="/shots/forum-1.png"/>\n\n<attached-image path="/shots/forum-2.png"/>');
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "Reddit cards" });
+    await settle();
+    expect(currentPicks(timeline())[0]?.files).toEqual(["/shots/forum-1.png", "/shots/forum-2.png"]);
+  });
+
   it("gives two picks answered with the same words their own question's screenshot and time", async () => {
     bot("Forum looks: A - red cards, B - blue cards. Which one?");
     say('I choose B\n\n<attached-image path="/shots/forum.png"/>');

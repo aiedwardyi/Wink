@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { join } from "node:path";
@@ -59,4 +59,32 @@ it("keeps a hand save made after the peer chatted before its snapshot arrived", 
   deliver(peerFolder, folder, peer.device!);
   expect(sync()["MEMORY.md"]).toBe("conflict");
   expect(readMemoryFile(botId).text).toBe(text);
+});
+
+it("shows an old pick only the screenshots on the message holding its quote, and never rewrites the file", async () => {
+  const botId = "bot-shots";
+  const store = new Store(() => ({ instanceId: "fixture", model: "fixture", mode: "automatic" }));
+  store.createBot({ name: "Shots" }, { id: botId, seedMessages: false });
+  const thread = store.bot(botId)!.threadId;
+  store.appendMessage(thread, { role: "user", kind: "text", text: 'the Reddit cards on the settings page look off\n\n<attached-image path="/shots/settings.png"/>' });
+  const pick = store.appendMessage(thread, { role: "user", kind: "text", text: 'Reddit cards\n\n<attached-image path="/shots/forum.png"/>' });
+  const both = store.appendMessage(thread, { role: "user", kind: "text", text: 'also clicking the icon again closes it\n\n<attached-image path="/shots/one.png"/>\n\n<attached-image path="/shots/two.png"/>' });
+  const text = [
+    "# Decision timeline", "",
+    "## 2026-11-17 10:00 | Forum look | current", "- Picked: C - Reddit cards", '- Said: "Reddit cards"', "- Files: /shots/settings.png; /shots/forum.png", `- At: ${pick.at}`, "",
+    "## 2026-11-17 10:01 | Forum icon click | current", "- Picked: Clicking again closes it", '- Said: "clicking the icon again closes it"', "- Files: /shots/one.png; /shots/two.png", `- At: ${both.at}`, "",
+  ].join("\n");
+  const file = join(workspaceDir(botId), "memory", "decisions.md");
+  mkdirSync(join(workspaceDir(botId), "memory"), { recursive: true });
+  writeFileSync(file, text);
+  // SAFETY: memoryTopic uses only the store.
+  const routes = createBotRoutes({ store } as Parameters<typeof createBotRoutes>[0]);
+  const res = new ServerResponse(new IncomingMessage(new Socket()));
+  const end = vi.spyOn(res, "end");
+  await routes.memoryTopic(res, ["", botId, "decisions.md"]);
+  // SAFETY: the route answers decisions.md with its text and parsed entries.
+  const body = JSON.parse(String(end.mock.calls[0]![0])) as { text: string; entries: { files: string[] }[] };
+  expect(body.entries.map((entry) => entry.files)).toEqual([["/shots/forum.png"], ["/shots/one.png", "/shots/two.png"]]);
+  expect(body.text).toBe(text);
+  expect(readFileSync(file, "utf8")).toBe(text);
 });
