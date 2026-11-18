@@ -15,7 +15,7 @@ import {
   type Group,
   type TerminalAttention,
 } from "@/state/store";
-import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
+import { collapsedUnreadCount, unreadConversationCount } from "@/lib/unread";
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
@@ -152,7 +152,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     latestJoined.current = joinedRooms;
   }, [joinedRooms]);
   const unreadCount = unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention);
-  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms));
+  const menuUnread = collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms) > 0;
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
   const menuExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
   const menuQuestion = anyChatNeedsYou(menuChats, menuExceptId);
@@ -779,20 +779,14 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       onClick={() => setDrawerOpen(true)}
       data-menu-needs-you={menuAsking || undefined}
       data-phone-menu={!preview || undefined}
+      data-side={sidebarOnRight ? "right" : "left"}
+      data-terminal-covers={terminalCovers || undefined}
       data-arrival-glow={menuArrival.playing || undefined}
       onAnimationEnd={preview ? undefined : menuArrival.onAnimationEnd}
-      className={`absolute z-30 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink md:hidden ${sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT}${menuAsking ? " needs-you-glow" : ""}${menuArrival.playing ? " arrival-glow" : ""}`}
+      className={`absolute z-30 rounded-md p-1.5 text-ink-secondary hover:text-ink md:hidden ${sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT}${menuAsking ? " needs-you-glow" : ""}${menuArrival.playing ? " arrival-glow" : ""}`}
     >
       <Menu size={18} />
-      {menuUnreadBadge != null && (
-        <span
-          data-menu-unread
-          aria-hidden="true"
-          className={`absolute ${DRAWER_BADGE} flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink`}
-        >
-          {menuUnreadBadge}
-        </span>
-      )}
+      {menuUnread && <span data-menu-unread aria-hidden="true" className={`absolute ${DRAWER_BADGE} h-2 w-2 rounded-full bg-accent`} />}
     </button>
   );
 

@@ -291,7 +291,7 @@ describe("Team rooms for the host", () => {
     } });
     await vi.waitFor(() => expect($('[data-joined-room-row]')).not.toBeNull());
     expect($('[data-joined-room-row] [data-sidebar-unread-count]')?.textContent).toBe("3");
-    expect($('[data-menu-unread]')?.textContent).toBe("3");
+    expect($('[data-menu-unread]')?.textContent).toBe("");
     expect($('[data-joined-room-row]')?.textContent).toContain("Edward: Welcome");
     unread = 0;
     await joinedFrame("r9");

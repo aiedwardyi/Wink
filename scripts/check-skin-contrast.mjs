@@ -6,14 +6,12 @@
 // It parses the CSS rather than taking a second copy of the values, so the
 // check can never pass against a palette that is no longer the shipped one.
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const css = ["src/styles.css", "src/skins/fresh-dark.css"].map((file) => readFileSync(join(root, file), "utf8")).join("\n");
 const sceneCss = readFileSync(join(root, "src/scenes/scenes.css"), "utf8");
-const drawerButton = readFileSync(join(root, "src/lib/drawer-button.ts"), "utf8");
 
 function declarations(body) {
   const tokens = {};
@@ -259,19 +257,13 @@ function iconBacking(source, marker) {
   return null;
 }
 
-// Header icons that float straight on the scene. The phone menu is placed by
-// drawer-button.ts: 30px box, 14px in from the side it opens from, 15px down.
-// The side pane toggle ends the chat header: the header's 20px px-5 in from the
-// right edge, or DRAWER_HEADER_RIGHT (read from drawer-button.ts) when the drawer opens from the right.
-const drawerHeaderRight = drawerButton.match(/DRAWER_HEADER_RIGHT = "[^"]*\bpr-(\d+)\b/);
-if (!drawerHeaderRight) throw new Error("DRAWER_HEADER_RIGHT in src/lib/drawer-button.ts has no pr-N: the side pane toggle inset cannot be derived");
-const DRAWER_HEADER_RIGHT_PX = Number(drawerHeaderRight[1]) * 4;
+// Header icons that float straight on the scene on the phone.
+// `spot` names the box in scripts/phone-backdrops.json that the icon sits over: measured on the live scenes at 360 and 390 for each side the drawer opens from, because a still cannot say where a scene puts its moon on a phone.
 const SCENE_ICONS = [
-  { name: "phone menu", marker: "[data-phone-menu]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [14], sides: ["left", "right"], top: 15 },
-  { name: "side pane toggle", marker: "[data-show-pane-button]", ink: "--color-ink-secondary", min: 3, size: 30, insets: [20, DRAWER_HEADER_RIGHT_PX], sides: ["right"], top: 15 },
+  { name: "phone menu", marker: "[data-phone-menu]", spot: "menu", paint: "color", ink: "--color-ink-secondary", min: 3 },
+  { name: "side pane toggle", marker: "[data-show-pane-button]", spot: "toggle", paint: "color", ink: "--color-ink-secondary", min: 3 },
+  { name: "unread dot", marker: "[data-menu-unread]", spot: "dot", paint: "background", ink: "--color-accent", min: 3 },
 ];
-// A tile is a 2x capture of a 132px thumbnail whose chat was laid out 132 / scale CSS px wide (scale 0.45, snow 0.3): 264 / 293 and 396 / 440 are both 0.9 tile px per CSS px.
-const STILL_PX_PER_CSS_PX = 0.9;
 
 function sharpPath() {
   const pnpm = join(root, "node_modules", ".pnpm");
@@ -283,42 +275,131 @@ function sharpPath() {
   throw new Error("sharp not found: it decodes the scene stills");
 }
 
-/** Brightest pixel of the still under a box `top` CSS px down and each `insets` px in from the `sides` it can sit on. */
-async function brightestBehind(file, { size, insets, sides, top }) {
-  const sharp = createRequire(import.meta.url)(sharpPath());
-  const { data, info } = await sharp(file).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const px = (css) => Math.round(css * STILL_PX_PER_CSS_PX);
-  let best = { r: 0, g: 0, b: 0 };
-  const starts = insets.flatMap((inset) => sides.map((side) => (side === "left" ? px(inset) : info.width - px(inset + size))));
-  for (const x0 of starts) {
-    for (let y = px(top); y < px(top + size); y++) {
-      for (let x = x0; x < x0 + px(size); x++) {
-        const i = (y * info.width + x) * 3;
-        const pixel = { r: data[i], g: data[i + 1], b: data[i + 2] };
-        if (luminance(pixel) > luminance(best)) best = pixel;
-      }
+/** A selector list split at its top-level commas (a comma inside :is() or :not() stays). */
+function splitSelectors(list) {
+  const parts = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === "(") depth++;
+    else if (list[i] === ")") depth--;
+    else if (list[i] === "," && depth === 0) {
+      parts.push(list.slice(from, i));
+      from = i + 1;
     }
   }
-  return best;
+  parts.push(list.slice(from));
+  return parts;
 }
 
-const toHex = ({ r, g, b }) => "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+/** What a scene rule's selector asks of the icon: the drawer side it names and whether it needs a painted scene or a closed terminal. A condition this check cannot evaluate throws, so a rule can never be matched by text alone. */
+function ruleConditions(selector, marker, id) {
+  const sceneFollows = ":is(:has(~ main[data-scene]), :has(~ * main[data-scene]))";
+  const rest = selector
+    .replaceAll("[data-scene-painted]", "")
+    .replaceAll(":not([data-terminal-covers])", "")
+    .replaceAll(marker, "")
+    .replaceAll(`[data-skin="${id}"]`, "")
+    .replace(/\[data-side="(?:left|right)"\]/, "")
+    .replaceAll(sceneFollows, "")
+    .replaceAll("main[data-scene]", "")
+    .replace(/>\s*svg/, "");
+  if (/[[:]/.test(rest)) throw new Error(`scene rule "${selector.trim()}" has a condition scripts/check-skin-contrast.mjs cannot evaluate: add it to ruleConditions or drop it`);
+  return {
+    side: selector.match(/\[data-side="(left|right)"\]/)?.[1] ?? null,
+    painted: selector.includes("[data-scene-painted]"),
+    closedTerminal: selector.includes(":not([data-terminal-covers])"),
+  };
+}
 
-/** Icon ink over what sits behind it: the backing the scene paints, else the scene's brightest pixel there. */
-async function sceneIconProblems(id, tokens, stills, source) {
-  const still = stills.get(id);
-  if (!still) return [];
+/** The token a scene rule paints the icon `marker` with on skin `id`, drawer side `side` and `state` ({painted, covers}): its `color`, or its `background` for a filled mark. Like the cascade: a rule naming `[data-side]` applies to that side only and beats a general one, and among equals the later rule wins. */
+function iconInk(source, marker, id, side, paint = "color", state = { painted: true, covers: false }) {
+  const property = paint === "background" ? "background(?:-color)?" : "color";
+  const declared = new RegExp(`(?:^|[;\\s])${property}:\\s*var\\((--color-[\\w-]+)\\)`);
+  let general = null;
+  let sided = null;
+  for (const [, list, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const token = body.match(declared)?.[1];
+    if (!token) continue;
+    for (const selector of splitSelectors(list)) {
+      if (!selector.includes(marker) || !selector.includes(`[data-skin="${id}"]`)) continue;
+      const need = ruleConditions(selector, marker, id);
+      if (need.side && need.side !== side) continue;
+      if (need.painted && !state.painted) continue;
+      if (need.closedTerminal && state.covers) continue;
+      if (need.side) sided = token;
+      else general = token;
+    }
+  }
+  return sided ?? general;
+}
+
+/** A token's value on the skin; a token the skin does not define fails loudly, since contrast() of nothing never fails. */
+function tokenHex(tokens, token, id) {
+  if (!tokens[token]) throw new Error(`${id}: scene rule uses ${token}, which the skin does not define`);
+  return tokens[token];
+}
+
+/** The scene CSS as the phone sees it: rules that only start at the 768px desktop breakpoint are dropped. */
+function phoneCss(source) {
+  const at = "@media (min-width: 768px)";
+  let out = source;
+  for (let start = out.indexOf(at); start !== -1; start = out.indexOf(at)) {
+    let depth = 0;
+    let end = out.indexOf("{", start);
+    for (; end < out.length; end++) {
+      if (out[end] === "{") depth++;
+      else if (out[end] === "}" && --depth === 0) break;
+    }
+    out = out.slice(0, start) + out.slice(end + 1);
+  }
+  return out;
+}
+
+const DRAWER_SIDES = ["left", "right"];
+const PHONE_WIDTHS = [360, 390];
+// Beyond the painted scene: its WebGL gradient fallback (and the moments before it paints) runs from the app to the panel color, and the phone terminal covers the chat in the panel color.
+const STATES = [
+  { label: "scene", painted: true, covers: false },
+  { label: "scene not painted", painted: false, covers: false },
+  { label: "terminal open", painted: true, covers: true, only: ["phone menu", "unread dot"] },
+];
+
+/** Icon ink over what sits behind it on the phone, per drawer side, phone width and state: the backing the scene paints, else the median pixel measured there (the painted scene) or the skin's own colors. Every drawer side and phone width must be measured. */
+function sceneIconProblems(id, tokens, stills, source, backdrops) {
+  if (!stills.get(id)) return [];
+  const measured = backdrops[id];
+  if (!measured) throw new Error(`${id} has no entry in scripts/phone-backdrops.json: run scripts/measure-phone-backdrops.mjs`);
+  const phone = phoneCss(source);
   const problems = [];
   for (const icon of SCENE_ICONS) {
-    const backingToken = iconBacking(source, icon.marker);
-    const behind = backingToken ? tokens[backingToken] : toHex(await brightestBehind(still, icon));
-    const ratio = contrast(tokens[icon.ink], behind);
-    if (ratio < icon.min) problems.push({ icon: icon.name, ink: icon.ink, behind: backingToken ?? `scene pixel ${behind}`, ratio, min: icon.min });
+    const backingToken = icon.paint === "color" ? iconBacking(phone, icon.marker) : null;
+    for (const drawer of DRAWER_SIDES) {
+      for (const state of STATES) {
+        if (state.only && !state.only.includes(icon.name)) continue;
+        const inkToken = iconInk(phone, icon.marker, id, drawer, icon.paint, state) ?? icon.ink;
+        const behinds = [];
+        if (backingToken) behinds.push([`${backingToken}`, tokenHex(tokens, backingToken, id)]);
+        else if (!state.painted) for (const token of ["--color-app", "--color-panel"]) behinds.push([token, tokenHex(tokens, token, id)]);
+        else if (state.covers) behinds.push(["--color-panel", tokenHex(tokens, "--color-panel", id)]);
+        else {
+          for (const width of PHONE_WIDTHS) {
+            const behind = measured[drawer]?.[width]?.[icon.spot];
+            if (!behind) throw new Error(`${id} (drawer ${drawer}, ${width}px) has no ${icon.spot} backdrop in scripts/phone-backdrops.json: run scripts/measure-phone-backdrops.mjs`);
+            behinds.push([`scene pixel ${behind} at ${width}px`, behind]);
+          }
+        }
+        for (const [behindName, behind] of behinds) {
+          const ratio = contrast(tokenHex(tokens, inkToken, id), behind);
+          if (ratio < icon.min) problems.push({ icon: `${icon.name} (drawer ${drawer}, ${state.label})`, ink: inkToken, behind: behindName, ratio, min: icon.min });
+        }
+      }
+    }
   }
   return problems;
 }
 
-export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, sceneIconProblems };
+export { parseCssRemaps, unmappedEmittedHexes, parseSceneStills, iconBacking, iconInk, sceneIconProblems, sharpPath };
 
 function isDirectRun() {
   const entry = process.argv[1];
@@ -335,6 +416,7 @@ if (isDirectRun()) {
   const emitted = emittedForegrounds(loadGithubDarkDefault());
   const remaps = parseCssRemaps(css);
   const stills = parseSceneStills(sceneCss);
+  const backdrops = JSON.parse(readFileSync(join(root, "scripts/phone-backdrops.json"), "utf8"));
   // Midnight is shipped as a faithful copy of upstream, contrast gaps included;
   // it is reported but not allowed to fail the run.
   const ADVISORY = new Set(["midnight"]);
@@ -369,7 +451,7 @@ if (isDirectRun()) {
       const ratio = contrast(tokens[fg], tokens[bg]);
       if (ratio < min) problems.push({ fg, bg, ratio, min, badge: badgePairs.includes(pair) });
     }
-    const iconProblems = await sceneIconProblems(id, tokens, stills, sceneCss);
+    const iconProblems = sceneIconProblems(id, tokens, stills, sceneCss, backdrops);
     const advisory = ADVISORY.has(id);
     if (missing.length) {
       console.log(`✗ ${id} — undefined token(s): ${[...new Set(missing)].join(", ")}`);

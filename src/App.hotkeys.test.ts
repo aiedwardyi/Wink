@@ -45,9 +45,37 @@ describe("phone drawer menu button", () => {
     expect(button).toContain("sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT");
     expect(button).toContain("md:hidden");
     expect(button).toContain("data-phone-menu");
+    // The scene CSS picks the line color by this side.
+    expect(button).toContain('data-side={sidebarOnRight ? "right" : "left"}');
     // Both sides share one inset and one top, so neither can drift from the header row.
     expect(DRAWER_BUTTON_LEFT).toBe(DRAWER_BUTTON_RIGHT.replace("right-3.5", "left-3.5"));
     expect(DRAWER_BUTTON_LEFT).toContain("top-[15px]");
+  });
+
+  it("has no box behind it, hovered or over a scene", () => {
+    expect(menuButtonSource().split("<Menu")[0]).not.toMatch(/(?:^|[\s"`:])(?:hover:)?bg-/);
+    const scenes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "scenes", "scenes.css"), "utf8");
+    const backed = [...scenes.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selector, body]) => selector.includes("[data-phone-menu]") && /background/.test(body));
+    expect(backed.map(([, selector]) => selector.trim())).toEqual([]);
+  });
+
+  it("keeps the unread dot visible, and tells the scene rules when the terminal covers the menu", () => {
+    const button = menuButtonSource();
+    const dot = button.match(/<span data-menu-unread[^>]*className=\{`([^`]*)`\}/)?.[1] ?? "";
+    expect(dot).toContain("absolute ${DRAWER_BADGE}");
+    expect(dot.split(/\s+/)).toEqual(expect.arrayContaining(["h-2", "w-2", "rounded-full", "bg-accent"]));
+    expect(dot).not.toMatch(/opacity|invisible|hidden|sr-only/);
+    expect(button).toContain("data-terminal-covers={terminalCovers || undefined}");
+  });
+
+  it("leaves the side pane toggle a bare icon on the phone", () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const scenes = readFileSync(join(dir, "scenes", "scenes.css"), "utf8");
+    const backed = scenes.split("\n").filter((line) => line.includes("[data-show-pane-button]") && /background/.test(line));
+    expect(backed.length).toBeGreaterThan(0);
+    for (const line of backed) expect(line.trimStart()).toMatch(/^@media \(min-width: 768px\)/);
+    const toggle = readFileSync(join(dir, "components", "ShowPaneButton.tsx"), "utf8");
+    expect(toggle).not.toMatch(/(?:^|[\s"`])hover:bg-/);
   });
 
   it("centers on the same leading row every page header reserves", () => {
@@ -71,7 +99,7 @@ describe("phone drawer menu button", () => {
   it("badges other unread chats, excluding the open one", () => {
     const button = menuButtonSource();
     expect(button).toContain("data-menu-unread");
-    expect(button).toContain("{menuUnreadBadge}");
+    expect(button).not.toMatch(/\{menuUnread\w*\}/);
     expect(app).toContain("collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms)");
   });
 
