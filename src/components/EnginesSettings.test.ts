@@ -641,6 +641,18 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
+  it("draws each Connections engine in its brand color", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
+    const head = (name: string) => [...host.querySelectorAll("[data-engine-head]")].find((row) => row.textContent!.startsWith(name))!;
+    const ink = (name: string) => head(name).querySelector("[data-brand-mark]")?.getAttribute("style") ?? "";
+    expect(ink("Codex")).toContain("--color-ink:#3594ff");
+    expect(ink("Grok")).toContain("--color-ink:#8b929c");
+    expect(ink("Meta Muse")).toContain("--color-ink:#43ce8b");
+    expect(head("Claude").querySelector("svg")!.getAttribute("class")).toContain("fill-[#d97757]");
+    expect(head("Gemini (Antigravity)").innerHTML).toContain("linearGradient");
+  });
+
   it("shows installed engines once with no path or Details controls", () => {
     const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
     for (const name of ["Claude", "Codex", "Grok", "Gemini (Antigravity)", "Meta Muse"]) {

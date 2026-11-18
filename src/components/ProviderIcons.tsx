@@ -1,7 +1,8 @@
 // Provider marks, keyed by driver kind.
-import { useId } from "react";
+import { useId, type CSSProperties } from "react";
 import { Monitor } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { modelFamilyAccent } from "@/lib/model-chip";
 import { useDevicePixelRatio } from "@/lib/use-device-pixel-ratio";
 
 export interface IconProps {
@@ -198,4 +199,12 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
         </span>
       );
   }
+}
+
+const INK_MARKS = new Set(["codex", "grok", "grokAgent", "museAgent"]);
+
+/** ProviderMark in the site's brand color: the ink marks take their family accent. */
+export function BrandMark(props: IconProps & { driverKind: string }) {
+  if (!INK_MARKS.has(props.driverKind)) return <ProviderMark {...props} />;
+  return <span data-brand-mark="" className="contents" style={{ "--color-ink": modelFamilyAccent(props.driverKind) } as CSSProperties}><ProviderMark {...props} /></span>;
 }
