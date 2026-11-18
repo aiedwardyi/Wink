@@ -127,47 +127,28 @@ try {
   proxyReport = { error: String((error && error.message) || error) };
 }
 
-// boot-reads.ts spawns this worker after the first paint; a bundle without it
-// boots and serves, then quietly never recovers mail, asks or sync notices.
-const bootProbe = join(staging, "server", "probe-boot-reads.mjs");
+const readProbe = join(staging, "server", "probe-cold-thread.mjs");
 writeFileSync(
-  bootProbe,
-  [
-    'import { Worker } from "node:worker_threads";',
-    'const worker = new Worker(new URL("./boot-reads-worker.js", import.meta.url), {',
-    `  workerData: { dataDir: ${JSON.stringify(home)}, now: Date.now(), askThreads: [], reportThreads: [], cutoverAt: null, notices: { migration: "", conflict: [] } },`,
-    "});",
-    'worker.once("message", (reply) => { console.log(JSON.stringify(reply)); process.exit(0); });',
-    'worker.once("error", (error) => { console.log(JSON.stringify({ error: String(error) })); process.exit(0); });',
-  ].join("\n"),
-);
-let bootReport = null;
-try {
-  const { stdout } = await promisify(execFile)(process.execPath, [bootProbe], { cwd: staging });
-  bootReport = JSON.parse(stdout);
-} catch (error) {
-  bootReport = { error: String((error && error.message) || error) };
-}
-
-// cold-thread.ts reads the first page of every chat the store has not loaded through this worker;
-// a bundle without it serves each of those pages by loading the whole chat on the main thread.
-const tailProbe = join(staging, "server", "probe-cold-thread.mjs");
-writeFileSync(
-  tailProbe,
+  readProbe,
   [
     'import { Worker } from "node:worker_threads";',
     'const worker = new Worker(new URL("./cold-thread-worker.js", import.meta.url));',
-    'worker.once("message", (reply) => { console.log(JSON.stringify(reply)); process.exit(0); });',
-    'worker.once("error", (error) => { console.log(JSON.stringify({ error: String(error) })); process.exit(0); });',
-    `worker.postMessage({ id: 1, file: ${JSON.stringify(join(home, "no-messages.db"))}, threadId: "t", count: 1 });`,
+    'const replies = {};',
+    'worker.on("message", (reply) => {',
+    '  replies[reply.id] = reply;',
+    '  if (replies[1] && replies[2]) worker.postMessage(null);',
+    '});',
+    'worker.once("exit", (code) => { console.log(JSON.stringify(replies)); process.exitCode = code; });',
+    `worker.postMessage({ id: 1, request: { kind: "tail", file: ${JSON.stringify(join(home, "no-messages.db"))}, threadId: "t", count: 1 } });`,
+    `worker.postMessage({ id: 2, request: { kind: "boot", input: { dataDir: ${JSON.stringify(home)}, now: Date.now(), askThreads: [], reportThreads: [], cutoverAt: null, notices: { migration: "", conflict: [] } } } });`,
   ].join("\n"),
 );
-let tailReport = null;
+let readReport = null;
 try {
-  const { stdout } = await promisify(execFile)(process.execPath, [tailProbe], { cwd: staging });
-  tailReport = JSON.parse(stdout);
+  const { stdout } = await promisify(execFile)(process.execPath, [readProbe], { cwd: staging, timeout: 10_000, windowsHide: true });
+  readReport = JSON.parse(stdout);
 } catch (error) {
-  tailReport = { error: String((error && error.message) || error) };
+  readReport = { error: String(error) };
 }
 
 // The public MCP process is a second packaged entry point. Send a request and
@@ -254,15 +235,9 @@ if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
   process.exit(1);
 }
 
-if (!bootReport || bootReport.error || !Array.isArray(bootReport.rows?.receipts)) {
-  console.error("the packaged boot-reads-worker.js did not load and reply inside the packaged server dir:");
-  console.error(JSON.stringify(bootReport, null, 2));
-  process.exit(1);
-}
-
-if (!tailReport || tailReport.error || tailReport.id !== 1 || !Array.isArray(tailReport.tail?.messages)) {
-  console.error("the packaged cold-thread-worker.js did not load and reply inside the packaged server dir:");
-  console.error(JSON.stringify(tailReport, null, 2));
+if (!Array.isArray(readReport?.[1]?.tail?.messages) || !Array.isArray(readReport?.[2]?.rows?.receipts)) {
+  console.error("the packaged cold-thread-worker.js did not answer both cold and boot reads:");
+  console.error(JSON.stringify(readReport, null, 2));
   process.exit(1);
 }
 
@@ -283,6 +258,5 @@ if (
 const count = Object.keys(proxyReport.resolved).length;
 console.log(`packaged boot answered health then /api/bots with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
-console.log("packaged boot-reads-worker.js loaded and returned its rows ✓");
-console.log("packaged cold-thread-worker.js loaded and answered a page read ✓");
+console.log("packaged cold-thread-worker.js answered cold and boot reads and exited ✓");
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");

@@ -123,7 +123,7 @@ function scans(rows: Statement[]): string[] {
   const planOf = plans(rows);
   const seen = new Set<string>();
   return rows.filter((row) => !keyed(row, planOf.get(row.sql))).flatMap((row) => {
-    const line = `main-thread scan of messages at boot: ${row.sql.replace(/\s+/g, " ").trim()} (${row.at}). Find the rows in server/boot-reads-worker.ts and apply them by id (ARCH-STARTUP).`;
+    const line = `main-thread scan of messages at boot: ${row.sql.replace(/\s+/g, " ").trim()} (${row.at}). Find the rows in server/cold-thread-worker.ts and apply them by id (ARCH-STARTUP).`;
     if (seen.has(line)) return [];
     seen.add(line);
     return [line];
@@ -144,7 +144,7 @@ function unbounded(rows: Statement[]): string[] {
     const whole = row.params.includes(threadId) && !/\bLIMIT\b/i.test(sql)
       && plan.some((detail) => /^SCAN (m|messages)\b/.test(detail) || /USING (?:COVERING )?INDEX (?:messages_thread|messages_thread_at|sqlite_autoindex_messages_1) \(thread_id=\?\)$/.test(detail));
     if (!json && !whole) return [];
-    const line = `main-thread ${json ? "JSON filter" : "whole-chat read"} after paint: ${sql} (${[row.at, ...(row.via ?? [])].join(" < ")}). Bound it to a key or a LIMITed page, or move it to server/boot-reads-worker.ts (ARCH-STARTUP).`;
+    const line = `main-thread ${json ? "JSON filter" : "whole-chat read"} after paint: ${sql} (${[row.at, ...(row.via ?? [])].join(" < ")}). Bound it to a key or a LIMITed page, or move it to server/cold-thread-worker.ts (ARCH-STARTUP).`;
     if (seen.has(line)) return [];
     seen.add(line);
     return [line];

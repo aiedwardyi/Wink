@@ -3,41 +3,71 @@ import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
-import type { TailRequest } from "./cold-thread-worker.ts";
-import { messageDbFile, threadOver, type ThreadRows } from "./message-db.ts";
+import type { BootReadInput, BootRows } from "./boot-reads.ts";
+import type { ReadReply, ReadRequest, Tail } from "./cold-thread-worker.ts";
+import { messageDbFile, threadOver } from "./message-db.ts";
 import type { Message, Store } from "./store.ts";
 
-type Tail = ThreadRows & { options: Message[] };
+type Read = (request: ReadRequest) => Promise<ReadReply>;
 
-let reader: ((threadId: string, count: number) => Promise<Tail>) | undefined;
+let reader: Read | undefined;
 
-/** Spawns cold-thread-worker.ts: on a cold disk a 237k-row chat's tail held the thread that serves the app ~800 ms. */
-function startReader(): (threadId: string, count: number) => Promise<Tail> {
+function startReader(): Read {
   const source = new URL("./cold-thread-worker.ts", import.meta.url);
   const entry = existsSync(source) ? source : new URL("./cold-thread-worker.js", import.meta.url);
   const worker = new Worker(entry, { execArgv: entry.pathname.endsWith(".ts") ? ["--experimental-strip-types"] : [] });
   worker.unref();
-  const waiting = new Map<number, { resolve: (tail: Tail) => void; reject: (error: Error) => void }>();
+  const waiting = new Map<number, { resolve: (reply: ReadReply) => void; reject: (error: Error) => void }>();
+  let closing = false;
+  const closed = new Promise<void>((resolve) => worker.once("exit", () => {
+    if (reader === read) reader = undefined;
+    stopped(new Error("the cold thread reader stopped"));
+    resolve();
+  }));
+  const closeWhenIdle = () => {
+    if (closing || waiting.size) return;
+    closing = true;
+    worker.postMessage(null);
+  };
   let next = 0;
-  worker.on("message", (reply: { id: number; tail?: Tail; error?: string }) => {
+  worker.on("message", (reply: ReadReply) => {
     const wait = waiting.get(reply.id);
     waiting.delete(reply.id);
-    if (reply.tail) wait?.resolve(reply.tail);
-    else wait?.reject(new Error(reply.error));
+    closeWhenIdle();
+    if ("error" in reply) wait?.reject(new Error(reply.error));
+    else wait?.resolve(reply);
   });
-  const read = (threadId: string, count: number) => new Promise<Tail>((resolve, reject) => {
-    const id = ++next;
-    waiting.set(id, { resolve, reject });
-    worker.postMessage({ id, file: messageDbFile(), threadId, count } satisfies TailRequest);
-  });
+  const read: Read = (request) => {
+    // The old isolate still counts until exit, even after it has answered its last request.
+    if (closing) return closed.then(() => readCold(request));
+    return new Promise((resolve, reject) => {
+      const id = ++next;
+      try {
+        worker.postMessage({ id, request });
+        waiting.set(id, { resolve, reject });
+      } catch (error) {
+        closeWhenIdle();
+        reject(error);
+      }
+    });
+  };
   const stopped = (error: Error) => {
-    if (reader === read) reader = undefined;
+    closing = true;
     for (const wait of waiting.values()) wait.reject(error);
     waiting.clear();
   };
   worker.once("error", stopped);
-  worker.once("exit", () => stopped(new Error("the cold thread reader stopped")));
   return read;
+}
+
+function readCold(request: ReadRequest): Promise<ReadReply> {
+  return (reader ??= startReader())(request);
+}
+
+export async function readBootRows(input: BootReadInput): Promise<BootRows> {
+  const reply = await readCold({ kind: "boot", input });
+  if ("rows" in reply) return reply.rows;
+  throw new Error("the cold thread reader returned no boot rows");
 }
 
 /** The newest `count` rows, chained as Store.thread() chains legacy rows; the oldest stays unchained unless all rows came back. */
@@ -61,7 +91,9 @@ export async function chatListPage(
   let tail: Tail;
   try {
     // one row past the page: offscreenLimit compares the first page row's parent with it
-    tail = await (reader ??= startReader())(threadId, limit + 1);
+    const reply = await readCold({ kind: "tail", file: messageDbFile(), threadId, count: limit + 1 });
+    if (!("tail" in reply)) throw new Error("the cold thread reader returned no tail");
+    tail = reply.tail;
   } catch (error) {
     console.error("cold page read failed; the store answers", threadId, error);
     return null;
