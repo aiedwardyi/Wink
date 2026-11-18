@@ -1,13 +1,13 @@
 // Forum replay, read-only: every ask_user card and phone call in a window, searched against the
 // Board as it stood then. Reads a copy of ~/.orbit, never the live folder, and writes nothing.
 // node scripts/forum-replay.ts <orbit copy> [--days 7] [--end <iso>]
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { createBoardCalls } from "../server/board-calls.ts";
-import { BOARD_USER, REPLY_REF, searchBoard, type Board, type BoardPost } from "../server/board.ts";
+import { createBoardCalls, FORUM_HOLDS_FILE, type ForumHold } from "../server/board-calls.ts";
+import { BOARD_USER, projectIdOf, REPLY_REF, searchBoard, type Board, type BoardPost } from "../server/board.ts";
 
 const [dir, ...rest] = process.argv.slice(2);
 const flag = (name: string) => {
@@ -31,7 +31,15 @@ const boardAt = (at: number): Board => {
   });
   return { search: (input) => searchBoard(view, input) } as Board;
 };
-const callsAt = (at: number) => createBoardCalls({ board: boardAt(at), projectOf: () => "", rings: () => true });
+// the server's boardProject, from today's bots.json
+type Bot = { threadId: string; cwd?: string | null; tasks?: Array<{ threadId: string; cwd?: string | null }> };
+const bots = JSON.parse(readFileSync(join(dir, "bots.json"), "utf8")) as Bot[];
+const projectOf = (threadId: string) => {
+  const bot = bots.find((each) => each.threadId === threadId || each.tasks?.some((task) => task.threadId === threadId));
+  const pinned = bot?.tasks?.find((task) => task.threadId === threadId)?.cwd;
+  return bot ? projectIdOf(pinned === undefined ? bot.cwd : pinned) : "";
+};
+const callsAt = (at: number) => createBoardCalls({ board: boardAt(at), projectOf, room: () => false });
 
 const db = new DatabaseSync(join(dir, "messages.db"), { readOnly: true });
 const end = flag("end") ? Date.parse(flag("end")!) : Number((db.prepare("SELECT max(at) AS at FROM messages").get() as { at: number }).at);
@@ -39,25 +47,17 @@ const start = end - Number(flag("days") ?? 7) * 86_400_000;
 
 type Card = { thread_id: string; at: number; json: string };
 const cards = (db.prepare("SELECT thread_id, at, json FROM messages WHERE kind = 'options' AND at BETWEEN ? AND ?").all(start, end) as Card[])
-  .map((row) => ({ ...row, message: JSON.parse(row.json) as { from?: unknown; card?: { askUser?: boolean; requestId?: string; subtitle: string } } }))
+  .map((row) => ({ ...row, message: JSON.parse(row.json) as { from?: unknown; card?: { askUser?: boolean; requestId?: string; subtitle: string; options?: string[] } } }))
   .filter((row) => row.message.card?.askUser && !row.message.card.requestId);
 // rooms never hold, like the live server
 const solo = cards.filter((row) => !row.message.from);
-const answerable = solo.filter((row) => callsAt(row.at).ask("replay", row.thread_id, row.message.card!.subtitle.trim()));
+const answerable = solo.filter((row) => callsAt(row.at).ask("replay", row.thread_id, row.message.card!.subtitle.trim(), row.message.card!.options ?? []));
 
-type Tool = { name: string; detail?: { input?: string; output?: string[] } };
-const holds = (db.prepare("SELECT thread_id, at, json FROM messages WHERE kind = 'activity' AND at BETWEEN ? AND ? AND json LIKE '%ask_user%' AND json LIKE '%Not asked yet%'").all(start, end) as Card[])
-  .map((row) => ({ ...row, tool: (JSON.parse(row.json) as { tool?: Tool }).tool }))
-  .filter((row) => row.tool?.name.endsWith("ask_user") && row.tool.detail?.output?.[0]?.startsWith("Not asked yet"));
-const question = (tool: Tool) => {
-  try {
-    return String((JSON.parse(tool.detail?.input ?? "{}") as { question?: unknown }).question ?? "").trim();
-  } catch {
-    return "";
-  }
-};
-// re-asked: the same question still reached the user within the hour
-const reasked = holds.filter((hold) => cards.some((row) => row.thread_id === hold.thread_id && row.at > hold.at && row.at - hold.at < 3_600_000 && row.message.card!.subtitle.trim() === question(hold.tool!)));
+// the holds the server logged; re-asked: any question still reached the user on that thread within the hour
+const holdsFile = join(dir, FORUM_HOLDS_FILE);
+const holds = (existsSync(holdsFile) ? readFileSync(holdsFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as ForumHold & { at: number }) : [])
+  .filter((hold) => hold.kind === "ask" && hold.at >= start && hold.at <= end);
+const reasked = holds.filter((hold) => cards.some((row) => row.thread_id === hold.threadId && row.at > hold.at && row.at - hold.at < 3_600_000));
 
 const calls = posts.filter((post) => post.kind === "stuck" && post.source_ref.startsWith("call:") && post.created_at >= start && post.created_at <= end);
 const heldCalls = calls.filter((post) => callsAt(post.created_at).hold("replay", "replay", [], [{ kind: "engine", note: post.title }]).notice);
@@ -67,6 +67,7 @@ const junk = fixes.filter((post) => post.fix.trim().length < 30 || post.fix.trim
 
 const pct = (part: number, whole: number) => (whole ? `${Math.round((part / whole) * 100)}%` : "n/a");
 console.log(JSON.stringify({
+  estimate: "snapshot estimate: today's posts and folders stand in for the Board and threads as they were; holds come from the server's hold log",
   window: { start: new Date(start).toISOString(), end: new Date(end).toISOString() },
   board: posts.length,
   asks: cards.length,

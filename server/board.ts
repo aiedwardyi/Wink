@@ -24,6 +24,7 @@ export const ownReply = (post: BoardPost) => post.author_bot_id === BOARD_USER &
 const copiedChat = (post: BoardPost) => post.author_bot_id === BOARD_USER && !ownReply(post);
 
 const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const;
+export const BOARD_REF_MAX = LIMITS.ref;
 
 const idSchema = z.string().regex(/^p[0-9a-f]{24}$/);
 /** The author as it looked when it posted, so another PC can show a bot it does not have. */
@@ -131,10 +132,15 @@ export interface BoardSearch {
   projectId?: string;
   errorSig?: string;
   solvedOnly?: boolean;
-  /** Share of the query's words a post must hold; a matching error_sig always passes. */
+  /** Share of the query's words a post must hold; a matching error_sig passes unless sigRanksOnly. */
   minShare?: number;
+  sigRanksOnly?: boolean;
+  /** Fewest of the query's words a post must hold. */
+  minHits?: number;
   limit?: number;
   withoutRoom?: boolean;
+  /** Only posts written on this room thread's turns. */
+  roomThread?: string;
 }
 
 export interface BoardOptions {
@@ -339,11 +345,12 @@ export function searchBoard(posts: readonly BoardPost[], input: BoardSearch): Bo
   const minShare = input.minShare ?? 0;
   const scored = posts.flatMap((post) => {
     if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
+    if (input.roomThread !== undefined && !post.source_ref.startsWith(`${ROOM_REF}${input.roomThread}:`)) return [];
     const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
     const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
     const hits = words.filter((word) => held.has(word)).length;
     const share = words.length ? hits / words.length : 0;
-    if (!sig && (!hits || share < minShare)) return [];
+    if ((!sig || input.sigRanksOnly) && (hits < (input.minHits ?? 1) || share < minShare)) return [];
     return [{ post, score: (sig ? 1 : 0) + share, local: Boolean(input.projectId && post.project_id === input.projectId) }];
   });
   scored.sort((a, b) => Number(b.local) - Number(a.local) || b.score - a.score || b.post.updated_at - a.post.updated_at);

@@ -39,7 +39,7 @@ beforeEach(() => {
   sent = [];
   board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-eval-")), "board"), pcId: () => "home" });
   const owner = (threadId: string) => Object.values(BOTS).find((bot) => bot.threadId === threadId)!;
-  boardCalls = createBoardCalls({ board, projectOf: (threadId) => owner(threadId).cwd!.split("\\").at(-1)!.toLowerCase(), rings: () => true });
+  boardCalls = createBoardCalls({ board, projectOf: (threadId) => owner(threadId).cwd!.split("\\").at(-1)!.toLowerCase(), room: () => false });
   const botCalls = createBotCalls({
     send: (payload) => sent.push(payload),
     current: (threadId) => packets.get(threadId)!.blockers,
@@ -149,14 +149,14 @@ describe("board handoff eval", () => {
   });
 
   it("holds only blockers whose fixes fit in the notice; the rest call", async () => {
-    const LOGIN = { kind: "login", note: "Claude: login expired on the work PC, run claude login." };
-    for (const [n, blocker] of [X("14:05"), X("14:05"), LOGIN, LOGIN].entries()) {
+    const Y = { kind: "engine", note: "Claude: overloaded on the work PC, wait for capacity." };
+    for (const [n, blocker] of [X("14:05"), X("14:05"), Y, Y].entries()) {
       const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: blocker.note, body: blocker.note, project_id: "wink", source_ref: `seed:${n}` });
       board.solve(stuck.id, `fix ${n}`);
     }
-    const notice = await blockers(BOTS.carbon!, [X("14:05"), LOGIN]);
+    const notice = await blockers(BOTS.carbon!, [X("14:05"), Y]);
     expect(sent.map((payload) => payload.title)).toEqual(["📞 Carbon is calling"]);
-    expect(packets.get("tc")!.blockers.map((blocker) => blocker.kind)).toEqual(["login"]);
+    expect(packets.get("tc")!.blockers).toEqual([Y]);
     expect(notice).toContain("fix 0");
     expect(notice).toContain("fix 1");
     expect(notice).not.toContain("fix 2");
@@ -171,8 +171,41 @@ describe("board handoff eval", () => {
     expect("answered" in boardCalls).toBe(false);
     expect(board.get(stuck!.id)!.status).toBe("open");
     await blockers(BOTS.astra!, []);
-    expect(board.get(stuck!.id)).toMatchObject({ status: "solved", fix: "" });
+    expect(board.get(stuck!.id)).toMatchObject({ status: "open", fix: "" });
     expect(board.list().some((post) => post.author_bot_id === BOARD_USER)).toBe(false);
+  });
+
+  it("one note clearing two calls solves neither", async () => {
+    const Y = { kind: "engine", note: "Claude: overloaded on the work PC, wait for capacity." };
+    await blockers(BOTS.astra!, [X("14:05"), Y]);
+    expect(board.list()).toHaveLength(2);
+    await blockers(BOTS.astra!, [], ANSWER);
+    expect(board.list().map((post) => post.status)).toEqual(["open", "open"]);
+  });
+
+  it("a Board write error never skips phone cleanup", async () => {
+    await blockers(BOTS.astra!, [X("14:05")]);
+    vi.spyOn(board, "solve").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    await blockers(BOTS.astra!, [], ANSWER);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(sent.map((payload) => payload.title)).toEqual(["📞 Astra is calling"]);
+  });
+
+  it("long notes that differ late get their own posts", () => {
+    const note = (end: string) => `Codex: ${"usage limit ".repeat(24)}${end}`.slice(0, 300);
+    expect(note("one").endsWith("one")).toBe(true);
+    boardCalls.called("astra", "ta", { kind: "engine", note: note("one") });
+    boardCalls.called("astra", "ta", { kind: "engine", note: note("two") });
+    expect(board.list().map((post) => post.body.slice(-3)).sort()).toEqual(["one", "two"]);
+  });
+
+  it("a call posted under the old full-note ref is still solved", async () => {
+    const old = board.post({ author_bot_id: "astra", kind: "stuck", title: X("14:05").note, body: X("14:05").note, project_id: "wink", source_ref: `call:ta:0:engine:${X("14:05").note}` });
+    packets.get("ta")!.blockers = [X("14:05") as TaskResumePacket["blockers"][number]];
+    await blockers(BOTS.astra!, [], ANSWER);
+    expect(board.get(old.id)).toMatchObject({ status: "solved", fix: ANSWER });
   });
 
   it("a cleared blocker that was never called leaves the Board alone", async () => {
@@ -181,11 +214,22 @@ describe("board handoff eval", () => {
     expect(board.list()).toEqual([]);
   });
 
-  it("a phone blocker is held on an open handoff, not only on solved fixes", async () => {
-    board.post({ author_bot_id: "astra", kind: "handoff", title: "Codex usage limit", body: "When Codex says you hit the usage limit, try again later or switch the worker to the Claude account.", project_id: "wink", source_ref: "tool:handoff" });
-    const notice = await blockers(BOTS.carbon!, [X("09:30")]);
-    expect(notice).toContain("switch the worker to the Claude account");
-    expect(sent).toEqual([]);
+  it("a phone blocker rings past an open handoff, tip or reply", async () => {
+    const TEXT = "When Codex says you hit the usage limit, try again later or switch the worker to the Claude account.";
+    board.post({ author_bot_id: "astra", kind: "handoff", title: "Codex usage limit", body: TEXT, project_id: "wink", source_ref: "tool:handoff" });
+    board.post({ author_bot_id: "astra", kind: "tip", title: "Codex usage limit", body: TEXT, project_id: "wink", source_ref: "tool:tip" });
+    const open = board.post({ author_bot_id: "astra", kind: "stuck", title: X("08:00").note, body: X("08:00").note, project_id: "wink", source_ref: "seed:open" });
+    board.post({ author_bot_id: BOARD_USER, kind: "tip", parent_id: open.id, title: open.title, body: "Thanks!", project_id: "wink", source_ref: "reply:r1" });
+    expect(await blockers(BOTS.carbon!, [X("09:30")])).toBe("");
+    expect(sent.map((payload) => payload.title)).toEqual(["📞 Carbon is calling"]);
+  });
+
+  it("a login blocker always rings, even with a matching fix", async () => {
+    const LOGIN = { kind: "login", note: "Claude: login expired on the work PC, run claude login." };
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: LOGIN.note, body: LOGIN.note, project_id: "wink", source_ref: "seed:login" });
+    board.solve(stuck.id, "Ran claude login on the work PC.");
+    expect(await blockers(BOTS.carbon!, [LOGIN])).toBe("");
+    expect(sent.map((payload) => payload.title)).toEqual(["📞 Carbon is calling"]);
   });
 
   it("an open post with no answer yet holds nothing back", async () => {

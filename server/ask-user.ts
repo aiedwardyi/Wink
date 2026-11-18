@@ -63,7 +63,7 @@ export interface AskUserDeps<B extends Sender> {
   /** Runs `post` now, or once the asking turn has replied. */
   whenSettled(botId: string, threadId: string, post: () => void, question: string): void;
   /** Forum posts that may answer the question, for the bot to try first; "" posts the card. */
-  forum?(botId: string, threadId: string, question: string): string;
+  forum?(botId: string, threadId: string, question: string, choices: readonly string[]): string;
 }
 
 export interface AskUserResult {
@@ -88,12 +88,13 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     }
     return { status: 200, body: { closed } };
   }
-  const notice = deps.forum?.(from.id, request.fromThreadId, question);
+  const choices = askUserChoices(request.choices);
+  const notice = deps.forum?.(from.id, request.fromThreadId, question, choices);
   if (notice) return { status: 200, body: { notice } };
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",
-    card: { title: ASK_USER_TITLE, subtitle: question, options: askUserChoices(request.choices), askUser: true, staysOpen: true },
+    card: { title: ASK_USER_TITLE, subtitle: question, options: choices, askUser: true, staysOpen: true },
   };
   // rooms attribute the question to the member who asked, like show_image
   if (owner.group) message.from = { botId: from.id, name: from.name, color: from.color };

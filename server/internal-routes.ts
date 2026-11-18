@@ -230,8 +230,12 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
       if (saved && body.blockers !== undefined) {
-        deps.boardCalls?.cleared(body.fromThreadId, current.blockers, saved.blockers, body.completed_note);
         deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+        try {
+          deps.boardCalls?.cleared(body.fromThreadId, current.blockers, saved.blockers, body.completed_note);
+        } catch (cause) {
+          console.warn(`board: ${cause}`);
+        }
       }
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
@@ -493,7 +497,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
           whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
-          forum: (botId, threadId, question) => deps.boardCalls?.ask(botId, threadId, question) ?? "",
+          forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
         },
         askUserRequestSchema.parse(body),
       );
