@@ -5,7 +5,7 @@
 // phone's own selection.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, X } from "lucide-react";
+import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, Trash2, X } from "lucide-react";
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
 import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
@@ -391,6 +391,8 @@ export function MessageMenu({
   onReply,
   onPin,
   onReact,
+  onDelete,
+  selectText = true,
   onClose,
   closing = false,
 }: {
@@ -398,9 +400,11 @@ export function MessageMenu({
   y: number;
   opener: HTMLElement;
   target: MessageMenuTarget;
-  onReply: (message: Message) => void;
-  onPin: (message: Message) => void;
+  onReply?: (message: Message) => void;
+  onPin?: (message: Message) => void;
   onReact?: (emoji: string) => void;
+  onDelete?: () => void;
+  selectText?: boolean;
   onClose: () => void;
   closing?: boolean;
 }) {
@@ -559,7 +563,7 @@ export function MessageMenu({
           role="menuitem"
           data-menu-pin
           onClick={() => {
-            onPin(message);
+            onPin?.(message);
             closeMenu(opener, ref.current, onClose);
           }}
           className={cn(ROW_CLASS, touch && "min-h-10")}
@@ -570,7 +574,7 @@ export function MessageMenu({
           {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
-      {message.kind === "text" && message.quick?.state !== "answer" && (
+      {onReply && message.kind === "text" && message.quick?.state !== "answer" && (
         <button
           type="button"
           role="menuitem"
@@ -598,7 +602,22 @@ export function MessageMenu({
         <Copy size={16} className="text-ink-secondary" />
         {t("chat.copy")}
       </button>
-      {touch && (
+      {onDelete && (
+        <button
+          type="button"
+          role="menuitem"
+          data-menu-delete
+          onClick={() => {
+            onDelete();
+            closeMenu(opener, ref.current, onClose);
+          }}
+          className={cn(ROW_CLASS, "text-danger", touch && "min-h-10")}
+        >
+          <Trash2 size={16} />
+          {t("chrome.delete")}
+        </button>
+      )}
+      {touch && selectText && (
         <button
           type="button"
           role="menuitem"

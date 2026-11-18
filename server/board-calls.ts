@@ -1,6 +1,6 @@
-// Bot calls feed the Board: a call leaves a stuck post, the user's answer becomes its fix,
-// and a later bot with the same blocker gets that fix instead of calling. No model calls.
-import { BOARD_USER, boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
+// Bot calls feed the Board: a call leaves a stuck post, the user's answer solves it, and a later
+// bot with the same blocker gets the fix a bot posted instead of calling. No model calls.
+import { boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 
 type Blocker = TaskResumePacket["blockers"][number];
@@ -98,25 +98,11 @@ export function createBoardCalls(deps: BoardCallDeps) {
         source_ref: ref(episode),
       });
     },
-    /** The user's next message on a called thread is the answer: a fix reply, and the post is solved. */
-    answered(threadId: string, message: { id: string; text?: string }): BoardPost[] {
-      const text = message.text?.trim();
-      if (!text) return [];
+    /** The user's next message on a called thread answers it: the post is solved, and their words stay in chat. */
+    answered(threadId: string, message: { text?: string }): BoardPost[] {
+      if (!message.text?.trim()) return [];
       const open = deps.board.list().filter((post) => post.kind === "stuck" && post.status === "open" && post.source_ref.startsWith(callRef(threadId)));
-      return open.map((stuck) => {
-        deps.board.post({
-          author_bot_id: BOARD_USER,
-          parent_id: stuck.id,
-          kind: "fix",
-          title: stuck.title,
-          body: text,
-          fix: text,
-          error_sig: stuck.error_sig,
-          project_id: stuck.project_id,
-          source_ref: `answer:${message.id}:${stuck.id}`,
-        });
-        return deps.board.get(stuck.id)!;
-      });
+      return open.map((stuck) => deps.board.solve(stuck.id, stuck.fix)!);
     },
     /** A turn that held a Board fix and ended without calling: the fix helped. */
     turnEnded(threadId: string, ok: boolean): void {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { BOARD_DIR, boardPostId, createBoard, errorSig, mergeBoardPosts, projectIdOf, type BoardPost } from "./board.ts";
+import { BOARD_DIR, BOARD_USER, boardPostId, createBoard, errorSig, mergeBoardPosts, projectIdOf, type BoardPost } from "./board.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { CONFLICT_NOTICE_V2 } from "./thread-sync.ts";
 
@@ -47,7 +47,7 @@ describe("board posts", () => {
     const board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-")), BOARD_DIR), pcId: () => "pc-a", changed: () => changes++ });
     const stuck = board.post(STUCK);
     changes = 0;
-    board.post({ author_bot_id: "user", kind: "fix", parent_id: stuck.id, title: STUCK.title, body: "Use Claude.", fix: "Use Claude.", source_ref: "answer:m1" });
+    board.post({ author_bot_id: "carbon", kind: "fix", parent_id: stuck.id, title: STUCK.title, body: "Use Claude.", fix: "Use Claude.", source_ref: "tool:tc:m1" });
     expect(changes).toBe(1);
     expect(board.get(stuck.id)).toMatchObject({ status: "solved", fix: "Use Claude." });
   });
@@ -132,5 +132,25 @@ describe("board Drive sync", () => {
     writeFileSync(join(folder, BOARD_DIR, "pc-a", `${post.id}.json`), "{\"id\":");
     expect(b.board.sync(folder, ids).pulled).toBe(0);
     expect(b.board.list()).toEqual([]);
+  });
+
+  it("a deleted post leaves every PC and no sync brings it back", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = a.board.post(STUCK);
+    const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    expect(b.board.get(reply.id)).toBeDefined();
+    expect(a.board.remove(reply.id)).toBe(true);
+    for (let pass = 0; pass < 2; pass++) {
+      a.board.sync(folder, ids);
+      b.board.sync(folder, ids);
+    }
+    for (const side of [a, b]) expect(side.board.list().map((post) => post.id)).toEqual([stuck.id]);
+    expect(createBoard({ dir: a.board.dir, pcId: () => "pc-a" }).get(reply.id)).toBeUndefined();
+    expect(readdirSync(join(folder, BOARD_DIR, "pc-b"))).not.toContain(`${reply.id}.json`);
   });
 });

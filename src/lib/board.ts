@@ -36,8 +36,10 @@ export interface BoardPost {
   author?: BoardAuthor;
 }
 
-/** The user's own answers carry this author id. */
+/** The user's Forum replies carry this author id. */
 export const BOARD_USER = "user";
+/** Mirrors ownReply in server/board.ts: only replies typed in the Forum's box can be deleted. */
+export const isOwnReply = (post: BoardPost) => post.author_bot_id === BOARD_USER && post.source_ref.startsWith("reply:");
 
 /** The sidebar selection for the Forum. It never matches a bot, group or room id. */
 export const FORUM_SELECTION = "forum:board";
@@ -90,6 +92,9 @@ export function sortBoardThreads<T extends { post: BoardPost; replies: readonly 
 
 export const replyToBoard = (parentId: string, body: string): Promise<{ post: BoardPost }> =>
   request("/api/board/reply", { method: "POST", body: JSON.stringify({ parent_id: parentId, body }) });
+
+export const deleteFromBoard = (id: string): Promise<{ id: string }> =>
+  request("/api/board/delete", { method: "POST", body: JSON.stringify({ id }) });
 
 export function useBoardPosts(): { posts: BoardPost[] | null; failed: boolean } {
   const [posts, setPosts] = useState<BoardPost[] | null>(null);

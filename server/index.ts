@@ -8540,6 +8540,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── device picker: PCs in the sync folder ──
     if (method === "GET" && path === BOARD_ROUTES.list) return boardRoutes.list(res);
     if (method === "POST" && path === BOARD_ROUTES.reply) return await boardRoutes.reply(req, res);
+    if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
