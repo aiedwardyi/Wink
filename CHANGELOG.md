@@ -2,6 +2,22 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.281] - 2026-11-18
+
+### Added
+- GPT-6.2 Sol and GPT-6.2 Astra are here: bots on GPT-6.1 Sol move to GPT-6.2 Sol and bots on GPT-6 Astra move to GPT-6.2 Astra, with one line in the chat saying so, and ChatGPT sign-in through the Codex CLI can pick 6.2. Both are in the Model Index.
+
+### Changed
+- On a desktop, the terminal opens beside the chat instead of over it, and Ctrl+F still searches the chat while it is open.
+- The Memory File in Settings is view-only; Long-Term Memory can still be edited.
+
+### Fixed
+- Calls answer status questions from the live to-do list, including decisions waiting on you and builds in progress.
+- In a call, a short yes or no gets an answer, End always ends the call, even with the call menu open, and call settings open only from the gear.
+- On a phone, bot replies reach the full chat width on every theme, Precision included.
+- The side pane button's count matches the open workers in the sidebar.
+- On a phone, the side pane button stays readable over scene themes, and the model name no longer slides under it.
+
 ## [1.0.280] - 2026-11-18
 
 ### Changed
