@@ -320,25 +320,31 @@ describe("Google reader kind recovery", () => {
     let poking = true;
     let fresh = false;
     let pokes = 0;
+    let release: (() => void) | undefined;
+    let held = 0;
     vi.spyOn(drive, "fetch").mockImplementation(async (input, init) => {
       if (fresh && poking) {
         fresh = false;
         pokes++;
         sync.poked();
-        await new Promise((done) => setTimeout(done, 3_000));
+        await new Promise<void>((done) => { release = done; held = 0; });
       }
       return fetch(input, init);
     });
     const sync = boot(dataDir, () => true, { prepare: () => { fresh = true; } });
     sync.resume();
     window();
-    // Pass work reads real files, so time moves in steps it can keep up with.
-    for (let s = 0; s < 69; s++) await vi.advanceTimersByTimeAsync(1_000);
+    // Pass work reads real files, so time moves in steps it can keep up with; each poked pass holds 3 s.
+    const step = async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (release && ++held >= 3) { release(); release = undefined; }
+    };
+    for (let s = 0; s < 69; s++) await step();
     expect(pokes).toBeGreaterThan(20);
     expect(existsSync(join(dataDir, "google-drive", path))).toBe(true);
     expect(value(join(dataDir, "google-drive"))).toBe("icon-36");
     poking = false;
-    for (let s = 0; s < 5; s++) await vi.advanceTimersByTimeAsync(1_000);
+    for (let s = 0; s < 5; s++) await step();
   });
 
   it("records a wake when a poke runs before the overdue timer", async () => {
