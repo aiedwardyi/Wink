@@ -398,6 +398,11 @@ it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row
   expect(css).toContain('html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }');
 });
 
+it("the tab row never scrolls up and down: the phone tap area hangs past the buttons and would lift the selected pill off center", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  expect(css).toMatch(/^\.show-pane-tabs \{[^}]*overflow-y: (hidden|clip)/m);
+});
+
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
