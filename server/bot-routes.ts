@@ -18,13 +18,13 @@ import { json, readBody } from "./http-helpers.ts";
 import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
-import { pickFiles } from "./memory-pass.ts";
 import { modelPickPatch } from "./pending-model.ts";
 import { parseTimeline, PICKS_FILE } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
-import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile, workspaceDir } from "./workspace.ts";
+import { timelinePicks } from "./timeline-picks.ts";
+import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopicResult, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 type BotRouteDeps = {
   cancelUsageWait?: (botId: string) => void;
@@ -513,7 +513,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
     },
     memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
-      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
       // Decode before validating: a UI-sent name arrives percent-encoded
       // ("my notes.md" → "my%20notes.md"), and an encoded traversal
       // ("..%2F..") must be judged by what it decodes TO, not slip through
@@ -526,16 +527,11 @@ export function createBotRoutes(deps: BotRouteDeps) {
         return json(res, 400, { error: "invalid topic name" });
       }
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
-      const text = readMemoryTopic(m[1], name);
-      // a bot with no picks yet has an empty timeline, not a missing one
-      if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
-      if (text === null) return json(res, 404, { error: "no such topic file" });
+      const text = readMemoryTopicResult(m[1], name);
+      if (text === undefined && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
+      if (text == null) return json(res, 404, { error: "no such topic file" });
       if (name !== PICKS_FILE) return json(res, 200, { name, text });
-      const threads = new Map<string, Message[]>();
-      const messages = (thread: string) => threads.get(thread) ?? threads.set(thread, store.messagesFor(thread)).get(thread)!;
-      const own = store.bot(m[1])!.threadId;
-      // an older pick may list another message's screenshots; it is shown without them and the file stays as saved
-      const entries = parseTimeline(text).entries.map((entry) => (entry.files.length ? { ...entry, files: pickFiles(entry, messages(entry.thread ?? own)) } : entry));
+      const entries = timelinePicks(parseTimeline(text).entries, bot, store);
       return json(res, 200, { name, text, entries });
     },
   };

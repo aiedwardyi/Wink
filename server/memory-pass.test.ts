@@ -14,7 +14,6 @@ import {
   noteSummary,
   parseFacts,
   pendingRows,
-  replyPictures,
   secretLike,
   userTyping,
   type MemoryPass,
@@ -22,6 +21,7 @@ import {
 } from "./memory-pass.ts";
 import { memoryNotesEnabled } from "./config.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { replyTurns } from "./pick-sources.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
@@ -138,11 +138,11 @@ describe("memory pass", () => {
       { instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText: defaultGenerateText },
       { instanceId: "claude-bound", driverKind: "claudeAgent", enabled: true, generateText },
     ], { instanceId: "claude-bound", available: true });
-    say("t1", "I prefer concise replies.");
-    say("t1", "I use pnpm for my projects.");
+    const first = say("t1", "I prefer concise replies.");
+    const second = say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
     expect(defaultGenerateText).not.toHaveBeenCalled();
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "I prefer concise replies." }, { text: "I use pnpm for my projects." }]), {
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ id: first.id, text: first.text! }, { id: second.id, text: second.text! }]), {
       signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true,
     });
     expect(memoryFileRaw("bot-t1")).toBe(
@@ -157,11 +157,11 @@ describe("memory pass", () => {
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
     const generateText = vi.fn(async () => recorded.reply.text);
     generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
-    store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
-    say("t1", "the second one");
+    const question = store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    const answer = say("t1", "the second one");
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(`<source message_id="${answer.id}" question_id="${question.id}" />\n<context>${question.text}</context>\nthe second one`), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
@@ -658,7 +658,8 @@ describe("memory pass", () => {
     await settle("t1", 3 * MINUTE);
     const prompt = generate.mock.calls[0]![0];
     expect(prompt).toContain("<context>");
-    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\nI use pnpm for my projects\.\n<\/user_lines>/);
+    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\n<source [^>]+>/);
+    expect(prompt).toContain("\nI use pnpm for my projects.\n</user_lines>");
     expect(prompt).not.toContain("Some setup. ".repeat(40));
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
@@ -747,11 +748,11 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
-  it("keeps the root of a picture path a bot names", () => {
+  it("does not offer files only named in a bot reply as saved pictures", () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Mocks: /tmp/mock/C.png, ~/mock/B.png and C:\\mocks\\A.png. Which one?" });
     const { id } = say("t1", "c");
-    const shown = replyPictures(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
-    expect(shown?.map(({ path }) => path)).toEqual(["/tmp/mock/C.png", "~/mock/B.png", "C:\\mocks\\A.png"]);
+    const shown = replyTurns(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
+    expect(shown?.pictures).toEqual([]);
   });
 
   it("never lands the same pick twice", async () => {

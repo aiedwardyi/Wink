@@ -246,10 +246,16 @@ export function memoryHealth(botId: string): MemoryHealth {
  * route — a future caller must not be able to turn this into a read of an
  * arbitrary path. Null for anything invalid or unreadable. */
 export function readMemoryTopic(botId: string, name: string): string | null {
+  return readMemoryTopicResult(botId, name) ?? null;
+}
+
+/** Undefined for a missing topic, null for other read errors. */
+export function readMemoryTopicResult(botId: string, name: string): string | null | undefined {
   if (!isMemoryTopicName(name)) return null;
   try {
     return readFileSync(join(workspaceDir(botId), "memory", name), "utf8");
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     return null;
   }
 }

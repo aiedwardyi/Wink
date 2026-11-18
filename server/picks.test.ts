@@ -62,6 +62,14 @@ describe("applyPicks", () => {
     expect(currentPicks(merged)).toHaveLength(2);
     expect(parseTimeline(merged).entries.find(({ picked }) => picked === "A - plain list")?.tweaks).toHaveLength(1);
   });
+  it("keeps same-time snapshots separate when their source messages differ", () => {
+    const first = applyPicks("", [pick("forum", "B", "b", at(17, 10), { thread: "t1", messageId: "m1", questionId: "q1", files: ["/shots/first.png"] })])!.text;
+    const next = applyPicks("", [pick("forum", "B", "b", at(17, 10), { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/next.png"] })])!.text;
+    const merged = mergeTimelines(first, next)!;
+    expect(parseTimeline(merged).entries).toHaveLength(2);
+    expect(mergeTimelines(merged, first)).toBe(merged);
+    expect(mergeTimelines(merged, next)).toBe(merged);
+  });
   it("replaces the current pick on the same question in one write, the old one struck with a pointer", () => {
     const first = applyPicks("", [pick("Forum look", "A - plain list", "a looks cleanest", at(17, 10))])!;
     const next = applyPicks(first.text, [pick("forum  LOOK!", "C - Reddit cards", "actually c", at(17, 10, 40))])!;
@@ -107,6 +115,13 @@ describe("applyPicks", () => {
     const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
     const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
     expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 12), { tapped: true })])).toBeNull();
+  });
+  it("keeps a retyped pick's binding and attachments after it syncs with the tap", () => {
+    const tapped = applyPicks("", [pick("forum", "B", "b", at(17, 10), { tapped: true, thread: "t1", messageId: "m1", questionId: "q1", files: ["/shots/tap.png"] })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "B", "I choose B", at(17, 11), { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/typed.png"] })])!.text;
+    expect(parseTimeline(mergeTimelines(tapped, typed)!).entries).toMatchObject([
+      { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/typed.png"] },
+    ]);
   });
   it("dates a retyped tap at the typing, so an older delayed pick never replaces it", () => {
     const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
@@ -267,5 +282,10 @@ describe("applyPicks order", () => {
     const a = applyPicks("", [pick("forum look", "A - plain list", "a", at(17, 10))])!;
     const c = applyPicks(a.text, [pick("forum look", "C - Reddit cards", "actually c", at(17, 10, 1))])!;
     expect(applyPicks(c.text, [pick("forum look", "A - plain list", "a", at(17, 10))])).toBeNull();
+    const first = { ...pick("forum look", "A - plain list", "a", at(17, 10)), thread: "t1", messageId: "m1", questionId: "q1" };
+    const second = { ...pick("forum look", "C - Reddit cards", "actually c", first.at), thread: "t1", messageId: "m2", questionId: "q1" };
+    const tied = applyPicks("", [first, second])!;
+    expect(currentPicks(tied.text)[0]?.messageId).toBe("m2");
+    expect(applyPicks(tied.text, [first, second])).toBeNull();
   });
 });

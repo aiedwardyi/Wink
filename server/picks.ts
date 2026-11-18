@@ -24,7 +24,7 @@ const HEADER = `Current picks, newest first: the user's own, each beating older 
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -47,8 +47,10 @@ export type PickEntry = {
   /** Picked by tapping a card; a typed pick on the question always beats it. */
   tapped?: boolean;
   files: string[];
-  /** The room it was picked in, which links its files; unset for the bot's own chat. */
+  /** The task or room that holds the source messages and links its files. */
   thread?: string;
+  messageId?: string;
+  questionId?: string;
   tweaks: Tweak[];
   extra: string[];
 };
@@ -66,6 +68,8 @@ export type PickChange =
       overPictures?: Picture[];
       files?: string[];
       thread?: string;
+      messageId?: string;
+      questionId?: string;
       tapped?: boolean;
       legacy?: { day: string; line: string };
     }
@@ -108,9 +112,11 @@ export function pickStamp(ms: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify([pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
+const identity = (entry: PickEntry) => entry.source ?? createHash("sha256").update(JSON.stringify(entry.messageId
+  ? [pickKey(entry.key), entry.thread, entry.messageId]
+  : [pickKey(entry.key), entry.id, entry.picked, entry.said, entry.at])).digest("hex");
 
-const entryTime = (entry: PickEntry) => {
+export const entryTime = (entry: PickEntry) => {
   const stamp = entry.id.replace(/ \(\d+\)$/, "");
   return entry.at ?? new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime();
 };
@@ -142,6 +148,8 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Source" && /^[a-f0-9]{64}$/.test(value)) entry.source = value;
     else if (field === "Tapped" && value === "yes") entry.tapped = true;
     else if (field === "Thread" && /^[\w-]+$/.test(value)) entry.thread = value;
+    else if (field === "Message" && /^[\w-]+$/.test(value)) entry.messageId = value;
+    else if (field === "Question" && /^[\w-]+$/.test(value)) entry.questionId = value;
     else if (field === "At" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) entry.at = Number(value);
     else entry.extra.push(line);
   }
@@ -163,6 +171,8 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.at === undefined ? [] : [`- At: ${entry.at}`]),
       ...(entry.tapped ? ["- Tapped: yes"] : []),
       ...(entry.thread ? [`- Thread: ${entry.thread}`] : []),
+      ...(entry.messageId ? [`- Message: ${entry.messageId}`] : []),
+      ...(entry.questionId ? [`- Question: ${entry.questionId}`] : []),
       ...entry.tweaks.map(({ at, said }) => `- Tweak ${at}: "${said}"`),
       ...entry.extra,
     ].join("\n"),
@@ -217,12 +227,22 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     }
     const picked = clip(change.picked, PICKED_MAX);
     if (!picked) continue;
+    if (change.messageId && entries.some((entry) => entry.messageId === change.messageId && entry.thread === change.thread && pickKey(entry.key) === pickKey(key))) continue;
     if (current && sameOption(current.picked, picked)) {
       if (overTap) {
         // pinned first: the identity hashes the time, and a merge must still find the tap
         current.source = identity(current);
         delete current.tapped;
         current.at = change.at;
+        if (change.messageId) {
+          current.thread = change.thread;
+          current.messageId = change.messageId;
+          current.questionId = change.questionId;
+          current.said = said;
+          current.files = change.files ?? [];
+          current.picture = change.picture;
+          current.overPictures = change.overPictures ?? [];
+        }
         retyped = true;
       }
       continue;
@@ -248,7 +268,9 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (change.picture) entry.picture = change.picture;
     if (tapped) entry.tapped = true;
     if (change.thread) entry.thread = change.thread;
-    if (change.at % 60_000) entry.at = change.at;
+    if (change.messageId) entry.messageId = change.messageId;
+    if (change.questionId) entry.questionId = change.questionId;
+    if (change.messageId || change.at % 60_000) entry.at = change.at;
     entries.push(entry);
     picks += 1;
   }
@@ -296,6 +318,12 @@ export function mergeTimelines(a: string, b: string): string | null {
       const before = merged.get(key);
       if (!before) {
         merged.set(key, { ...entry, source: key, replacedBy: undefined });
+        continue;
+      }
+      const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
+      const bound = typed ?? (before.messageId ? before : entry);
+      if (bound.messageId) {
+        merged.set(key, { ...bound, source: key, replacedBy: undefined, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
         continue;
       }
       const both: PickEntry = {
