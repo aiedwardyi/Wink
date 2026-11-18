@@ -10,10 +10,10 @@ type Box = { tree: number; min: number; full: number; free: number; flow?: HTMLE
 type Placed = { tree: number; rows: number };
 
 // rows: the line above the Git rows, which give or take what the tree gains or loses.
-// The other line moves only the Git rows and the code; when the rows have no give that way, the move goes to the tree.
+// The other line moves only the Git rows and the code; when the rows can neither grow nor shrink, the move goes to the tree.
 export function MapSplit({ target, rows = false }: { target: RefObject<HTMLElement | null>; rows?: boolean }) {
   const { locale } = useI18n();
-  const drag = useRef<Box & { y: number; at: Placed; touched: { tree: boolean; rows: boolean }; frame: number } | null>(null);
+  const drag = useRef<Box & { y: number; at: Placed; split: string; touched: { tree: boolean; rows: boolean }; frame: number } | null>(null);
   useEffect(() => {
     const saved = Number(localStorage.getItem(KEY));
     if (saved > 0) target.current?.style.setProperty("--map-split", `${saved}%`);
@@ -31,10 +31,13 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     if (flow ? !list : rows) return null;
     const row = list?.firstElementChild?.getBoundingClientRect().height ?? 0;
     const room = handle.parentElement?.querySelector<HTMLElement>(":scope > .map-code")?.clientHeight ?? 0;
+    // No code view below: the rows box fills the pane, and the room under its list is give too.
+    const pad = flow && getComputedStyle(flow);
+    const empty = flow && list && pad && !flow.nextElementSibling ? Math.max(0, flow.clientHeight - (Number.parseFloat(pad.paddingTop) || 0) - (Number.parseFloat(pad.paddingBottom) || 0) - list.offsetHeight) : 0;
     return {
       tree: top.getBoundingClientRect().height, min: Number.parseFloat(getComputedStyle(top).minHeight) || 0, full: top.scrollHeight + top.offsetHeight - top.clientHeight,
       // The rows keep one row, take back only what they hide, and never take the code view under REST.
-      free: Math.max(0, room - REST), flow, tall: flow?.getBoundingClientRect().height ?? 0, shrink: list ? Math.max(0, list.clientHeight - row) : 0, grow: list ? list.scrollHeight - list.clientHeight : 0,
+      free: Math.max(0, room - REST), flow, tall: flow?.getBoundingClientRect().height ?? 0, shrink: list ? Math.max(0, list.clientHeight - row) + empty : 0, grow: list ? list.scrollHeight - list.clientHeight : 0,
     };
   };
   const place = (box: Box, by: number): Placed => {
@@ -46,7 +49,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
       const moved = Math.min(size, tree, give > 0 ? give : code);
       return { tree: box.tree + sign * moved, rows: give > 0 ? box.tall - sign * moved : box.tall };
     }
-    if (give > 0) return { tree: box.tree, rows: box.tall + sign * Math.min(size, give, code) };
+    if (box.shrink || box.grow) return { tree: box.tree, rows: box.tall + sign * Math.min(size, give, code) };
     return { tree: box.tree + sign * Math.min(size, tree, code), rows: box.tall };
   };
   const keep = (box: Box, at: Placed) => {
@@ -75,6 +78,8 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     cancelAnimationFrame(now.frame);
     handle.removeAttribute("data-drag");
     lift(handle, false);
+    // A drag that comes back to its start keeps the tree's share, not the last frame's pixels.
+    target.current?.style.setProperty("--map-split", now.split);
     now.flow?.style.removeProperty("--map-rows");
     keep(now, now.at);
   };
@@ -88,7 +93,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
       event.currentTarget.setPointerCapture?.(event.pointerId);
       event.currentTarget.setAttribute("data-drag", "");
       lift(event.currentTarget, true);
-      drag.current = { ...box, y: event.clientY, at: { tree: box.tree, rows: box.tall }, touched: { tree: false, rows: false }, frame: 0 };
+      drag.current = { ...box, y: event.clientY, at: { tree: box.tree, rows: box.tall }, split: target.current?.style.getPropertyValue("--map-split") ?? "", touched: { tree: false, rows: false }, frame: 0 };
     }}
     onPointerMove={event => {
       const now = drag.current;
