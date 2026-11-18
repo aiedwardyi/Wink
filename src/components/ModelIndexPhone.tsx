@@ -106,6 +106,17 @@ export function Badge({ provider, r, clip }: { provider: ChartProvider; r: numbe
   );
 }
 
+export function PhoneBadge({ provider, r }: { provider: ChartProvider; r: number }) {
+  const size = r * 1.5;
+  return provider === "other" ? (
+    <circle r={r} style={{ fill: color(provider) }} />
+  ) : (
+    <g transform={`translate(${-size / 2} ${-size / 2})`}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size} />
+    </g>
+  );
+}
+
 /** Index pills that scroll sideways under an edge fade; the picked one scrolls into view. */
 export function PhoneTabs<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ id: T; label: string }>; onChange: (id: T) => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -525,9 +536,6 @@ export function PhoneChart({
         </button>
         <svg ref={svgRef} width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block overflow-visible" role="group" aria-label={title}>
           <defs>
-            <clipPath id={clip} clipPathUnits="objectBoundingBox">
-              <circle cx={0.5} cy={0.5} r={0.46} />
-            </clipPath>
             <linearGradient id={`${clip}-best`} x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.085 }} />
               <stop offset="1" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.02 }} />
@@ -586,7 +594,7 @@ export function PhoneChart({
             return (
               <g key={`dot-${row.model}`} data-mi-dot={row.model} transform={`translate(${at.x.toFixed(1)} ${at.y.toFixed(1)})`}>
                 <g pointerEvents="none" opacity={line && row !== line ? 0.3 : undefined}>
-                  <Badge provider={row.provider} r={BADGE} clip={clip} />
+                  <PhoneBadge provider={row.provider} r={BADGE} />
                 </g>
                 <circle
                   r={14}
