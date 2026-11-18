@@ -15,7 +15,7 @@ import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_T
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
-import { mergeTaskAsks } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, mergeTaskAsks } from "./task-asks.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
@@ -113,6 +113,52 @@ describe("call token", () => {
 
     await h.post("token", { callId: first.data.callId, resume: true });
     expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain(taskContext);
+  });
+
+  it("includes other tasks' live decisions without reviving a copy closed in a newer record", async () => {
+    const h = harness();
+    const priorThread = h.bot.threadId;
+    const priorMessage = h.store.activePath(priorThread)[0]!;
+    const now = Date.now();
+    const prior = seedTaskResumePacket({ botId: h.bot.id, threadId: priorThread, text: priorMessage.text!, messageId: priorMessage.id, now, turnsAtWrite: 0 });
+    const shared = { id: "A2", ask: "Old icon decision", status: "waiting-for-user" as const, at: now, changedAt: now };
+    const waiting = { ...shared, id: "A1", ask: "Approve billing" };
+    expect(h.store.writeTaskPacket({ ...prior, asks: [waiting, shared] })).toBeTruthy();
+
+    const currentThread = h.store.createTask(h.bot.id, "Release")!.threadId;
+    const currentMessage = h.store.appendMessage(currentThread, { role: "user", kind: "text", text: "Check release readiness" });
+    const current = seedTaskResumePacket({ botId: h.bot.id, threadId: currentThread, text: currentMessage.text!, messageId: currentMessage.id, now: now + 1, turnsAtWrite: 0 });
+    expect(h.store.writeTaskPacket({ ...current, asks: [{ ...shared, status: "done", changedAt: now + 1 }] })).toBeTruthy();
+    const first = await h.post("token");
+    expect(first.status).toBe(200);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain('waiting-for-user: "Approve billing"');
+    expect(brief).not.toContain("Old icon decision");
+    expect(brief).toContain('Next action: "Check release readiness"');
+
+    expect(h.store.writeTaskPacket({ ...prior, updatedAt: now + 2, asks: [{ ...waiting, status: "done", changedAt: now + 2 }] })).toBeTruthy();
+    const refreshed = await h.post("task-context");
+    expect(refreshed.data.taskContext).toContain("0 waiting-for-user");
+    expect(refreshed.data.taskContext).not.toMatch(/Approve billing|Old icon decision/);
+  });
+
+  it("counts a saved skipped question as unanswered and carries its choices", async () => {
+    const h = harness();
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const question = addQuestionAsk(packet, "Ship it now?", ["Yes", "Wait"], now)!;
+    expect(h.store.writeTaskPacket({ ...packet, ...question })).toBeTruthy();
+    expect((await h.post("token")).status).toBe(200);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain('open question: "Ship it now?" (choices: "Yes / Wait")');
+    expect(brief).toContain("1 unanswered question");
+    expect(brief).toContain('never say "nothing needs you" while any are waiting or unanswered');
+    expect((await h.post("task-context")).data.taskContext).toContain('open question: "Ship it now?" (choices: "Yes / Wait")');
+
+    const answered = answerQuestionAsk(question.asks, "Ship it now?", now, now + 1)!;
+    expect(h.store.writeTaskPacket({ ...packet, ...question, asks: answered })).toBeTruthy();
+    expect((await h.post("task-context")).data.taskContext).not.toMatch(/unanswered question|Ship it now\?/);
   });
 
   it("settles saved user lines for Auto Notes, excluding voice-only batches", async () => {

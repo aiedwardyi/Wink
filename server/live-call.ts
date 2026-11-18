@@ -239,7 +239,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const { cfg, store, dataDir } = deps;
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
-  const taskContext = (bot: BotRecord) => callTaskContext(deps.taskPacket(bot.threadId));
+  const taskContext = (bot: BotRecord) => callTaskContext(bot, deps.taskPacket);
   const briefs = new Map<string, { botId: string; roomKey: string; brief: string; locale: string; voice: LiveVoice; style: CallStyle; at: number }>();
   const picksPath = join(dataDir, CALL_PICKS_FILE);
   const savedPicks = () => {
