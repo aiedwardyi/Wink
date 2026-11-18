@@ -1,4 +1,4 @@
-import type { SQLOutputValue } from "node:sqlite";
+import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 
 import type { MediaMessage } from "../src/lib/chat-media.ts";
 import { messageDatabase } from "./message-db.ts";
@@ -39,9 +39,9 @@ const SQL = `
   ORDER BY path.depth
 `;
 
-export function readMediaRows(threadId: string, cursor: string | null, limit: number): { rows: MediaRow[]; next: string | null } {
+export function readMediaRows(threadId: string, cursor: string | null, limit: number, database?: DatabaseSync): { rows: MediaRow[]; next: string | null } {
   if (!cursor) return { rows: [], next: null };
-  const statement = messageDatabase().prepare(SQL);
+  const statement = (database ?? messageDatabase()).prepare(SQL);
   // SAFETY: The SQL projects media fields and one row carrying the next page's id.
   const page = statement.all(threadId, cursor, limit) as PageRow[];
   const rows: MediaRow[] = [];

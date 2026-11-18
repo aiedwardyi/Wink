@@ -1,10 +1,13 @@
 // The Media tab's index of one chat: every picture and file on the active path,
 // newest first and each once, columnar so thousands of files stay light on the wire.
 import { stat } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { setImmediate as yieldLoop } from "node:timers/promises";
 
 import { mediaKey, messageRefs, showKind } from "../src/lib/chat-media.ts";
 
 import { readMediaRows, type MediaRow } from "./media-rows.ts";
+import { messageDbFile } from "./message-db.ts";
 import type { Store } from "./store.ts";
 
 export interface MediaIndex {
@@ -62,6 +65,7 @@ interface HeldIndex {
   cursor: string | null;
   seen: Set<string>;
   dirty?: true;
+  completion?: Promise<MediaIndex[]>;
   sizes: Map<string, Promise<number | null>>;
   legacy?: MediaIndex;
   legacyLoad?: Promise<MediaIndex>;
@@ -71,9 +75,9 @@ function mightShowMedia({ image, kind, role, text }: MediaRow): boolean {
   return Boolean(image || (kind === "text" && text && (role === "user" ? text.includes("<attached-") : text.includes("](") || text.includes("!["))));
 }
 
-function readPage(threadId: string, cached: HeldIndex, limit: number): MediaIndex {
+function readPage(threadId: string, cached: HeldIndex, limit: number, database?: DatabaseSync): MediaIndex {
   const start = cached.cursor;
-  const { rows, next } = readMediaRows(threadId, start, limit);
+  const { rows, next } = readMediaRows(threadId, start, limit, database);
   if (start) cached.cursors.add(start);
   cached.cursor = next && !cached.cursors.has(next) ? next : null;
   const page: MediaIndex = { v: cached.v, ...buildMediaIndex(threadId, rows, cached.seen) };
@@ -88,8 +92,7 @@ function readPage(threadId: string, cached: HeldIndex, limit: number): MediaInde
   return page;
 }
 
-function readSize(cached: HeldIndex, n: number, slot: number): Promise<number | null> {
-  const page = cached.pages[n];
+function readSize(cached: HeldIndex, n: number, slot: number, page = cached.pages[n]): Promise<number | null> {
   const ref = page?.ref[slot];
   // A UNC path would authenticate to a remote host.
   if (!ref || page.kind[slot] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return Promise.resolve(null);
@@ -144,9 +147,33 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
     return cached;
   }
 
-  function complete(threadId: string, cached: HeldIndex): MediaIndex[] {
-    while (cached.cursor) readPage(threadId, cached, OLDER_ROWS);
-    return cached.pages;
+  async function readRemaining(threadId: string, cached: HeldIndex): Promise<MediaIndex[]> {
+    const full = { ...cached, pages: cached.pages.slice(), cursors: new Set(cached.cursors), seen: new Set(cached.seen) };
+    const database = new DatabaseSync(messageDbFile(), { readOnly: true });
+    try {
+      // Pin the rows to one revision while chat writes run between pages.
+      database.exec("BEGIN");
+      while (full.cursor) {
+        readPage(threadId, full, OLDER_ROWS, database);
+        if (full.cursor) await yieldLoop();
+      }
+      return full.pages;
+    } finally {
+      database.close();
+    }
+  }
+
+  function complete(threadId: string, cached: HeldIndex): Promise<MediaIndex[]> {
+    if (!cached.cursor) return Promise.resolve(cached.pages);
+    return cached.completion ??= readRemaining(threadId, cached).then((pages) => {
+      if (!cached.dirty) {
+        cached.pages = pages;
+        cached.cursor = null;
+        cached.cursors.clear();
+        cached.seen.clear();
+      }
+      return pages;
+    }).finally(() => { cached.completion = undefined; });
   }
 
   return {
@@ -159,31 +186,34 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
       if (!cached || cached.dirty || cached.v !== v) return null;
       return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(threadId, cached, OLDER_ROWS) : null);
     },
-    snapshot(threadId: string): MediaIndex[] {
+    snapshot(threadId: string): Promise<MediaIndex[]> {
       return complete(threadId, current(threadId));
     },
     async legacy(threadId: string, v: string | null): Promise<MediaIndex | { v: string }> {
       const cached = current(threadId);
       if (!cached.legacyLoad) {
-        const pages = complete(threadId, cached);
-        const pending = Promise.all(pages.flatMap((page, n) => page.size.map((size, slot) => size ?? readSize(cached, n, slot))))
-          .then((size) => {
-            const list: MediaList = {
-              ids: pages.flatMap((page) => page.ids), at: pages.flatMap((page) => page.at), kind: pages.map((page) => page.kind).join(""),
-              name: pages.flatMap((page) => page.name), ref: pages.flatMap((page) => page.ref), size,
-            };
-            const index = cached.legacy && same(cached.legacy, list) ? cached.legacy : { v: `${boot}.full.${++count}`, ...list };
-            if (cached.legacyLoad === pending) cached.legacy = index;
-            return index;
-          });
+        const pending = complete(threadId, cached).then(async (pages) => {
+          const size = await Promise.all(pages.flatMap((page, n) => page.size.map((size, slot) => size ?? readSize(cached, n, slot, page))));
+          const list: MediaList = {
+            ids: pages.flatMap((page) => page.ids), at: pages.flatMap((page) => page.at), kind: pages.map((page) => page.kind).join(""),
+            name: pages.flatMap((page) => page.name), ref: pages.flatMap((page) => page.ref), size,
+          };
+          const index = cached.legacy && same(cached.legacy, list) ? cached.legacy : { v: `${boot}.full.${++count}`, ...list };
+          if (cached.legacyLoad === pending) cached.legacy = index;
+          return index;
+        }).catch((error) => {
+          if (cached.legacyLoad === pending) cached.legacyLoad = undefined;
+          throw error;
+        });
         cached.legacyLoad = pending;
       }
       const index = await cached.legacyLoad;
       return index.v === v ? { v } : index;
     },
-    size(threadId: string, v: string | null, slot: number, n = 0): Promise<number | null> {
+    async size(threadId: string, v: string | null, slot: number, n = 0): Promise<number | null | undefined> {
       const cached = held.get(threadId);
-      return cached?.v === v && Number.isSafeInteger(slot) ? readSize(cached, n, slot) : Promise.resolve(null);
+      if (!cached || cached.v !== v) return undefined;
+      return Number.isSafeInteger(slot) ? readSize(cached, n, slot) : null;
     },
   };
 }

@@ -34,6 +34,7 @@ interface Held {
   v?: string;
   head?: string;
   next?: number;
+  previous?: Held;
   files: MediaFile[];
   /** A room's own `/files` answer, for its notice and Delete. */
   list?: RoomFiles;
@@ -56,14 +57,20 @@ export function decodeMedia(threadId: string, wire: MediaWire, page = 0): MediaF
     const kind = wire.kind[n] as MediaRef["kind"];
     const file = mediaFile(threadId, { kind, name: wire.name[n]!, ref, size: wire.size[n] ?? undefined }, wire.at[n]! * 1000);
     if (kind === "l" && !file.image && !file.video && file.size === undefined) {
-      file.readSize = () => request(`${versioned}&size=${n}`).then((result: { size: number | null }) => result.size, () => null);
+      file.readSize = (signal) => request(`${versioned}&size=${n}`, { signal }).then(
+        (result: { size: number | null }) => result.size,
+        (error: { status?: number }) => error?.status === 409 ? undefined : null,
+      );
     }
     return file;
   });
 }
 
 /** What this session last loaded, drawn at once while it is asked again. */
-export const heldMedia = (threadId: string, roomId?: string) => held.get(heldKey(threadId, roomId)) ?? null;
+export function heldMedia(threadId: string, roomId?: string): Held | null {
+  const index = held.get(heldKey(threadId, roomId));
+  return index?.previous ?? index ?? null;
+}
 
 /** The Photos or Files pick each chat last made this session. */
 export const pickedKind = (threadId: string, roomId?: string) => kinds.get(heldKey(threadId, roomId));
@@ -79,8 +86,12 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
       ? request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles & { files: Array<RoomFile & { at: number; sender?: string }> }) => ({ files: roomMedia(threadId, roomId, list.files), list }))
       : request(`/api/threads/${threadId}/media?paged=1${was?.v ? `&v=${encodeURIComponent(was.v)}` : ""}`)
         .then((wire: MediaWire | { v: string }) => {
-          if (wire && "ids" in wire) return { v: wire.v, head: wire.head, next: wire.next, files: decodeMedia(threadId, wire) };
           const current = held.get(key);
+          if (wire && "ids" in wire) {
+            const last = current ?? was;
+            const previous = last?.previous ?? (last?.next ? undefined : last);
+            return { v: wire.v, head: wire.head, next: wire.next, previous: wire.next && previous?.files.length ? previous : undefined, files: decodeMedia(threadId, wire) };
+          }
           if (current && current.v === wire?.v) return current;
           if (was && was.v === wire?.v) return was;
           throw new Error("Unknown Media version");
@@ -100,7 +111,7 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
 export async function loadOlderMedia(threadId: string, was: Held, signal: AbortSignal, showFirst: (index: Held) => void): Promise<Held> {
   const path = `/api/threads/${threadId}/media`;
   const chunks = [was.files];
-  let shown = Boolean(was.files.length);
+  let shown = Boolean(was.previous || was.files.length);
   let got: Held;
   try {
     for (let page = was.next; page;) {
@@ -117,7 +128,7 @@ export async function loadOlderMedia(threadId: string, was: Held, signal: AbortS
       }
       page = wire.next;
     }
-    got = { ...was, next: undefined, files: chunks.length === 1 ? was.files : chunks.flat() };
+    got = { v: was.v, files: chunks.length === 1 ? was.files : chunks.flat() };
   } catch {
     signal.throwIfAborted();
     const pages: MediaWire[] = await request(`${path}?paged=1&snapshot=1`, { signal });

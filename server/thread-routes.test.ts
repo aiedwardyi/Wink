@@ -98,7 +98,7 @@ describe("search", () => {
 });
 
 describe("media", () => {
-  function mediaRoute() {
+  function mediaRoute(padding = 256) {
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { threadId } = store.createBot({}, { seedMessages: false });
     const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
@@ -111,7 +111,7 @@ describe("media", () => {
     };
     const old = store.appendMessage(threadId, { role: "bot", kind: "text", text: "[first.pdf](C:\\w\\first.pdf)" });
     const notice = store.appendMessage(threadId, { role: "bot", kind: "note", text: "Sync notice" });
-    for (let n = 0; n < 256; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
+    for (let n = 0; n < padding; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
     return { store, threadId, get, old, notice };
   }
 
@@ -140,6 +140,35 @@ describe("media", () => {
     const { body: refreshed } = await get("?paged=1");
     expect(refreshed.v).not.toBe(first.v);
     expect((await get(`?v=${first.v}&page=1`)).status).toBe(409);
+  });
+
+  it.each(["", "?paged=1&snapshot=1"])("lets other work run during a full read (%s) without mixing revisions", async (query) => {
+    const { store, threadId, get, old } = mediaRoute(2_350);
+    store.patchMessage(threadId, old.id, { text: "[before.png](C:\\w\\before.png)" });
+    let patched = false;
+    const otherWork = new Promise<void>((resolve) => setImmediate(() => {
+      store.patchMessage(threadId, old.id, { text: "[after.png](C:\\w\\after.png)" });
+      patched = true;
+      resolve();
+    }));
+    const { body } = await get(query);
+    const patchedBeforeResponse = patched;
+    await otherWork;
+    expect(patchedBeforeResponse).toBe(true);
+    expect([body].flat().flatMap((page) => page.name)).toEqual(["before.png"]);
+    expect([(await get(query)).body].flat().flatMap((page) => page.name)).toEqual(["after.png"]);
+  });
+
+  it("distinguishes an expired size request from a missing file", async () => {
+    const { store, threadId, get } = mediaRoute();
+    const { body: first } = await get("?paged=1");
+    const size = `?v=${first.v}&page=1&size=0`;
+    expect((await get(`?v=${first.v}&page=1`)).status).toBe(200);
+    expect(await get(size)).toEqual({ status: 200, body: { size: null } });
+
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
+    await get("?paged=1");
+    expect((await get(size)).status).toBe(409);
   });
 
   it("lists a chat's files in one answer, then the version alone, and 404s an unknown chat", async () => {

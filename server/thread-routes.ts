@@ -111,7 +111,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const slot = url.searchParams.get("size");
       if (slot !== null) {
         if (!/^\d+$/.test(slot)) return json(res, 400, { error: "invalid media slot" });
-        return json(res, 200, { size: await mediaIndex.size(threadId, v, Number(slot), Number(page)) });
+        const size = await mediaIndex.size(threadId, v, Number(slot), Number(page));
+        return size === undefined ? json(res, 409, { error: "media version expired" }) : json(res, 200, { size });
       }
       if (page !== null) {
         const older = mediaIndex.page(threadId, v, Number(page));
@@ -120,7 +121,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
       if (url.searchParams.get("paged") !== "1") return json(res, 200, await mediaIndex.legacy(threadId, v));
-      if (url.searchParams.get("snapshot") === "1") return json(res, 200, mediaIndex.snapshot(threadId));
+      if (url.searchParams.get("snapshot") === "1") return json(res, 200, await mediaIndex.snapshot(threadId));
       return json(res, 200, mediaIndex.list(threadId, v));
     },
     messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {

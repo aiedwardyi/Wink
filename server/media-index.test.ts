@@ -139,8 +139,8 @@ describe("media index", () => {
     expect(await media.size(threadId, index.v, 0)).toBe(500);
     expect(await media.size(threadId, index.v, 1)).toBeNull();
     expect(await media.size(threadId, index.v, 4)).toBeNull();
-    expect(await media.size(threadId, "old", 0)).toBeNull();
-    expect(await media.size("other", index.v, 0)).toBeNull();
+    expect(await media.size(threadId, "old", 0)).toBeUndefined();
+    expect(await media.size("other", index.v, 0)).toBeUndefined();
     writeFileSync(report, "x".repeat(700));
     expect(await media.size(threadId, index.v, 0)).toBe(500);
 

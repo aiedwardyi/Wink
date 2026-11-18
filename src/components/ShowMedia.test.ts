@@ -230,6 +230,91 @@ it("renders the first page while older media is loading", async () => {
   expect(tiles()).toEqual(["new.png", "old.png"]);
 });
 
+it("keeps the complete list through a reopen while a new version is paging", async () => {
+  const old: Entry = ["b1", 1000, "l", "old.pdf", "C:\\w\\old.pdf"];
+  const photo: Entry = ["b2", 2000, "l", "old.png", "C:\\w\\old.png"];
+  let finish!: (page: MediaWire) => void;
+  const older = new Promise<MediaWire>((resolve) => { finish = resolve; });
+  let pageStarted: Promise<void> | undefined;
+  let startPage: (() => void) | undefined;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    calls.push(url);
+    if (url.endsWith("page=1")) {
+      startPage?.();
+      return Response.json(await older);
+    }
+    if (url.includes("&size=")) {
+      if (!pageStarted) return Response.json({ size: 300 });
+      await pageStarted;
+      return Response.json({ error: "media version expired" }, { status: 409 });
+    }
+    if (url.endsWith("v=2")) return Response.json({ v: "2" });
+    if (url.includes("v=")) return Response.json({ ...wire([], "2"), head: "b3", next: 1 });
+    return Response.json(wire([photo, old]));
+  }));
+  await act(async () => showItem(deck));
+  await render({ ...chat, messages: [] });
+  await click(tab("Media"));
+  await settle();
+  await click(tab("Files"));
+  expect(names()).toEqual(["old.pdf"]);
+
+  for (let n = 0; n < 2; n++) {
+    pageStarted = new Promise<void>((resolve) => { startPage = resolve; });
+    await click(tab("Show"));
+    await click(tab("Media"));
+    await settle();
+    expect(calls.filter((url) => url.endsWith("page=1"))).toHaveLength(n + 1);
+    expect(calls.filter((url) => url.includes("?paged=1"))).toHaveLength(n + 2);
+    expect(names()).toEqual(["old.pdf"]);
+    expect(tab("Files").getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector("[data-show-media]")?.hasAttribute("aria-busy")).toBe(false);
+  }
+
+  finish(wire([photo, ["b1", 1000, "f", "updated.pdf", "C:\\w\\updated.pdf"]], "2"));
+  await settle();
+  expect(names()).toEqual(["updated.pdf"]);
+});
+
+it("refreshes once when visible sizes expire and uses the refreshed slots", async () => {
+  const first: Entry = ["b1", 1000, "l", "first.pdf", "C:\\w\\first.pdf"];
+  const second: Entry = ["b2", 2000, "l", "second.pdf", "C:\\w\\second.pdf"];
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    calls.push(url);
+    if (url.includes("v=1&size=")) return Response.json({ error: "media version expired" }, { status: 409 });
+    if (url.includes("v=2&size=")) return Response.json({ size: url.endsWith("size=1") ? 300 : 600 });
+    if (url.includes("paged=1&v=1")) return Response.json(wire([second, first], "2"));
+    return Response.json(wire([first, second]));
+  }));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  expect(calls.filter((url) => url === "/api/threads/t1/media?paged=1&v=1")).toHaveLength(1);
+  expect(row("first.pdf").textContent).toContain("300 B");
+  expect(row("second.pdf").textContent).toContain("600 B");
+});
+
+it("cancels size requests once their rows scroll out of the grid", async () => {
+  const entries = Array.from({ length: 1_000 }, (_, n): Entry => [
+    "b" + n, NOVEMBER, "l", "file-" + n + ".pdf", "C:\\w\\file-" + n + ".pdf",
+  ]);
+  const pending: Array<AbortSignal | undefined> = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, options?: RequestInit) => {
+    if (!url.includes("&size=")) return Response.json(wire(entries));
+    const signal = options?.signal ?? undefined;
+    pending.push(signal);
+    return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [] });
+  await settle();
+  const previous = pending.slice();
+  expect(previous.length).toBeGreaterThan(0);
+  await act(async () => { scroller().scrollTop = 40_000; scroller().dispatchEvent(new Event("scroll")); });
+  expect(pending.length).toBeGreaterThan(previous.length);
+  expect(previous.map((signal) => signal?.aborted)).toEqual(previous.map(() => true));
+});
+
 it.each([409, 503])("recovers the complete index when a continuation returns %s", async (status) => {
   const old = wire([["b1", 1000, "l", "old.png", "C:\\w\\old.png"]], "2");
   let snapshot = false;
