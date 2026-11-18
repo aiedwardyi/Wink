@@ -99,11 +99,9 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
             {snap.muted ? <MicOff size={17} /> : <Mic size={17} />}
           </button>
         )}
-        <CallSettingsHold bot={bot}>
-          <button type="button" aria-label={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
-            <PhoneOff size={16} />
-          </button>
-        </CallSettingsHold>
+        <button type="button" data-call-end="" aria-label={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
+          <PhoneOff size={16} />
+        </button>
       </div>
     </>
   );

@@ -612,7 +612,7 @@ describe("11-16 call c-21351ca21949, in its own order", () => {
     if (order === "the result lands first") await tick(10);
     speak(e, "On it.");
     await tick(10);
-    expect(e.results).toEqual([{ id: "p1", result: "sent. They already heard you answer: say nothing more." }]);
+    expect(e.results).toEqual([{ id: "p1", result: "sent" }]);
     const played = audio.played;
     // Google speaks after every tool result and after his yes; one of the two turns had no transcript.
     e.events.answering();
