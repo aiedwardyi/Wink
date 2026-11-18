@@ -97,6 +97,27 @@ describe("memory reads", () => {
     expect(memorySyncUnchanged(folder, "bot", workspace, ledger, { now: later })).toBe(false);
   });
 
+  it("does not record a peer's edit as seen when it landed after the snapshots were read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-landed-"));
+    roots.push(root);
+    const folder = join(root, "drive");
+    const [workspace, other] = [join(root, "workspace"), join(root, "other")];
+    for (const dir of [workspace, other]) {
+      mkdirSync(dir);
+      writeFileSync(join(dir, "MEMORY.md"), "remember this");
+    }
+    const later = Date.now() + 10_000;
+    const [mine, theirs]: MemorySyncLedger[] = [{ bots: {} }, { bots: {} }];
+    syncBotMemory(folder, "bot", other, theirs, { host: "other", now: later });
+    syncBotMemory(folder, "bot", workspace, mine, { now: later });
+    const groups = await readMemorySnapshots(folder, "bot");
+    writeFileSync(join(other, "MEMORY.md"), "remember this and that");
+    syncBotMemory(folder, "bot", other, theirs, { host: "other", now: later });
+    syncBotMemory(folder, "bot", workspace, mine, { now: later, snapshots: groups });
+    expect(mine.bots.bot.seen).toBeUndefined();
+    expect(syncBotMemory(folder, "bot", workspace, mine, { now: later })["MEMORY.md"]).toBe("pulled");
+  });
+
   it("retries a file it could not read, even though nothing about it changed", async () => {
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     const root = mkdtempSync(join(tmpdir(), "memory-retry-"));

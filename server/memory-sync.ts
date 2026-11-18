@@ -224,12 +224,15 @@ async function readSnapshotsAsync(dir: string): Promise<Snapshots | undefined> {
   return partialOf(read.flat(), partial);
 }
 
+type SnapshotsRead = Array<Snapshots | undefined> & { at?: number };
+
 /** One bot's snapshots per sync root, read off the event loop; pass them to syncBotMemory as `snapshots`. */
-export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<Array<Snapshots | undefined>> {
+export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<SnapshotsRead> {
+  const at = Date.now();
   try {
-    return await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId))));
+    return Object.assign(await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId)))), { at });
   } catch {
-    return [undefined];
+    return Object.assign([undefined], { at });
   }
 }
 
@@ -376,7 +379,7 @@ export function memorySyncUnchanged(folder: string, botSyncId: string, workspace
   }
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshots | undefined> };
+export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: SnapshotsRead };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -539,6 +542,7 @@ export function syncBotMemory(
   const after = memoryFiles(workspace);
   // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen
   const complete = !groups.some((group) => group?.partial) && !Object.values(results).includes("skipped");
-  bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files }, talkedAt, me, now) : undefined;
+  // a file written after the snapshots were read may not be what was read, so the racy window starts at the read
+  bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files }, talkedAt, me, Math.min(now, read?.at ?? now)) : undefined;
   return results;
 }
