@@ -165,5 +165,6 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
     observer.observe(box);
     return () => observer.disconnect();
   }, []);
+  // The default must come first or merging drops the caller's overflow-y.
   return <textarea ref={ref} className={cn("overflow-hidden", className, "resize-none")} {...props} />;
 }
