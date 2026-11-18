@@ -4,8 +4,9 @@
 }
 .show-pane { --head: 40px; flex-direction: column; align-items: stretch; }
 .show-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 4px; height: var(--head); padding: 10px 6px 0 12px; }
-.show-pane-tabs { display: flex; padding: 2px; border-radius: 8px; background: var(--color-inset); }
-.show-pane-tabs button { height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; cursor: default; }
+/* Tabs that do not fit scroll and fade at the edge like Segmented, so the Maximize and Close buttons stay in the pane. */
+.show-pane-tabs { display: flex; min-width: 0; padding: 2px; border-radius: 8px; background: var(--color-inset); overflow-x: auto; scrollbar-width: none; }
+.show-pane-tabs button { flex-shrink: 0; height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; white-space: nowrap; outline-offset: -2px; cursor: default; }
 .show-pane-tabs button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
 .show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media, .show-pane > .show-workers { min-height: calc(100% - var(--head) - 20px); }
@@ -57,6 +58,8 @@
   .show-pane-tabs button { position: relative; padding-inline: 9px; }
   .show-pane-tabs button::after { content: ""; position: absolute; inset: -6px 0; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
+  /* The sheet also covers a narrow desktop window, where the native buttons sit over its top right. */
+  html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }
   /* a thumb a finger can catch */
   .show-media-rail { width: 44px; }
   .show-media-bubble { right: 50px; }

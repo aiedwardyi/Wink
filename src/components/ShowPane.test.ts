@@ -389,6 +389,15 @@ it("hides only Show and Check behind the other tabs, never the Media list", () =
   expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane)');
 });
 
+it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row, and the sheet starts under the Windows caption", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  const row = css.match(/^\.show-pane-tabs \{[^}]*\}/m)![0];
+  expect(row).toContain("min-width: 0");
+  expect(row).toContain("overflow-x: auto");
+  expect(css).toMatch(/\.show-pane-tabs button \{[^}]*flex-shrink: 0[^}]*white-space: nowrap[^}]*outline-offset: -2px/);
+  expect(css).toContain('html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }');
+});
+
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
