@@ -141,6 +141,24 @@ describe("warm chats", () => {
     expect(store.loaded(big!.threadId)).toBe(false);
   });
 
+  it("warms each chat once while the thread cache drops older ones", async () => {
+    const setup = fresh();
+    const bots = Array.from({ length: 4 }, () => setup.createBot({}, { seedMessages: false }));
+    for (const bot of bots) for (const text of ["a", "b", "c"]) setup.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }), { threadCacheRows: 6 });
+    const read = vi.spyOn(store, "messagesFor");
+    let listed = 0;
+    let start!: () => Promise<void>;
+    warmChats(store, () => {
+      if (++listed > 10) throw new Error("warming never ends");
+      return bots;
+    }, (begin) => (start = begin));
+    await start();
+    await vi.waitFor(() => expect(listed).toBe(5));
+    expect(read.mock.calls.map(([threadId]) => threadId)).toEqual(bots.map((bot) => bot.threadId));
+    expect(store.loaded(bots[0]!.threadId)).toBe(false);
+  });
+
   it("keeps warming past a thread that fails to load", async () => {
     const setup = fresh();
     const bots = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];

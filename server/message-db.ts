@@ -295,6 +295,14 @@ export function applySyncedRows(
 }
 
 /** One stored row by key, without loading its thread. */
+/** Rows whose text contains `needle` (ASCII case-insensitive), oldest first; the thread's other rows are never parsed. */
+export function textRows(threadId: string, needle: string): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
+  // SAFETY: This projection selects TEXT id, role and text, and a nullable TEXT bot id from the stored JSON.
+  return db()
+    .prepare("SELECT id, role, text, json_extract(json, '$.from.botId') AS fromBotId FROM messages WHERE thread_id = ? AND text LIKE ? ESCAPE '\\' ORDER BY rowid")
+    .all(threadId, `%${needle.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`) as Array<{ id: string; role: string; text: string; fromBotId: string | null }>;
+}
+
 export function readMessage(threadId: string, id: string): Message | undefined {
   // SAFETY: This projection selects the stored message JSON.
   const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { json: string } | undefined;

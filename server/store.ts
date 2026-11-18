@@ -16,6 +16,7 @@ import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
+import { THREAD_CACHE_ROWS, ThreadCache } from "./thread-cache.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
@@ -775,7 +776,7 @@ export class Store {
   readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
-  private threads = new Map<string, ThreadState>();
+  private threads: ThreadCache<ThreadState>;
   private taskPackets = new Map<string, TaskResumePacket | null>();
   private defaultSelection: () => ModelSelection;
   private listeners = new Set<(change: StoreChange) => void>();
@@ -788,7 +789,8 @@ export class Store {
     this.pruneSessionSystems();
   });
 
-  constructor(defaultSelection: () => ModelSelection, opts: { coalesceSaves?: boolean } = {}) {
+  constructor(defaultSelection: () => ModelSelection, opts: { coalesceSaves?: boolean; threadCacheRows?: number } = {}) {
+    this.threads = new ThreadCache(opts.threadCacheRows ?? THREAD_CACHE_ROWS, () => this.busyThreads());
     this.defaultSelection = defaultSelection;
     this.coalesce = opts.coalesceSaves === true;
     mkdirSync(DATA_DIR, { recursive: true });
@@ -1330,13 +1332,21 @@ export class Store {
     return t;
   }
 
+  /** Threads a running turn writes to; the cache keeps them. */
+  private busyThreads(): Set<string> {
+    const busy = new Set<string>();
+    for (const bot of this.bots) if (bot.busy) busy.add(bot.activeThreadId ?? bot.threadId);
+    for (const group of this.groups) if (group.busyBotId) busy.add(group.threadId);
+    return busy;
+  }
+
   messagesFor(threadId: string): Message[] {
     return this.thread(threadId).messages;
   }
 
   /** One row by id: the cached copy when the thread is loaded, else a key read. */
   row(threadId: string, messageId: string): Message | undefined {
-    const t = this.threads.get(threadId);
+    const t = this.threads.peek(threadId);
     return t ? t.messages.find((m) => m.id === messageId) : mdb.readMessage(threadId, messageId);
   }
 
@@ -2262,7 +2272,7 @@ export class Store {
         task = { threadId, title: UNTITLED_TASK, createdAt: 0, resumeCursors: {} };
         bot.tasks = [...(bot.tasks ?? []), task];
       }
-      const cached = this.threads.get(threadId);
+      const cached = this.threads.peek(threadId);
       const events: StoreChange[] = [];
       const pathChanged = mdb.withMessageTransaction((db) => {
         const changed = syncPathChanged(db, threadId, changes);

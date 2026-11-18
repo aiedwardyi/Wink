@@ -448,6 +448,7 @@ import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-st
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
+import { linkedRows } from "./linked-rows.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -1095,6 +1096,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const linkedMessages = linkedRows(store);
 const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
@@ -8674,17 +8676,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
       if ((!bot && !group) || linkedFilesClosed(group, threadId)) return json(res, 404, { error: "no such conversation" });
-      const messages = store.messagesFor(threadId).map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        fromBotId: message.from?.botId,
-      }));
       return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         holder: phone?.id,
         threadId,
-        messages,
+        messages: (target) => linkedMessages(threadId, target),
         deviceId: profileSyncSettings.deviceId,
         own: ownChat(threadId, Boolean(group?.hosted), joinedRoomThreads),
         writerDeviceId: (messageId) => threadSyncGate.enabled ? threadSyncV2?.messageWriter(threadId, messageId) ?? null : messageWriter(DATA_DIR, threadId, messageId),
