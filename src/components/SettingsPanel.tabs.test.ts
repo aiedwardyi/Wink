@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { en } from "@/lib/i18n-catalog";
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { MOTION_LARGE_MS, MOTION_MODERATE_MS } from "@/lib/motion";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { Presence } from "@/lib/use-presence";
@@ -317,6 +319,47 @@ describe("Bot details tab swipe", () => {
 });
 
 describe("Memory tab on return", () => {
+  it("refreshes an open Memory page after its bot's peer sync lands", async () => {
+    let latest = "- Uses Windows";
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) === `/api/bots/${bot.id}/memory` && !init?.method
+      ? Promise.resolve(Response.json({ text: latest, truncated: false, revision: latest, topics: [] }))
+      : answer(url, init));
+    const sync = (botId: string) => {
+      const frame = { kind: "memory.changed", botId };
+      return act(async () => noteMemoryFrame(frame, { hydrated: true, bots: [bot] }));
+    };
+    await open();
+    await toMemory();
+    await startEditing();
+    expect(box()!.value).toBe(latest);
+    latest = "- Uses Linux";
+    await sync("other-bot");
+    expect(box()!.value).toBe("- Uses Windows");
+    await sync(bot.id);
+    expect(box()!.value).toBe(latest);
+
+    await write("- My unsaved edit");
+    latest = "- Uses macOS";
+    await sync(bot.id);
+    expect(box()!.value).toBe("- My unsaved edit");
+    expect(puts).toEqual([]);
+  });
+
+  it("shows the existing error toast when an unmount save conflicts", async () => {
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, init) => init?.method === "PUT"
+      ? Promise.resolve(Response.json({ error: "conflict", text: "- New peer notes", revision: "peer" }, { status: 409 }))
+      : answer(url, init));
+    await open();
+    await toMemory();
+    await startEditing();
+    await write("- My unsaved edit");
+    await act(async () => root.render(null));
+    expect(dispatch).toHaveBeenCalledWith({ type: "error", message: en["bot.memoryConflict"] });
+    expect(localStorage.getItem(`omb-memory-draft:${bot.id}`)).toContain("My unsaved edit");
+  });
+
   it("closes the Memory File and the open kinds when you leave", async () => {
     await open();
     await toMemory();

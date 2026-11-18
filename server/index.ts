@@ -2456,8 +2456,11 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-  // the poll runs for every idle bot, so only changed files refresh the check
-  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+  // the poll runs for every idle bot, so only pulled changes refresh the page and check
+  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
+    memoryHealthCheck.refresh(botId);
+    broadcast({ kind: "memory.changed", botId });
+  }
   return true;
 }
 
@@ -2472,7 +2475,7 @@ async function syncMemoryOnce(botId: string): Promise<void> {
   if (ran || memoryLedgerUnsaved) saveMemoryLedger();
 }
 
-// the PC the user is talking to a bot on keeps its copy of the bot's memory when two PCs changed it at once
+// ties favor the PC with the latest chat or hand edit
 function noteTalked(botId: string): void {
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (botSyncId) markTalked(memorySyncLedger, botSyncId);
@@ -8021,6 +8024,7 @@ const botRoutes = createBotRoutes({
   taskPacketForWrite,
   projectNotesCheck,
   memoryHealthCheck,
+  noteTalked,
   activeVpsThreads,
   resumePaneWakes,
 });

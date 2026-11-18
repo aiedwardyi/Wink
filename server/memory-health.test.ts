@@ -85,13 +85,13 @@ describe("createMemoryHealthCheck", () => {
 describe("memory check refresh sites", () => {
   it("refreshes the check after a Memory box save", () => {
     const bots = readFileSync(new URL("./bot-routes.ts", import.meta.url), "utf8");
-    expect(bots).toMatch(/const saved = saveMemoryFile\(m\[1\], parsed\.data\.text, parsed\.data\.baseRevision\);\r?\n\s*if \(saved\.conflict\) return json\(res, 409[^;]*;\r?\n\s*memoryHealthCheck\.refresh\(m\[1\]\);/);
+    expect(bots).toMatch(/const saved = saveMemoryFile\(m\[1\], parsed\.data\.text, parsed\.data\.baseRevision\);\s*if \(saved\.conflict\) return json\(res, 409[^;]*;\s*deps\.noteTalked\(m\[1\]\);\s*memoryHealthCheck\.refresh\(m\[1\]\);/);
   });
 
-  it("refreshes the check only when sync pulled or conflicted", () => {
+  it("refreshes the check and page only when sync pulled or conflicted", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const sync = index.slice(index.indexOf("function syncMemory("), index.indexOf("function noteTalked("));
+    const sync = index.slice(index.indexOf("async function syncMemoryPass("), index.indexOf("async function syncMemoryOnce("));
     expect(sync).toContain("const results = syncBotMemory(");
-    expect(sync).toMatch(/if \(Object\.values\(results\)\.some\(\(result\) => result === "pulled" \|\| result === "conflict"\)\) memoryHealthCheck\.refresh\(botId\);/);
+    expect(sync).toMatch(/if \(Object\.values\(results\)\.some\(\(result\) => result === "pulled" \|\| result === "conflict"\)\) \{\s*memoryHealthCheck\.refresh\(botId\);\s*broadcast\(\{ kind: "memory.changed", botId \}\);\s*\}/);
   });
 });
