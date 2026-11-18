@@ -463,8 +463,9 @@ it("pulses the pane once when its file is clicked again, and not when a click on
 });
 
 const timeline = readFileSync("test/fixtures/decision-timeline/decisions.md", "utf8");
-const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url) === "/api/bots/b1/memory/topics/decisions.md" ? reply() : new Response(null, { status: 404 })));
-const openTimeline = () => render({ timeline: true, profileName: "Edward", botId: "b1", source: { threadId: "t1", messages: [] }, hidden: false });
+const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url).endsWith("/memory/topics/decisions.md") ? reply() : new Response(null, { status: 404 })));
+// each test names its own bot: a pick's fold is kept for the session, per bot
+const openTimeline = (botId = "b1") => render({ timeline: true, profileName: "Edward", botId, source: { threadId: "t1", messages: [] }, hidden: false });
 const rows = () => [...host.querySelectorAll("[data-timeline-row]")];
 
 it("lists the bot's picks on the Timeline tab, newest day first, with a replaced pick folded under the newer one", async () => {
@@ -484,7 +485,6 @@ it("lists the bot's picks on the Timeline tab, newest day first, with a replaced
   await act(async () => fold.click());
   expect(forum.textContent).toContain("i thot this is bot to bot forum, not me?");
   expect(forum.querySelector(".timeline-said span")?.textContent).toMatch(/^Edward · /);
-  await act(async () => forum.querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
   expect([...forum.querySelectorAll(".timeline-tweaks q")].map((tweak) => tweak.textContent)).toEqual(["im wondering if it should have a small title up top so ppl know what it is", "humans can reply too if they want, but its made for the bots"]);
   expect([...forum.querySelectorAll("[data-timeline-out]")].map((out) => out.textContent)).toEqual(["A - Needs you header", "B - Needs you chip", "A - Needs you header", "B - Needs you chip"]);
   const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
@@ -501,8 +501,60 @@ it("pairs a crossed picture by its caption, and an uncaptioned one only with the
   picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
   await openTimeline();
   await until(() => rows().length > 0);
-  await act(async () => rows()[0]!.querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
   expect([...rows()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
+});
+
+const mapRow = () => rows().find((row) => row.querySelector(".timeline-key")?.textContent === "Map on phone")!;
+const pickList = () => picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
+
+it("opens every pick, and keeps a pick the user closed closed after a tab switch and back", async () => {
+  pickList();
+  await openTimeline("b-folds");
+  await until(() => rows().length > 0);
+  expect(rows().map((row) => row.querySelector("[data-timeline-head]")?.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true", "true"]);
+  expect(rows().every((row) => row.querySelector(".timeline-detail"))).toBe(true);
+  await act(async () => mapRow().querySelector<HTMLButtonElement>("[data-timeline-head]")!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+  expect(mapRow().querySelector(".timeline-detail")).toBeNull();
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  expect(host.querySelector(".timeline-pane")).toBeNull();
+  await openTimeline("b-folds");
+  await until(() => rows().length > 0);
+  expect(mapRow().querySelector("[data-timeline-head]")?.getAttribute("aria-expanded")).toBe("false");
+  expect(mapRow().querySelector(".timeline-detail")).toBeNull();
+  expect(rows().filter((row) => row !== mapRow()).every((row) => row.querySelector(".timeline-detail"))).toBe(true);
+});
+
+it("opens a screenshot, or a picked or crossed picture, in the viewer on one click", async () => {
+  pickList();
+  await openTimeline("b-viewer");
+  await until(() => rows().length > 0);
+  const opener = (selector: string) => mapRow().querySelector<HTMLButtonElement>(selector)!;
+  expect(document.querySelector("[data-media-viewer]")).toBeNull();
+  for (const [selector, name] of [[".timeline-shots button", "map-shot1.png"], [".timeline-won button", "map-pick.png"], ["[data-timeline-out] button", "map-a2.png"]] as const) {
+    expect(opener(selector).getAttribute("aria-label")).toBe(`Open Image ${name}`);
+    await act(async () => opener(selector).click());
+    expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toContain(name);
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await until(() => !document.querySelector("[data-media-viewer]"));
+    expect(document.querySelector("[data-media-viewer]")).toBeNull();
+  }
+});
+
+it("leaves right-click on a picture to the image's own menu, with nothing drawn over it", async () => {
+  pickList();
+  await openTimeline("b-menu");
+  await until(() => rows().length > 0);
+  const images = [...mapRow().querySelectorAll("img")];
+  expect(images.length).toBeGreaterThan(5);
+  for (const img of images) {
+    const click = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => { img.dispatchEvent(click); });
+    expect(click.defaultPrevented).toBe(false);
+  }
+  const css = readFileSync("src/components/TimelinePane.css", "utf8");
+  expect(css).toMatch(/\.timeline-strike \{[^}]*pointer-events: none/);
+  expect(css).toMatch(/\.timeline-won:not\(\[data-text\]\) > \.timeline-badge \{[^}]*pointer-events: none/);
 });
 
 it("says so in one line when the bot has no picks yet", async () => {
