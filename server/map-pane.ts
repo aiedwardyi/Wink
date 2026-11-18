@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
 import { latestMapFile, mapFileDiff, mapFiles, mapFork, mapGit, mapHead, mapRepoFiles, mapTrunkFork, mapWalkFiles } from "./map-git.ts";
-import type { Store } from "./store.ts";
+import type { Message, Store } from "./store.ts";
 import { DATA_DIR } from "./config.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { parsePaneNote } from "../shared/pane-note.ts";
@@ -12,6 +12,8 @@ import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
 import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
+import { messageDatabase } from "./message-db.ts";
+import { redactToolMessage } from "./tool-detail.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -256,7 +258,8 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
       const bot = store.bot(botId);
       const task = bot && store.taskByThread(bot.id, bot.threadId);
       // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
-      const self = bot ? mapBotSelf(store.messagesFor(bot.threadId), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
+      const rows = bot ? messageDatabase().prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT 2000").all(bot.threadId) as Array<{ json: string }> : [];
+      const self = bot ? mapBotSelf(rows.reverse().map(row => redactToolMessage(JSON.parse(row.json) as Message)), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
       const bridge = access();
       if (!bridge) return self;
       const snapshot = await terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true });
@@ -265,8 +268,9 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
       return [...paneSchema.array().parse(snapshot.body.panes ?? []), ...self];
     },
     reason: (botId, pane, editedAt) => {
-      const messages = store.messagesFor(store.bot(botId)?.threadId ?? "");
-      for (const message of messages.toReversed()) {
+      const rows = messageDatabase().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'note' AND at >= ? ORDER BY rowid DESC").iterate(store.bot(botId)?.threadId ?? "", editedAt) as Iterable<{ json: string }>;
+      for (const row of rows) {
+        const message = JSON.parse(row.json) as Message;
         if (message.kind !== "note" || !message.text || message.at < editedAt) continue;
         const note = parsePaneNote(message.text);
         if (note.pane8 && pane.sessionId.startsWith(note.pane8) && !note.alert) return note.body.trim().split("\n")[0].slice(0, 240) || undefined;

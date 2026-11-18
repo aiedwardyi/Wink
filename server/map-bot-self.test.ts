@@ -10,6 +10,8 @@ import { createWorkerMap } from "./map-pane.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
+import { insertMessage, messageDatabase } from "./message-db.ts";
+import { DATA_DIR } from "./config.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -42,11 +44,15 @@ const edited = (writes: string[], ok = true): Message => ({
 
 async function open(messages: Message[], cwd?: string, task?: { cwd?: string | null }) {
   const listeners: ((change: StoreChange) => void)[] = [];
+  mkdirSync(DATA_DIR, { recursive: true });
+  const thread = `map-self-${++id}`;
+  for (const message of messages) insertMessage(thread, message);
+  const wholeThread = vi.fn(() => messages);
   // SAFETY: the worker map reads only these four store members.
   const store = {
-    bot: () => ({ id: "bot", name: "Teacher", threadId: "thread", cwd }),
+    bot: () => ({ id: "bot", name: "Teacher", threadId: thread, cwd }),
     taskByThread: () => task,
-    messagesFor: () => messages,
+    messagesFor: wholeThread,
     onChange: (listener: (change: StoreChange) => void) => { listeners.push(listener); return () => {}; },
   } as unknown as Store;
   const feature = createWorkerMap(store, () => null);
@@ -74,9 +80,30 @@ async function open(messages: Message[], cwd?: string, task?: { cwd?: string | n
       }
     }
   }
-  const add = (message: Message) => { messages.push(message); for (const listener of listeners) listener({ type: "message", threadId: "thread", message }); };
-  return { url, until, add, close: () => abort.abort() };
+  const add = (message: Message) => { messages.push(message); insertMessage(thread, message); for (const listener of listeners) listener({ type: "message", threadId: thread, message }); };
+  return { url, until, add, wholeThread, close: () => abort.abort() };
 }
+
+it("reads a bounded tail on open and sync while preserving seeded rows", async () => {
+  const { root } = repo();
+  writeFileSync(join(root, "file.ts"), "const after = 2;\n");
+  mkdirSync(DATA_DIR, { recursive: true });
+  const database = messageDatabase();
+  const prepare = vi.spyOn(database, "prepare");
+  const map = await open([said("Start"), edited([join(root, "file.ts")]), said("Done")]);
+  const first = await map.until(data => data.workers.length === 1);
+  expect(first.workers.map(worker => [worker.nick, worker.files.map(file => file.path)])).toEqual([["Teacher", ["file.ts"]]]);
+  writeFileSync(join(root, "new.ts"), "const fresh = 1;\n");
+  map.add(edited([join(root, "new.ts")]));
+  await map.until(data => data.workers[0]?.files.some(file => file.path === "new.ts"));
+  expect(map.wholeThread).not.toHaveBeenCalled();
+  const query = prepare.mock.calls.map(([sql]) => sql).find(sql => /ORDER BY rowid DESC LIMIT 2000/.test(sql));
+  expect(query).toBeDefined();
+  const plan = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all("thread");
+  expect(JSON.stringify(plan)).toContain("messages_thread");
+  prepare.mockRestore();
+  map.close();
+});
 
 it("shows the bot as a row with the files its own turn edited in a git folder", async () => {
   const { root } = repo();
