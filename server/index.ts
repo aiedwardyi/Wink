@@ -9139,6 +9139,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
         environment: config.environment,
         account: config.account,
+        fresh: url.searchParams.get("fresh") === "1",
       };
       const result = m[1] === "check"
         ? await checkMuseUsage({

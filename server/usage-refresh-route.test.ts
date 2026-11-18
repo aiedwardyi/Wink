@@ -200,4 +200,11 @@ describe("usage refresh throttle vs runtime reports", () => {
     expect(result.error).toBe(error);
     expect(result.report).toBeUndefined();
   });
+
+  it("reads the provider again for a tapped refresh inside the cooldown", async () => {
+    const auto = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy")).body);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const tap = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy?fresh=1")).body);
+    expect(Date.parse(tap.report!.observedAt)).toBeGreaterThan(Date.parse(auto.report!.observedAt));
+  });
 });

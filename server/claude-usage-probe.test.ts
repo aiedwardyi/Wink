@@ -159,6 +159,19 @@ it("keeps the single-account usage path on its existing API read", async () => {
   expect(request).toHaveBeenCalledOnce();
 });
 
+it("reads an account again on a tap while automatic checks keep the five minute wait", async () => {
+  const levels = [[35], [12]];
+  const claude = vi.fn<typeof readClaudeUsage>(async () => levels.shift()!.map((usedPercent) => ({ ...windows[0]!, usedPercent })));
+  const refresh = createUsageRefresh({ claude });
+  const used = async (fresh?: boolean) => (await refresh("claudeAgent", { instanceId: account.id, account, fresh })).report?.windows[0]?.usedPercent;
+  expect(await used()).toBe(35);
+  expect(await used()).toBe(35);
+  expect(claude).toHaveBeenCalledTimes(1);
+  expect(await used(true)).toBe(12);
+  expect(await used()).toBe(12);
+  expect(claude).toHaveBeenCalledTimes(2);
+});
+
 it("drops a late reading after account invalidation", async () => {
   let finish!: (value: typeof windows) => void;
   const refresh = createUsageRefresh({ claude: () => new Promise((resolve) => { finish = resolve; }) });

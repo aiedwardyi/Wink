@@ -77,12 +77,12 @@ export function createClaudeUsageProbe(deps: {
   read?: typeof readClaudeUsage; now?: () => number; random?: () => number;
 } = {}) {
   const now = deps.now ?? Date.now;
-  const reads = new Map<string, { generation: number; retryAt: number; pending: Promise<Report | undefined> }>();
+  const reads = new Map<string, { generation: number; retryAt: number; settled: boolean; pending: Promise<Report | undefined> }>();
   let queue: Promise<unknown> = Promise.resolve();
-  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext) => {
+  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext, fresh?: boolean) => {
     const cached = reads.get(account.id);
-    if (cached && now() < cached.retryAt) return cached.generation === account.generation ? cached.pending : Promise.resolve(undefined);
-    const entry = { generation: account.generation, retryAt: Infinity, pending: Promise.resolve<Report | undefined>(undefined) };
+    if (cached && (!cached.settled || (!fresh && now() < cached.retryAt))) return cached.generation === account.generation ? cached.pending : Promise.resolve(undefined);
+    const entry = { generation: account.generation, retryAt: Infinity, settled: false, pending: Promise.resolve<Report | undefined>(undefined) };
     entry.pending = queue.then(async () => {
       entry.retryAt = now() + 300_000 + Math.floor((deps.random ?? Math.random)() * 30_000);
       try {
@@ -90,6 +90,8 @@ export function createClaudeUsageProbe(deps: {
         return { windows, observedAt: new Date(now()).toISOString() };
       } catch { return undefined; }
     });
+    const settle = () => { entry.settled = true; };
+    entry.pending.then(settle, settle);
     reads.set(account.id, entry);
     queue = entry.pending;
     return entry.pending;

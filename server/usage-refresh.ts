@@ -34,7 +34,7 @@ export type UsageRefreshStatus =
   | "auth_error"
   | "limit_reached";
 type Result = { report?: Report; error?: string; retryAt: number; status?: UsageRefreshStatus; resetsAt?: number | null };
-type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string; account?: AccountContext };
+type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string; account?: AccountContext; fresh?: boolean };
 const usableReport = (report: Report | undefined): report is Report =>
   Boolean(report && report.windows.length > 0 && Number.isFinite(Date.parse(report.observedAt)));
 const text = z.string().min(1);
@@ -855,7 +855,7 @@ export function createUsageRefresh(deps: {
     const key = options.account ? `${options.instanceId}:${options.account.generation}` : options.instanceId;
     const epoch = epochs.get(options.instanceId);
     const cached = driver === "claudeAgent" ? undefined : cache.get(key);
-    if (cached && (!cached.settled || clock() < cached.retryAt)) return cached.pending;
+    if (cached && (!cached.settled || (!options.fresh && clock() < cached.retryAt))) return cached.pending;
     const retryAt = clock() + (deps.throttleMs ?? 30_000);
     active.set(options.instanceId, (active.get(options.instanceId) ?? 0) + 1);
     let released = false;
@@ -909,7 +909,7 @@ export function createUsageRefresh(deps: {
           windows = report.windows;
           observedAt = report.observedAt;
         } else if (options.account && driver === "claudeAgent") {
-          const report = await claudeProbe(options.cli || "claude", env, options.account);
+          const report = await claudeProbe(options.cli || "claude", env, options.account, options.fresh);
           if (!report) return { report: previous, retryAt, status: "no_observation" };
           windows = report.windows;
           observedAt = report.observedAt;
@@ -925,7 +925,7 @@ export function createUsageRefresh(deps: {
           const credential = envToken ? `env:${envToken}` : credentialsPath;
           credentials.set(options.instanceId, credential);
           let shared = claudeReads.get(credential);
-          if (!shared || (shared.settled && clock() >= shared.retryAt)) {
+          if (!shared || (shared.settled && (clock() >= shared.retryAt || (options.fresh && !shared.limited)))) {
             const limited = shared?.limited ?? 0;
             const entry = { retryAt, settled: false, limited: 0, pending: Promise.resolve<Report>({ windows: [], observedAt: "" }) };
             entry.pending = (async () => {

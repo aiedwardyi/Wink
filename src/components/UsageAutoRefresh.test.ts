@@ -222,7 +222,7 @@ describe("Usage auto refresh", () => {
       expect(button()!.nextElementSibling).toBe(close);
       expect(button()!.getAttribute("aria-label")).toBe("Refresh");
       await act(async () => { button()!.click(); });
-      expect(refreshed()).toEqual(["/api/usage/refresh/claude"]);
+      expect(refreshed()).toEqual(["/api/usage/refresh/claude?fresh=1"]);
     });
 
     it("spins and disables while a refresh is pending, then stops", async () => {
@@ -230,7 +230,7 @@ describe("Usage auto refresh", () => {
       await act(async () => { button()!.click(); });
       expect(button()!.disabled).toBe(true);
       expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
-      await act(async () => { settle("/api/usage/refresh/claude", "ok"); });
+      await act(async () => { settle("/api/usage/refresh/claude?fresh=1", "ok"); });
       expect(button()!.disabled).toBe(false);
       expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
       await act(async () => { button()!.querySelector("svg")!.dispatchEvent(new Event("animationiteration", { bubbles: true })); });
@@ -246,7 +246,7 @@ describe("Usage auto refresh", () => {
     it("shows the failure line and keeps the old reading", async () => {
       await open(quick());
       await act(async () => { button()!.click(); });
-      await act(async () => { settle("/api/usage/refresh/claude", "fail"); });
+      await act(async () => { settle("/api/usage/refresh/claude?fresh=1", "fail"); });
       expect(document.body.querySelector('[role="alert"]')?.textContent).toBe("Could not refresh usage. Try again.");
       expect(mockState.instances[0]!.rateLimits).toBeDefined();
     });

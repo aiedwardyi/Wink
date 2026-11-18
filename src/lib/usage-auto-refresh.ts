@@ -66,7 +66,7 @@ export async function refreshUsage(instances: InstanceInfo[], board: UsageBoard,
     && MANUAL_DRIVERS.includes(each.driverKind)
     && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
     .map((each) => joinRefresh(each.instanceId, async () => {
-      let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+      let result = await api(`/api/usage/refresh/${each.instanceId}?fresh=1`, { method: "POST" });
       if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
         result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
       }
