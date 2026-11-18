@@ -1146,7 +1146,7 @@ describe("Store", () => {
 
   it("a new replaced-models row moves a saved bot with no other code change", () => {
     const rows = REPLACED_MODELS as ReplacedModel[];
-    rows.push({ engine: "codex", from: "old-x", to: "new-x" });
+    rows.push({ engine: "codex", from: "old-x", to: "new-x", fromLabel: "Old X", toLabel: "New X" });
     try {
       const store = new Store(selection);
       const bot = store.createBot({ modelSelection: { instanceId: "codex", model: "old-x", effort: "high" } });

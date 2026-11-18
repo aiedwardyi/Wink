@@ -1844,6 +1844,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (slot) remoteOpens.add(slot);
       let session;
       let worker;
+      let commandText = input.command;
       let remoteLine;
       let claimed = false;
       try {
@@ -1853,10 +1854,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
         if (recovery) launchInput.resume = recovery.blocked ? { ...recovery.session, blocked: recovery.blocked } : recovery.session;
-        // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
-        else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
+        else if (!workerAccountsEnabled && workerLaunch && input.command) launchInput.unrouted = true;
         if (slot) remoteLine = await remote.open({ name: input.host, command: input.command, cwd: input.cwd, slot });
-        else if (launchInput.unrouted) worker = await Promise.resolve(launchInput).then(workerLaunch).then((launch) => launch?.kind === "unrouted" ? launch : null, () => null);
+        else if (launchInput.unrouted) {
+          const launch = await Promise.resolve(launchInput).then(workerLaunch).then((result) => result?.kind === "unrouted" ? result : null, () => null);
+          commandText = launch?.command ?? commandText;
+          if (platform === "win32" && launch?.session) worker = launch;
+        }
         else worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
         if (worker?.kind === "hold") return { hold: worker.hold };
         if (recovery && worker?.kind !== "managed" && worker?.kind !== "unrouted") throw new Error("Worker resume service is unavailable");
@@ -1897,10 +1901,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
       if (input.command) {
-        // A fresh unrouted pane types the bot's own text; every other worker types its rendered argv.
         const rendered = worker?.kind === "managed" || (recovery && worker?.kind === "unrouted") ? worker : null;
         const command = normalizeTerminalText(slot ? remoteLine : rendered ? managedWorkerCommand(rendered, session.workerEnvironment, platform, session.mail?.binDir)
-          : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, input.command, session.mail?.binDir) : input.command);
+          : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, commandText, session.mail?.binDir) : commandText);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
         await botWrite(session, session.command, rendered, slot && input.command);
       }

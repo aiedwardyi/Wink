@@ -26,14 +26,16 @@ const HOME_SELECTOR = /^(?:CODEX_HOME|CODEX_SQLITE_HOME|CLAUDE_CONFIG_DIR|CLAUDE
 const ENV_PREFIX = /^\s*\$env:(\w+)\s*=\s*('(?:[^']|'')*'|"[^"$`]*"|[^\s;]+)\s*;/i;
 const WRAPPER = /^(?:&|\.|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|bash|sh|env|iex|invoke-expression|start-process)$/i;
 
-function tokens(command: string): string[] {
-  const result: string[] = [];
+function tokens(command: string) {
+  const result: Array<{ value: string; start: number; end: number }> = [];
   const windows = process.platform === "win32";
   let token = "";
   let quote = "";
   let started = false;
+  let start = 0;
   for (let i = 0; i < command.length; i++) {
     const char = command[i];
+    if (!started) start = i;
     if (!windows && char === "\\" && quote !== "'") {
       const next = command[i + 1];
       if (next === undefined) throw new Error("Ambiguous worker launch quoting");
@@ -52,7 +54,7 @@ function tokens(command: string): string[] {
       token += `\u0000${variable[1].toUpperCase()}\u0000`;
       i += variable[0].length - 1;
     } else if (!quote && /\s/.test(char)) {
-      if (started) result.push(token);
+      if (started) result.push({ value: token, start, end: i });
       token = ""; started = false;
     } else {
       if (char === "\u0000" || (!quote && /[;&|<>(){}\r\n`]/.test(char)) || (quote === '"' && char === "`")) throw new Error("Ambiguous worker launch expression");
@@ -60,7 +62,7 @@ function tokens(command: string): string[] {
     }
   }
   if (quote) throw new Error("Ambiguous worker launch quoting");
-  if (started) result.push(token);
+  if (started) result.push({ value: token, start, end: command.length });
   return result;
 }
 
@@ -70,7 +72,9 @@ function engineToken(token: string) {
 
 /** A pane typed with an id Wink replaced starts on its replacement. */
 function withCurrentModel(driver: string, args: string[]): string[] {
+  const stop = args.findIndex((arg) => arg === "--" || arg === "--%");
   return args.map((arg, index) => {
+    if (stop !== -1 && index >= stop) return arg;
     if (/^(?:--model|-m)$/.test(args[index - 1] ?? "")) return currentModel(driver, arg);
     const inline = /^(--model=)(.+)$/.exec(arg);
     return inline ? `${inline[1]}${currentModel(driver, inline[2])}` : arg;
@@ -100,9 +104,21 @@ export function workerCommand(command: string, unmanaged = false) {
   }
   if (home && home.selector !== (engine.driver === "codex" ? "CODEX_HOME" : engine.driver === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : engine.driver === "grokAgent" ? "GROK_HOME" : "")) throw new Error("Worker account prefix must match the engine");
   if (Object.keys(environment).some((name) => name !== "AGY_CLI_DISABLE_AUTO_UPDATE")) throw new Error("Conflicting worker environment override");
-  const [executable, ...args] = tokens(rest);
+  const [{ value: executable }, ...argTokens] = tokens(rest);
   if (engineToken(executable) !== first.toLowerCase()) throw new Error("Ambiguous worker executable");
-  return { kind: "managed" as const, executable, args: withCurrentModel(engine.driver, args), environment, home, ...engine };
+  const original = argTokens.map(({ value }) => value);
+  const args = withCurrentModel(engine.driver, original);
+  const offset = command.trimEnd().length - rest.length;
+  const rewritten = args.reduceRight((text, arg, index) => {
+    if (arg === original[index]) return text;
+    const { start, end } = argTokens[index];
+    const raw = rest.slice(start, end);
+    const from = original[index].replace(/^--model=/, "");
+    const to = arg.replace(/^--model=/, "");
+    const replacement = raw.includes(from) ? raw.replace(from, to) : arg;
+    return text.slice(0, offset + start) + replacement + text.slice(offset + end);
+  }, command);
+  return { kind: "managed" as const, executable, args, rewritten: rewritten !== command ? rewritten : undefined, environment, home, ...engine };
 }
 
 function withoutWorkerSettings(args: string[]) {
@@ -116,19 +132,24 @@ function withoutWorkerSettings(args: string[]) {
   return { args: rest, workerSettings };
 }
 
-// Without account routing the pane still types the bot's own command, so only the session flags get appended.
-function unroutedLaunch(text: string) {
+function captureUnrouted(command: Extract<ReturnType<typeof workerCommand>, { kind: "managed" }>) {
+  if (command.home || command.args.some((arg) => arg === "--" || arg === "--%")) return null;
+  const { args, workerSettings } = command.driver === "claudeAgent" ? withoutWorkerSettings(command.args) : { args: [...command.args], workerSettings: false };
+  if (command.driver === "claudeAgent" && !workerSettings && args.some((arg) => /^--settings(?:=|$)/.test(arg))) return null;
+  const typed = args.length;
   try {
-    const command = workerCommand(text);
-    if (command.kind !== "managed" || command.home || command.args.some((arg) => arg === "--" || arg === "--%")) return null;
-    const { args, workerSettings } = command.driver === "claudeAgent" ? withoutWorkerSettings(command.args) : { args: [...command.args], workerSettings: false };
-    if (command.driver === "claudeAgent" && !workerSettings && args.some((arg) => /^--settings(?:=|$)/.test(arg))) return null;
-    const typed = args.length;
     const session = workerSession(command.executable, args, {}, { executable: command.executable, args: [...command.args] });
-    return session ? { kind: "unrouted" as const, account: { id: command.base, generation: 0 }, args: args.slice(typed), workerSettings, session } : null;
+    return session ? { args: args.slice(typed), workerSettings, session } : null;
   } catch {
     return null;
   }
+}
+
+function unroutedLaunch(command: ReturnType<typeof workerCommand> | undefined) {
+  if (command?.kind !== "managed") return null;
+  const capture = captureUnrouted(command);
+  if (!capture && !command.rewritten) return null;
+  return { kind: "unrouted" as const, account: { id: command.base, generation: 0 }, args: [], session: undefined, ...capture, command: command.rewritten };
 }
 
 export function createWorkerLaunch(options: {
@@ -162,9 +183,9 @@ export function createWorkerLaunch(options: {
       const home = requested.home?.value ?? baseAccount("codex", "codex", input.environment).home;
       requireCodexPromoAccount(home);
     }
-    if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
+    if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(requested);
     // Routing is on for the credit alone; every other launch gets the answer an unrouted host gets today.
-    if (!deps.enabled() && !input.resume && (input.mode === "send" || !onCredit(input.command))) return deps.credit && process.platform === "win32" && input.mode !== "send" ? unroutedLaunch(input.command) : null;
+    if (!deps.enabled() && !input.resume && (input.mode === "send" || !onCredit(input.command))) return deps.credit && process.platform === "win32" && input.mode !== "send" ? unroutedLaunch(requested) : null;
     const resume = input.resume;
     const command = resume ? { ...workerCommand(resume.engine), args: resumeArgs(resume) } : workerCommand(input.command, input.mode === "send");
     if (command.kind !== "managed") return command;

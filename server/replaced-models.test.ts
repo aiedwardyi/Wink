@@ -30,6 +30,14 @@ describe("replaced models", () => {
     expect(replacedModelLine("codex", "gpt-6.2-sol")).toBeNull();
   });
 
+  it.each([["3.7", "high", "High"], ["3.6", "medium", "Medium"], ["3.5", "low", "Low"]])(
+    "uses picker labels for retired Gemini %s Flash at %s effort", (version, effort, label) => {
+      expect(replacedModelLine("antigravityAgent", `gemini-${version}-flash-${effort}`)).toBe(
+        `Gemini ${version} Flash (${label}) was replaced by Gemini 3.8 Flash (${label})`,
+      );
+    },
+  );
+
   it.each([
     ["codex --model gpt-6.1-sol -c model_reasoning_effort=high 'go'", ["--model", "gpt-6.2-sol"]],
     ["codex -m gpt-6-astra 'go'", ["-m", "gpt-6.2-astra"]],
@@ -42,7 +50,7 @@ describe("replaced models", () => {
 
   it("a new row also moves a launch, with no other code change", () => {
     const rows = REPLACED_MODELS as ReplacedModel[];
-    rows.push({ engine: "codex", from: "old-x", to: "new-x" });
+    rows.push({ engine: "codex", from: "old-x", to: "new-x", fromLabel: "Old X", toLabel: "New X" });
     try {
       const launch = workerCommand("codex --model old-x 'go'");
       expect(launch.kind === "managed" && launch.args).toEqual(["--model", "new-x", "go"]);

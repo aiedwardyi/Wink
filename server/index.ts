@@ -16,6 +16,7 @@ import {
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
+import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { savedKeysPrompt } from "../shared/credential-request.ts";
@@ -917,18 +918,23 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
 /** A bot saved on a model Wink replaced moves to the replacement before the send, with one plain line in its chat. */
 async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
   const saved = bot.modelSelection;
-  const selection = await resolveBotSelection(bot, task);
-  if (selection.model === saved.model) return selection;
+  const automatic = saved.mode === "automatic";
+  const chosen = automatic ? await automaticBotSelection(bot, task) : saved;
+  const selection = botAccounts.resolve({ modelSelection: chosen }, automatic ? undefined : automaticRequirements(bot));
+  const live = store.bot(bot.id);
+  if (!live || !sameModelSelection(live.modelSelection, saved)) return selection;
   const kind = registry.get(botAccounts.catalogInstanceId(selection))?.driverKind;
-  const line = kind && currentModel(kind, saved.model) === selection.model ? replacedModelLine(kind, saved.model) : null;
-  if (!line) return selection;
-  store.patchBot(bot.id, { modelSelection: { ...saved, model: selection.model } });
-  store.appendMessage(task?.threadId ?? bot.activeThreadId ?? bot.threadId, { role: "bot", kind: "activity", tool: { name: line, ok: true } });
+  const line = kind && selection.model !== saved.model && currentModel(kind, saved.model) === selection.model ? replacedModelLine(kind, saved.model) : null;
+  if (line) {
+    store.patchBot(bot.id, { modelSelection: { ...chosen, model: selection.model } });
+    store.appendMessage(task?.threadId ?? live.activeThreadId ?? live.threadId, { role: "bot", kind: "activity", tool: { name: line, ok: true } });
+  } else if (automatic && !sameModelSelection(chosen, saved)) {
+    store.patchBot(bot.id, { modelSelection: chosen });
+  }
   return selection;
 }
 
-async function resolveBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
-  if (bot.modelSelection.mode !== "automatic") return botAccounts.resolve(bot, automaticRequirements(bot));
+async function automaticBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
   const continuityId = task?.lastInstanceId && (accounts.get(task.lastInstanceId)?.of ?? task.lastInstanceId);
   const preferredIds = [...new Set([continuityId, bot.modelSelection.instanceId].filter(Boolean))];
   const preferred = preferredIds.flatMap((instanceId) => {
@@ -949,14 +955,7 @@ async function resolveBotSelection(bot: BotRecord, task?: TaskRecord): Promise<M
   if (!selection) {
     throw Object.assign(new Error("no working engine supports this bot's current tools"), { status: 409 });
   }
-  if (
-    selection.instanceId !== bot.modelSelection.instanceId ||
-    selection.model !== bot.modelSelection.model ||
-    selection.effort !== bot.modelSelection.effort
-  ) {
-    store.patchBot(bot.id, { modelSelection: selection });
-  }
-  return botAccounts.resolve({ modelSelection: selection });
+  return selection;
 }
 
 // New bots prefer working engines without cached exhaustion. Automatic keeps the choice
