@@ -1,20 +1,24 @@
 // The Forum: the Board's posts as a Threads-style feed on one raised sheet (Hot / New / Top, flair chips); a post opens its replies down a thread line.
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SetStateAction } from "react";
 import { ArrowBigUp, CircleCheck, Flame, MessageCircle, Sparkles, TrendingUp, type LucideIcon } from "lucide-react";
 
 import { agoText } from "@/lib/ago";
 import {
-  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, isOwnReply, replyToBoard, sortBoardThreads, useBoardPosts,
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, replyToBoard, sortBoardThreads, useBoardPosts,
   type BoardKind, type BoardPost, type BoardReply, type BoardSort,
 } from "@/lib/board";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
+import { draftRevision, markDraftEdited, restoreComposerDraft, useDraft } from "@/lib/drafts";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
+import { hapticTick } from "@/lib/phone-swipe";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { useStore } from "@/state/store";
 import { shownProfile } from "@/state/store-transforms";
 import type { Bot } from "@/state/store-types";
@@ -22,6 +26,7 @@ import type { Bot } from "@/state/store-types";
 import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { BackButton } from "./BackButton";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { MessageMenu, messageMenuProps, SelectionMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { ProviderBrandMark } from "./ProviderIcons";
 import { MessageBoundary } from "./TurnPresence";
@@ -42,7 +47,7 @@ const SORT = {
 } satisfies Record<BoardSort, { key: MessageKey; Icon: typeof Flame }>;
 
 /** The one raised sheet; on a phone the page is the sheet. */
-const SHEET = "mx-auto flex w-full max-w-[640px] flex-col pb-4 md:min-h-full md:rounded-t-[28px] md:border md:border-b-0 md:border-hairline/75 md:bg-card md:shadow-2xl md:shadow-black/30";
+const SHEET = "mx-auto flex w-full break-words max-w-[640px] flex-col pb-4 md:min-h-full md:rounded-t-[28px] md:border md:border-b-0 md:border-hairline/75 md:bg-card md:shadow-2xl md:shadow-black/30";
 const ROW = "grid grid-cols-[52px_minmax(0,1fr)] px-6 max-md:grid-cols-[46px_minmax(0,1fr)] max-md:px-4";
 const SIDE = "px-6 max-md:px-4";
 // replies after this many share the last delay, so a long thread is never slow to show
@@ -54,36 +59,54 @@ const EMPTY_MARK_SIZE = 30;
 const EMPTY_RING_RADIUS = 56;
 const EMPTY_RING_BOX = 2 * EMPTY_RING_RADIUS + EMPTY_MARK_SIZE;
 
-function useUserFace() {
+type UserLook = { name: string; avatarUrl?: string };
+
+function useUserLook(): UserLook {
   const { t } = useI18n();
   const { state } = useStore();
   const profile = shownProfile(state)?.profile;
   const name = profile?.name?.trim() || profile?.email?.trim() || t("chrome.you");
-  return { name, face: (size: number) => <InitialsAvatar initials={profileInitials({ name })} imageUrl={profile?.avatarUrl} size={size} /> };
+  const avatarUrl = profile?.avatarUrl;
+  return useMemo(() => ({ name, avatarUrl }), [name, avatarUrl]);
 }
 
+const userFace = (user: UserLook) => (size: number) => <InitialsAvatar initials={profileInitials({ name: user.name })} imageUrl={user.avatarUrl} size={size} />;
+
+function useUserFace() {
+  const user = useUserLook();
+  return { name: user.name, face: userFace(user) };
+}
+
+type Instances = ReturnType<typeof useStore>["state"]["instances"];
+
+// the bot may have switched engines since it posted, so the mark follows the model it posted with
+const engineOf = (instances: Instances, post: BoardPost) => {
+  const model = post.author?.model;
+  return (model && instances.find((instance) => instance.models?.options.some((option) => option.label === model || option.id === model))?.driverKind) || "";
+};
+
 /** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture, and its working ring. */
-function useAuthor(post: BoardPost) {
-  const { state } = useStore();
-  const user = useUserFace();
-  if (post.author_bot_id === BOARD_USER) return { ...user, model: "", driverKind: "", working: false };
-  const bot: Bot | undefined = state.bots.find((candidate) => candidate.id === post.author_bot_id);
+function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, user: UserLook) {
+  if (post.author_bot_id === BOARD_USER) return { name: user.name, face: userFace(user), model: "", driverKind: "", working: false };
   const name = post.author?.name || bot?.name || "";
   const look = bot ?? { name, color: post.author?.color, mascotStyle: post.author?.mascot_style || null };
   const working = Boolean(bot?.busy);
-  const model = post.author?.model ?? "";
-  // the bot may have switched engines since it posted, so the mark follows the model it posted with
-  const engine = model ? state.instances.find((instance) => instance.models?.options.some((option) => option.label === model || option.id === model)) : undefined;
   return {
     name,
-    model,
-    driverKind: engine?.driverKind ?? "",
+    model: post.author?.model ?? "",
+    driverKind,
     working,
     face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} orbitRing={working} />,
   };
 }
 
-type Author = ReturnType<typeof useAuthor>;
+function useAuthor(post: BoardPost) {
+  const { state } = useStore();
+  const user = useUserLook();
+  return authorOf(post, state.bots.find((candidate) => candidate.id === post.author_bot_id), engineOf(state.instances, post), user);
+}
+
+type Author = ReturnType<typeof authorOf>;
 
 function Solved() {
   const { t } = useI18n();
@@ -138,7 +161,7 @@ function Body({ text }: { text: string }) {
 }
 
 /** The body's opening words for the list, without markdown marks. */
-const preview = (post: BoardPost) => (post.body && post.body !== post.title ? post.body.replace(/\*\*|`/g, "").replace(/^\s*(?:#+|>|[-*]|\d+\.)\s+/gm, "").replace(/\s+/g, " ").trim() : "");
+const preview = (post: BoardPost) => (post.body && post.body !== post.title ? post.body.slice(0, 400).replace(/\*\*|`/g, "").replace(/^\s*(?:#+|>|[-*]|\d+\.)\s+/gm, "").replace(/\s+/g, " ").trim() : "");
 
 type OnMenu = (menu: MessageMenuRequest) => void;
 
@@ -152,13 +175,14 @@ const menuProps = (post: BoardPost, onMenu: OnMenu) => {
 
 const repliesText = (count: number, t: ReturnType<typeof useI18n>["t"]) => (count === 1 ? t("board.oneReply") : t("board.replies", { n: count }));
 
-function PostRow({ post, replies, onOpen, onMenu }: { post: BoardPost; replies: number; onOpen: () => void; onMenu: OnMenu }) {
+// rows take what they show as props, so an app state change elsewhere redraws none of them
+const PostRow = memo(function PostRow({ post, replies, bot, driverKind, user, onOpen, onMenu }: { post: BoardPost; replies: number; bot: Bot | undefined; driverKind: string; user: UserLook; onOpen: (id: string) => void; onMenu: OnMenu }) {
   const { t } = useI18n();
-  const author = useAuthor(post);
+  const author = authorOf(post, bot, driverKind, user);
   const more = preview(post);
   return (
     <div role="listitem" data-board-post={post.id} className="border-t border-hairline/55 first:border-t-0" {...menuProps(post, onMenu)}>
-      <button type="button" onClick={onOpen} className={cn(ROW, "w-full pt-3.5 pb-2 text-left hover:bg-raised/40 max-md:pt-3 max-md:pb-1.5")}>
+      <button type="button" onClick={() => onOpen(post.id)} className={cn(ROW, "w-full pt-3.5 pb-2 text-left hover:bg-raised/50 max-md:pt-3 max-md:pb-1.5")}>
         <span className="pt-0.5">{author.face(40)}</span>
         <span className="flex min-w-0 flex-col">
           <Byline post={post} author={author} flair solved={post.status === "solved" && post.kind !== "fix"} working={false} />
@@ -172,25 +196,42 @@ function PostRow({ post, replies, onOpen, onMenu }: { post: BoardPost; replies: 
       </button>
     </div>
   );
-}
+});
 
-function ReplyBox({ parentId, to, onDone, autoFocus = false, top = false }: { parentId: string; to: string; onDone?: () => void; autoFocus?: boolean; top?: boolean }) {
+// a retry of an unedited reply keeps its id; outlives the box, which Back or another Reply unmounts
+const sends = new Map<string, { id: string; revision: number }>();
+
+type OnSaved = (post: BoardPost) => void;
+
+function ReplyBox({ parentId, to, onSaved, onDone, autoFocus = false, top = false }: { parentId: string; to: string; onSaved: OnSaved; onDone?: (parentId: string) => void; autoFocus?: boolean; top?: boolean }) {
   const { t } = useI18n();
   const user = useUserFace();
-  const [text, setText] = useState("");
+  const draftId = `forum:${parentId}`;
+  const [text, setText] = useDraft(draftId);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const form = useRef<HTMLFormElement>(null);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const body = text.trim();
     if (!body || busy) return;
+    const revision = draftRevision(draftId);
+    const held = sends.get(draftId);
+    const send = held?.revision === revision ? held : { id: crypto.randomUUID(), revision };
+    sends.set(draftId, send);
     setBusy(true);
-    replyToBoard(parentId, body).then(
-      () => {
-        setText((now) => (now.trim() === body ? "" : now));
+    replyToBoard(parentId, body, send.id).then(
+      ({ post }) => {
+        sends.delete(draftId);
+        onSaved(post);
         setFailed(false);
         setBusy(false);
-        onDone?.();
+        // only the draft that was sent clears and closes; one typed since stays
+        if (draftRevision(draftId) !== revision) return;
+        restoreComposerDraft(draftId, { text: "", attachments: [] });
+        // the box closes; keyboard focus goes back to its Reply button, not to the top of the page
+        if (!top && form.current?.contains(document.activeElement)) form.current.parentElement?.querySelector<HTMLElement>(`[data-board-reply-to="${parentId}"]`)?.focus();
+        onDone?.(parentId);
       },
       () => {
         setFailed(true);
@@ -199,12 +240,15 @@ function ReplyBox({ parentId, to, onDone, autoFocus = false, top = false }: { pa
     );
   };
   return (
-    <form data-board-reply-box={parentId} onSubmit={submit} className={cn("flex flex-col gap-1", top ? cn(SIDE, "border-b border-hairline/55 pt-1 pb-4 focus-within:border-accent-border") : "mt-2")}>
+    <form ref={form} data-board-reply-box={parentId} onSubmit={submit} className={cn("flex flex-col gap-1", top ? cn(SIDE, "border-b border-hairline/55 pt-1 pb-4 focus-within:border-accent-border") : "mt-2")}>
       <div className={cn("flex items-center", top ? "gap-3" : "gap-2 rounded-2xl border border-hairline/70 py-1 pr-1 pl-4 focus-within:border-accent-border")}>
         {top && <span className="shrink-0">{user.face(32)}</span>}
         <input
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value);
+            markDraftEdited(draftId);
+          }}
           placeholder={to ? t("board.replyTo", { name: to }) : t("board.addReply")}
           aria-label={t("board.addReply")}
           autoFocus={autoFocus}
@@ -241,7 +285,7 @@ function HelpedChip({ ids }: { ids: string[] }) {
 
 type Chain = { end: string; order: Map<string, number> | null };
 
-function Comment({ node, chain, replying, setReplying, onMenu }: { node: BoardReply; chain: Chain; replying: string | null; setReplying: (id: string | null) => void; onMenu: OnMenu }) {
+function Comment({ node, chain, replying, setReplying, onMenu, onSaved }: { node: BoardReply; chain: Chain; replying: string | null; setReplying: Dispatch<SetStateAction<string | null>>; onMenu: OnMenu; onSaved: OnSaved }) {
   const { t } = useI18n();
   const { post, replies } = node;
   const author = useAuthor(post);
@@ -257,7 +301,7 @@ function Comment({ node, chain, replying, setReplying, onMenu }: { node: BoardRe
           {post.id !== chain.end && <span data-board-chain aria-hidden className="absolute top-11 -bottom-3.5 left-[17px] w-0.5 rounded-full bg-hairline" />}
         </div>
         <div className="min-w-0">
-          <div {...menuProps(post, onMenu)}>
+          <div tabIndex={0} {...menuProps(post, onMenu)}>
             <Byline post={post} author={author} flair={post.kind === "fix"} solved={false} />
             <div className="mt-[7px] text-[15px] leading-normal text-ink max-md:text-[14.5px]"><Body text={post.body || post.title} /></div>
           </div>
@@ -273,12 +317,12 @@ function Comment({ node, chain, replying, setReplying, onMenu }: { node: BoardRe
               <MessageCircle size={18} aria-hidden />{t("board.reply")}
             </button>
           </div>
-          {replying === post.id && <ReplyBox parentId={post.id} to={author.name} autoFocus onDone={() => setReplying(null)} />}
+          {replying === post.id && <ReplyBox parentId={post.id} to={author.name} autoFocus onSaved={onSaved} onDone={(id) => setReplying((open) => (open === id ? null : open))} />}
         </div>
       </div>
       {replies.length > 0 && (
         <div role="list">
-          {replies.map((child) => <Comment key={child.post.id} node={child} chain={chain} replying={replying} setReplying={setReplying} onMenu={onMenu} />)}
+          {replies.map((child) => <Comment key={child.post.id} node={child} chain={chain} replying={replying} setReplying={setReplying} onMenu={onMenu} onSaved={onSaved} />)}
         </div>
       )}
     </div>
@@ -288,7 +332,7 @@ function Comment({ node, chain, replying, setReplying, onMenu }: { node: BoardRe
 const lastOf = (node: BoardReply): string => (node.replies.length ? lastOf(node.replies[node.replies.length - 1]!) : node.post.id);
 const walk = (nodes: BoardReply[]): string[] => nodes.flatMap((node) => [node.post.id, ...walk(node.replies)]);
 
-function Thread({ post, replies, onMenu }: { post: BoardPost; replies: BoardPost[]; onMenu: OnMenu }) {
+function Thread({ post, replies, onMenu, onSaved }: { post: BoardPost; replies: BoardPost[]; onMenu: OnMenu; onSaved: OnSaved }) {
   const { t } = useI18n();
   const author = useAuthor(post);
   const [replying, setReplying] = useState<string | null>(null);
@@ -317,9 +361,9 @@ function Thread({ post, replies, onMenu }: { post: BoardPost; replies: BoardPost
         </div>
       </article>
       <h3 className={cn(SIDE, "border-t border-hairline/65 py-3.5 text-[15px] font-semibold text-ink max-md:py-3")}>{t("board.repliesHead")}</h3>
-      <ReplyBox parentId={post.id} to={author.name} top />
+      <ReplyBox parentId={post.id} to={author.name} onSaved={onSaved} top />
       <div role="list" aria-label={t("board.list")}>
-        {tree.map((node) => <Comment key={node.post.id} node={node} chain={{ end: lastOf(node), order }} replying={replying} setReplying={setReplying} onMenu={onMenu} />)}
+        {tree.map((node) => <Comment key={node.post.id} node={node} chain={{ end: lastOf(node), order }} replying={replying} setReplying={setReplying} onMenu={onMenu} onSaved={onSaved} />)}
       </div>
     </>
   );
@@ -344,20 +388,76 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
 export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const { t } = useI18n();
   const sidebarOnRight = useSidebarSide() === "right";
-  const { posts, failed } = useBoardPosts();
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [sort, setSort] = useState<BoardSort>("hot");
-  const [flair, setFlair] = useState<BoardKind | null>(null);
+  const { posts, failed, saved, retry } = useBoardPosts();
+  const { state } = useStore();
+  const user = useUserLook();
+  const [openId, setOpenId] = useState(() => forumKept.openId);
+  const [sort, setSort] = useState<BoardSort>(() => forumKept.sort);
+  const [flair, setFlair] = useState(() => forumKept.flair);
+  useEffect(() => {
+    Object.assign(forumKept, { sort, flair, openId });
+  }, [sort, flair, openId]);
   const threads = boardThreads(posts ?? []);
+  const botById = new Map(state.bots.map((bot) => [bot.id, bot]));
   const open = openId ? threads.find((thread) => thread.post.id === openId) : undefined;
   const shown = sortBoardThreads(threads.filter((thread) => !flair || thread.post.kind === flair), sort, Date.now());
   const close = () => setOpenId(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // where Back returns: the row that opened the post and the list's scroll then
+  const opener = useRef<{ id: string; top: number } | null>(null);
+  const openPost = useCallback((id: string) => {
+    opener.current = { id, top: listRef.current?.scrollTop ?? 0 };
+    setOpenId(id);
+  }, []);
+  // a working ring repaints its blurred halo every frame, even scrolled away, so only rows near the screen draw one
+  const shownIds = shown.map((thread) => thread.post.id).join(" ");
+  useEffect(() => {
+    const root = listRef.current;
+    if (!root) return;
+    const near = new IntersectionObserver((entries) => {
+      for (const entry of entries) entry.target.toggleAttribute("data-on-screen", entry.isIntersecting);
+    }, { root, rootMargin: "200px 0px" });
+    for (const row of root.querySelectorAll("[data-board-list] > [data-board-post]")) near.observe(row);
+    return () => near.disconnect();
+  }, [shownIds]);
   useBackLayer(Boolean(open), close);
+  const stepSort = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = BOARD_SORTS[(BOARD_SORTS.indexOf(sort) + step + BOARD_SORTS.length) % BOARD_SORTS.length]!;
+    setSort(next);
+    event.currentTarget.querySelector<HTMLElement>(`[data-board-sort="${next}"]`)?.focus();
+  };
   const isOpen = Boolean(open);
   const page = usePresence(open);
+  const phone = useIsPhone();
+  const pageRef = useRef<HTMLDivElement>(null);
+  useSettingsSwipe(pageRef, phone && page.mounted && !page.closing, false, () => {
+    hapticTick();
+    // the swipe already settled offscreen; do not replay the exit
+    if (pageRef.current) pageRef.current.style.animation = "none";
+    close();
+  });
+  useLayoutEffect(() => {
+    if (isOpen) {
+      listRef.current?.closest("[data-board-view]")?.querySelector<HTMLElement>("[data-back-button]")?.focus({ preventScroll: true });
+      return;
+    }
+    const back = opener.current;
+    if (!back) return;
+    opener.current = null;
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTop = back.top;
+    list.querySelector<HTMLElement>(`[data-board-post="${back.id}"] > button`)?.focus({ preventScroll: true });
+  }, [isOpen]);
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   const [deleteFailed, setDeleteFailed] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const confirm = usePresence(deleting);
+  const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
   const remove = (id: string) => deleteFromBoard(id).then(() => setDeleteFailed(false), () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
@@ -387,9 +487,9 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
-        <div className="h-full overflow-x-hidden overflow-y-auto md:px-5">
+        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto md:px-5">
           <section className={SHEET}>
-            {failed && <div role="alert" className={cn(SIDE, "py-3 text-[13px] text-danger")}>{t("errors.request")}</div>}
+            {failed && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{retryButton}</div>}
             {!posts && !failed && (
               <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
             )}
@@ -416,7 +516,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             )}
             {!open && threads.length > 0 && (
               <>
-                <div role="tablist" aria-label={t("board.sort")} className="grid grid-cols-3 border-b border-hairline/65">
+                <div role="tablist" aria-label={t("board.sort")} onKeyDown={stepSort} className="grid grid-cols-3 border-b border-hairline/65">
                     {BOARD_SORTS.map((id) => {
                       const { key, Icon } = SORT[id];
                       return (
@@ -425,6 +525,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
                           type="button"
                           role="tab"
                           aria-selected={sort === id}
+                          tabIndex={sort === id ? 0 : -1}
                           data-board-sort={id}
                           onClick={() => setSort(id)}
                           className={cn(
@@ -445,8 +546,10 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
                     </Chip>
                   ))}
                 </div>
-                <div role="list" aria-label={t("board.list")} className="flex flex-col">
-                  {shown.map(({ post, replies }) => <PostRow key={post.id} post={post} replies={replies.length} onOpen={() => setOpenId(post.id)} onMenu={setMenu} />)}
+                <div role="list" data-board-list aria-label={t("board.list")} className="flex flex-col">
+                  {shown.map(({ post, replies }) => (
+                    <PostRow key={post.id} post={post} replies={replies.length} bot={botById.get(post.author_bot_id)} driverKind={engineOf(state.instances, post)} user={user} onOpen={openPost} onMenu={setMenu} />
+                  ))}
                   {!shown.length && <div className="py-6 text-center text-[13px] text-ink-secondary">{t("board.noneHere")}</div>}
                 </div>
               </>
@@ -455,14 +558,15 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
         </div>
         {page.mounted && page.value && (
           <div
+            ref={pageRef}
             data-side-panel=""
             data-closing={page.closing || undefined}
             inert={page.closing}
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app md:px-5"
           >
             <section className={SHEET}>
-              {deleteFailed && <div role="alert" className={cn(SIDE, "pt-3 text-[13px] text-danger")}>{t("errors.request")}</div>}
-              <Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} />
+              {(failed || deleteFailed) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
+              <Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} onSaved={saved} />
             </section>
           </div>
         )}
@@ -476,12 +580,25 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isOwnReply(menuPost) ? () => void remove(menuPost.id) : undefined}
+          onDelete={menuPost && isOwnReply(menuPost) ? () => setDeleting(menuPost.id) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (
         <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
+      {confirm.value && (
+        <ConfirmDialog
+          closing={confirm.closing}
+          title={t("board.deleteTitle")}
+          body={t("board.deleteBody")}
+          confirmLabel={t("chrome.delete")}
+          onConfirm={() => {
+            void remove(confirm.value!);
+            setDeleting(null);
+          }}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </main>
   );
 }

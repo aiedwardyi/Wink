@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +10,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { BOARD_USER, createBoard } from "../../server/board.ts";
 import { createTempDirs } from "../../server/testing/cleanup.ts";
 
-import { BOARD_CHANGED_EVENT, FORUM_SELECTION, type BoardPost } from "@/lib/board";
+import { BOARD_CHANGED_EVENT, FORUM_SELECTION, forumKept, type BoardPost } from "@/lib/board";
+import { PHONE_QUERY } from "@/lib/phone-swipe";
 import type { Action, Bot } from "@/state/store";
 
 const mock = vi.hoisted(() => ({
@@ -50,6 +53,8 @@ const realMatchMedia = window.matchMedia.bind(window);
 const reduceMotion = (reduce: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: reduce && query.includes("reduce") }));
 
 beforeEach(() => {
+  Object.assign(forumKept, { posts: null, sort: "hot", flair: null, openId: null });
+  localStorage.clear();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -81,7 +86,229 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const typeIn = (input: HTMLInputElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+});
+const box = (id: string) => host.querySelector<HTMLInputElement>(`[data-board-reply-box="${id}"] input`);
+const click = (selector: string) => act(async () => host.querySelector<HTMLElement>(selector)!.click());
+const openRow = (id: string) => click(`[data-board-post="${id}"] > button`);
+const dialogButton = (label: string) => act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((button) => button.textContent === label)!.click());
+const json = (body: { posts: BoardPost[] }) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
 describe("Forum", () => {
+  it("a finished reply clears only its own draft: a reply typed meanwhile stays, across Back too", async () => {
+    posts = [post("pop", { created_at: 1 }), post("pa", { parent_id: "pop", author_bot_id: "carbon", body: "A", created_at: 2 }), post("pb", { parent_id: "pop", author_bot_id: "carbon", body: "B", created_at: 3 })];
+    const ok = globalThis.fetch;
+    let finish = () => {};
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => (url === "/api/board/reply" ? new Promise<Response>((resolve) => { finish = () => void ok(url, init).then(resolve); }) : ok(url, init))));
+    await render(BoardView);
+    await openRow("pop");
+    await click('[data-board-reply-to="pa"]');
+    await typeIn(box("pa")!, "to A");
+    await click('[data-board-reply-box="pa"] button[type="submit"]');
+    await click('[data-board-reply-to="pb"]');
+    await typeIn(box("pb")!, "to B");
+    await act(async () => finish());
+    await settle();
+    expect(box("pb")?.value).toBe("to B");
+    await click("[data-back-button]");
+    await openRow("pop");
+    await click('[data-board-reply-to="pb"]');
+    expect(box("pb")!.value).toBe("to B");
+    await click('[data-board-reply-to="pa"]');
+    expect(box("pa")!.value).toBe("");
+  });
+
+  it("an older load that finishes late does not drop a newer post", async () => {
+    const answers: Array<(list: BoardPost[]) => void> = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => answers.push((list) => resolve(json({ posts: list }))))));
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView))));
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await act(async () => answers[1]!([post("pold", { created_at: 1 }), post("pnew", { created_at: 2 })]));
+    await settle();
+    await act(async () => answers[0]!([post("pold", { created_at: 1 })]));
+    await settle();
+    expect(rows()).toEqual(["pnew", "pold"]);
+  });
+
+  it("shows a saved reply without waiting for a Board change, and a failed load inside the open post", async () => {
+    posts = [post("pop", { created_at: 1 })];
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "On it.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(rows()).toEqual(["pop", "puser"]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector("[data-side-panel] [role=alert]")).not.toBeNull();
+  });
+
+  it("a retry after a lost answer sends the same reply id; a new reply gets a new one", async () => {
+    posts = [post("pop", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    let lost = true;
+    const ids: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        ids.push(JSON.parse(String(init?.body)).client_id);
+        if (lost) throw new TypeError("connection reset");
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "Same words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    lost = false;
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    await typeIn(box("pop")!, "Other words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it("Back returns to the same place in the list with the opened row focused; open focuses Back", async () => {
+    posts = Array.from({ length: 30 }, (_, i) => post(`p${i}`, { created_at: i + 1 }));
+    await render(BoardView);
+    const list = host.querySelector<HTMLElement>("[data-board-view] .overflow-y-auto")!;
+    list.scrollTop = 600;
+    await openRow("p10");
+    expect(document.activeElement).toBe(host.querySelector("[data-back-button]"));
+    list.scrollTop = 0;
+    await click("[data-back-button]");
+    expect(list.scrollTop).toBe(600);
+    expect(document.activeElement).toBe(host.querySelector('[data-board-post="p10"] > button'));
+  });
+
+  it("a keyboard user reaches Copy and Delete on their own plain reply", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
+    await render(BoardView);
+    await openRow("pbot");
+    const opener = host.querySelector<HTMLElement>('[data-board-post="pmine"] [tabindex="0"]')!;
+    expect(opener).not.toBeNull();
+    opener.focus();
+    await act(async () => { opener.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })); });
+    expect([...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent)).toEqual(["Copy", "Delete"]);
+  });
+
+  it("asks before deleting the user's own reply, and Cancel keeps it", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
+    const ok = globalThis.fetch;
+    const deletes: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/delete") deletes.push(JSON.parse(String(init?.body)).id);
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    const askDelete = async () => {
+      await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+      await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    };
+    await askDelete();
+    expect(document.body.querySelector("[role=dialog] h2")!.textContent).toBe("Delete this reply?");
+    expect(deletes).toEqual([]);
+    await dialogButton("Cancel");
+    await settle();
+    expect(deletes).toEqual([]);
+    expect(host.querySelector('[data-board-post="pmine"]')).not.toBeNull();
+    await askDelete();
+    await dialogButton("Delete");
+    await settle();
+    expect(deletes).toEqual(["pmine"]);
+  });
+
+  it("a failed load offers Retry, and the error goes once a load works", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await render(BoardView);
+    const alert = () => host.querySelector("[role=alert]");
+    const retry = [...alert()!.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+    expect(retry).toBeDefined();
+    vi.stubGlobal("fetch", vi.fn(async () => json({ posts: [post("pback", { created_at: 1 })] })));
+    await act(async () => retry.click());
+    await settle();
+    expect(alert()).toBeNull();
+    expect(rows()).toEqual(["pback"]);
+  });
+
+  it("only list rows near the screen draw a working ring", async () => {
+    let report: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
+    const watched: Element[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof report) { report = callback; }
+      observe(row: Element) { watched.push(row); }
+      disconnect() {}
+    });
+    posts = [post("pa", { created_at: 1 }), post("pb", { created_at: 2 })];
+    await render(BoardView);
+    expect(watched.map((row) => row.getAttribute("data-board-post"))).toEqual(["pb", "pa"]);
+    act(() => report([{ target: watched[0]!, isIntersecting: true }, { target: watched[1]!, isIntersecting: false }]));
+    expect(rows().filter((id) => host.querySelector(`[data-board-post="${id}"]`)!.hasAttribute("data-on-screen"))).toEqual(["pb"]);
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
+    const hide = /^([^{}\n]*data-on-screen[^{}\n]*)\{\s*display: none;/m.exec(css)![1]!.trim().replace(/ \.orbit-ring$/, "");
+    expect(host.querySelector('[data-board-post="pa"]')!.matches(hide)).toBe(true);
+    expect(host.querySelector('[data-board-post="pb"]')!.matches(hide)).toBe(false);
+    // a reply in an open post keeps its ring
+    await openRow("pa");
+    posts.push(post("preply", { parent_id: "pa", author_bot_id: "carbon", created_at: 3 }));
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector('[data-board-post="preply"]')!.matches(hide)).toBe(false);
+  });
+
+  it("a right swipe on a phone goes back from a post", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: query.includes("reduce") || query === PHONE_QUERY }));
+    posts = [post("pswipe", { created_at: 1 })];
+    await render(BoardView);
+    await openRow("pswipe");
+    const page = host.querySelector<HTMLElement>("[data-side-panel]")!;
+    const touch = (type: string, x: number, at: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: 200 }] }, timeStamp: { value: at } });
+      page.dispatchEvent(event);
+    };
+    await act(async () => {
+      touch("touchstart", 10, 100);
+      touch("touchmove", 60, 120);
+      touch("touchmove", 700, 140);
+      touch("touchend", 700, 160);
+    });
+    expect(host.querySelector("article")).toBeNull();
+  });
+
+  it("a chat visit comes back to the same sort, filter and open post, with no Loading frame", async () => {
+    posts = [post("pa", { kind: "tip", created_at: 1 }), post("pb", { kind: "tip", created_at: 2 }), post("pc", { created_at: 3 })];
+    await render(BoardView);
+    await click('[data-board-sort="new"]');
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((chip) => chip.textContent === "Tip")!.click());
+    await openRow("pa");
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView))));
+    expect(host.querySelector("[data-board-loading]")).toBeNull();
+    expect(host.querySelector('article[data-board-post="pa"]')).not.toBeNull();
+    await click("[data-back-button]");
+    expect(rows()).toEqual(["pb", "pa"]);
+  });
+
+  it("an app state change elsewhere redraws no list row", async () => {
+    posts = Array.from({ length: 6 }, (_, i) => post(`p${i}`, { created_at: i + 1 }));
+    await render(BoardView);
+    // each row reads the clock for its age; the list reads it once to sort
+    const clock = vi.spyOn(Date, "now");
+    mock.state = { ...mock.state, selectedId: "elsewhere" };
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView))));
+    expect(clock.mock.calls.length).toBeLessThan(posts.length);
+  });
+
   it("lists posts with helped, flair, replies and Solved; a click opens the thread", async () => {
     posts = [
       post("pold", { title: "Old snag", body: "Old snag", created_at: 1 }),
@@ -229,6 +456,24 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pb", "pa", "pc"]);
   });
 
+  it("Left and Right move between Hot, New and Top, one tab stop on the chosen one", async () => {
+    posts = [post("pa", { created_at: 1 })];
+    await render(BoardView);
+    const tab = (id: string) => host.querySelector<HTMLButtonElement>(`[data-board-sort="${id}"]`)!;
+    const stops = () => [...host.querySelectorAll<HTMLButtonElement>("[data-board-sort]")].map((each) => each.tabIndex);
+    expect(stops()).toEqual([0, -1, -1]);
+    const press = (key: string) => act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
+    tab("hot").focus();
+    await press("ArrowRight");
+    expect(document.activeElement).toBe(tab("new"));
+    expect(tab("new").getAttribute("aria-selected")).toBe("true");
+    expect(stops()).toEqual([-1, 0, -1]);
+    await press("ArrowLeft");
+    await press("ArrowLeft");
+    expect(document.activeElement).toBe(tab("top"));
+    expect(stops()).toEqual([-1, -1, 0]);
+  });
+
   it("filters by flair and All brings every post back", async () => {
     posts = [post("pfix", { kind: "fix", status: "solved", created_at: 3 }), post("ptip", { kind: "tip", created_at: 2 }), post("pstuck", { created_at: 1 })];
     await render(BoardView);
@@ -320,7 +565,7 @@ describe("Forum", () => {
     });
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-reply-box="pop"] button[type="submit"]')!.click());
     await settle();
-    expect(replies).toEqual([{ parent_id: "pop", body: "Switching is fine by me." }]);
+    expect(replies).toEqual([{ parent_id: "pop", body: "Switching is fine by me.", client_id: expect.any(String) }]);
     expect(input.value).toBe("");
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
@@ -383,6 +628,7 @@ describe("Forum", () => {
     expect(await menuFor('[data-board-post="pcarbon"] [data-board-author]')).toEqual(["Copy"]);
     expect(await menuFor('[data-board-post="pmine"] p')).toEqual(["Copy", "Delete"]);
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
     await settle();
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
@@ -402,6 +648,7 @@ describe("Forum", () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
     await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
     await settle();
     expect(host.querySelector('[role="alert"]')!.textContent).toBe("Wink couldn't finish that. Try again.");
     expect(rows()).toEqual(["pbot", "pmine"]);
