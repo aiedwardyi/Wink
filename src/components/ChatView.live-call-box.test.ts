@@ -243,6 +243,26 @@ describe("call button in the message box", () => {
     }
   });
 
+  it("uses the same gear in the message box as in the call, without changing the row height", async () => {
+    const rem = (className: string, prefix: string) => Number(className.match(new RegExp(`(?:^| )${prefix}(-?\\d+)(?: |$)`))?.[1] ?? 0);
+    const phone = (el: HTMLElement) => (rem(el.className, "max-md:size-") || rem(el.className, "size-")) - 2 * rem(el.className, "max-md:-my-");
+    const { host, unmount } = await mount();
+    try {
+      const gear = button(frame(host), "Call settings")!;
+      expect(rem(gear.className, "max-md:size-")).toBe(10);
+      await type(host, "hi");
+      const send = button(frame(host), "Send message")!;
+      expect(phone(gear)).toBe(phone(send));
+      await type(host, "");
+      await connect(host);
+      const live = button(frame(host), "Call settings")!;
+      expect(rem(live.className, "size-")).toBe(rem(gear.className, "size-"));
+      expect(rem(live.className, "max-md:size-")).toBe(10);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("labels Call in Korean", async () => {
     applyLocale("ko");
     const { host, unmount } = await mount();
