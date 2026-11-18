@@ -636,7 +636,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string; reveal?: boolean; searchLanding?: AbortController }
+  | { type: "select"; id: string; reveal?: boolean; searchLanding?: { threadId: string; request: AbortController } }
   | {
       type: "send";
       botId: string;

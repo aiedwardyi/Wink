@@ -847,16 +847,19 @@ describe("paged transcripts", () => {
     expect(button(host, "Jump to latest")).toBeUndefined();
   });
 
-  it("discards a held search task switch after swiping away and back", async () => {
+  it.each(["swiping away and back", "opening another task by notification"] as const)("discards a held search task switch after %s", async (navigation) => {
     const a = bot(lettered("a", 200), false);
     const b = { ...a, id: "b", threadId: "thread-b", name: "B", messages: lettered("b", 200) };
     const task = { ...a, threadId: "thread-a2", messages: lettered("t", 600).slice(-200), hasMore: true };
+    const next = { ...a, threadId: "thread-a3", messages: lettered("n", 200) };
+    a.tasks = [task, next].map(({ threadId }) => ({ threadId, title: threadId, createdAt: 1 }));
     let release: (() => void) | undefined;
     const fetch = vi.fn(async (url: string) => {
       if (url === "/api/bots?messages=200") return Response.json({ bots: [a, b], groups: [], computerControl: {} });
       if (url === `/api/bots/a/tasks/${task.threadId}`) {
         return new Promise<Response>((resolve) => { release = () => resolve(Response.json({ bot: task })); });
       }
+      if (url === `/api/bots/a/tasks/${next.threadId}`) return Response.json({ bot: next });
       if (url === `/api/threads/${task.threadId}/messages?around=t150&limit=200`) {
         return Response.json({ messages: lettered("t", 251).slice(51), hasMore: true });
       }
@@ -865,7 +868,7 @@ describe("paged transcripts", () => {
     vi.stubGlobal("fetch", fetch);
     const host = await mount("chat", true);
     await act(async () => store.dispatch({ type: "select", id: b.id }));
-    let landing: Promise<void>;
+    let landing: ReturnType<typeof landOnSearchHit>;
     await act(async () => {
       landing = landOnSearchHit({
         botId: a.id, name: a.name, threadId: task.threadId, messageId: "t150", role: "user", kind: "text",
@@ -874,13 +877,20 @@ describe("paged transcripts", () => {
     });
     expect(release).toBeDefined();
     expect(host.querySelector('[data-mid="a199"]')).not.toBeNull();
-    await act(async () => store.dispatch({ type: "select", id: b.id }));
-    expect(host.querySelector('[data-mid="b199"]')).not.toBeNull();
-    await act(async () => store.dispatch({ type: "select", id: a.id }));
+    if (navigation === "swiping away and back") {
+      await act(async () => store.dispatch({ type: "select", id: b.id }));
+      expect(host.querySelector('[data-mid="b199"]')).not.toBeNull();
+      await act(async () => store.dispatch({ type: "select", id: a.id }));
+    } else {
+      await act(async () => openNotificationTarget(store.dispatch, { botId: a.id, threadId: next.threadId }, store.state, true));
+    }
+    const current = navigation === "swiping away and back" ? a : next;
+    const latest = `[data-mid="${current.messages.at(-1)!.id}"]`;
+    expect(host.querySelector(latest)).not.toBeNull();
 
     await act(async () => { release!(); await landing; });
-    expect(host.querySelector('[data-mid="a199"]')).not.toBeNull();
-    expect(store.state.bots.find((candidate) => candidate.id === a.id)?.threadId).toBe(a.threadId);
+    expect(host.querySelector(latest)).not.toBeNull();
+    expect(store.state.bots.find((candidate) => candidate.id === a.id)?.threadId).toBe(current.threadId);
     expect(store.state.focusMessage).toBeNull();
     expect(fetch.mock.calls.some(([url]) => url.includes("around=t150"))).toBe(false);
   });

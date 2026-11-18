@@ -81,7 +81,7 @@ export async function landOnSearchHit(
   state: SearchLandingState,
   dispatch: React.Dispatch<Action>,
   query?: string,
-): Promise<void> {
+): Promise<boolean> {
   searchLanding?.abort();
   const request = searchLanding = new AbortController();
   const stale = () => request.signal.aborted;
@@ -90,35 +90,41 @@ export async function landOnSearchHit(
   const group = hit.groupId ? state.groups.find((candidate) => candidate.id === hit.groupId) : undefined;
   if (!ownerId || (!bot && !group)) throw new Error("That conversation is no longer available.");
 
-  dispatch({ type: "select", id: ownerId, searchLanding: request });
-  if (bot && bot.threadId !== hit.threadId) {
-    const result = await api(`/api/bots/${bot.id}/tasks/${hit.threadId}`, { method: "POST" });
-    if (stale()) return;
-    if (result?.bot) dispatch({ type: "taskSwitched", bot: result.bot });
-  }
-  if (group && group.threadId !== hit.threadId) {
-    const asked = groupTaskTicket();
-    const result = await api(`/api/groups/${group.id}/tasks/${hit.threadId}`, { method: "POST" });
-    if (stale()) return;
-    if (result?.group) showGroupTask(result.group, dispatch, asked);
-  }
-  if (bot && !hit.onActivePath) {
-    const branch = await api(`/api/bots/${bot.id}/active-branch`, {
-      method: "POST",
-      body: JSON.stringify({ messageId: hit.messageId }),
-    });
-    if (stale()) return;
-    if (branch?.activeLeafId) {
-      dispatch({ type: "threadActive", threadId: hit.threadId, activeLeafId: branch.activeLeafId });
+  dispatch({ type: "select", id: ownerId, searchLanding: { threadId: hit.threadId, request } });
+  try {
+    if (bot && bot.threadId !== hit.threadId) {
+      const result = await api(`/api/bots/${bot.id}/tasks/${hit.threadId}`, { method: "POST" });
+      if (stale()) return false;
+      if (result?.bot) dispatch({ type: "taskSwitched", bot: result.bot });
     }
+    if (group && group.threadId !== hit.threadId) {
+      const asked = groupTaskTicket();
+      const result = await api(`/api/groups/${group.id}/tasks/${hit.threadId}`, { method: "POST" });
+      if (stale()) return false;
+      if (result?.group) showGroupTask(result.group, dispatch, asked);
+    }
+    if (bot && !hit.onActivePath) {
+      const branch = await api(`/api/bots/${bot.id}/active-branch`, {
+        method: "POST",
+        body: JSON.stringify({ messageId: hit.messageId }),
+      });
+      if (stale()) return false;
+      if (branch?.activeLeafId) {
+        dispatch({ type: "threadActive", threadId: hit.threadId, activeLeafId: branch.activeLeafId });
+      }
+    }
+  } catch (error) {
+    if (stale()) return false;
+    throw error;
   }
-  if (stale()) return;
+  if (stale()) return false;
   dispatch({
     type: "focusMessage",
     threadId: hit.threadId,
     messageId: hit.messageId,
     query: query?.trim() || undefined,
   });
+  return true;
 }
 
 export function useFocusMessage(threadId: string, ready: boolean) {

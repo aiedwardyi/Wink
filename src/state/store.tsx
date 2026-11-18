@@ -1151,7 +1151,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshGeneration = useRef(0);
   const instancesVersion = useRef(0);
   const taskSwitchGeneration = useRef(0);
-  const searchLanding = useRef<{ id: string; request: AbortController } | null>(null);
+  const searchLanding = useRef<{ id: string; threadId: string; request: AbortController } | null>(null);
   const pendingNotificationSwitch = useRef<NotificationTarget | null>(null);
   const pendingTaskResumes = useRef(new Map<string, (error: string | null, pending?: boolean) => void>());
   // per-frame stream-delta batching (see the "runtime" SSE case); stream
@@ -1358,6 +1358,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }).then((res) => stillOpen(res, threadId), () => true);
       void holdReload(saving);
       return saving;
+    };
+
+    const cancelSearchForTaskSwitch = (id: string, threadId: string) => {
+      const landing = searchLanding.current;
+      if (landing?.id !== id || landing.threadId === threadId) return;
+      landing.request.abort();
+      searchLanding.current = null;
     };
 
     const wrapped: React.Dispatch<Action> = (rawAction) => {
@@ -1762,7 +1769,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "select": {
           if (searchLanding.current?.id !== action.id || action.searchLanding) {
             searchLanding.current?.request.abort();
-            searchLanding.current = action.searchLanding ? { id: action.id, request: action.searchLanding } : null;
+            searchLanding.current = action.searchLanding ? { id: action.id, ...action.searchLanding } : null;
           }
           closeGroupArchive();
           // a chat picked before hydrate drops a pending notification target
@@ -1964,6 +1971,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // tasks: the server answers with the bot AND the live transcript,
         // because switching changes which conversation is on screen
         case "switchTask":
+          cancelSearchForTaskSwitch(action.botId, action.threadId);
           api(`/api/bots/${action.botId}/tasks/${action.threadId}`, { method: "POST" })
             .then((r: any) => r?.bot && dispatch({ type: "taskSwitched", bot: r.bot, generation: action.generation }))
             .catch(showError);
@@ -1972,6 +1980,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pendingNotificationSwitch.current = action.target;
           break;
         case "switchGroupTask": {
+          cancelSearchForTaskSwitch(action.groupId, action.threadId);
           const asked = groupTaskTicket();
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "POST" })
             .then((r: any) => r?.group && showGroupTask(r.group, dispatch, asked))
