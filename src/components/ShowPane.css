@@ -5,7 +5,7 @@
 .show-pane { --head: 40px; flex-direction: column; align-items: stretch; }
 .show-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 4px; height: var(--head); padding: 10px 6px 0 12px; }
 /* Tabs that do not fit scroll and fade at the edge like Segmented, so the Maximize and Close buttons stay in the pane. */
-.show-pane-tabs { display: flex; min-width: 0; padding: 2px; border-radius: 8px; background: var(--color-inset); overflow-x: auto; scrollbar-width: none; }
+.show-pane-tabs { display: flex; min-width: 0; padding: 2px; border-radius: 8px; background: var(--color-inset); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .show-pane-tabs button { flex-shrink: 0; height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; white-space: nowrap; outline-offset: -2px; cursor: default; }
 .show-pane-tabs button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
