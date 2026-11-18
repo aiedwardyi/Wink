@@ -88,13 +88,15 @@ async function holdCall(onCall = vi.fn()) {
   return { host, onCall, call: button(host, "Call Ada")! };
 }
 
-async function swipe(target: Element) {
+async function swipe(target: Element, flick = false) {
   const events: Event[] = [];
   await act(async () => {
-    for (const [type, y, time] of [["touchstart", 100, 0], ["touchmove", 300, 200], ["touchend", 300, 400]] as const) {
+    for (const [type, x, y, time] of flick
+      ? [["touchstart", 200, 100, 0], ["touchmove", 225, 135, 20], ["touchend", 225, 135, 25]] as const
+      : [["touchstart", 200, 100, 0], ["touchmove", 200, 300, 200], ["touchend", 200, 300, 400]] as const) {
       const event = new Event(type, { bubbles: true, cancelable: true });
       Object.defineProperties(event, {
-        touches: { value: type === "touchend" ? [] : [{ clientX: 200, clientY: y }] },
+        touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] },
         timeStamp: { value: time },
       });
       target.dispatchEvent(event);
@@ -120,6 +122,18 @@ it.each([true, false])("only closes on a downward swipe at the top on phone=%s",
   expect(panel.dataset.closing).toBe(phone ? "true" : undefined);
   expect(atTop[1]!.defaultPrevented).toBe(phone);
   expect(onCall).not.toHaveBeenCalled();
+});
+
+it.each(["Speed", "Volume"])("keeps the menu open on a steep %s slider drag", async (label) => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width") }));
+  const { call } = await holdCall();
+  await act(async () => call.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+  const panel = menu()!;
+  Object.defineProperty(panel, "offsetHeight", { value: 100 });
+  const events = await swipe(panel.querySelector(`input[aria-label="${label}"]`)!, true);
+  expect(panel.dataset.closing).toBeUndefined();
+  expect(events[1]!.defaultPrevented).toBe(false);
+  expect(events[2]!.defaultPrevented).toBe(false);
 });
 
 it("right-click on Call opens the panel and a left-click still calls", async () => {
