@@ -441,9 +441,8 @@ it("restores Retry when the reload after a failed history also fails", async () 
 
   reload = true;
   await click(retry()!);
-  await act(() => new Promise((resolve) => setTimeout(resolve, 1_100)));
-  await settle();
-  expect(retry()).toBeDefined();
+  expect(retry()).toBeUndefined();
+  await vi.waitFor(async () => { await settle(); expect(retry()).toBeDefined(); }, { timeout: 3_000 });
 });
 
 // Only the very first of the unloaded messages brings a file.
