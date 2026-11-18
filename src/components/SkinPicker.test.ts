@@ -309,7 +309,7 @@ describe("Moving tiles", () => {
     await open();
     await painted();
     const scenes = [...arrive.keys()];
-    expect(scenes).toHaveLength(7);
+    expect(scenes).toHaveLength(new Set(animated.map((skin) => sceneOf(skin as SkinId))).size);
     for (const scene of scenes.slice(0, -1)) {
       arrive.get(scene)!();
       await act(async () => {});
@@ -329,8 +329,9 @@ describe("Moving tiles", () => {
     };
     await open();
     await painted();
-    expect(running).toHaveLength(animated.length - 2);
-    expect(document.querySelectorAll("[data-mini-scene][data-live]")).toHaveLength(animated.length - 2);
+    const lost = animated.filter((skin) => sceneOf(skin as SkinId) === "snow").length;
+    expect(running).toHaveLength(animated.length - lost);
+    expect(document.querySelectorAll("[data-mini-scene][data-live]")).toHaveLength(animated.length - lost);
   });
 
   it("starts nothing when the picker closes before its first paint", async () => {
