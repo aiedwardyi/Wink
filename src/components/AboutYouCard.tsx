@@ -84,7 +84,7 @@ export function AboutYouCard() {
 
   const known = Boolean(sources?.length);
   const steps = (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-6">
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
         <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5">
@@ -110,7 +110,7 @@ export function AboutYouCard() {
           disabled={busy}
           onChange={(event) => setText(event.target.value)}
         />
-        <div className="mt-2 flex justify-end">
+        <div className="mt-6 flex justify-end">
           <button onClick={() => void add()} disabled={busy || !text.trim()} className={cn(ROW_BUTTON, "text-ink")}>
             {t("aboutYou.add")}
           </button>
@@ -155,7 +155,7 @@ export function AboutYouCard() {
           </div>
         </>
       ) : (
-        steps
+        <div className="pt-2">{steps}</div>
       )}
     </Card>
   );
