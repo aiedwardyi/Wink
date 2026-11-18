@@ -149,7 +149,7 @@ describe("worker chip liveness", () => {
     const { host, unmount } = await mountChat(seven);
     try {
       await answer(resolvers, "chip-seven", ids);
-      await vi.waitFor(() => expect(chipLabel(host)).toBe("6 working, 0 waiting, 0 failed, 1 done. Show workers"));
+      await vi.waitFor(() => expect(chipLabel(host)).toBe("7 working, 0 waiting, 0 failed, 0 done. Show workers"));
       await act(async () => {
         for (const cb of exits) cb({ botId: "chip-seven", id: ids[6]! });
         await sleep(10);
@@ -189,7 +189,7 @@ describe("worker chip liveness", () => {
       const { host, unmount } = await mountChat(wide, remoteTerminal("chip-wide", { ids: many }));
       try {
         await act(async () => seedBadge({ "chip-wide": many.map((id) => `L-${id}`) }));
-        await vi.waitFor(() => expect(chipLabel(host)).toBe("0 working, 0 waiting, 0 failed, 24 done. Show workers"));
+        await vi.waitFor(() => expect(chipLabel(host)).toBe("24 working, 0 waiting, 0 failed, 0 done. Show workers"));
         expect(badgeOf("chip-wide")).toHaveLength(24);
       } finally {
         await unmount();
@@ -201,7 +201,7 @@ describe("worker chip liveness", () => {
       const { host, unmount } = await mountChat(bare, remoteTerminal("chip-bare", { ids }));
       try {
         await act(async () => seedBadge({ "chip-bare": ids.map((id) => `L-${id}`) }));
-        await vi.waitFor(() => expect(chipLabel(host)).toBe("0 working, 0 waiting, 0 failed, 3 done. Show workers"));
+        await vi.waitFor(() => expect(chipLabel(host)).toBe("3 working, 0 waiting, 0 failed, 0 done. Show workers"));
       } finally {
         await unmount();
       }

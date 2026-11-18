@@ -111,7 +111,7 @@ export function RemoteTerminalView({
   const [copied, setCopied] = useState(false);
   const [selectedPane, setSelectedPane] = useState<string | null>(() => lastViewedPanes.get(bot.id) ?? null);
   const [draft, setDraft] = useState("");
-  // The pane a draft was typed for; a closed pane must not hand its line to whichever pane takes the screen.
+  // The pane a draft was typed for, MAIN_TAB for Main since a restart gives it a new id; a closed pane must not hand its line to whichever pane takes the screen.
   const [draftPane, setDraftPane] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -204,14 +204,14 @@ export function RemoteTerminalView({
     if (paneFocus.sessionId === null) {
       focusedRef.current = paneFocus;
       setSelectedPane(mainPane ? null : MAIN_TAB);
-      setDraftPane(mainPane?.sessionId ?? null);
+      setDraftPane(mainPane ? MAIN_TAB : null);
       return;
     }
     const match = panes.find((pane) => pane.sessionId === paneFocus.sessionId);
     if (!match) return;
     focusedRef.current = paneFocus;
     setSelectedPane(match.main ? null : match.sessionId);
-    setDraftPane(match.sessionId);
+    setDraftPane(match.main ? MAIN_TAB : match.sessionId);
   }, [paneFocus, panes]);
 
   useEffect(() => {
@@ -248,7 +248,8 @@ export function RemoteTerminalView({
   const text = shown && !noTerminal ? snapshotText(shown).replace(/(?:\r?\n[^\S\r\n]*)+$/, "") : "";
   const screenRuns = shown?.screenRuns?.slice(0, Math.max(1, shown.screenRuns.findLastIndex((row) => row.some((run) => run.t.trim())) + 1));
   const canType = !!shown?.sessionId && shown.generation !== undefined && !noTerminal && !shown.exited;
-  const stranded = draft !== "" && draftPane !== null && draftPane !== shown?.sessionId;
+  const shownPane = shown?.sessionId && shown.sessionId === mainPane?.sessionId ? MAIN_TAB : shown?.sessionId ?? null;
+  const stranded = draft !== "" && draftPane !== null && draftPane !== shownPane;
 
   useLayoutEffect(() => {
     const el = outputRef.current;
@@ -340,7 +341,7 @@ export function RemoteTerminalView({
       appliedRequestRef.current = ++requestRef.current;
       pinnedRef.current = true;
       setSelectedPane(null);
-      setDraftPane(next.sessionId ?? null);
+      setDraftPane(next.sessionId ? MAIN_TAB : null);
       setSnapshot(next);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
@@ -373,7 +374,7 @@ export function RemoteTerminalView({
   const watchedName = watched ? parseWorkerLabel(watched.label).nick ?? watched.sessionId.slice(0, 8) : bot.name;
   const pick = (sessionId: string | null) => {
     setSelectedPane(sessionId);
-    setDraftPane(sessionId === MAIN_TAB ? null : sessionId ?? mainPane?.sessionId ?? null);
+    setDraftPane(sessionId === MAIN_TAB ? null : sessionId ?? (mainPane ? MAIN_TAB : null));
     focusInput(inputRef.current);
   };
 
@@ -478,7 +479,7 @@ export function RemoteTerminalView({
               rows={1}
               value={draft}
               onChange={(event) => {
-                if (!draft || draftPane === null) setDraftPane(shown?.sessionId ?? null);
+                if (!draft || draftPane === null) setDraftPane(shownPane);
                 setDraft(event.target.value);
               }}
               placeholder={t("terminal.inputPlaceholder")}

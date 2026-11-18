@@ -514,7 +514,7 @@ describe("RemoteTerminalView", () => {
     try {
       const listed = await openList(host);
       expect(listed.map(nickOf)).toEqual(["run", "build"]);
-      expect(listed.map(stateOf)).toEqual(["done", "ended"]);
+      expect(listed.map(stateOf)).toEqual(["working", "ended"]);
       expect(listed[1].querySelector("[data-worker-state]")?.textContent).toContain("Ended");
     } finally {
       await act(async () => root.unmount());
@@ -936,6 +936,30 @@ describe("RemoteTerminalView", () => {
       expect(button(host, "Send").disabled).toBe(false);
       await act(async () => click(button(host, "Send")));
       expect(sends().map(([, init]) => JSON.parse(init.body).sessionId)).toEqual(["main"]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps a Main draft on Main after Main restarts under a new id", async () => {
+    let main = "main-1";
+    const panes = () => [{ sessionId: main, label: null, main: true, exited: false }, { sessionId: "worker", label: "build", main: false, exited: false }];
+    store.api.mockImplementation(async (path: string, init?: { body?: string }) => {
+      if (path.endsWith("/send")) return { screenText: "$ sent", sessionId: JSON.parse(init!.body!).sessionId, generation: 1, panes: panes() };
+      return { screenText: `${main}$`, sessionId: main, generation: 1, panes: panes() };
+    });
+    const { host, root } = await renderView();
+    try {
+      await act(async () => {});
+      await act(async () => typeLine(composer(host)!, "npm test"));
+      main = "main-2";
+      await act(async () => click(button(host, "Refresh")));
+      await act(async () => {});
+      expect(host.querySelector("pre")?.textContent).toBe("main-2$");
+      expect(composer(host)!.value).toBe("npm test");
+      expect(button(host, "Send").disabled).toBe(false);
+      await act(async () => click(button(host, "Send")));
+      expect(sends().map(([, init]) => JSON.parse(init.body).sessionId)).toEqual(["main-2"]);
     } finally {
       await act(async () => root.unmount());
     }

@@ -191,7 +191,7 @@ export function TerminalWorkspace({
     let replayComplete = false;
     let replaying = false;
     let seen: IntersectionObserver | null = null;
-    const quiet = quietAttachRef.current;
+    let quiet = quietAttachRef.current;
     quietAttachRef.current = false;
     const liveQueue: OutputEvent[] = [];
     terminalLiveQueues.push(liveQueue);
@@ -456,6 +456,7 @@ export function TerminalWorkspace({
           .catch(report);
       }
       if (!blockedRef.current && !quiet) terminal.focus();
+      quiet = false;
     };
     // A replay that never reached the screen is stale: reset the attach so the
     // next show opens fresh instead of queueing output while hidden.

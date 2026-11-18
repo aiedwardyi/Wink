@@ -8,7 +8,7 @@ import { sidebarWorkerStatus } from "@/lib/worker-status";
 import { workerRuns } from "@/lib/worker-runs";
 import type { Message } from "@/state/store";
 import { saveSidebarSide } from "@/lib/sidebar-preferences";
-import { closeShow, showItem, showMedia, useMediaThread, useShowItem, useWorkersThread } from "@/lib/show-pane";
+import { closeShow, showItem, showMedia, showWorkers, useMediaThread, useShowItem, useWorkersThread } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPaneButton } from "./ShowPaneButton";
 import type { WorkerSource } from "./WorkerRows";
@@ -122,9 +122,19 @@ it("reopens on the chat's last tab while no worker is listed, and on Workers onc
   expect([state[1], crew]).toEqual([null, "b7"]);
 });
 
-it("shows no Working badge for an open pane whose run is past the loaded page", async () => {
+it("reopens on Workers when it was the chat's last tab, with no worker listed", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(), onOpenTerminal: () => {} };
+  await render("b9");
+  await act(async () => showWorkers("b9"));
+  await press();
+  expect(crew).toBeNull();
+  await press();
+  expect([state[1], crew]).toEqual([null, "b9"]);
+});
+
+it("keeps the Working badge and sidebar line for an open pane whose run is past the loaded page", async () => {
   workers = { name: "Ada", runs: [], livePanes: new Set(["00000009-1"]), paneLabels: new Map([["00000009-1", "OLD | Opus 5.5 | high"]]) };
   await render("b8");
-  expect(host.querySelector("[data-worker-badge]")).toBeNull();
-  expect(sidebarWorkerStatus([], ["OLD | Opus 5.5 | high"], (key, vars) => translate("en", key, vars))).toBe("");
+  expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("1");
+  expect(sidebarWorkerStatus([], ["OLD | Opus 5.5 | high"], (key, vars) => translate("en", key, vars))).toBe("1 worker");
 });

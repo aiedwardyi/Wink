@@ -18,7 +18,7 @@ it("uses the newest note label across panes sharing a nickname", () => {
 });
 
 it("keeps an unlabeled live pane independent of an unlabeled completed note", () => {
-  expect(sidebarWorkerStatus([launch("old", 1, "REVIEW", "aaaaaaaa"), done("done", 2, "aaaaaaaa"), launch("live", 3, "SHIP", "bbbbbbbb")], ["", "SHIP"], t)).toBe("2 workers");
+  expect(sidebarWorkerStatus([launch("old", 1, "REVIEW", "aaaaaaaa"), done("done", 2, "aaaaaaaa")], [""], t)).toBe("1 worker");
 });
 
 it("uses the latest job on the matched pane even after its nickname changes", () => {
@@ -26,7 +26,7 @@ it("uses the latest job on the matched pane even after its nickname changes", ()
   expect(sidebarWorkerStatus(messages, ["REVIEW"], t)).toBe("");
 });
 
-it("never reads an unmatched live pane as working, so a finished one past the loaded page stays quiet", () => {
-  expect(sidebarWorkerStatus([], ["REVIEW"], t)).toBe("");
+it("keeps an unmatched live pane working until its launch arrives or it closes", () => {
+  expect(sidebarWorkerStatus([], ["REVIEW"], t)).toBe("1 worker");
   expect(sidebarWorkerStatus([], [], t)).toBe("");
 });

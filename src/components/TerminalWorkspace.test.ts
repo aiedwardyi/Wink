@@ -1570,7 +1570,7 @@ it("keeps an exited pane listed as an ended row that still opens until the host 
   const f = paneFixture();
   f.snapshot.panes[0].exited = true;
   await f.render();
-  expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["two", "done"], ["one", "ended"]]);
+  expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["two", "working"], ["one", "ended"]]);
   await act(async () => { f.exit({ id: "pane-two", exitCode: 0 }); });
   expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["one", "ended"], ["two", "ended"]]);
   f.open.mockClear();
@@ -2250,6 +2250,27 @@ it("keeps the keyboard in the chat box when the docked worker pane closes on its
   expect(shownPane()).toBe("Desk");
   expect(terminal.focus).not.toHaveBeenCalled();
   expect(document.activeElement).toBe(chatBox);
+  chatBox.remove();
+});
+
+it("focuses Main on Restart after a quiet hand-off from a closed worker pane", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select("one");
+  const chatBox = document.createElement("textarea");
+  document.body.append(chatBox);
+  chatBox.focus();
+  await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
+  expect(shownPane()).toBe("Desk");
+  await f.render({ ...f.props, bot: { ...f.props.bot, cwd: "C:\\other" } });
+  terminal.focus.mockClear();
+  const here = [...host.querySelectorAll("button")].find((el) => el.textContent?.includes("Open terminal here"))!;
+  await act(async () => { here.click(); });
+  const confirm = [...document.querySelectorAll("button")].find((el) => el.textContent?.trim() === "Restart terminal")!;
+  await act(async () => { confirm.click(); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(f.open).toHaveBeenLastCalledWith(expect.objectContaining({ restart: true }));
+  expect(terminal.focus).toHaveBeenCalled();
   chatBox.remove();
 });
 

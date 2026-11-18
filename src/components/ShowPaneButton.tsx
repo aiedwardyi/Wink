@@ -49,7 +49,7 @@ export function ShowPaneButton({ threadId, map, workers, className }: { threadId
       aria-pressed={open}
       aria-label={workerTab ? t("workers.stripAria", counts) : t("show.pane")}
       title={t("show.pane")}
-      onClick={() => open ? closePane() : togglePane(threadId, map, hasWorkers)}
+      onClick={() => open ? closePane() : togglePane(threadId, map, hasWorkers ? "listed" : workerTab ? "tab" : undefined)}
       className={cn("relative shrink-0 rounded-md p-1.5 hover:text-ink md:hover:bg-raised", open ? "text-accent" : "text-ink-secondary", className)}
     >
       {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}

@@ -49,7 +49,6 @@ class FakeEventSource {
 }
 
 const bot = (id: string) => ({ id, threadId: `${id}-thread`, name: id, messages: [] });
-const launched = (label: string) => ({ id: `launch-${label}`, at: 1, role: "bot", kind: "launch", text: `Launched ${label}` });
 
 function SeedTerminalAttention() {
   const { state, dispatch } = useStore();
@@ -2082,7 +2081,7 @@ describe("Sidebar bot second line", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (path: string) => path === "/api/bots?messages=200"
-        ? new Response(JSON.stringify({ bots: [{ ...bot("busy"), messages: [launched("AUDIT | Astra | high")] }, { ...bot("solo"), messages: [launched("SOLO | Luna | max")] }, bot("attention"), bot("idle")], groups: [] }))
+        ? new Response(JSON.stringify({ bots: [bot("busy"), bot("solo"), bot("attention"), bot("idle")], groups: [] }))
         : new Response(JSON.stringify({ error: "not in this test" }), { status: 404 })),
     );
     vi.spyOn(console, "warn").mockImplementation(() => {});

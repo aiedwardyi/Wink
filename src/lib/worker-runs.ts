@@ -90,10 +90,7 @@ function paneRuns<T extends ShownLike>(runs: readonly T[], livePanes: ReadonlySe
   return panes;
 }
 
-/** A live pane whose launch and reports fall outside the loaded transcript; never shown as working. */
-export const UNKNOWN_PANE_STATE = "done" satisfies WorkerState;
-
-/** Live panes in any state; one with no transcript run gets an UNKNOWN_PANE_STATE placeholder. Unknown liveness keeps today's working and waiting runs. Panes in `ended` list as ended. */
+/** Live panes in any state; one with no transcript run gets a working placeholder. Unknown liveness keeps today's working and waiting runs. Panes in `ended` list as ended. */
 export function listedRuns(runs: readonly ShownLike[], livePanes: ReadonlySet<string> | null, labels?: ReadonlyMap<string, string>, ended?: ReadonlySet<string>): ShownLike[] {
   if (!livePanes) return runs.filter((shown) => shown.state === "working" || shown.state === "waiting").sort(byUrgency);
   const panes = paneRuns(runs, livePanes);
@@ -104,8 +101,8 @@ export function listedRuns(runs: readonly ShownLike[], livePanes: ReadonlySet<st
     const pane8 = sessionId.slice(0, 8);
     const { nick, model, effort } = parseWorkerLabel(labels?.get(sessionId));
     listed.push({
-      state: ended?.has(sessionId) ? "ended" : UNKNOWN_PANE_STATE,
-      run: { id: `pane:${sessionId}`, nick: nick ?? pane8, model, effort, provider: workerProvider(model), state: UNKNOWN_PANE_STATE, at: Number.MAX_SAFE_INTEGER, latest: { at: 0, index: 0 }, pane8, sessionId, folder: null, botId: null, messageIds: [], notes: [] },
+      state: ended?.has(sessionId) ? "ended" : "working",
+      run: { id: `pane:${sessionId}`, nick: nick ?? pane8, model, effort, provider: workerProvider(model), state: "working", at: Number.MAX_SAFE_INTEGER, latest: { at: 0, index: 0 }, pane8, sessionId, folder: null, botId: null, messageIds: [], notes: [] },
     });
   }
   return listed.sort(byUrgency);
