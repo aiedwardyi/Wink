@@ -27,7 +27,7 @@ const needsUser = (ask: TaskAsk) => ask.status === "waiting-for-user" || ask.kin
 export function callTaskContext(bot: Pick<BotRecord, "threadId" | "tasks">, read: (threadId: string) => TaskResumePacket | null): string {
   const threads = new Set(bot.tasks?.map((task) => task.threadId));
   threads.add(bot.threadId);
-  const records = [...threads].map(read).filter((record) => record !== null);
+  const records = [...threads].map((threadId) => read(threadId)).filter((record) => record !== null);
   if (!records.length) return "TASK RECORD: unavailable.";
   const selected = records.find((record) => record.threadId === bot.threadId);
   const blockers = selected?.blockers ?? [];
