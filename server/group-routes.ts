@@ -484,7 +484,9 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
           if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
           // a typed line answers the open question, so its asker takes it; a mention still wins
           const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard, roomFileIds, actedAt);
-          return { ok: true as const, threadId, message, idle: idle() };
+          const roomIdle = idle();
+          if (sendId && roomIdle) broadcast({ kind: "group.send.idle", threadId, sendId });
+          return { ok: true as const, threadId, message, idle: roomIdle };
         },
       ).catch((error: Error & { status?: number; code?: string; file?: string }) => {
         // a teammate's upload names its refused file the same way; the generic 5xx body would hide a full room

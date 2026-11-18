@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Atom, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Hexagon, Leaf, MoonStar, Mountain, Orbit, Sparkle, Sparkles, Sun, X } from "lucide-react";
 import { shownModelSelection, useStore, type Bot, type ModelSelection } from "@/state/store";
@@ -93,7 +93,8 @@ export function ModelPickerControl({
   const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
   const followUpRef = useRef(false);
-  followUpRef.current = Boolean(state.pendingQueued?.[bot.threadId]?.length) || bot.messages.some((message) => message.queued) || Boolean(accepted?.some((send) => send.kind === "sends-next"));
+  const queuedReply = useMemo(() => bot.messages.some((message) => message.queued), [bot.messages]);
+  followUpRef.current = Boolean(state.pendingQueued?.[bot.threadId]?.length) || queuedReply || Boolean(accepted?.some((send) => send.kind === "sends-next"));
   const stageRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef({ x: 0, y: 0, stepped: true });
   const wheelRef = useRef({ at: 0, dir: 0, sum: 0 });

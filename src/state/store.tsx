@@ -836,11 +836,10 @@ export function reducer(state: AppState, action: Action): AppState {
         }),
       };
     }
-    case "sendSettled":
-      return {
-        ...state,
-        acceptedSends: settleAcceptedSend(state.acceptedSends, action.threadId, action.sendId, action.queued),
-      };
+    case "sendSettled": {
+      const acceptedSends = settleAcceptedSend(state.acceptedSends, action.threadId, action.sendId, action.queued);
+      return acceptedSends === state.acceptedSends ? state : { ...state, acceptedSends };
+    }
     case "sendRejected": {
       const rejected = (state.acceptedSends[action.threadId] ?? []).find(
         (entry) => entry.sendId === action.sendId,
@@ -1079,24 +1078,17 @@ function normalizeSnapshotFailure(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
 }
 
-/** A refused SSE resume needs the chat transcript snapshot before its cursor
- * can be acknowledged. The other panels should refresh at the same boundary,
- * but a broken optional endpoint must not hold every chat frame hostage. */
+/** Only the chat snapshot gates the live cursor after a refused resume. */
 export async function loadSnapshotBoundary<Key extends string>(
   loadChat: () => Promise<void>,
   peripherals: readonly PeripheralSnapshotLoad<Key>[],
   onPeripheralFailure: (part: PeripheralSnapshotLoad<Key>, error: Error) => void,
 ): Promise<boolean> {
-  const [chat, ...settledPeripherals] = await Promise.allSettled([
-    loadChat(),
-    ...peripherals.map((part) => part.load()),
-  ]);
-  settledPeripherals.forEach((result, index) => {
-    if (result.status === "rejected") {
-      onPeripheralFailure(peripherals[index]!, normalizeSnapshotFailure(result.reason));
-    }
-  });
-  return chat.status === "fulfilled";
+  const chat = loadChat();
+  for (const part of peripherals) {
+    void part.load().catch((error) => onPeripheralFailure(part, normalizeSnapshotFailure(error)));
+  }
+  return chat.then(() => true, () => false);
 }
 
 /** Per-frame stream state lives in its OWN context: token frames update only
@@ -2081,10 +2073,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refresh.attempt += 1;
       refresh.timer = setTimeout(() => {
         refresh.timer = null;
-        void loadPeripheral(part, true).catch((nextError) => schedulePeripheralRetry(part, nextError));
+        void loadPeripheral(part).catch((nextError) => schedulePeripheralRetry(part, nextError));
       }, delay);
     };
-    const loadPeripheral = async (part: PeripheralPart, protectLiveFrames: boolean): Promise<void> => {
+    const loadPeripheral = async (part: PeripheralPart): Promise<void> => {
       const refresh = refreshState(part.key);
       if (refresh.timer) {
         clearTimeout(refresh.timer);
@@ -2095,10 +2087,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       try {
         const apply = await part.request();
         if (!alive || refresh.generation !== generation) return;
-        // A background retry must never replace a live patch that arrived
-        // after its request began. Discard that stale response and try again
-        // from the newer event boundary instead.
-        if (protectLiveFrames && refresh.version !== version) {
+        // Live patches can overtake a peripheral snapshot.
+        if (refresh.version !== version) {
           schedulePeripheralRetry(part);
           return;
         }
@@ -2155,7 +2145,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       };
       const peripherals = firstChatPeripherals(peripheralParts).map((part) => ({
         key: part.key,
-        load: () => loadPeripheral(part, false),
+        load: () => loadPeripheral(part),
       }));
       const chatReady = await loadSnapshotBoundary(chat, peripherals, (failed, error) => {
         const part = partByKey.get(failed.key);
@@ -2438,6 +2428,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
           break;
+        case "group.send.idle":
+          rawDispatch({ type: "sendSettled", threadId: frame.threadId, sendId: frame.sendId, queued: true });
+          break;
         case "queue.cancelled":
           for (const send of frame.sends ?? []) {
             rawDispatch({ type: "cancelQueued", botId: frame.botId, threadId: send.threadId, queueId: send.queueId });
@@ -2475,7 +2468,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           {
             const instances = partByKey.get("instances");
             if (instances) {
-              void loadPeripheral(instances, true).catch((error) =>
+              void loadPeripheral(instances).catch((error) =>
                 schedulePeripheralRetry(instances, error),
               );
             }
@@ -2507,7 +2500,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // The mount's deferred load covers the first boundary; a later one may follow a missed instances frame.
         const instances = partByKey.get("instances");
         if (snapshotBoundaries++ > 0 && instances) {
-          void loadPeripheral(instances, true).catch((error) => schedulePeripheralRetry(instances, error));
+          void loadPeripheral(instances).catch((error) => schedulePeripheralRetry(instances, error));
         }
         return hydrate(cursor);
       },
@@ -2535,7 +2528,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopDeferredInstances = instancesPart
       ? scheduleDeferredInstancesLoad(() => {
           if (!alive) return;
-          void loadPeripheral(instancesPart, true).catch((error) =>
+          void loadPeripheral(instancesPart).catch((error) =>
             schedulePeripheralRetry(instancesPart, error),
           );
         })

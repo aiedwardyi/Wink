@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { jumpWindowMessages, mergeForwardPage, useJumpWindow, useOlderMessages } from "./message-pages";
+import { jumpWindowMessages, mergeForwardPage, useJumpWindow, useOlderMessages, useThreadMessage } from "./message-pages";
 import type { Message } from "@/state/store";
 
 const row = (i: number): Message => ({ id: `m${i}`, parentId: i ? `m${i - 1}` : null, at: i, role: "user", kind: "text", text: `row ${i};` });
@@ -116,6 +116,36 @@ describe("useJumpWindow forward paging", () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+it("shares a fetched quote only until its last view unmounts", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const quoted = row(12);
+  const fetch = vi.fn(async () => Response.json({ messages: [quoted] }));
+  vi.stubGlobal("fetch", fetch);
+  function Quote() {
+    const message = useThreadMessage("quote-thread", quoted.id, undefined);
+    return message?.text ?? null;
+  }
+  const hosts = Array.from({ length: 3 }, () => document.createElement("div"));
+  const roots = hosts.map((host) => createRoot(host));
+  const show = (index: number, visible: boolean) => act(async () => roots[index]!.render(visible ? createElement(Quote) : null));
+  try {
+    await show(0, true);
+    await show(1, true);
+    expect(hosts[1]?.textContent).toBe(quoted.text);
+    expect(fetch).toHaveBeenCalledOnce();
+    await show(0, false);
+    await show(2, true);
+    expect(fetch).toHaveBeenCalledOnce();
+    await show(1, false);
+    await show(2, false);
+    await show(0, true);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(hosts[0]?.textContent).toBe(quoted.text);
+  } finally {
+    await act(async () => roots.forEach((root) => root.unmount()));
+  }
 });
 
 describe("useOlderMessages", () => {
