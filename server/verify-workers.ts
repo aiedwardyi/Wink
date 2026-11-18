@@ -65,7 +65,9 @@ function since(store: VerifyWorkersDeps["store"], threadId: string, paneId: stri
 
 export function createVerifyWorkers(deps: VerifyWorkersDeps) {
   const { store } = deps;
+  // keyed by thread too: release wakes only the job's own thread
   const jobs = new Map<string, Job>();
+  const jobKey = (threadId: string, root: string) => JSON.stringify([threadId, root]);
   const checked = new Map<string, string>();
   const starts = new Map<string, number[]>();
   const holdMs = Math.min(90_000, deps.holdMs ?? WORKER_HOLD_MS);
@@ -77,7 +79,7 @@ export function createVerifyWorkers(deps: VerifyWorkersDeps) {
     const from = root ? since(store, source.threadId, scope.pane, pane!.spawnedAt) : undefined;
     if (!root || from === undefined) return null;
     const base = { botId: source.id, threadId: source.threadId, paneId: scope.pane, root };
-    const joined = jobs.get(root);
+    const joined = jobs.get(jobKey(source.threadId, root));
     if (joined) return { ...joined.plan, ...base };
     const paths = await (deps.scan ?? scanVerifyWrites)(root, from);
     const site = paths.filter(path => SITE_TYPES.has(extname(path).toLowerCase()));
@@ -105,7 +107,8 @@ export function createVerifyWorkers(deps: VerifyWorkersDeps) {
     if (human?.text && OPT_OUT.test(human.text)) return null;
     const found = await planFor(scope, text, source).catch((error: Error) => { deps.log(`Live Verify: worker check skipped, ${error.message}`); return null; });
     if (!found) return null;
-    if (jobs.has(found.root)) return { hold: { until: jobs.get(found.root)!.arrival + holdMs }, plan: found };
+    const existing = jobs.get(jobKey(found.threadId, found.root));
+    if (existing) return { hold: { until: existing.arrival + holdMs }, plan: found };
     const now = Date.now(), recent = (starts.get(source.id) ?? []).filter(at => at > now - 3_600_000);
     starts.set(source.id, recent);
     const free = (deps.freeMemory ?? freemem)();
@@ -174,15 +177,15 @@ export function createVerifyWorkers(deps: VerifyWorkersDeps) {
         store.appendMessage(found.threadId, { role: "bot", kind: "note", text: verifyNote.text, origin: deps.deviceId(), heldFrom: last, verifyNote: { ...verifyNote, alone: true } });
         deps.arrived(found.botId, found.threadId, found.paneId);
       })
-      .finally(() => { if (jobs.get(found.root) === job) jobs.delete(found.root); });
+      .finally(() => { if (jobs.get(jobKey(found.threadId, found.root)) === job) jobs.delete(jobKey(found.threadId, found.root)); });
   }
 
   /** The note is stored with its hold: start its check, or join the one already running on its folder. */
   function held(found: WorkerPlan, message: Message) {
-    const joined = jobs.get(found.root);
+    const joined = jobs.get(jobKey(found.threadId, found.root));
     if (joined && !joined.released) { joined.notes.push(message.id); joined.plan = { ...joined.plan, paneId: found.paneId }; return; }
     const job: Job = { plan: found, notes: [message.id], arrival: Date.now(), abort: new AbortController() };
-    jobs.set(found.root, job);
+    jobs.set(jobKey(found.threadId, found.root), job);
     start(job);
   }
 

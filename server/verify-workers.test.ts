@@ -67,8 +67,8 @@ async function fixture(root: string | ((pane: string) => string), opts: { holdMs
   servers.push(server);
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as { port: number };
-  const headers = (pane: string) => ({ authorization: `Bearer ${mailboxGrant(secret, pane, bot.id, bot.id)}`, "x-orbit-pane": pane, "x-orbit-bot": bot.id, "x-orbit-teacher": bot.id, "content-type": "application/json" });
-  const post = async (text: string, pane = PANE) => expect((await fetch(`http://127.0.0.1:${port}/api/mailbox`, { method: "POST", headers: headers(pane), body: JSON.stringify({ text, kind: "report" }) })).status).toBe(200);
+  const headers = (pane: string, to: string) => ({ authorization: `Bearer ${mailboxGrant(secret, pane, to, to)}`, "x-orbit-pane": pane, "x-orbit-bot": to, "x-orbit-teacher": to, "content-type": "application/json" });
+  const post = async (text: string, pane = PANE, to = bot.id) => expect((await fetch(`http://127.0.0.1:${port}/api/mailbox`, { method: "POST", headers: headers(pane, to), body: JSON.stringify({ text, kind: "report" }) })).status).toBe(200);
   const notes = () => store.activePath(bot.threadId).filter((message: Message) => message.kind === "note" && !message.verify);
   const forModel = () => paneNotesForTurn(store.activePath(bot.threadId), new Set(), undefined, false).notes;
   return { logs, store, bot, runs, arrived, workers, post, notes, forModel };
@@ -205,6 +205,20 @@ describe("Live Verify on a worker's DONE report", () => {
     expect(notes).toHaveLength(2);
     expect(notes[0]).not.toContain("Live Verify");
     expect(notes[1]).toContain("outcome: clean");
+  });
+
+  it("checks a second bot's report on the same folder on its own and wakes that bot", async () => {
+    const root = site({ "index.html": "<h1>Hi</h1>" });
+    const t = await fixture(root);
+    const other = t.store.createBot();
+    const pane = PANE.replace("4f9c2a1e", "77777777");
+    await t.post(DONE);
+    await t.post(DONE, pane, other.id);
+    expect(t.runs.map(run => run.input.threadId)).toEqual([t.bot.threadId, other.threadId]);
+    t.runs.forEach(run => run.done(clean()));
+    await vi.waitFor(() => expect(t.arrived).toHaveBeenCalledTimes(2));
+    expect(t.arrived).toHaveBeenCalledWith(other.id, other.threadId, pane);
+    expect(t.store.activePath(other.threadId).filter(message => message.hold && !message.hold.to)).toEqual([]);
   });
 
   it("skips with a reason line on low memory and when the checker is busy, never holding", async () => {

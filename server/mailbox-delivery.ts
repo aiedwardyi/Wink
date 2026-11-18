@@ -36,7 +36,7 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
   const input = parsed.data;
   let kind = input.kind;
   let accepted = false;
-  let held: { plan: Parameters<NonNullable<Dependencies["check"]>["held"]>[0]; message: Message } | undefined;
+  let pending: { plan: Parameters<NonNullable<Dependencies["check"]>["held"]>[0]; message: Message } | undefined;
   const result = await deps.receipts.accept(scope, input.messageId, async key => {
     deps.refresh(input.text);
     if (kind === "auto") {
@@ -58,7 +58,7 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
     if (check && "verifyNote" in check) row.verifyNote = check.verifyNote;
     if (check && "hold" in check) row.hold = check.hold;
     const message = deps.store.appendMessage(source.threadId, row);
-    if (check && "plan" in check) held = { plan: check.plan, message };
+    if (check && "plan" in check) pending = { plan: check.plan, message };
     accepted = true;
     return { ok: true, id: message.id };
   }, input.kind !== "auto").catch(error => {
@@ -70,7 +70,7 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
     if (kind === "report") { await deps.attention(scope, kind, input.text); deps.reported(scope, input.text, source); }
     if (source.notifications !== false) deps.notify(source, input.text);
     if (kind !== "report") void deps.attention(scope, kind);
-    if (held) deps.check!.held(held.plan, held.message);
+    if (pending) deps.check!.held(pending.plan, pending.message);
     else deps.arrived(scope, source);
   }
   return { status: 200, body: result };
