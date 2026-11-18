@@ -104,10 +104,16 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
     media: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
       const threadId = m[1];
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
+      mediaIndex ??= createMediaIndex(store);
+      const v = url.searchParams.get("v");
+      const slot = url.searchParams.get("size");
+      if (slot !== null) {
+        if (!/^\d+$/.test(slot)) return json(res, 400, { error: "invalid media slot" });
+        return json(res, 200, { size: await mediaIndex.size(threadId, v, Number(slot)) });
+      }
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
-      mediaIndex ??= createMediaIndex(store);
-      return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
+      return json(res, 200, mediaIndex.list(threadId, v));
     },
     messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
       // Same guard as the page route above, and for the same reason twice

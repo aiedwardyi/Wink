@@ -46,8 +46,16 @@ const kinds = new Map<string, MediaKind>();
 const heldKey = (threadId: string, roomId?: string) => roomId ? `room:${roomId}` : threadId;
 
 export function decodeMedia(threadId: string, wire: MediaWire): MediaFile[] {
+  const versioned = `/api/threads/${threadId}/media?v=${encodeURIComponent(wire.v)}`;
   // SAFETY: the server writes one MediaRef kind letter per entry.
-  return wire.ref.map((ref, n) => mediaFile(threadId, { kind: wire.kind[n] as MediaRef["kind"], name: wire.name[n]!, ref, size: wire.size[n] ?? undefined }, wire.at[n]! * 1000));
+  return wire.ref.map((ref, n) => {
+    const kind = wire.kind[n] as MediaRef["kind"];
+    const file = mediaFile(threadId, { kind, name: wire.name[n]!, ref, size: wire.size[n] ?? undefined }, wire.at[n]! * 1000);
+    if (kind === "l" && !file.image && !file.video && file.size === undefined) {
+      file.readSize = () => request(`${versioned}&size=${n}`).then((result: { size: number | null }) => result.size, () => null);
+    }
+    return file;
+  });
 }
 
 /** What this session last loaded, drawn at once while it is asked again. */

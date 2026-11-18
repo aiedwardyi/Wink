@@ -59,6 +59,7 @@ beforeEach(() => {
   media = {};
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
+    if (url.includes("&size=")) return Response.json({ size: 300 });
     const asked = url.match(/^\/api\/threads\/([^/?]+)\/media(?:\?v=(.+))?$/);
     if (asked) {
       const answer = media[asked[1]!] ?? wire([]);
@@ -186,7 +187,7 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   expect(shown).toEqual(deck);
 });
 
-it("asks for the whole timeline only once Media opens, then for its version alone", async () => {
+it("loads the timeline on open and a linked size when its row appears", async () => {
   media.t1 = wire([["b0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]);
   await act(async () => showItem(deck));
   await render({ ...chat, hasMore: true });
@@ -196,11 +197,14 @@ it("asks for the whole timeline only once Media opens, then for its version alon
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media"]);
   await click(tab("Files"));
+  await settle();
   expect(names().at(-1)).toBe("first.pdf");
+  expect(row("first.pdf").textContent).toContain("300 B");
   await click(tab("Show"));
   await click(tab("Media"));
   await settle();
-  expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
+  expect(calls.filter((url) => !url.includes("&size="))).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
+  expect(calls.filter((url) => url.includes("&size="))).toEqual(Array(2).fill("/api/threads/t1/media?v=1&size=0"));
   expect(names().at(-1)).toBe("first.pdf");
 });
 
@@ -209,6 +213,7 @@ function longChat(older: number, fail = 0) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
     if (fail-- > 0) return new Response(null, { status: 503 });
+    if (url.includes("&size=")) return Response.json({ size: null });
     if (url.includes("/media")) return Response.json(wire([["h0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]));
     const before = new URL(url, "http://x").searchParams.get("before")!;
     const end = before === "u1" ? older : Number(before.slice(1));
@@ -235,7 +240,7 @@ it("asks once more when the timeline fails to load, without reopening Media", as
   for (let i = 0; i < 4; i++) await settle();
   await click(tab("Files"));
   expect(names()).toContain("first.pdf");
-  expect(calls.filter((url) => url.includes("/media"))).toHaveLength(2);
+  expect(calls.filter((url) => url === "/api/threads/t1/media")).toHaveLength(2);
 });
 
 it("keeps the grid as it is while a reply streams, and adds a file the moment it lands", async () => {

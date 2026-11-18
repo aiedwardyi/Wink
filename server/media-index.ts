@@ -2,9 +2,10 @@
 // newest first and each once, columnar so thousands of files stay light on the wire.
 import { stat } from "node:fs/promises";
 
-import { mediaKey, messageRefs, showKind, type MediaRef } from "../src/lib/chat-media.ts";
+import { mediaKey, messageRefs, showKind } from "../src/lib/chat-media.ts";
 
-import type { Message, Store } from "./store.ts";
+import { mediaRows, type MediaRow } from "./media-rows.ts";
+import type { Store } from "./store.ts";
 
 export interface MediaIndex {
   /** Moves only when the list does, so an unchanged chat answers with `{ v }` alone. */
@@ -16,7 +17,7 @@ export interface MediaIndex {
   kind: string;
   name: string[];
   ref: string[];
-  /** Bytes, when the attach tag or the disk says. */
+  /** Bytes from the attach tag. Linked file sizes are read on demand. */
   size: Array<number | null>;
 }
 
@@ -25,16 +26,12 @@ type MediaList = Omit<MediaIndex, "v">;
 // held per chat; the least recently asked go first
 const HELD = 16;
 const boot = Date.now().toString(36);
-const refsOf = new WeakMap<Message, MediaRef[]>();
 
-export function buildMediaIndex(threadId: string, path: readonly Message[]): MediaList {
+export function buildMediaIndex(threadId: string, newestFirst: Iterable<MediaRow>): MediaList {
   const index: MediaList = { ids: [], at: [], kind: "", name: [], ref: [], size: [] };
   const seen = new Set<string>();
-  for (let i = path.length - 1; i >= 0; i--) {
-    const message = path[i]!;
-    let refs = refsOf.get(message);
-    if (!refs) refsOf.set(message, refs = messageRefs(message));
-    for (const ref of refs) {
+  for (const message of newestFirst) {
+    for (const ref of messageRefs(message)) {
       const key = mediaKey(threadId, ref);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -53,38 +50,49 @@ function same(a: MediaList, b: MediaList): boolean {
   return a.ids.length === b.ids.length && a.kind === b.kind && (["ids", "at", "name", "ref", "size"] as const).every((column) => a[column].every((value, n) => value === b[column][n]));
 }
 
-async function linkedSizes(list: MediaList): Promise<MediaList> {
-  await Promise.all(list.ref.map(async (ref, n) => {
-    // a UNC path would authenticate to a remote host
-    if (list.kind[n] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return;
-    list.size[n] = await stat(ref).then((info) => info.isFile() ? info.size : null, () => null);
-  }));
-  return list;
+interface HeldIndex {
+  index: MediaIndex;
+  dirty?: true;
+  sizes: Map<number, Promise<number | null>>;
 }
 
-/** Builds a chat's index on its first ask and again only after that chat changes. */
-export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) {
-  const held = new Map<string, MediaIndex>();
-  const dirty = new Set<string>();
-  const building = new Set<string>();
+export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) {
+  const held = new Map<string, HeldIndex>();
   let count = 0;
   store.onChange((change) => {
-    if (!("threadId" in change) || !(held.has(change.threadId) || building.has(change.threadId))) return;
+    if (!("threadId" in change)) return;
+    const cached = held.get(change.threadId);
     if (change.type === "thread.deleted") held.delete(change.threadId);
-    else dirty.add(change.threadId);
-  });
-  return async (threadId: string, v?: string | null): Promise<MediaIndex | { v: string }> => {
-    let index = held.get(threadId);
-    if (!index || dirty.has(threadId)) {
-      dirty.delete(threadId);
-      building.add(threadId);
-      const list = await linkedSizes(buildMediaIndex(threadId, store.activePath(threadId))).finally(() => building.delete(threadId));
-      index = held.get(threadId);
-      if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
+    else if (cached) {
+      cached.dirty = true;
+      cached.sizes.clear();
     }
-    held.delete(threadId);
-    held.set(threadId, index);
-    if (held.size > HELD) held.delete(held.keys().next().value!);
-    return v === index.v ? { v: index.v } : index;
+  });
+  return {
+    list(threadId: string, v?: string | null): MediaIndex | { v: string } {
+      let cached = held.get(threadId);
+      if (!cached || cached.dirty) {
+        const list = buildMediaIndex(threadId, mediaRows(threadId, store.activeLeaf(threadId)));
+        if (cached && same(cached.index, list)) cached.dirty = undefined;
+        else cached = { index: { v: `${boot}.${++count}`, ...list }, sizes: new Map() };
+      }
+      held.delete(threadId);
+      held.set(threadId, cached);
+      if (held.size > HELD) held.delete(held.keys().next().value!);
+      return v === cached.index.v ? { v } : cached.index;
+    },
+    async size(threadId: string, v: string | null, slot: number): Promise<number | null> {
+      const cached = held.get(threadId);
+      if (!cached || cached.index.v !== v || !Number.isSafeInteger(slot)) return null;
+      const ref = cached.index.ref[slot];
+      // A UNC path would authenticate to a remote host.
+      if (!ref || cached.index.kind[slot] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return null;
+      let size = cached.sizes.get(slot);
+      if (!size) {
+        size = stat(ref).then((info) => info.isFile() ? info.size : null, () => null);
+        cached.sizes.set(slot, size);
+      }
+      return size;
+    },
   };
 }

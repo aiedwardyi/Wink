@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -29,7 +29,7 @@ describe("media index", () => {
       { id: "b2", at: START + 5_001 * HOUR, role: "bot", kind: "text", text: "[gone.png](C:\\w\\gone.png)", summarized: true },
     ];
 
-    const index = buildMediaIndex("t1", path);
+    const index = buildMediaIndex("t1", path.toReversed());
 
     expect(index.ids).toHaveLength(5_004);
     expect(index.ids.slice(0, 4)).toEqual(["b1", "b1", "b1", "m4999"]);
@@ -43,41 +43,62 @@ describe("media index", () => {
     expect(index.ref.slice(-2)).toEqual(["", "C:\\att\\notes.docx"]);
   });
 
-  it("answers again only when a file lands, and with the version alone when nothing changed", async () => {
+  it("answers again only when a file lands, and with the version alone when nothing changed", () => {
     const store = new Store(selection);
     const { threadId } = store.createBot({}, { seedMessages: false });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[a.png](C:\\w\\a.png)" });
-    const media = createMediaIndex(store);
+    const { list: media } = createMediaIndex(store);
 
-    const first = await media(threadId);
+    const first = media(threadId);
     expect("ids" in first && first.ids).toHaveLength(1);
-    expect(await media(threadId, first.v)).toEqual({ v: first.v });
+    expect(media(threadId, first.v)).toEqual({ v: first.v });
 
     store.appendMessage(threadId, { role: "user", kind: "text", text: "thanks" });
-    expect(await media(threadId, first.v)).toEqual({ v: first.v });
+    expect(media(threadId, first.v)).toEqual({ v: first.v });
 
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.pdf](C:\\w\\b.pdf)" });
-    const next = await media(threadId, first.v);
+    const next = media(threadId, first.v);
     expect(next.v).not.toBe(first.v);
     expect("name" in next && next.name).toEqual(["b.pdf", "a.png"]);
   });
 
-  it("follows a streamed reply and a branch switch", async () => {
+  it("follows a streamed reply and a branch switch", () => {
     const store = new Store(selection);
     const { threadId } = store.createBot({}, { seedMessages: false });
     const ask = store.appendMessage(threadId, { role: "user", kind: "text", text: "draw it" });
     const reply = store.appendMessage(threadId, { role: "bot", kind: "text", text: "Working" });
-    const media = createMediaIndex(store);
-    expect(await media(threadId)).toMatchObject({ ids: [] });
+    const { list: media } = createMediaIndex(store);
+    expect(media(threadId)).toMatchObject({ ids: [] });
 
     store.patchMessage(threadId, reply.id, { text: "Done: [plot.png](C:\\w\\plot.png)" });
-    expect(await media(threadId)).toMatchObject({ ids: [reply.id], name: ["plot.png"] });
+    expect(media(threadId)).toMatchObject({ ids: [reply.id], name: ["plot.png"] });
 
     store.branchMessage(threadId, ask.id, "draw it bigger");
-    expect(await media(threadId)).toMatchObject({ ids: [] });
+    expect(media(threadId)).toMatchObject({ ids: [] });
   });
 
-  it("carries an attached file's size, and a linked file's from its disk", async () => {
+  it("reads media across database pages without loading the chat transcript", () => {
+    const writer = new Store(selection);
+    const { threadId } = writer.createBot({}, { seedMessages: false });
+    writer.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png)" });
+    for (let n = 0; n < 300; n++) writer.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
+    writer.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
+
+    const store = new Store(selection);
+    const activePath = vi.spyOn(store, "activePath");
+    expect(createMediaIndex(store).list(threadId)).toMatchObject({ name: ["new.png", "old.png"] });
+    expect(activePath).not.toHaveBeenCalled();
+    expect(store.loaded(threadId)).toBe(false);
+  });
+
+  it("imports a flat legacy thread and follows its insertion order", () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    writeFileSync(join(DATA_DIR, `messages-${threadId}.json`), JSON.stringify([shot(5), shot(2)]));
+    expect(createMediaIndex(store).list(threadId)).toMatchObject({ name: ["shot-2.png", "shot-5.png"] });
+  });
+
+  it("carries attached sizes and reads linked sizes only on request", async () => {
     const store = new Store(selection);
     const { threadId } = store.createBot({}, { seedMessages: false });
     const report = join(DATA_DIR, "report.pdf");
@@ -85,22 +106,33 @@ describe("media index", () => {
     store.appendMessage(threadId, { role: "user", kind: "text", text: upload });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: `[report.pdf](<${report}>), [gone.pdf](C:\\w\\gone.pdf) and [a.png](C:\\w\\a.png)` });
 
-    const index = await createMediaIndex(store)(threadId);
+    const media = createMediaIndex(store);
+    const index = media.list(threadId);
+    expect("size" in index && index.size).toEqual([null, null, null, null, 2048]);
+    writeFileSync(report, "x".repeat(500));
+    expect(await media.size(threadId, index.v, 0)).toBe(500);
+    expect(await media.size(threadId, index.v, 1)).toBeNull();
+    expect(await media.size(threadId, index.v, 4)).toBeNull();
+    expect(await media.size(threadId, "old", 0)).toBeNull();
+    expect(await media.size("other", index.v, 0)).toBeNull();
+    writeFileSync(report, "x".repeat(700));
+    expect(await media.size(threadId, index.v, 0)).toBe(500);
 
-    expect("size" in index && index.size).toEqual([300, null, null, null, 2048]);
+    store.appendMessage(threadId, { role: "user", kind: "text", text: "thanks" });
+    expect(media.list(threadId, index.v)).toEqual({ v: index.v });
+    expect(await media.size(threadId, index.v, 0)).toBe(700);
   });
 
-  it("keeps a file that lands while the first index builds", async () => {
+  it("keeps an older index stable when the next revision adds a file", () => {
     const store = new Store(selection);
     const { threadId } = store.createBot({}, { seedMessages: false });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[a.pdf](C:\\w\\a.pdf)" });
-    const media = createMediaIndex(store);
+    const { list: media } = createMediaIndex(store);
 
-    const building = media(threadId);
+    const first = media(threadId);
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.pdf](C:\\w\\b.pdf)" });
-    const first = await building;
 
     expect("name" in first && first.name).toEqual(["a.pdf"]);
-    expect(await media(threadId, first.v)).toMatchObject({ name: ["b.pdf", "a.pdf"] });
+    expect(media(threadId, first.v)).toMatchObject({ name: ["b.pdf", "a.pdf"] });
   });
 });

@@ -218,8 +218,17 @@ function MediaVideo({ file, top, left, size, onOpen }: { file: MediaFile; top: n
 }
 
 function MediaRow({ file, top, day }: { file: MediaFile; top: number; day: Intl.DateTimeFormat }) {
+  const readSize = file.readSize;
+  const [loaded, setLoaded] = useState<{ readSize: typeof readSize; size: number | null }>();
+  useEffect(() => {
+    if (!readSize) return;
+    let alive = true;
+    void readSize().then((size) => { if (alive) setLoaded({ readSize, size }); });
+    return () => { alive = false; };
+  }, [readSize]);
+  const size = file.size ?? (loaded?.readSize === readSize ? loaded?.size : null);
   const Icon = ICONS.find(([type]) => type.test(file.name))?.[1] ?? FileIcon;
-  const about = [file.size !== undefined && formatSize(file.size), file.sender, day.format(file.at)].filter(Boolean).join(" · ");
+  const about = [size != null && formatSize(size), file.sender, day.format(file.at)].filter(Boolean).join(" · ");
   return (
     <MediaOpen file={file} style={{ top }} className={ROW} row>
       <Icon aria-hidden="true" className="size-8 shrink-0 rounded-md bg-raised p-2 text-ink-secondary" />
