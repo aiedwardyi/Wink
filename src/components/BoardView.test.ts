@@ -225,6 +225,74 @@ describe("Forum", () => {
     expect(deletes).toEqual(["pmine"]);
   });
 
+  it("a deleted reply stays gone: no ghost from the saved reply or a load asked before the delete", async () => {
+    posts = [post("pbot", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    let hold: ((value: Response) => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        const sent = JSON.parse(String(init?.body));
+        const mine = post("pmine", { parent_id: sent.parent_id, author_bot_id: "user", kind: "tip", body: sent.body, source_ref: `reply:${sent.client_id}`, created_at: 2 });
+        posts.push(mine);
+        return new Response(JSON.stringify({ post: mine }), { headers: { "content-type": "application/json" } });
+      }
+      // a load asked before the delete that answers after it
+      if (url === "/api/board" && hold === null && posts.some((held) => held.id === "pmine")) {
+        const snapshot = [...posts];
+        return new Promise<Response>((resolve) => { hold = resolve; }).then(() => json({ posts: snapshot }));
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    await typeIn(box("pbot")!, "Mine.");
+    await click('[data-board-reply-box="pbot"] button[type="submit"]');
+    await settle();
+    expect(rows()).toContain("pmine");
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    expect(rows()).not.toContain("pmine");
+    await act(async () => hold!(new Response()));
+    await settle();
+    expect(rows()).not.toContain("pmine");
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual(["pbot"]);
+  });
+
+  it("a newer send of the same draft keeps its retry id when an older send finishes", async () => {
+    posts = [post("pop", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    const ids: string[] = [];
+    let finishFirst: (() => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        ids.push(JSON.parse(String(init?.body)).client_id);
+        if (ids.length === 1) return new Promise<Response>((resolve) => { finishFirst = () => resolve(ok(url, init)); });
+        if (ids.length === 2) throw new TypeError("connection reset");
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "First words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await click("[data-back-button]");
+    await openRow("pop");
+    await typeIn(box("pop")!, "Second words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    await act(async () => finishFirst!());
+    await settle();
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(ids[1]).not.toBe(ids[0]);
+    expect(ids[2]).toBe(ids[1]);
+  });
+
   it("a failed load offers Retry, and the error goes once a load works", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
     await render(BoardView);
@@ -261,6 +329,24 @@ describe("Forum", () => {
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
     expect(host.querySelector('[data-board-post="preply"]')!.matches(hide)).toBe(false);
+  });
+
+it("Back watches the list's new rows, so their rings come back", async () => {
+    let report: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
+    let watched: Element[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof report) { report = callback; }
+      observe(row: Element) { watched.push(row); }
+      disconnect() { watched = []; }
+    });
+    posts = [post("pa", { created_at: 1 }), post("pb", { created_at: 2 })];
+    await render(BoardView);
+    await openRow("pa");
+    await click("[data-back-button]");
+    await settle();
+    expect(watched.filter((row) => row.isConnected).map((row) => row.getAttribute("data-board-post"))).toEqual(["pb", "pa"]);
+    act(() => report(watched.map((target) => ({ target, isIntersecting: true }))));
+    expect(rows().filter((id) => host.querySelector(`[data-board-post="${id}"]`)!.hasAttribute("data-on-screen"))).toEqual(["pb", "pa"]);
   });
 
   it("a right swipe on a phone goes back from a post", async () => {

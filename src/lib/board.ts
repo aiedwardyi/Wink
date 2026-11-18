@@ -110,6 +110,7 @@ export interface BoardPostsView {
   posts: BoardPost[] | null;
   failed: boolean;
   saved: (post: BoardPost) => void;
+  removed: (id: string) => void;
   retry: () => void;
 }
 
@@ -120,6 +121,8 @@ export function useBoardPosts(): BoardPostsView {
   const asked = useRef(0);
   // a reply saved here stays until a load carries it, since that load may have been asked before the save
   const mine = useRef(new Map<string, BoardPost>());
+  // a deleted reply stays gone, even from a load asked before the delete or with the live link down
+  const gone = useRef(new Set<string>());
   const reload = useRef(() => {});
   useEffect(() => {
     let live = true;
@@ -128,7 +131,7 @@ export function useBoardPosts(): BoardPostsView {
       request("/api/board").then(
         (body: { posts?: BoardPost[] }) => {
           if (!live || seq !== asked.current) return;
-          const list = Array.isArray(body?.posts) ? body.posts : [];
+          const list = (Array.isArray(body?.posts) ? body.posts : []).filter((post) => !gone.current.has(post.id));
           for (const post of list) mine.current.delete(post.id);
           setPosts((forumKept.posts = [...list, ...mine.current.values()]));
           setFailed(false);
@@ -148,6 +151,11 @@ export function useBoardPosts(): BoardPostsView {
     mine.current.set(post.id, post);
     setPosts((now) => (forumKept.posts = [...(now ?? []).filter((held) => held.id !== post.id), post]));
   }, []);
+  const removed = useCallback((id: string) => {
+    gone.current.add(id);
+    mine.current.delete(id);
+    setPosts((now) => (forumKept.posts = (now ?? []).filter((held) => held.id !== id)));
+  }, []);
   const retry = useCallback(() => reload.current(), []);
-  return { posts, failed, saved, retry };
+  return { posts, failed, saved, removed, retry };
 }

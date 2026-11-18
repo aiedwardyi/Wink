@@ -114,7 +114,7 @@ function Solved() {
 }
 
 /** Name, flair, age and Working on one line, the model under it. */
-function Byline({ post, author, flair, solved, working: showWorking = true }: { post: BoardPost; author: Author; flair: boolean; solved: boolean; working?: boolean }) {
+function Byline({ post, author, flair, solved, working: showWorking = false }: { post: BoardPost; author: Author; flair: boolean; solved: boolean; working?: boolean }) {
   const { t } = useI18n();
   const working = WORKER_STATUS.working;
   return (
@@ -222,7 +222,8 @@ function ReplyBox({ parentId, to, onSaved, onDone, autoFocus = false, top = fals
     setBusy(true);
     replyToBoard(parentId, body, send.id).then(
       ({ post }) => {
-        sends.delete(draftId);
+        // a newer send of this draft keeps its id for its own retry
+        if (sends.get(draftId) === send) sends.delete(draftId);
         onSaved(post);
         setFailed(false);
         setBusy(false);
@@ -250,7 +251,7 @@ function ReplyBox({ parentId, to, onSaved, onDone, autoFocus = false, top = fals
             markDraftEdited(draftId);
           }}
           placeholder={to ? t("board.replyTo", { name: to }) : t("board.addReply")}
-          aria-label={t("board.addReply")}
+          aria-label={to ? t("board.replyTo", { name: to }) : t("board.addReply")}
           autoFocus={autoFocus}
           maxLength={4000}
           className="min-w-0 flex-1 bg-transparent py-1 text-[15px] text-ink outline-none placeholder:text-ink-secondary max-md:text-[16px]"
@@ -302,7 +303,7 @@ function Comment({ node, chain, replying, setReplying, onMenu, onSaved }: { node
         </div>
         <div className="min-w-0">
           <div tabIndex={0} {...menuProps(post, onMenu)}>
-            <Byline post={post} author={author} flair={post.kind === "fix"} solved={false} />
+            <Byline post={post} author={author} flair={post.kind === "fix"} solved={false} working />
             <div className="mt-[7px] text-[15px] leading-normal text-ink max-md:text-[14.5px]"><Body text={post.body || post.title} /></div>
           </div>
           <HelpedChip ids={post.helped_bot_ids} />
@@ -344,7 +345,7 @@ function Thread({ post, replies, onMenu, onSaved }: { post: BoardPost; replies: 
       <article data-board-post={post.id} className={cn(SIDE, "pt-[22px] pb-2.5 text-ink max-md:pt-3.5 max-md:pb-2")} {...menuProps(post, onMenu)}>
         <div className="flex items-center gap-3">
           <span className="shrink-0">{author.face(44)}</span>
-          <Byline post={post} author={author} flair solved={false} />
+          <Byline post={post} author={author} flair solved={false} working />
           {post.status === "solved" && post.kind !== "fix" && <Solved />}
         </div>
         <h2 className="mt-3.5 text-[18px] leading-normal font-normal text-pretty max-md:text-[16.5px]">{post.title}</h2>
@@ -388,7 +389,7 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
 export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const { t } = useI18n();
   const sidebarOnRight = useSidebarSide() === "right";
-  const { posts, failed, saved, retry } = useBoardPosts();
+  const { posts, failed, saved, removed, retry } = useBoardPosts();
   const { state } = useStore();
   const user = useUserLook();
   const [openId, setOpenId] = useState(() => forumKept.openId);
@@ -411,6 +412,8 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   }, []);
   // a working ring repaints its blurred halo every frame, even scrolled away, so only rows near the screen draw one
   const shownIds = shown.map((thread) => thread.post.id).join(" ");
+  // Back mounts new rows for the same ids
+  const listShown = !open && threads.length > 0;
   useEffect(() => {
     const root = listRef.current;
     if (!root) return;
@@ -419,7 +422,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
     }, { root, rootMargin: "200px 0px" });
     for (const row of root.querySelectorAll("[data-board-list] > [data-board-post]")) near.observe(row);
     return () => near.disconnect();
-  }, [shownIds]);
+  }, [shownIds, listShown]);
   useBackLayer(Boolean(open), close);
   const stepSort = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -458,7 +461,10 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const [deleting, setDeleting] = useState<string | null>(null);
   const confirm = usePresence(deleting);
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
-  const remove = (id: string) => deleteFromBoard(id).then(() => setDeleteFailed(false), () => setDeleteFailed(true));
+  const remove = (id: string) => deleteFromBoard(id).then(() => {
+    removed(id);
+    setDeleteFailed(false);
+  }, () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
     if (!isOpen || hidden) return;
