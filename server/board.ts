@@ -77,6 +77,8 @@ export function boardWords(text: string): string[] {
   return [...new Set(words)];
 }
 
+const postWords = (post: BoardPost) => new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
+
 export function projectIdOf(folder: string | undefined | null): string {
   return folder ? basename(folder.replace(/[\\/]+$/, "")).toLowerCase() : "";
 }
@@ -159,8 +161,19 @@ export function createBoard(options: BoardOptions) {
   let deleted: Set<string> | null = null;
   const gone = () => (deleted ??= new Set(readDeleted(options.dir)));
 
+  // keyed by post id and checked against the text it was built from, so an edit never reads stale words
+  const wordSets = new Map<string, { title: string; body: string; fix: string; words: Set<string> }>();
+  const wordsOf = (post: BoardPost) => {
+    const held = wordSets.get(post.id);
+    if (held && held.title === post.title && held.body === post.body && held.fix === post.fix) return held.words;
+    const words = postWords(post);
+    wordSets.set(post.id, { title: post.title, body: post.body, fix: post.fix, words });
+    return words;
+  };
+
   const drop = (id: string) => {
     view = null;
+    wordSets.delete(id);
     posts().delete(id);
     rmSync(join(options.dir, `${id}.json`), { force: true });
     if (gone().has(id)) return;
@@ -277,7 +290,11 @@ export function createBoard(options: BoardOptions) {
       if (changed) options.changed?.();
     },
     search(input: BoardSearch): BoardPost[] {
-      return searchBoard(board.list(), input);
+      return searchBoard(board.list(), input, wordsOf);
+    },
+    /** Reads every post and builds its words now, so the first search waits on neither. */
+    warm(): void {
+      for (const post of readable().values()) wordsOf(post);
     },
     /**
      * Drive sync. Each PC writes only its own folder, so two PCs posting at once never
@@ -340,14 +357,14 @@ export function createBoard(options: BoardOptions) {
 
 export type Board = ReturnType<typeof createBoard>;
 
-export function searchBoard(posts: readonly BoardPost[], input: BoardSearch): BoardPost[] {
+export function searchBoard(posts: readonly BoardPost[], input: BoardSearch, wordsOf = postWords): BoardPost[] {
   const words = boardWords(input.query);
   const minShare = input.minShare ?? 0;
   const scored = posts.flatMap((post) => {
     if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
     if (input.roomThread !== undefined && !post.source_ref.startsWith(`${ROOM_REF}${input.roomThread}:`)) return [];
     const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
-    const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
+    const held = wordsOf(post);
     const hits = words.filter((word) => held.has(word)).length;
     const share = words.length ? hits / words.length : 0;
     if ((!sig || input.sigRanksOnly) && (hits < (input.minHits ?? 1) || share < minShare)) return [];
