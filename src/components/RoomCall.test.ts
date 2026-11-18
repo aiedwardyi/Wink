@@ -13,6 +13,8 @@ import { CallHostSlot } from "./CallSlots";
 import { TeamRoomView } from "./TeamRoomView";
 
 type Fakes = { engines: Array<{ events: LiveEvents; texts: string[]; contexts: string[] }>; bots: Bot[]; sse?: { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } };
+// oxlint-disable-next-line anti-slop/no-module-mocking -- voice calls ship cut; this test drives the call code behind the flag.
+vi.mock("../../shared/voice-calls", () => ({ VOICE_CALLS: true }));
 const fakes = vi.hoisted((): Fakes => ({ engines: [], bots: [] }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Markdown highlighting is not what this test checks.
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));

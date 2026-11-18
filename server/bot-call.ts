@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 
 import { buildNotification, type NotifyBot } from "./notify.ts";
+import { VOICE_CALLS } from "../shared/voice-calls.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { pushPayload, type PushPayload } from "./web-push.ts";
 
@@ -18,6 +19,8 @@ export type BotCallDeps = {
   /** A call is the bot's own voice on its own thread, so a room's blocker keeps its normal alert. */
   chat: (threadId: string) => string | undefined;
   skip: (threadId: string) => boolean;
+  /** False sends one plain alert per blocker and never rings; defaults to the app-wide VOICE_CALLS. */
+  calls?: boolean;
   /** The first ring of a call went out. */
   called?: (botId: string, threadId: string, blocker: Blocker) => void;
 };
@@ -38,16 +41,17 @@ export function botCallPayload(bot: NotifyBot, threadId: string, note: string, c
 }
 
 export function createBotCalls(deps: BotCallDeps) {
+  const rings = deps.calls ?? VOICE_CALLS;
   const threads = new Map<string, Map<string, Ringing>>();
 
   const ring = (ringing: Ringing, bot: NotifyBot, threadId: string, blocker: Blocker, n: number) => {
     const key = keyOf(blocker);
     if (n > 1 && !deps.current(threadId).some((held) => keyOf(held) === key)) return forget(threadId, key);
-    const payload = botCallPayload(bot, threadId, blocker.note, { id: ringing.id, ring: n });
+    const payload = botCallPayload(bot, threadId, blocker.note, { id: ringing.id, ring: rings ? n : CALL_RINGS + 1 });
     if (!payload) return;
     deps.send(payload);
     if (n === 1) deps.called?.(bot.id, threadId, blocker);
-    ringing.timer = n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, blocker, n + 1), CALL_RING_GAP_MS) : undefined;
+    ringing.timer = rings && n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, blocker, n + 1), CALL_RING_GAP_MS) : undefined;
   };
 
   const forget = (threadId: string, key: string) => {

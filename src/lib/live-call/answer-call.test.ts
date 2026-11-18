@@ -3,6 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Bot } from "@/state/store-types";
 
+// oxlint-disable-next-line anti-slop/no-module-mocking -- voice calls ship cut; this test drives the call code behind the flag.
+vi.mock("../../../shared/voice-calls", () => ({ VOICE_CALLS: true }));
+
 const contexts: Array<{ state: string; resume: ReturnType<typeof vi.fn> }> = [];
 const voices: Array<{ play: ReturnType<typeof vi.fn> }> = [];
 const bot = { id: "b1", name: "Scout" } as Bot;

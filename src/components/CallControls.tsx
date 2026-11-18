@@ -5,6 +5,7 @@ import { useChatPreview } from "@/lib/chat-preview";
 import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote, type ActiveCall } from "@/lib/live-call/active";
 import { callAudio } from "@/lib/live-call/warm-audio";
 import { lazyView } from "@/lib/stale-build";
+import { VOICE_CALLS } from "../../shared/voice-calls";
 import { CallButton } from "./CallView";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 
@@ -32,7 +33,7 @@ export function useCallControls(bot: Bot | undefined, hidden: boolean, room?: Ac
     if (!bot) return;
     placeCall(bot, callAudio(), undefined, roomId && roomKind ? { id: roomId, kind: roomKind, name: roomName } : undefined);
   }, [bot, roomId, roomKind, roomName]);
-  if (!bot) return { on: false, bar: null, composer: {} };
+  if (!bot || !VOICE_CALLS) return { on: false, bar: null, composer: {} };
   const available = ready && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
   return {
     on,

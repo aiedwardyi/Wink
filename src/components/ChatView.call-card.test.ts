@@ -7,6 +7,8 @@ import { StoreProvider, useStore, type Bot, type Message } from "@/state/store";
 
 import { ChatView } from "./ChatView";
 
+// oxlint-disable-next-line anti-slop/no-module-mocking -- voice calls ship cut; this test drives the call code behind the flag.
+vi.mock("../../shared/voice-calls", () => ({ VOICE_CALLS: true }));
 const live = vi.hoisted(() => ({ botId: "" }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/active", async (actual) => ({

@@ -26,8 +26,8 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
-function routes() {
-  const botCalls = createBotCalls({ send: (payload) => sent.push(payload), current: () => packet.blockers, chat: () => room, skip: () => hosted });
+function routes(calls = true) {
+  const botCalls = createBotCalls({ calls, send: (payload) => sent.push(payload), current: () => packet.blockers, chat: () => room, skip: () => hosted });
   const store = {
     bot: (id: string) => (id === bot.id ? bot : undefined),
     conversationForBot: () => ({}),
@@ -103,7 +103,7 @@ describe("bot calls", () => {
   });
 
   it("stops ringing once the call is picked up", async () => {
-    const botCalls = createBotCalls({ send: (payload) => sent.push(payload), current: () => [{ kind: "login", note: "Sign in" }], chat: () => undefined, skip: () => false });
+    const botCalls = createBotCalls({ calls: true, send: (payload) => sent.push(payload), current: () => [{ kind: "login", note: "Sign in" }], chat: () => undefined, skip: () => false });
     botCalls.blockers(bot, "t1", [], [{ kind: "login", note: "Sign in" }]);
     botCalls.answered("scout");
     await vi.advanceTimersByTimeAsync(CALL_RING_GAP_MS * 5);
@@ -129,5 +129,22 @@ describe("bot calls", () => {
     packet.blockers = [{ kind: "login", note: LOGIN.note }];
     await write(routes(), [LOGIN]);
     expect(sent).toEqual([]);
+  });
+});
+
+describe("voice calls cut", () => {
+  it("ships with calls off", () => {
+    const login = { kind: "login" as const, note: LOGIN.note };
+    const botCalls = createBotCalls({ send: (payload) => sent.push(payload), current: () => [login], chat: () => undefined, skip: () => false });
+    botCalls.blockers(bot, "t1", [], [login]);
+    expect(sent.map((payload) => payload.title)).toEqual(["Scout needs you"]);
+  });
+
+  it("sends one plain alert for a new login blocker and never rings again", async () => {
+    await write(routes(false), [LOGIN]);
+    await vi.advanceTimersByTimeAsync(CALL_RING_GAP_MS * 5);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: "Scout needs you", body: LOGIN.note, tag: "wink-call:scout", url: "/?bot=scout&thread=t1" });
+    expect(sent[0]!.call).toBeUndefined();
   });
 });

@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
 import type { CallRoom } from "../../../shared/live-call";
+import { VOICE_CALLS } from "../../../shared/voice-calls";
 import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 import { callAudio, type CallSound } from "./warm-audio";
@@ -43,7 +44,7 @@ export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: Ac
 
 /** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */
 export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
-  if (!bot || !opener || call || !callsSupported()) return null;
+  if (!VOICE_CALLS || !bot || !opener || call || !callsSupported()) return null;
   const sound = callAudio();
   if (sound.ctx.state === "suspended") {
     addEventListener("pointerdown", () => {
