@@ -1,20 +1,22 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer, request as httpsRequest, type Server } from "node:https";
 import { createConnection, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
+import { Readable } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { PHONE_RELAY_OFF } from "../../shared/relay-protocol.ts";
 import { DATA_DIR } from "../config.ts";
+import { createInternalRoutes } from "../internal-routes.ts";
 import { PhoneAccess } from "../phone-access.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
-import { Store, type Message } from "../store.ts";
+import { Store, type BotRecord, type Message } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
@@ -686,7 +688,7 @@ describe("bots in two homes hand work to each other", () => {
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   /** Edward hosts Rando; JJ's PC joins and runs 스타줌. Both engines answer from a script. */
-  async function homes(rando: (ask: RoomAsk) => string, starzoom: (prompt: string) => string) {
+  async function homes(rando: (ask: RoomAsk) => string, starzoom: (prompt: string) => string, during?: (threadId: string) => Promise<unknown>) {
     const bot = store.patchBot(store.createBot().id, { name: "Rando" })!;
     const group = store.createGroup("Dinner", [bot.id], false, undefined, undefined, { roomId: createRoom("Dinner").id }) as HostedGroup;
     const roomId = group.hosted.roomId;
@@ -705,14 +707,15 @@ describe("bots in two homes hand work to each other", () => {
     });
     const thread: Message[] = [];
     const turns: MyRoomBotTurns = new MyRoomBotTurns({
-      client: { botSend: (...args) => c.botSend(...args), file: (...args) => c.file(...args) },
+      client: { botSend: (...args) => c.botSend(...args), file: (...args) => c.file(...args), upload: (...args) => c.upload(...args) },
       bot: (botId) => (botId === "jj-local" ? { id: botId, name: "스타줌" } : null),
       busy: () => false,
       hasTask: (_botId, threadId) => threadId === "jj-task",
       createTask: () => ({ threadId: "jj-task" }),
       startTurn: async (_botId, threadId, prompt, typed) => {
         thread.push({ id: `u${thread.length}`, at: Date.now(), role: "user", kind: "text", text: typed });
-        void wait(20).then(() => {
+        void wait(20).then(async () => {
+          await during?.(threadId);
           thread.push({ id: `b${thread.length}`, at: Date.now(), role: "bot", kind: "text", text: starzoom(prompt) });
           return turns.settled(threadId, true);
         });
@@ -737,8 +740,52 @@ describe("bots in two homes hand work to each other", () => {
     await until(() => Boolean(joinedRoom(roomId)?.state?.teamBots?.length));
     const log = () => recentRoomEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
     const joinedLog = () => joinedEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
-    return { roomId, group, answer, log, joinedLog };
+    return { roomId, group, answer, log, joinedLog, turns, thread, c };
   }
+
+  /** JJ's own show_image route, as JJ's PC wires it for a room turn. */
+  async function showOnJJ(home: Awaited<ReturnType<typeof homes>>, threadId: string, folder: string, path: string, caption: string) {
+    const bot = { id: "jj-local", threadId: "jj-main", name: "스타줌", color: "teal", cwd: folder } as BotRecord;
+    const routes = createInternalRoutes({
+      cfg: {},
+      store: {
+        bot: (id: string) => (id === bot.id ? bot : undefined),
+        taskByThread: () => undefined,
+        groupTaskByThread: () => undefined,
+        appendMessage: (_threadId: string, message: Partial<Message>) => {
+          const row = { id: `s${home.thread.length}`, at: Date.now(), ...message } as Message;
+          home.thread.push(row);
+          return row;
+        },
+      },
+      connectorThread: () => ({}),
+      botOutputRoots: () => [folder],
+      roomPicture: (_bot: BotRecord, thread: string, file: string, name: string, words: string) => home.turns.picture(thread, file, name, words),
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    await routes.showImage(Readable.from([JSON.stringify({ fromBotId: bot.id, fromThreadId: threadId, path, caption })]) as unknown as IncomingMessage, res as unknown as ServerResponse);
+    return { status: res.writeHead.mock.calls[0]![0] as number, body: JSON.parse(res.end.mock.calls[0]![0] as string) as Record<string, unknown> };
+  }
+
+  it("posts JJ's bot's picture as a room file that Edward and the room both get", async () => {
+    const folder = join(DATA_DIR, "jj-work");
+    mkdirSync(folder, { recursive: true });
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
+    writeFileSync(join(folder, "cat.png"), png);
+    let shown: Awaited<ReturnType<typeof showOnJJ>> | undefined;
+    const home: Awaited<ReturnType<typeof homes>> = await homes(() => "", () => "Here's a cat.", async (threadId) => {
+      shown = await showOnJJ(home, threadId, folder, join(folder, "cat.png"), "A cat");
+    });
+    hostSays(home.group, "@스타줌 show me a cat");
+    await until(() => home.log().includes("스타줌: Here's a cat."));
+    expect(shown).toMatchObject({ status: 201 });
+    const entry = recentRoomEntries(home.roomId, 100).find((each) => each.author.name === "스타줌" && each.text === "A cat");
+    expect(entry?.files?.map((file) => [file.name, file.type])).toEqual([["cat.png", "image/png"]]);
+    expect(store.messagesFor(home.group.threadId).find((message) => message.roomEntryId === entry!.id)?.roomFiles).toEqual(entry!.files);
+    await until(() => Boolean(joinedEntries(home.roomId, 100).find((each) => each.id === entry!.id)));
+    const held = await home.c.file(home.roomId, entry!.files![0]!.id);
+    expect(held.ok && readFileSync(held.value.path)).toEqual(png);
+  });
 
   it("tells JJ's bot the host's switches as of each turn, and that only an @ here reaches Edward's bots", async () => {
     const prompts: string[] = [];

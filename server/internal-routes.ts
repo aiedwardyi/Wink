@@ -81,7 +81,11 @@ type InternalRouteDeps = {
   botOutputRoots: (bot: BotRecord, threadId: string, groupId?: string) => string[];
   routineProposalPersistence: (botId: string, threadId: string) => { ok: false; status: number; error: string } | { ok: true };
   maybeResumeConnectors: (botId: string, threadId: string, resumeKey: string) => boolean;
+  /** Copies a shown picture into the team room `threadId` is in, for every member. Null: show it on the thread as usual. Throws the room's refusal. */
+  roomPicture?: (bot: BotRecord, threadId: string, path: string, name: string, caption: string) => Promise<{ messageId: string; url: string } | null>;
 };
+
+const roomRefusal = (e: unknown) => ({ status: (e as { status?: number }).status ?? 500, error: `the room refused it: ${(e as Error).message}` });
 
 export function createInternalRoutes(deps: InternalRouteDeps) {
   const caller = (req: IncomingMessage | undefined, botId: string, threadId: string) => deps.resolveCommsCaller
@@ -502,6 +506,18 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 403, { error: `picture gate: ${verdict.reason}. Run picture-gate check ${body.path}` });
       }
       const caption = typeof body.caption === "string" ? body.caption.trim().slice(0, 500) : "";
+      let shared: Awaited<ReturnType<NonNullable<InternalRouteDeps["roomPicture"]>>> = null;
+      try {
+        shared = await deps.roomPicture?.(from, fromThreadId, saved.path, basename(String(body.path)), caption) ?? null;
+      } catch (e) {
+        try { unlinkSync(saved.path); } catch {}
+        const { status, error } = roomRefusal(e);
+        return json(res, status, { error });
+      }
+      if (shared) {
+        try { unlinkSync(saved.path); } catch {}
+        return json(res, 201, shared);
+      }
       const message = store.appendMessage(fromThreadId, {
         role: "bot",
         kind: "screen",
@@ -542,6 +558,17 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         shown = saveImage(generated.bytes, "image/png");
       } catch (e) {
         return json(res, 201, { path: generated.path, showError: (e as Error).message });
+      }
+      let shared: Awaited<ReturnType<NonNullable<InternalRouteDeps["roomPicture"]>>> = null;
+      try {
+        shared = await deps.roomPicture?.(from, fromThreadId, shown.path, basename(generated.path), "") ?? null;
+      } catch (e) {
+        try { unlinkSync(shown.path); } catch {}
+        return json(res, 201, { path: generated.path, showError: roomRefusal(e).error });
+      }
+      if (shared) {
+        try { unlinkSync(shown.path); } catch {}
+        return json(res, 201, { path: generated.path, ...shared });
       }
       const name = basename(shown.path);
       const message = store.appendMessage(fromThreadId, {

@@ -472,11 +472,11 @@ export class GuestClient {
     return { ok: true, value: on };
   }
 
-  /** Posts this PC's bot answer under the bot's room name. */
-  async botSend(roomId: string, id: string, text: string, replyToId?: string): Promise<GuestResult<JoinedEntry>> {
+  /** Posts this PC's bot answer under the bot's room name, with files this PC uploaded. */
+  async botSend(roomId: string, id: string, text: string, replyToId?: string, fileIds: readonly string[] = []): Promise<GuestResult<JoinedEntry>> {
     const creds = joinedKey(roomId);
     if (!creds) return failed(409, "this room is read-only");
-    const body = JSON.stringify({ botId: id, text: text.slice(0, 20_000), ...(replyToId ? { replyToId } : {}), sendId: randomBytes(18).toString("base64url") });
+    const body = JSON.stringify({ botId: id, text: text.slice(0, 20_000), ...(replyToId ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}), sendId: randomBytes(18).toString("base64url") });
     let reply: GuestResult<unknown> = unavailable();
     for (let tries = 0; tries < SEND_TRIES && !reply.ok && reply.status === 503; tries++) {
       reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bot-send`, creds.key, body);

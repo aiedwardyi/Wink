@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -596,5 +596,22 @@ describe("a room bot's @ to this PC's bot", () => {
     turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
     await settle();
     expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
+  });
+
+  it("names why the room refused its picture and posts no line", async () => {
+    const picture = join(DATA_DIR, "cat.png");
+    writeFileSync(picture, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const upload = vi.fn(async () => ({ ok: false, status: 507, error: "this room is out of space for files" }));
+    Object.assign(deps.client, { upload });
+    const turns = new MyRoomBotTurns(deps);
+    const ask = line(peter, "@Pete-Coder draw a cat");
+    turns.sent(ROOM, ask);
+    await settle();
+    await expect(turns.picture("private-task", picture, "cat.png", "")).resolves.toBeNull();
+    await expect(turns.picture("task-1", picture, "cat.png", "A cat")).rejects.toMatchObject({ status: 507, message: "this room is out of space for files" });
+    expect(deps.client.botSend).not.toHaveBeenCalled();
+    upload.mockResolvedValueOnce({ ok: true, value: FILE } as never);
+    await expect(turns.picture("task-1", picture, "cat.png", "A cat")).rejects.toMatchObject({ status: 409 });
+    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "A cat", ask.id, [FILE.id]);
   });
 });

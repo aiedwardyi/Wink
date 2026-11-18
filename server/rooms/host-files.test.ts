@@ -9,13 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ATTACHMENTS_DIR } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
 import { createGroupRoutes } from "../group-routes.ts";
+import { createInternalRoutes } from "../internal-routes.ts";
 import { markRelaySocket } from "../phone-relay/via.ts";
 import { SendSequencer } from "../send-idempotency.ts";
-import { Store, type Message } from "../store.ts";
+import { Store, type BotRecord, type Message } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, type HostedGroup } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
 import { listRoomFiles } from "./files.ts";
-import { hostRoomFiles, hostSend } from "./send.ts";
+import { hostBotPicture, hostRoomFiles, hostSend } from "./send.ts";
 
 const copying = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
 vi.mock("./send.ts", async (actual) => {
@@ -161,6 +162,29 @@ describe("the host's files in a room with people and bots", () => {
     expect(lastEntry()).toMatchObject({ text: "see [image]" });
     expect(lastEntry().files).toBeUndefined();
     expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+  });
+});
+
+describe("a host bot's picture in a room with people", () => {
+  it("reaches teammates as a room file on the bot's own line, shown once on the host", async () => {
+    const bot = store.bot(group.memberIds[0]!)!;
+    const routes = createInternalRoutes({
+      cfg: {},
+      store,
+      connectorThread: () => ({ group }),
+      botOutputRoots: () => [local],
+      roomPicture: (from: BotRecord, threadId: string, path: string, name: string, caption: string) => hostBotPicture(store, from, threadId, path, name, caption),
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    const body = { fromBotId: bot.id, fromThreadId: group.threadId, path: put("cat.png", PNG), caption: " A cat " };
+    await routes.showImage(Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage, res as unknown as ServerResponse);
+    expect(res.writeHead.mock.calls[0]![0]).toBe(201);
+    const entry = lastEntry();
+    expect(entry).toMatchObject({ author: { kind: "bot", id: bot.id, name: "Wink" }, text: "A cat" });
+    expect(entry.files?.map((each) => [each.name, each.type])).toEqual([["cat.png", "image/png"]]);
+    const rows = store.messagesFor(group.threadId).filter((message) => message.role === "bot");
+    expect(rows).toEqual([expect.objectContaining({ kind: "text", roomEntryId: entry.id, roomFiles: entry.files })]);
+    expect(JSON.parse(res.end.mock.calls[0]![0])).toEqual({ messageId: rows[0]!.id, url: `/api/rooms/${group.hosted.roomId}/files/${entry.files![0]!.id}/preview` });
   });
 });
 

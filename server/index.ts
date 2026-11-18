@@ -66,7 +66,7 @@ import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/mult
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostSend, liveBotChain } from "./rooms/send.ts";
+import { hostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -6782,7 +6782,7 @@ configureRoomAsks({
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
 sweepRoomFiles(store.groups);
 const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
-  client: { botSend: (...args) => guestClient.botSend(...args), file: (...args) => guestClient.file(...args) },
+  client: { botSend: (...args) => guestClient.botSend(...args), file: (...args) => guestClient.file(...args), upload: (...args) => guestClient.upload(...args) },
   bot: (botId) => store.bot(botId),
   busy: (botId) => botHasActiveTurn(botId) || hasQueuedSends(botId),
   hasTask: (botId, threadId) => Boolean(store.taskByThread(botId, threadId)),
@@ -7961,6 +7961,7 @@ const internalRoutes = createInternalRoutes({
   botOutputRoots,
   routineProposalPersistence,
   maybeResumeConnectors,
+  roomPicture: async (bot, threadId, path, name, caption) => (await hostBotPicture(store, bot, threadId, path, name, caption)) ?? myRoomBotTurns.picture(threadId, path, name, caption),
 });
 const verifyAutoOn = () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false;
 const verifyDoc = createVerifyDoc({

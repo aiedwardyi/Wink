@@ -312,8 +312,9 @@ async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string
   const still = bearer ? guestByKey(bearer) : null;
   if (still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
   const fields = record(body.value);
-  const { botId, text, replyToId } = fields ?? {};
+  const { botId, text, replyToId, fileIds = [] } = fields ?? {};
   if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
+  if (!Array.isArray(fileIds) || !fileIds.every((id): id is string => typeof id === "string")) return send(res, 400, { error: "bad request" });
   const bot = /^[\w-]{1,64}$/.test(botId) ? teamBot(roomId, botId) : null;
   if (!bot || bot.owner !== person.id) return send(res, 403, { error: "forbidden" });
   if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return send(res, 404, { error: "no such message in this room" });
@@ -325,7 +326,7 @@ async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string
   }
   try {
     const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
-    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId);
+    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId, fileIds);
     if (!entry) return send(res, 409, { error: "sendId was used for another message" });
     send(res, 200, { entry: doorEntry(entry) });
   } catch (error) {

@@ -1,6 +1,9 @@
 // This PC's own bots in rooms it joined. Anyone in the room wakes one by @name
 // or a reply to its line, and a room bot by @name; it works here in one hidden
 // task per room and its answer goes back through the door under its room name.
+import { randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+
 import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
@@ -12,7 +15,7 @@ import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 export type MyBotTurn = { working?: boolean; since?: number; waiting?: boolean; error?: "failed" };
 
 export interface MyRoomBotDeps {
-  client: Pick<GuestClient, "botSend" | "file">;
+  client: Pick<GuestClient, "botSend" | "file" | "upload">;
   bot(botId: string): { id: string; name: string } | null;
   busy(botId: string): boolean;
   /** The bot's task thread still exists. */
@@ -271,6 +274,21 @@ export class MyRoomBotTurns {
       out.push(got.ok ? `${file.name}: ${got.value.path}` : `${file.name}: (could not download)`);
     }
     return out;
+  }
+
+  /** A picture this PC's bot shows on its room turn: uploaded like its owner's file, then posted as its own line. Null off a room turn. */
+  async picture(threadId: string, path: string, name: string, caption: string): Promise<null> {
+    const run = this.running.get(threadId);
+    if (!run) return null;
+    const refused = (status: number, error: string) => Object.assign(new Error(error), { status });
+    const bytes = await readFile(path);
+    const uploaded = await this.deps.client.upload(run.roomId, bytes, name, randomBytes(18).toString("base64url"), String(bytes.length));
+    if (!uploaded.ok) throw refused(uploaded.status, uploaded.error);
+    const posted = await this.deps.client.botSend(run.roomId, run.id, caption, run.entry.id, [uploaded.value.id]);
+    if (!posted.ok) throw refused(posted.status, posted.error);
+    // an older host drops the file and keeps only the words
+    if (!posted.value.files?.length) throw refused(409, "the host's Wink is too old for pictures from teammates' bots");
+    return null;
   }
 
   /** Call on every settled turn; only a room task's posts. */
