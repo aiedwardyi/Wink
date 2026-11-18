@@ -4,8 +4,8 @@
 // its choices, and a tap on the row opens the card again. It arrives as the row
 // when the box already holds a draft, a reply or attachments. Unlike an approval
 // it never takes the composer over: the bot keeps working, and typing a reply
-// answers it only when it has no choices. The row's x or a sideways swipe only
-// hides it here; the bot still waits, and a count on the composer brings it back.
+// answers it only when it has no choices. A sideways swipe hides the row here;
+// the bot still waits, and a count on the composer brings it back.
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
@@ -150,7 +150,6 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     </span>
   ) : <span className={BADGE}>{count}</span>;
   const label = t("ask.asks", { name: askerName });
-  // the row's x only hides it here, the card's x dismisses the question
   const controls = (open: boolean) => (
     <>
       <button
@@ -166,9 +165,9 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
       </button>
       <button
         type="button"
-        onClick={open ? onDismiss : hide}
-        aria-label={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
-        title={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
+        onClick={onDismiss}
+        aria-label={t("chat.dismissQuestion")}
+        title={t("chat.dismissQuestion")}
         className={cn(CONTROL, "-mr-1 pointer-coarse:after:-left-1 pointer-coarse:after:-right-3")}
       >
         <X size={14} aria-hidden="true" />
