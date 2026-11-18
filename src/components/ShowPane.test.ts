@@ -8,6 +8,7 @@ import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
 
@@ -502,6 +503,25 @@ it("pairs a crossed picture by its caption, and an uncaptioned one only with the
   await openTimeline();
   await until(() => rows().length > 0);
   expect([...rows()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
+});
+
+it("shows a pick Auto Notes saves while the pane is open", async () => {
+  picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
+  await openTimeline("b-live");
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  expect(rows()).toHaveLength(0);
+  pickList();
+  const saved = { id: "save-1", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message: saved }, { hydrated: true, bots: [{ id: "b-live", threadId: "t1" }] }));
+  await until(() => rows().length > 0);
+  expect(rows()).toHaveLength(5);
+});
+
+it("keeps the Timeline search box at 16px on a phone so iOS does not zoom", async () => {
+  pickList();
+  await openTimeline("b-zoom");
+  await until(() => rows().length > 0);
+  expect(host.querySelector(".timeline-search input")!.className).toContain("max-md:text-[16px]");
 });
 
 const mapRow = () => rows().find((row) => row.querySelector(".timeline-key")?.textContent === "Map on phone")!;

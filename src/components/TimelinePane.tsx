@@ -6,6 +6,7 @@ import { request } from "@/lib/api-request";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
+import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { Fold } from "./Fold";
@@ -115,6 +116,9 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
+  const [saves, setSaves] = useState(0);
+
+  useEffect(() => watchMemoryArrival(botId, () => setSaves((count) => count + 1)), [botId]);
 
   useEffect(() => {
     let alive = true;
@@ -122,17 +126,21 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
       (body) => {
         if (!alive) return;
         const parsed = topic.safeParse(body);
-        if (parsed.success) setEntries(parsed.data.entries);
-        else setFailed(true);
+        if (parsed.success) {
+          setEntries(parsed.data.entries);
+          setFailed(false);
+        } else setFailed(true);
       },
       (error: { status?: number }) => {
         if (!alive) return;
-        if (error.status === 404) setEntries([]);
-        else setFailed(true);
+        if (error.status === 404) {
+          setEntries([]);
+          setFailed(false);
+        } else setFailed(true);
       },
     );
     return () => { alive = false; };
-  }, [botId]);
+  }, [botId, saves]);
 
   const days = useMemo(() => timelineDays(entries ?? []), [entries]);
   const needle = query.trim().toLowerCase();
@@ -151,6 +159,7 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
               <label className="timeline-search">
                 <Search size={14} aria-hidden="true" />
                 <input
+                  className="max-md:text-[16px]"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {

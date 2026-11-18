@@ -29,7 +29,6 @@ const MAX_PENDING = 200;
 const QUOTE_MAX = 120;
 const FACT_MAX = 200;
 const DECISION_MAX = 100;
-const DECISIONS_PER_PASS = 3;
 const CONTEXT_MAX = 400;
 const CONTEXT_SCAN = 50;
 const PICTURE_SCAN = 200;
@@ -200,8 +199,11 @@ export function replyPictures(messages: readonly Message[], ids: string[], attac
       pictures.push(label ? { path: clean, caption: label } : { path: clean });
     };
     for (const message of turn) {
-      // a show_image summary is a display line cut at 120 characters, and a bot may delete the copy it showed
-      if (shownImage(message)) add(existsSync(message.tool!.summary!) ? message.tool!.summary! : (copies.get(message.id) ?? ""), captions.get(message.id));
+      // the chat draws the attachments copy and the pane loads only that; a show_image summary is a display line cut at 120 characters, and a bot may delete the file it showed
+      if (shownImage(message)) {
+        const copy = copies.get(message.id);
+        add(copy && existsSync(copy) ? copy : existsSync(message.tool!.summary!) ? message.tool!.summary! : (copy ?? ""), captions.get(message.id));
+      }
       else if (message.kind === "screen" && message.image && !(message.parentId && tools.has(message.parentId))) add(join(attachments, message.image), message.text);
       else if (message.kind === "text" && message.text) for (const path of message.text.match(IMAGE_PATH) ?? []) add(path);
     }
@@ -227,7 +229,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Skip one-off requests that are not tweaks, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
     "- CONTEXT is the end of the bot's message before a user line, PICTURES the pictures it showed: use them only to see what a short answer like \"c\" picked. The pick must be in the user's own line; quote it. A bot idea the user did not take is not a decision.",
-    `- kind: "decision", "tweak" or "fact". At most ${DECISIONS_PER_PASS} decisions, one per thing.`,
+    `- kind: "decision", "tweak" or "fact". One decision per thing.`,
     `- decision: key is the thing decided, never the option, in 2-6 chat words, copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with the bot's letter or number, like "C - Reddit cards"; over: the options it beat, the same way; picture, over_pictures: their paths copied exactly from PICTURES or CURRENT PICKS.`,
     "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
     "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
@@ -473,7 +475,7 @@ function shownPicture(value: string | null | undefined, shown: Picture[]): Pictu
   return shown.find(({ path, caption }) => asked === path.toLowerCase() || (caption !== undefined && asked === `${path} (${caption})`.toLowerCase()));
 }
 
-/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, on 3 questions at most, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
+/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
   const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
@@ -489,7 +491,6 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   const live = new Set(current.keys());
   const seen = new Set<string>();
   const decided = new Set<string>();
-  const keys = new Set<string>();
   const taken = new Set<string>();
   const accept = (fact: Fact): Note | null => {
     const { kind, quote, replaces } = fact;
@@ -522,7 +523,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const known = before ? [...sources, { text: [before.key, before.picked, ...before.over, ...recorded.map(({ caption }) => caption ?? "")].join("\n") }] : sources;
       // a second pick on one question in the same lines is a change of mind: both land, in the order said
       const id = `pick ${pickKey(thing)} ${squash(said)}`;
-      if ((keys.size >= DECISIONS_PER_PASS && !keys.has(pickKey(thing))) || seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, own)) return null;
+      if (seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, own)) return null;
       // an older Auto Notes line on this question leaves MEMORY.md for the timeline, named by the note-taker or not
       const listed = replaceable(replaces, lines, claims) && (inSection(replaces) || legacyLine(thing, [replaces], taken) === replaces) && !taken.has(replaces) ? replaces : undefined;
       const target = listed ?? legacyLine(thing, lines, taken);
@@ -546,7 +547,6 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const files = [...new Set(own.flatMap(({ files }) => files ?? []))];
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
-      keys.add(pickKey(thing));
       live.add(pickKey(thing));
       decided.add(squash(said));
       const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: source.at(-1)?.at ?? 0, key: thing, picked: line, said };

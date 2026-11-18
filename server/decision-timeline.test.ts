@@ -97,6 +97,17 @@ describe("decision timeline", () => {
     expect(memorySystemPrompt(BOT)).toContain("C - Reddit cards");
   });
 
+  it("lands every pick when more than 3 questions are answered in one pass", async () => {
+    const asks = [["forum", "A - plain list", "B - tiles"], ["header", "A - small title", "B - big title"], ["footer", "A - links row", "B - one line"], ["theme", "A - dark", "B - light"]] as const;
+    for (const [thing, first, second] of asks) {
+      bot(`For the ${thing}: ${first}, ${second}. Which one?`);
+      say(`I choose A for the ${thing}`);
+    }
+    reply(...asks.map(([thing, first]) => ({ kind: "decision", key: thing, fact: first, quote: `I choose A for the ${thing}` })));
+    await settle();
+    expect(currentPicks(timeline()).map((pick) => pick.key).sort()).toEqual(["footer", "forum", "header", "theme"]);
+  });
+
   it("keeps an introductory letter pick and its tweak", async () => {
     bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
     const quote = "Actually, C, and make the header smaller with a dark border";
@@ -388,6 +399,19 @@ describe("decision timeline", () => {
     await settle();
     expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copy("A")} (A - plain list)\n${copy("C")} (C - Reddit cards)\n</pictures>`);
     expect(timeline()).toContain(`- Picture: ${copy("C")} (C - Reddit cards)\n- Over: A - plain list\n- Over pictures: ${copy("A")} (A - plain list)\n`);
+  });
+
+  it("records the attachments copy the chat drew when the source file still exists", async () => {
+    const mock = showMocks();
+    mkdirSync(join(dataDir, "attachments"), { recursive: true });
+    for (const name of ["A", "C"]) writeFileSync(join(dataDir, "attachments", `${name}.png`), "");
+    const copy = (name: string) => join(dataDir, "attachments", `${name}.png`);
+    bot("A or C?");
+    say("c");
+    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "c", picture: copy("C"), over: ["A - plain list"], over_pictures: [copy("A")] });
+    await settle();
+    expect(timeline()).toContain(`- Picture: ${copy("C")} (C - Reddit cards)\n- Over: A - plain list\n- Over pictures: ${copy("A")} (A - plain list)\n`);
+    expect(generate.mock.calls[0]![0]).toContain(`<pictures>\n${copy("A")} (A - plain list)\n${mock("B")} (B - tiles)\n${copy("C")} (C - Reddit cards)\n</pictures>`);
   });
 
   it("keeps a change of mind quoted from the bot's confirmation, never a bot pick", async () => {

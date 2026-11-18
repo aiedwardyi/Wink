@@ -937,13 +937,13 @@ describe("memory pass filters", () => {
       expect(picked([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
     });
 
-    it("keeps 3 per pass and one line per quote", () => {
+    it("keeps every decision in a pass and one line per quote", () => {
       const text = "dark, tabs, pnpm, vitest and npm";
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
-      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       const shared = own.map((pick) => ({ ...pick, quote: text }));
-      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       expect(picked([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);
