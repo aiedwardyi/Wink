@@ -231,6 +231,7 @@ describe("call button in the message box", () => {
       expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
       expect(tokens()).toBe(0);
       await act(async () => gear.click());
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
       await type(host, "hi");
       expect(button(host, "Call settings")).toBeNull();
       await type(host, "");

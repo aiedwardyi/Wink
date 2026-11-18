@@ -1508,22 +1508,22 @@ export function Composer({
           )}
           {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
             <>
-            <CallSettingsHold bot={caller} tap>
-              <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink">
-                <Settings size={17} />
+              <CallSettingsHold bot={caller} tap>
+                <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink">
+                  <Settings size={17} />
+                </button>
+              </CallSettingsHold>
+              <button
+                type="button"
+                onClick={onCall}
+                onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
+                onFocus={warmCallAudio}
+                aria-label={t("composer.call", { name: caller.name })}
+                title={t("composer.call", { name: caller.name })}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
+              >
+                <Phone size={16} />
               </button>
-            </CallSettingsHold>
-            <button
-              type="button"
-              onClick={onCall}
-              onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
-              onFocus={warmCallAudio}
-              aria-label={t("composer.call", { name: caller.name })}
-              title={t("composer.call", { name: caller.name })}
-              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
-            >
-              <Phone size={16} />
-            </button>
             </>
           ))}
           </div>
