@@ -171,6 +171,9 @@
     transition: none;
     animation: panel-slide var(--motion-large) var(--ease-standard);
   }
+  .orbit-terminal-overlay[data-side][data-closing] {
+    width: var(--dock-exit-width, var(--dock));
+  }
   .orbit-terminal-overlay[data-side][data-open="true"] > * {
     animation: fade-in var(--motion-moderate) var(--ease-standard);
   }

@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
@@ -204,10 +204,17 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // a desktop terminal docks beside the chat; a phone's covers it
   const terminalCovers = terminalOpen && phoneMenuVisible;
   const terminalDock = usePresence(terminalOpen && !phoneMenuVisible);
-  const terminalDockRef = useRef<HTMLDivElement>(null);
-  const closingTerminalWidth = terminalDock.closing ? terminalDockRef.current?.getBoundingClientRect().width : undefined;
-  const terminalDockStyle: (CSSProperties & { "--dock": string }) | undefined =
-    closingTerminalWidth ? { "--dock": `${closingTerminalWidth}px` } : undefined;
+  const captureTerminalDock = useCallback((dock: HTMLDivElement | null) => {
+    if (!dock || !terminalOpen || phoneMenuVisible) return;
+    const measure = () => {
+      const { width } = dock.getBoundingClientRect();
+      if (width) dock.style.setProperty("--dock-exit-width", `${width}px`);
+    };
+    measure();
+    const observer = window.ResizeObserver ? new ResizeObserver(measure) : undefined;
+    observer?.observe(dock, { box: "border-box" });
+    return () => observer?.disconnect();
+  }, [phoneMenuVisible, terminalOpen]);
   const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
@@ -869,7 +876,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
             }}
           </PhoneChatPages>
           {bot && terminalViews[bot.id] !== undefined && (
-            <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" ref={terminalDockRef} style={terminalDockStyle} data-open={terminalOpen} data-side={!phoneMenuVisible || undefined} data-side-panel={!phoneMenuVisible ? "" : undefined} data-closing={terminalDock.closing || undefined} inert={!terminalOpen} aria-hidden={!terminalOpen}>
+            <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" ref={captureTerminalDock} data-open={terminalOpen} data-side={!phoneMenuVisible || undefined} data-side-panel={!phoneMenuVisible ? "" : undefined} data-closing={terminalDock.closing || undefined} inert={!terminalOpen} aria-hidden={!terminalOpen}>
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (
                   <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />

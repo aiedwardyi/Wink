@@ -319,6 +319,7 @@ export function TerminalWorkspace({
     });
     // Forward keystrokes and emulator replies only after historical replay finishes.
     // onBinary carries non-UTF8 mouse reports (wheel in X10/RXVT mode); without it the wheel is dropped.
+    let pendingInput: Promise<void> | null = null;
     const forwardInput = (data: string, track = true) => {
       if (!id || !replayComplete || terminal.options.disableStdin || exits.has(id)) return;
       if (track) trackFeatureOnce("terminal.type");
@@ -343,10 +344,13 @@ export function TerminalWorkspace({
         }).catch(report);
       };
       const submit = /[\r\n]/.test(data);
-      // Enter can reach the shell before the resize observer runs.
-      const sizing = submit ? syncSize() : pendingResize;
-      if (sizing) void sizing.then(send);
-      else if (submit) void send();
+      // Enter waits for sizing and later keystrokes wait for Enter to be sent.
+      const sizing = submit ? syncSize() : null;
+      if (sizing || pendingInput) {
+        const next = Promise.all([pendingInput, sizing]).then(() => { void send(); }).catch(report);
+        pendingInput = next;
+        void next.then(() => { if (pendingInput === next) pendingInput = null; });
+      } else if (submit) void send();
       else void Promise.resolve().then(send);
     };
     forwardInputRef.current = forwardInput;
