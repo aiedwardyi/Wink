@@ -1074,6 +1074,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const attach = (session) => {
     const { pty } = session;
     let handshake = platform === "win32";
+    let queryTail = "";
     pty.onData((data) => {
       if (session.retired || session.pty !== pty) return;
       session.output += data;
@@ -1088,9 +1089,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       try {
         session.screen.consume(data);
       } catch {}
-      if (handshake && !session.adopting && data.includes(CONPTY_DEVICE_QUERY)) {
-        handshake = false;
-        try { void Promise.resolve(pty.write(DEVICE_ATTRIBUTES)).catch(() => {}); } catch {}
+      if (handshake && !session.adopting) {
+        const window = queryTail + data;
+        queryTail = window.slice(1 - CONPTY_DEVICE_QUERY.length);
+        if (window.includes(CONPTY_DEVICE_QUERY)) {
+          handshake = false;
+          try { void Promise.resolve(pty.write(DEVICE_ATTRIBUTES)).catch(() => {}); } catch {}
+        }
       }
       if (parsed.text.trim()) handshake = false;
       cancelClaudeStartup(session);

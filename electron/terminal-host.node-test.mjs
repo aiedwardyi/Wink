@@ -5000,6 +5000,14 @@ describe("ConPTY start", () => {
     assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
   });
 
+  test("answers a device query split across two chunks", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[");
+    f.children[0].data("c\x1b[?1004h");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
   test("leaves device queries after the prompt to the panel", async (t) => {
     const f = winFixture(t);
     await f.host.open(f.event, f.input);
