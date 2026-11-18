@@ -427,6 +427,7 @@ export interface InstanceInfo {
   instanceId: string;
   driverKind: string;
   accountOf?: string;
+  accountGeneration?: number;
   accountMain?: boolean;
   accountState?: "pending" | "ready" | "stopped";
   drain?: { destinationId: string; phase: "draining" | "logout" | "signed-out" | "failed" };

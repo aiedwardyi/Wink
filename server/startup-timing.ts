@@ -60,6 +60,7 @@ export function createStartupTiming(options: {
     measure,
     track,
     paint,
+    beforeFirstPaint: () => serving && !released,
     afterPaint(name: string, work: () => Promise<unknown>): void {
       pending++;
       const task = painted.then(async () => {

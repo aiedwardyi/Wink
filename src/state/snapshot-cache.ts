@@ -11,7 +11,7 @@ export interface CachedSnapshot {
   bots: Bot[];
   groups: Group[];
   selectedId: string;
-  /** The model chip's engine icon; absent in older caches. */
+  /** The last engine rows for Connections and the model picker; absent in older caches. */
   instances?: InstanceInfo[];
   /** The sidebar's own photo and name until the config answers. */
   profile?: ConfigStatus["profile"];
@@ -45,6 +45,20 @@ const isInstance = (value: unknown) =>
 
 const isProfile = (value: unknown) =>
   isRecord(value) && typeof value.name === "string" && typeof value.email === "string" && (value.avatarUrl === undefined || typeof value.avatarUrl === "string");
+
+export function keepCheckedInstance(saved: InstanceInfo | undefined, row: InstanceInfo): InstanceInfo {
+  if (row.snapshot.state !== "checking" && row.pickerSnapshot?.state !== "checking") return row;
+  if (!saved || saved.driverKind !== row.driverKind || saved.cli !== row.cli || saved.accountOf !== row.accountOf
+    || saved.accountGeneration !== row.accountGeneration || saved.accountMain !== row.accountMain
+    || saved.accountState !== row.accountState || saved.drain || row.drain || row.loginState) return row;
+  return {
+    ...row,
+    ...(row.snapshot.state === "checking" && saved.snapshot?.state && saved.snapshot.state !== "checking" && saved.models
+      ? { snapshot: saved.snapshot, models: saved.models } : {}),
+    ...(row.pickerSnapshot?.state === "checking" && saved.pickerSnapshot && saved.pickerSnapshot.state !== "checking"
+      ? { pickerSnapshot: saved.pickerSnapshot, pickerModels: saved.pickerModels } : {}),
+  };
+}
 
 export function readSnapshotCache(explicit?: Storage): CachedSnapshot | null {
   try {

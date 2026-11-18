@@ -1,9 +1,11 @@
 import { usageIdentity, usageIdentityChanged } from "../../shared/usage-identity";
+import { keepCheckedInstance } from "./snapshot-cache";
 import type { Action, InstanceInfo } from "./store-types";
 
 export function usageInstances(before: InstanceInfo[], after: InstanceInfo[], preserve = false): InstanceInfo[] {
-  return after.map((instance) => {
-    const previous = before.find((candidate) => candidate.instanceId === instance.instanceId);
+  return after.map((row) => {
+    const previous = before.find((candidate) => candidate.instanceId === row.instanceId);
+    const instance = keepCheckedInstance(previous, row);
     if (previous && usageIdentityChanged(previous.snapshot, instance.snapshot)) return { ...instance, rateLimits: undefined };
     const current = previous?.rateLimits;
     if (!preserve || !current || (instance.rateLimits && Date.parse(instance.rateLimits.observedAt) >= Date.parse(current.observedAt))) return instance;

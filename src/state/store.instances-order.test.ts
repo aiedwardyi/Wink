@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { StoreProvider, useEngineLoginRefresh, useStore, type InstanceInfo } from "./store";
+import { writeSnapshotCache } from "./snapshot-cache";
 
 class FakeEventSource {
   static last: FakeEventSource;
@@ -62,6 +63,48 @@ it("ignores an older instances reply after a newer live frame", async () => {
   await act(async () => { finish(Response.json({ instances: [instance(true)] })); await request; });
   expect(store.state.instances[0]?.accountMain, "newer Main survives the reload").toBe(false);
   expect(fetchMock.mock.calls.filter(([url]) => url === "/api/instances?refresh=1")).toHaveLength(1);
+});
+
+it("keeps a saved sign-in and model menu until the live check finishes", async () => {
+  const saved = { ...instance(true), models: { default: "saved", options: [{ id: "saved", label: "Saved" }] } };
+  writeSnapshotCache({ bots: [], groups: [], selectedId: "", instances: [saved] });
+  vi.stubGlobal("fetch", (url: string) => url === "/api/bots?messages=200"
+    ? Promise.resolve(Response.json({ bots: [], groups: [], cursor: "stream00:1" }))
+    : ["/api/config", "/api/routines"].includes(url) ? Promise.resolve(Response.json({})) : new Promise<Response>(() => {}));
+  await mount();
+  expect(store.state.instances[0]).toEqual(saved);
+
+  const checking: InstanceInfo = { ...instance(true), snapshot: { state: "checking" } };
+  const publish = async (row: InstanceInfo) => {
+    await act(async () => FakeEventSource.last.onmessage!({ data: JSON.stringify({ kind: "instances", instances: [row] }), lastEventId: "" }));
+  };
+  await publish(checking);
+  expect(store.state.instances[0].snapshot).toEqual(saved.snapshot);
+  expect(store.state.instances[0].models).toEqual(saved.models);
+
+  const signedOut: InstanceInfo = { ...checking, snapshot: { state: "available", authenticated: false, authChecked: true } };
+  await publish(signedOut);
+  expect(store.state.instances[0]).toEqual(signedOut);
+});
+
+it("updates a checked account while the chat snapshot is still loading", async () => {
+  const saved = instance(true);
+  writeSnapshotCache({ bots: [], groups: [], selectedId: "", instances: [saved] });
+  vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
+  function Capture() {
+    store = useStore();
+    return null;
+  }
+  host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(Capture))));
+  await act(async () => FakeEventSource.last.onmessage!({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "stream00:1" }), lastEventId: "" }));
+  expect(store.state.hydrated).toBe(false);
+  expect(store.state.instances[0]).toEqual(saved);
+
+  const signedOut: InstanceInfo = { ...saved, snapshot: { state: "available", authenticated: false, authChecked: true } };
+  await act(async () => FakeEventSource.last.onmessage!({ data: JSON.stringify({ kind: "instances", instances: [signedOut] }), lastEventId: "stream00:2" }));
+  expect(store.state.instances[0]).toEqual(signedOut);
 });
 
 it("ignores an older sign-in poll reply after a newer live frame", async () => {

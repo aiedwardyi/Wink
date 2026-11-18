@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { readSnapshotCache, SNAPSHOT_CACHE_KEY, writeSnapshotCache } from "./snapshot-cache";
-import type { Bot, Message } from "./store";
+import { keepCheckedInstance, readSnapshotCache, SNAPSHOT_CACHE_KEY, writeSnapshotCache } from "./snapshot-cache";
+import type { Bot, InstanceInfo, Message } from "./store";
 
 const redactions = vi.hoisted(() => ({ count: 0 }));
 vi.mock("../../server/redact.ts", async (importOriginal) => {
@@ -30,6 +30,15 @@ const bot = (messages: Message[]) =>
   ({ id: "b1", threadId: "t1", name: "Scout", unread: false, color: "blue", messages }) as unknown as Bot;
 
 describe("snapshot cache", () => {
+  it("does not carry a sign-in across an account generation change", () => {
+    const saved: InstanceInfo = {
+      instanceId: "extra", driverKind: "claudeAgent", displayName: "Claude", accountOf: "claude", accountGeneration: 1,
+      snapshot: { state: "available", authenticated: true }, models: { default: "saved", options: [] },
+    };
+    const checking: InstanceInfo = { ...saved, accountGeneration: 2, snapshot: { state: "checking" } };
+    expect(keepCheckedInstance(saved, checking)).toBe(checking);
+  });
+
   it("redacts secrets from every cached message, user rows included", () => {
     const local = storage();
     const message: Message = { id: "m1", at: 1, role: "user", kind: "text", text: `my key is ${KEY}` };

@@ -2507,7 +2507,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       onFrame: (frame) => {
         receivedAt.set(frame, Date.now());
-        if (!hydrated) {
+        // Engine rows have their own ordering and can settle before the chat boundary.
+        if (!hydrated && frame.kind !== "instances") {
           pendingFrames.push(frame);
           return;
         }

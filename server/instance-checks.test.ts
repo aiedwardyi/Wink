@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderSnapshot } from "./contracts.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
+import { createStartupTiming } from "./startup-timing.ts";
 import { makeFakeDriver } from "./testing/fake-driver.ts";
 
 async function slowRegistry(slow: () => Promise<ProviderSnapshot>) {
@@ -84,5 +85,57 @@ describe("first-run engine checks", () => {
     expect(states(await checks.describe())).toEqual({ a: "available", b: "available" });
     await registry.describe({ refresh: true });
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("reports known rows without starting checks before the first chat paint", async () => {
+    const startup = createStartupTiming({ write: () => {} });
+    const snapshot = vi.fn(async (): Promise<ProviderSnapshot> => ({ state: "available", authenticated: true }));
+    const registry = await slowRegistry(snapshot);
+    const startChecks = vi.spyOn(registry, "describeCached");
+    const publish = vi.fn();
+    const checks = createInstanceChecks(registry, publish, startup);
+    startup.afterPaint("probes", () => registry.describe());
+    startup.serving();
+    try {
+      expect(states(await checks.describe())).toEqual({ a: "checking", b: "checking" });
+      expect(startChecks).not.toHaveBeenCalled();
+      startup.paint();
+      await startup.waitFor("probes");
+      await vi.waitFor(() => expect(states(publish.mock.lastCall![0])).toEqual({ a: "available", b: "available" }));
+    } finally {
+      startup.close();
+    }
+  });
+
+  it("publishes a changed saved row before the other startup checks finish", async () => {
+    let held = false;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const registry = await slowRegistry(async () => {
+      if (held) await pending;
+      return { state: "available", authenticated: true };
+    });
+    await registry.describe();
+    vi.spyOn(registry.get("a")!, "snapshot").mockResolvedValue({ state: "available", authenticated: false });
+    held = true;
+
+    const startup = createStartupTiming({ write: () => {} });
+    startup.afterPaint("probes", () => registry.describe({ refresh: true }));
+    const publish = vi.fn();
+    const checks = createInstanceChecks(registry, publish, startup);
+    startup.serving();
+    try {
+      expect(states(await checks.describe())).toEqual({ a: "available", b: "available" });
+      startup.paint();
+      await vi.waitFor(() => {
+        expect(publish).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({
+          instanceId: "a", snapshot: expect.objectContaining({ authenticated: false }),
+        })]));
+      });
+    } finally {
+      release();
+      await startup.waitFor("probes");
+      startup.close();
+    }
   });
 });
