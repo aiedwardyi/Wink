@@ -66,7 +66,7 @@ import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/mult
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
+import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -2624,6 +2624,9 @@ function clientMessage(message: Message): Message {
 
 /** show_image rows carry a name, not pixels; iOS only fetches them when `hasImage` is set. */
 function flagShownImage(message: Message): Message {
+  if (message.kind === "screen" && message.roomFiles) {
+    return { ...message, hasImage: message.roomFiles.some((file) => !file.deleted && file.type.startsWith("image/")) };
+  }
   return message.kind === "screen" && message.image ? { ...message, hasImage: true } : message;
 }
 
@@ -6782,7 +6785,7 @@ configureRoomAsks({
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
 sweepRoomFiles(store.groups);
 const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
-  client: { botSend: (...args) => guestClient.botSend(...args), file: (...args) => guestClient.file(...args), upload: (...args) => guestClient.upload(...args) },
+  client: { botSend: (...args) => guestClient.botSend(...args), botPicture: (...args) => guestClient.botPicture(...args), file: (...args) => guestClient.file(...args) },
   bot: (botId) => store.bot(botId),
   busy: (botId) => botHasActiveTurn(botId) || hasQueuedSends(botId),
   hasTask: (botId, threadId) => Boolean(store.taskByThread(botId, threadId)),
@@ -7961,7 +7964,10 @@ const internalRoutes = createInternalRoutes({
   botOutputRoots,
   routineProposalPersistence,
   maybeResumeConnectors,
-  roomPicture: async (bot, threadId, path, name, caption) => (await hostBotPicture(store, bot, threadId, path, name, caption)) ?? myRoomBotTurns.picture(threadId, path, name, caption),
+  captureRoomPicture: (bot, threadId) => {
+    const interrupted = turnInterruptedAt.get(threadId);
+    return captureHostBotPicture(store, bot, threadId, () => turnInterruptedAt.get(threadId) !== interrupted) ?? myRoomBotTurns.capturePicture(threadId);
+  },
 });
 const verifyAutoOn = () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false;
 const verifyDoc = createVerifyDoc({

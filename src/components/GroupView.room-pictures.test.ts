@@ -29,8 +29,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  vi.unstubAllGlobals();
   await act(async () => root?.unmount());
+  vi.unstubAllGlobals();
   root = null;
   document.body.innerHTML = "";
 });
@@ -45,4 +45,18 @@ describe("a teammate bot's picture in the host's chat", () => {
     expect([...host.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toContain(`/api/rooms/r1/files/${CAT.id}/preview`);
     expect(host.textContent).toContain("A cat");
   });
+});
+
+it("removes the host bot's inline preview when its room file is deleted", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  const screen: Message = { ...picture, kind: "screen", shown: true };
+  const render = (message: Message) => act(async () => root!.render(createElement(I18nProvider, null, createElement(Transcript, {
+    group, members: [], messages: [message], transcript: [message], streamingMessage: null, dock: null, onReply: () => undefined, onMessageMenu: () => undefined, workers: [],
+  }))));
+  await render(screen);
+  expect(host.querySelector(`img[src="/api/rooms/r1/files/${CAT.id}/preview"]`)).toBeTruthy();
+  await render({ ...screen, roomFiles: [{ ...CAT, deleted: true }] });
+  expect(host.querySelector(`img[src="/api/rooms/r1/files/${CAT.id}/preview"]`)).toBeNull();
+  expect(host.textContent).toContain("A cat");
 });

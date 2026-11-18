@@ -112,7 +112,7 @@ describe("a bot's picture in a team room", () => {
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ group: { id: "group" } }),
     botOutputRoots: () => [folder],
-    roomPicture,
+    captureRoomPicture: () => roomPicture,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
   const refusal = () => vi.fn(async () => { throw Object.assign(new Error("this room is out of space for files"), { status: 507 }); });
 
@@ -121,7 +121,7 @@ describe("a bot's picture in a team room", () => {
     const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
     const result = await call(shared(roomPicture).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path, caption: " Cat " });
     expect(result).toMatchObject({ status: 201, body: { messageId: "room-row", url: "/api/rooms/r1/files/f/preview" } });
-    expect(roomPicture).toHaveBeenCalledWith(bot, bot.threadId, expect.any(String), "picture.gif", "Cat");
+    expect(roomPicture).toHaveBeenCalledWith(expect.any(String), "picture.gif", "Cat");
     expect(appendMessage).not.toHaveBeenCalled();
     expect(attachments()).toEqual(before);
   });
@@ -133,7 +133,7 @@ describe("a bot's picture in a team room", () => {
       connectorThread: () => ({ group: { id: "group" } }),
       botOutputRoots: () => [folder],
       resolveCommsCaller: () => ({ botId: bot.id, threadId: "another-thread" }),
-      roomPicture,
+      captureRoomPicture: () => roomPicture,
     } as unknown as Parameters<typeof createInternalRoutes>[0]);
     expect(await call(routes.showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path })).toMatchObject({ status: 403 });
     expect(await call(routes.generateImage, { fromBotId: bot.id, fromThreadId: bot.threadId, prompt: "picture" })).toMatchObject({ status: 403 });

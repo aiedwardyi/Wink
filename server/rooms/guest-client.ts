@@ -472,16 +472,28 @@ export class GuestClient {
     return { ok: true, value: on };
   }
 
-  /** Posts this PC's bot answer under the bot's room name, with files this PC uploaded. */
-  async botSend(roomId: string, id: string, text: string, replyToId?: string, fileIds: readonly string[] = []): Promise<GuestResult<JoinedEntry>> {
+  /** Posts this PC's bot answer under the bot's room name. */
+  botSend(roomId: string, id: string, text: string, replyToId?: string): Promise<GuestResult<JoinedEntry>> {
+    const body = JSON.stringify({ botId: id, text: text.slice(0, 20_000), ...(replyToId ? { replyToId } : {}), sendId: randomBytes(18).toString("base64url") });
+    return this.sendBotEntry(roomId, "bot-send", body);
+  }
+
+  botPicture(roomId: string, id: string, text: string, replyToId: string, name: string, bytes: Buffer, signal: AbortSignal): Promise<GuestResult<JoinedEntry>> {
+    const metadata = Buffer.from(JSON.stringify({ botId: id, text: text.slice(0, 500), replyToId, name: name.slice(0, 200), sendId: randomBytes(18).toString("base64url") })).toString("base64url");
+    return this.sendBotEntry(roomId, "bot-picture", bytes, { metadata, signal });
+  }
+
+  private async sendBotEntry(roomId: string, action: "bot-send" | "bot-picture", body: string | Buffer, picture?: { metadata: string; signal: AbortSignal }): Promise<GuestResult<JoinedEntry>> {
     const creds = joinedKey(roomId);
     if (!creds) return failed(409, "this room is read-only");
-    const body = JSON.stringify({ botId: id, text: text.slice(0, 20_000), ...(replyToId ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}), sendId: randomBytes(18).toString("base64url") });
+    const length = Buffer.isBuffer(body) ? String(body.length) : undefined;
     let reply: GuestResult<unknown> = unavailable();
     for (let tries = 0; tries < SEND_TRIES && !reply.ok && reply.status === 503; tries++) {
-      reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/${fileIds.length ? "bot-picture" : "bot-send"}`, creds.key, body);
+      if (picture?.signal.aborted) return failed(409, "the turn was stopped");
+      reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/${action}`, creds.key, body, length, length ? uploadDeadline(length) : undefined, picture);
     }
     if (!reply.ok) {
+      if (picture?.signal.aborted) return failed(409, "the turn was stopped");
       if (reply.status === 401) this.end(roomId, creds.key);
       return reply;
     }
@@ -609,7 +621,7 @@ export class GuestClient {
 
   /** A transport failure or a non-JSON reply reads as 503 `unavailable`. */
   private async call(
-    relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
+    relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS, picture?: { metadata: string; signal: AbortSignal },
   ): Promise<GuestResult<unknown>> {
     const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", "x-orbit-room-media": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
     if (key) {
@@ -617,9 +629,10 @@ export class GuestClient {
       headers["x-wink-device"] = this.deps.joiner().device;
     }
     if (length) headers["content-length"] = length;
+    if (picture) headers["x-orbit-room-picture"] = picture.metadata;
     const contentType = typeof body === "string" ? undefined : "application/octet-stream";
     try {
-      const res = await httpsRequest({ method, url: `https://${relayHost}${path}`, body, contentType, headers, timeoutMs, maxBytes: REPLY_BYTES }, this.deps.https);
+      const res = await httpsRequest({ method, url: `https://${relayHost}${path}`, body, contentType, headers, timeoutMs, maxBytes: REPLY_BYTES, signal: picture?.signal }, this.deps.https);
       if (res.status !== 200) return doorError(res.status, res.body);
       return { ok: true, value: JSON.parse(res.body.toString("utf8")) };
     } catch (error) {

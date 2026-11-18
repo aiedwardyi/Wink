@@ -4,14 +4,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 
-import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
-import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
+import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
+import { roomResponder } from "../../shared/room-routing.ts";
 import { sharableLocalFile } from "../attachments.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
 import { broadcastDoorEntry, broadcastDoorStop } from "./door-streams.ts";
 import { appendRoomEntry, committedRoomText, recentRoomEntries, roomById, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
-import { copyRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
+import { copyRoomFile, discardUnpostedRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { askById, createAsk, roomAskDeps, roomAsks, runAsk, type HostedGroup } from "./asks.ts";
@@ -116,8 +116,7 @@ export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot,
   const { entry } = writeRoomEntry(roomAskDeps().store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
   const people = roomPeople(roomId);
   const bots = groupBots(group);
-  // a picture's caption hands nothing off
-  const tagged = files.length ? null : botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
+  const tagged = handoffTarget(entry, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)]);
   // a handoff pings no one; the line that closes it does
   markPersonLine(group, entry, bot.name, !tagged);
   const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : tagged;
@@ -198,15 +197,32 @@ export async function hostRoomFiles(group: HostedGroup, text: string, sendId?: s
   return ids;
 }
 
-/** A host bot's picture on its room thread: a room file on a line of its own, linked to the show_image row the caller writes. Null on any other thread. */
-export async function hostBotPicture(store: Pick<Store, "groupByThread">, bot: BotRecord, threadId: string, path: string, name: string, caption: string) {
+export function captureHostBotPicture(store: Pick<Store, "groupByThread" | "messagesFor">, bot: BotRecord, threadId: string, interrupted: () => boolean) {
   const group = store.groupByThread(threadId);
   if (!group?.hosted || group.threadId !== threadId || !roomById(group.hosted.roomId) || peopleOnlyRoom(group.hosted.roomId)) return null;
   const roomId = group.hosted.roomId;
-  const file = await copyRoomFile(path, roomId, { owner: "host", name, uploadId: randomBytes(18).toString("base64url") });
-  const entry = appendRoomEntry(roomId, { author: { kind: "bot", id: bot.id, name: bot.name }, text: caption, files: [file] });
-  broadcastDoorEntry(roomId, entry);
-  return { roomEntryId: entry.id };
+  const ask = roomAsks(roomId, ["running", "stopping"]).find((candidate) => candidate.threadId === threadId && candidate.botId === bot.id);
+  const check = () => {
+    if (interrupted() || (ask && askById(ask.id)?.state !== "running")) throw new RoomError(409, "the turn was stopped");
+    return true;
+  };
+  return async (path: string, name: string, caption: string) => {
+    check();
+    const file = await copyRoomFile(path, roomId, { owner: "host", name, uploadId: randomBytes(18).toString("base64url"), still: check });
+    try {
+      check();
+      const entry = appendRoomEntry(roomId, {
+        author: { kind: "bot", id: bot.id, name: bot.name }, text: caption, files: [file],
+        ...(ask ? { replyToId: ask.entryId, askId: ask.id, grant: ask.grant, clean: ask.clean } : {}),
+      });
+      broadcastDoorEntry(roomId, entry);
+      const replyToId = ask ? store.messagesFor(threadId).find((message) => message.roomEntryId === ask.entryId)?.id : undefined;
+      return { roomEntryId: entry.id, roomFiles: [file], replyToId, url: `/api/rooms/${roomId}/files/${file.id}/preview` };
+    } catch (error) {
+      discardUnpostedRoomFile(roomId, file.id);
+      throw error;
+    }
+  };
 }
 
 /** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy, with `fileIds` from hostRoomFiles in place of the tags. */

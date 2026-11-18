@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer, request as httpsRequest, type Server } from "node:https";
@@ -21,6 +21,8 @@ import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopR
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
+import { listRoomFiles } from "./files.ts";
+import { roomFilesRoot } from "./files-folder.ts";
 import { GuestClient } from "./guest-client.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
@@ -51,6 +53,7 @@ let doorHeaders: IncomingHttpHeaders[] = [];
 let client: GuestClient | null = null;
 let changes: unknown[] = [];
 let ownName = "Mina";
+let refusePicture: (() => Promise<number>) | undefined;
 
 /** The relay hop: splices TCP to the PC, which ends TLS, as the real relay does. */
 const hop = {
@@ -68,6 +71,13 @@ const hop = {
 async function app(req: IncomingMessage, res: ServerResponse) {
   if (isRelayRequest(req)) {
     doorHeaders.push(req.headers);
+    if (refusePicture && req.url?.split("?")[0]?.endsWith("/bot-picture")) {
+      const status = await refusePicture();
+      req.resume();
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: status === 404 ? "not found" : "unavailable" }));
+      return;
+    }
     if ((await access.gate(req, res)).handled) return;
   }
   res.writeHead(404, { "content-type": "application/json" });
@@ -132,6 +142,7 @@ const close = () => {
 let skew = 0;
 
 beforeEach(() => {
+  refusePicture = undefined;
   vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
   vi.setSystemTime(Date.now() + (skew += 2 * 60_000));
   close();
@@ -707,7 +718,7 @@ describe("bots in two homes hand work to each other", () => {
     });
     const thread: Message[] = [];
     const turns: MyRoomBotTurns = new MyRoomBotTurns({
-      client: { botSend: (...args) => c.botSend(...args), file: (...args) => c.file(...args), upload: (...args) => c.upload(...args) },
+      client: { botSend: (...args) => c.botSend(...args), botPicture: (...args) => c.botPicture(...args), file: (...args) => c.file(...args) },
       bot: (botId) => (botId === "jj-local" ? { id: botId, name: "스타줌" } : null),
       busy: () => false,
       hasTask: (_botId, threadId) => threadId === "jj-task",
@@ -760,7 +771,7 @@ describe("bots in two homes hand work to each other", () => {
       },
       connectorThread: () => ({}),
       botOutputRoots: () => [folder],
-      roomPicture: (_bot: BotRecord, thread: string, file: string, name: string, words: string) => home.turns.picture(thread, file, name, words),
+      captureRoomPicture: (_bot: BotRecord, thread: string) => home.turns.capturePicture(thread),
     } as unknown as Parameters<typeof createInternalRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };
     await routes.showImage(Readable.from([JSON.stringify({ fromBotId: bot.id, fromThreadId: threadId, path, caption })]) as unknown as IncomingMessage, res as unknown as ServerResponse);
@@ -787,6 +798,50 @@ describe("bots in two homes hand work to each other", () => {
     await until(() => Boolean(joinedEntries(home.roomId, 100).find((each) => each.id === entry!.id)));
     const held = await home.c.file(home.roomId, entry!.files![0]!.id);
     expect(held.ok && readFileSync(held.value.path)).toEqual(png);
+  });
+
+  it.each([404, 503])("leaves no file when the picture post gets %s", async (status) => {
+    const folder = join(DATA_DIR, "jj-work");
+    mkdirSync(folder, { recursive: true });
+    const path = join(folder, "cat.png");
+    writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    let received!: () => void;
+    const receiving = new Promise<void>((resolve) => (received = resolve));
+    let refuse!: (status: number) => void;
+    const refusal = new Promise<number>((resolve) => (refuse = resolve));
+    let shown: Awaited<ReturnType<typeof showOnJJ>> | undefined;
+    refusePicture = vi.fn(() => {
+      received();
+      return refusal;
+    });
+    const count = refusePicture;
+    const home: Awaited<ReturnType<typeof homes>> = await homes(() => "", () => "", async (threadId) => {
+      shown = await showOnJJ(home, threadId, folder, path, "A cat");
+    });
+    hostSays(home.group, "@스타줌 show me a cat");
+    await receiving;
+    if (status === 503) await home.turns.stopMine(home.roomId);
+    refuse(status);
+    await until(() => Boolean(shown));
+    expect({
+      status: shown?.status,
+      posts: vi.mocked(count).mock.calls.length,
+      files: listRoomFiles(home.roomId, "Edward").files,
+      used: listRoomFiles(home.roomId, "Edward").used,
+      log: home.log(),
+    }).toEqual({ status: status === 503 ? 409 : 404, posts: 1, files: [], used: 0, log: ["Edward: @스타줌 show me a cat"] });
+  });
+
+  it("removes the bytes and quota entry when the host rejects a saved picture payload", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    const bot = await c.addBot(roomId, "mine", "Helper", "");
+    if (!bot.ok) throw new Error(bot.error);
+    const ask = hostSays(group, "@Helper show me a cat");
+    expect(await c.botPicture(roomId, bot.value.id, "A cat", ask.id, "cat.png", Buffer.from("plain text"), new AbortController().signal))
+      .toMatchObject({ ok: false, status: 415 });
+    expect(listRoomFiles(roomId, "Edward")).toMatchObject({ files: [], used: 0 });
+    expect(readdirSync(join(roomFilesRoot(), roomId))).toEqual([]);
+    expect(recentRoomEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome", ask.text]);
   });
 
   it("tells JJ's bot the host's switches as of each turn, and that only an @ here reaches Edward's bots", async () => {

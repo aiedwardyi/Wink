@@ -467,6 +467,8 @@ export const Transcript = memo(function Transcript({
               onRetry={onRetryFor(m.id)}
               onMessageMenu={readOnly ? undefined : onMessageMenu}
             />
+          ) : m.kind === "screen" && roomBase && m.roomFiles ? (
+            <ShownImage picture={roomPictures(roomBase, m.roomFiles)[0]} caption={m.text} messageId={m.id} />
           ) : m.kind === "screen" && m.image ? (
             <ShownImage name={m.image} caption={m.text} />
           ) : m.kind === "screen" && (m.png || m.hasImage) ? (

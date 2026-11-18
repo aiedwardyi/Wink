@@ -259,7 +259,7 @@ export function picturedReplies(messages: readonly Message[]): Set<string> {
   };
   for (const message of messages) {
     if (message.role === "user") close();
-    else if (message.kind === "screen" && message.image) shown.add(message.from?.botId ?? "");
+    else if (message.kind === "screen" && (message.image || message.roomFiles?.length)) shown.add(message.from?.botId ?? "");
     else if (message.kind === "text") replies.push(message);
   }
   close();

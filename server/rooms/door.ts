@@ -27,8 +27,8 @@ import {
   type DoorState,
   type LineReactions,
 } from "./door-streams.ts";
-import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
-import { deletedRoomFiles } from "./files.ts";
+import { FILE_PATH, fileAction, fileIdsOf, fileRoute, reply as replyRoomFile, sameFiles } from "./file-routes.ts";
+import { deletedRoomFiles, discardUnpostedRoomFile, saveRoomFile } from "./files.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
 import { hostedSend, teamBotSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
@@ -303,38 +303,77 @@ export function removeRoomTeamBot(roomId: string, botId: string): boolean {
   return removed;
 }
 
+function pictureMetadata(value: string | string[] | undefined): unknown {
+  if (typeof value !== "string" || value.length > 8 * 1024 || !/^[\w-]+$/.test(value)) return null;
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
 // a picture has its own action: an older host's bot-send would post its caption and drop the file
 async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson, picture = false): Promise<void> {
-  const body = await readJson(req, BOT_BODY_BYTES);
+  const upload = picture && req.headers["content-type"] === "application/octet-stream";
+  const body = upload ? { ok: true as const, value: pictureMetadata(req.headers["x-orbit-room-picture"]) } : await readJson(req, BOT_BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
+  const answer = (status: number, value: unknown) =>
+    upload && !req.readableEnded ? replyRoomFile(res, status, value, req) : send(res, status, value);
   const group = doorGroup(roomId);
-  if (!group) return notFound(res);
+  if (!group) return answer(404, { error: "not found" });
   const bearer = bearerOf(req);
-  const still = bearer ? guestByKey(bearer) : null;
-  if (still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
+  const still = () => bearer ? guestByKey(bearer) : null;
+  const guest = still();
+  if (guest?.roomId !== roomId || guest.person.id !== person.id) return answer(401, { error: "unauthorized" });
   const fields = record(body.value);
-  const { botId, text, replyToId } = fields ?? {};
-  const fileIds = picture ? fields?.fileIds : [];
-  if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
-  if (!Array.isArray(fileIds) || (picture && !fileIds.length) || !fileIds.every((id): id is string => typeof id === "string")) return send(res, 400, { error: "bad request" });
+  const { botId, text, replyToId, name } = fields ?? {};
+  const pictureName = typeof name === "string" ? name : null;
+  const fileIds = picture && !upload ? fileIdsOf(fields?.fileIds) : [];
+  if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return answer(400, { error: "bad request" });
+  if (!fileIds || (picture && !upload && !fileIds.length) || (upload && (pictureName === null || text.length > 500))) return answer(400, { error: "bad request" });
   const bot = /^[\w-]{1,64}$/.test(botId) ? teamBot(roomId, botId) : null;
-  if (!bot || bot.owner !== person.id) return send(res, 403, { error: "forbidden" });
-  if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return send(res, 404, { error: "no such message in this room" });
+  if (!bot || bot.owner !== person.id) return answer(403, { error: "forbidden" });
+  if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return answer(404, { error: "no such message in this room" });
   let sendId: string | undefined;
   try {
     sendId = parseSendId(fields?.sendId === undefined ? undefined : String(fields.sendId));
   } catch {
-    return send(res, 400, { error: "bad sendId" });
+    return answer(400, { error: "bad sendId" });
   }
+  if (upload && !sendId) return answer(400, { error: "bad sendId" });
+  const sentAlready = () => sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
+  const canPost = () => !res.destroyed && !req.socket.destroyed && still()?.person.id === person.id
+    && doorGroup(roomId)?.threadId === group.threadId && teamBot(roomId, bot.id)?.owner === person.id;
+  let uploaded: string | undefined;
   try {
-    const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
-    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId, fileIds);
-    if (!entry) return send(res, 409, { error: "sendId was used for another message" });
-    send(res, 200, { entry: doorEntry(entry) });
+    let earlier = sentAlready();
+    if (upload && !earlier) {
+      if (replyToId !== undefined && !roomEntry(roomId, replyToId)) throw new RoomError(404, "no such message in this room");
+      const file = await saveRoomFile(req, roomId, { owner: person.id, name: pictureName, uploadId: sendId!, still: canPost });
+      uploaded = file.id;
+      if (!canPost()) {
+        discardUnpostedRoomFile(roomId, uploaded);
+        if (!res.destroyed) answer(401, { error: "unauthorized" });
+        return;
+      }
+      if (!file.type.startsWith("image/")) {
+        discardUnpostedRoomFile(roomId, uploaded);
+        return answer(415, { error: "not a PNG, JPEG, GIF, or WebP image" });
+      }
+      earlier = sentAlready();
+    }
+    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId)
+      : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId, uploaded ? [uploaded] : fileIds);
+    if (upload && earlier && (!entry?.files?.length || entry.replyToId !== replyToId || entry.text !== committedRoomText("bot", text))) {
+      throw new RoomError(409, "sendId was used for another message");
+    }
+    if (!entry) throw new RoomError(409, "sendId was used for another message");
+    answer(200, { entry: doorEntry(entry) });
   } catch (error) {
+    if (uploaded) discardUnpostedRoomFile(roomId, uploaded);
     const status = (error as { status?: number }).status;
     if (status === undefined) throw error;
-    send(res, status, { error: (error as Error).message });
+    if (!res.destroyed) answer(status, { error: (error as Error).message });
   }
 }
 
