@@ -3,7 +3,7 @@ import { cn } from "@/lib/cn";
 import { localizeServerLine } from "@/lib/activity-runs";
 import { useI18n, type Translate } from "@/lib/i18n";
 import type { Message } from "@/state/store";
-import { FoldClip } from "./FoldClip";
+import { FOLD_FADE, FoldClip } from "./FoldClip";
 
 // the fold a long user message gets in ChatView
 const FOLD_CHARS = 600;
@@ -25,7 +25,7 @@ export function PeerMessageBody({ text, short = false }: { text: string; short?:
   const long = text.length > FOLD_CHARS || text.split("\n").length > FOLD_LINES;
   return (
     <div data-peer-body className="mt-1.5 ml-3 max-w-[min(42rem,78%)] border-l-2 border-hairline/50 pl-3 text-[14px] leading-relaxed whitespace-pre-wrap break-words text-ink">
-      {short ? <FoldClip data-peer-text="">{text}</FoldClip> : <div data-peer-text className={cn(long && !expanded && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>
+      {short ? <FoldClip data-peer-text="">{text}</FoldClip> : <div data-peer-text className={cn(long && !expanded && `max-h-40 overflow-hidden ${FOLD_FADE}`)}>
         {text}
       </div>}
       {!short && long && (
