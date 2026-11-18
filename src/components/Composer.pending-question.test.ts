@@ -2,7 +2,7 @@
 // The pinned ask_user question over the composer, against the real store:
 // it arrives as the full card and shrinks to one row once the person types,
 // attaches or the chat moves on; a tap goes out exactly the way a typed answer
-// would, the row's x only hides it, and the open card's x settles it.
+// would, and either x settles the question.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -319,7 +319,7 @@ describe("pinned ask_user question", () => {
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
     expect([...row()!.querySelectorAll("[data-row-choices] button:not([hidden])")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
     expect(rowButton("Prod").className).toContain("whitespace-nowrap");
-    expect(pinButton("Hide question")).toBeTruthy();
+    expect(pinButton("Dismiss question")).toBeTruthy();
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
@@ -350,7 +350,7 @@ describe("pinned ask_user question", () => {
     await act(async () => pinButton("Fold question").click());
     await settle();
     expect(host!.querySelector(".arrival-glow")).toBeNull();
-    await act(async () => pinButton("Hide question").click());
+    await swipe(row()!, 200);
     await act(async () => dot()!.click());
     expect(host!.querySelector(".arrival-glow")).toBeNull();
     await expand();
@@ -453,19 +453,15 @@ describe("pinned ask_user question", () => {
     expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
   });
 
-  it("hides with the row's x without dismissing, and the composer's dot brings it back", async () => {
+  it("dismisses with the row's x without leaving a dot", async () => {
     await mount({ bot: bot([question]) });
     await shrink();
-    await act(async () => pinButton("Hide question").click());
+    await act(async () => pinButton("Dismiss question").click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
     expect(pin()).toBeNull();
-    expect(calls).toEqual([]);
-    expect(dot()?.textContent).toBe("1");
-    expect(dot()?.getAttribute("aria-label")).toBe("Show question");
-    expect(dot()!.closest("[data-orbit-composer-frame]")).not.toBeNull();
-    await act(async () => dot()!.click());
-    expect(row()).not.toBeNull();
     expect(dot()).toBeNull();
-    expect(calls).toEqual([]);
+    expect(textarea()?.disabled).toBe(false);
   });
 
   it("hides on a sideways swipe across the row without dismissing", async () => {
@@ -487,7 +483,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     expect(row()!.textContent).toContain("2/2");
     expect(row()!.textContent).toContain("Which plan?");
-    await act(async () => pinButton("Hide question").click());
+    await swipe(row()!, 200);
     expect(dot()?.textContent).toBe("2");
   });
 
