@@ -87,6 +87,25 @@ function createLeaseRegistry() {
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
 describe("ProviderRegistry", () => {
+  it.each(["claudeAgent", "codex"])("probes an installed %s base after sign-out invalidates its snapshot", async (kind) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      await registry.load({ base: { driver: kind } });
+      const snapshot = vi.spyOn(registry.get("base")!, "snapshot")
+        .mockResolvedValueOnce({ state: "available", version: "1.2.3", authenticated: true })
+        .mockResolvedValue({ state: "available", version: "1.2.3", authenticated: false });
+      await registry.describe();
+      registry.blockAccount("base", true);
+      registry.invalidateAccount("base");
+      expect((await registry.describeKnown())[0].snapshot.state).toBe("checking");
+      expect((await registry.describeCached())[0].snapshot).toMatchObject({ state: "available", version: "1.2.3", authenticated: false });
+      expect(registry.accountAvailable("base")).toBe(false);
+      snapshot.mockResolvedValue({ state: "unavailable", cliMissing: true });
+      expect((await registry.describe({ rescan: true }))[0].snapshot).toMatchObject({ state: "unavailable", cliMissing: true });
+    } finally { await registry.disposeAll(); }
+  });
+
   it("a driver gets the registry incarnation at create", async () => {
     const fake = makeFakeDriver();
     const create = vi.spyOn(fake.driver, "create");

@@ -74,6 +74,32 @@ afterEach(async () => {
 });
 
 describe("ModelPicker cross navigation", () => {
+  it.each([false, true])("guides and detects a copied Windows install from the picker (custom %s)", async (custom) => {
+    const previous = window.ogb;
+    const openEngineInstall = vi.fn(async () => "copied" as const);
+    Object.assign(window, { ogb: { platform: "win32", openEngineInstall } });
+    const missing = engine("claude", "claudeAgent", ["opus"]);
+    missing.models.options[0]!.custom = custom;
+    missing.snapshot = { state: "unavailable" };
+    missing.install = { command: { win32: "install-claude" } };
+    mock.instances = [missing];
+    vi.useFakeTimers();
+    try {
+      await mount({ instanceId: "claude", model: "opus" });
+      const install = [...document.querySelectorAll("button")].find((button) => button.textContent === "Open Install in Terminal")!;
+      await act(async () => install.click());
+      expect(openEngineInstall.mock.calls).toEqual([custom ? ["claude", true] : ["claude"]]);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2300); });
+      expect(document.body.textContent).toContain("Paste the command in Terminal and press Enter.");
+      mock.refreshInstances.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2700); });
+      expect(mock.refreshInstances).toHaveBeenCalledExactlyOnceWith("passive");
+    } finally {
+      window.ogb = previous;
+      vi.useRealTimers();
+    }
+  });
+
   it.each([["mono-hud", false], ["mono-hud", true], ["servo-gray", false], ["servo-gray", true]] as const)("keeps %s's open selector in Precision (contained %s)", async (skin, contained) => {
     mock.instances = [engine("claude", "claudeAgent", ["claude-opus-5-5"])];
     try {

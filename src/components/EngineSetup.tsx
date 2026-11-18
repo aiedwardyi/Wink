@@ -3,7 +3,7 @@
 // unusable model lists stay out of the way until the engine is ready.
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Download, ExternalLink, LogIn, TerminalSquare } from "lucide-react";
-import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } from "@/state/store";
+import { api, useEngineLoginRefresh, useOptionalRefreshInstances, type EngineInstall, type InstanceInfo } from "@/state/store";
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -11,6 +11,7 @@ import type { MessageKey } from "@/lib/i18n-catalog";
 import { accountReady } from "@/lib/accounts";
 import { ConnectionError } from "@/lib/error-text";
 import { trackFeature, trackOnboard } from "@/lib/usage-stats";
+import { useEngineInstall } from "@/lib/use-engine-install";
 
 type Platform = "darwin" | "win32" | "linux";
 
@@ -76,7 +77,9 @@ export function installSignsIn(install: EngineInstall | undefined): boolean {
   return Boolean(install?.signInCommand && !/\bYOUR_[A-Z0-9_]+\b/.test(install.signInCommand));
 }
 
-export async function openEngineInstallOrCopy(instanceId: string, command: string, installOnly = false): Promise<"running" | "opened" | "copied"> {
+export type InstallLaunch = "running" | "opened" | "copied";
+
+export async function openEngineInstallOrCopy(instanceId: string, command: string, installOnly = false): Promise<InstallLaunch> {
   if (window.ogb?.openEngineInstall) {
     try {
       return await (installOnly ? window.ogb.openEngineInstall(instanceId, true) : window.ogb.openEngineInstall(instanceId));
@@ -100,18 +103,22 @@ export function setupErrorAction(
   return "retry";
 }
 
-export function CommandRow({ command, actionLabel, signInInstanceId, installInstanceId, installOnly, signsIn, docsUrl, quiet = false }: { command: string; actionLabel: string; signInInstanceId?: string; installInstanceId?: string; installOnly?: boolean; signsIn?: boolean; docsUrl?: string; quiet?: boolean }) {
+export function CommandRow({ command, actionLabel, signInInstanceId, installInstanceId, onInstallStarted, installOnly, signsIn, docsUrl, quiet = false }: {
+  command: string; actionLabel: string; signInInstanceId?: string; installInstanceId?: string; onInstallStarted?: (id: string, result: InstallLaunch) => void;
+  installOnly?: boolean; signsIn?: boolean; docsUrl?: string; quiet?: boolean;
+}) {
   const { t } = useI18n();
-  const [status, setStatus] = useState<"copied" | "opened" | "running" | null>(null);
+  const [status, setStatus] = useState<InstallLaunch | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const oneClickInstall = Boolean(installInstanceId && window.ogb?.openEngineInstall);
   const canOpen = Boolean(signInInstanceId ? window.ogb?.openEngineSignIn : (installInstanceId && window.ogb?.openEngineInstall) || window.ogb?.openInstallTerminal);
   const automaticSignIn = Boolean(signInInstanceId && !/\bYOUR_[A-Z0-9_]+\b/.test(command));
 
-  const settle = (next: "copied" | "opened" | "running") => {
+  const settle = (next: InstallLaunch) => {
     setStatus(next);
-    window.setTimeout(() => setStatus(null), 2200);
+    if (installInstanceId) onInstallStarted?.(installInstanceId, next);
+    else window.setTimeout(() => setStatus(null), 2200);
   };
 
   const copy = async () => {
@@ -194,21 +201,24 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
             {status === "opened" || status === "running" ? t("engine.terminalOpened") : actionLabel}
           </button>
           <p aria-live="polite" className="mt-1.5 text-center text-[11px] text-ink-secondary/70">
-            {status === "copied" ? t("engine.commandCopied")
+            {status === "copied" ? t(installInstanceId ? "engine.pasteAndEnter" : "engine.commandCopied")
               : status === "opened" ? t("engine.pasteAndEnter")
                 : status === "running" && !signInInstanceId && !signsIn ? t("engine.installRunning")
                   : status === "running" || automaticSignIn ? t("engine.followSignIn") : !oneClickInstall ? t("engine.copiedWhenOpens") : null}
           </p>
         </>
       ) : (
-        <button
-          type="button"
-          onClick={() => void copy()}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-control px-3 py-2 text-[12.5px] font-semibold text-ink hover:bg-raised-hover"
-        >
-          {status === "copied" ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-          {status === "copied" ? t("engine.commandCopied") : t("engine.copyCommand")}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => void copy()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-control px-3 py-2 text-[12.5px] font-semibold text-ink hover:bg-raised-hover"
+          >
+            {status === "copied" ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+            {status === "copied" ? t("engine.commandCopied") : t("engine.copyCommand")}
+          </button>
+          {installInstanceId && status === "copied" && <p aria-live="polite" className="mt-1.5 text-center text-[11px] text-ink-secondary/70">{t("engine.pasteAndEnter")}</p>}
+        </>
       )}
     </div>
   );
@@ -374,6 +384,8 @@ export function EngineSetup({
   className,
   intent = "cloud",
   signIn = false,
+  onRefresh,
+  onInstallStarted,
 }: {
   instance: InstanceInfo;
   className?: string;
@@ -381,8 +393,12 @@ export function EngineSetup({
   intent?: "cloud" | "inject";
   /** Force the sign-in card when the snapshot has no `authenticated` field. */
   signIn?: boolean;
+  onRefresh?: () => void | Promise<void>;
+  onInstallStarted?: (id: string, result: InstallLaunch) => void;
 }) {
   const { t } = useI18n();
+  const refreshInstances = useOptionalRefreshInstances();
+  const { begin } = useEngineInstall([instance], onRefresh ?? (() => refreshInstances?.("passive")), false);
   const install = instance.install;
   const installCommand = installCommandFor(install);
   const signInCommand = install?.signInCommand;
@@ -428,7 +444,8 @@ export function EngineSetup({
       {oneClick ? (
         <div className="mt-3 flex justify-end"><EngineSignIn instance={instance} forceSignIn={signIn} /></div>
       ) : command ? (
-        <CommandRow command={command} signInInstanceId={signInOnly ? instance.instanceId : undefined} installInstanceId={signInOnly ? undefined : instance.instanceId} installOnly={intent === "inject"} signsIn={intent !== "inject" && installSignsIn(install)} docsUrl={install.docsUrl} actionLabel={signInOnly ? t("engine.openSignIn") : t("engine.openInstall")} />
+        <CommandRow command={command} signInInstanceId={signInOnly ? instance.instanceId : undefined} installInstanceId={signInOnly ? undefined : instance.instanceId} onInstallStarted={onInstallStarted ?? begin}
+          installOnly={intent === "inject"} signsIn={intent !== "inject" && installSignsIn(install)} docsUrl={install.docsUrl} actionLabel={signInOnly ? t("engine.openSignIn") : t("engine.openInstall")} />
       ) : (
         <p className="mt-3 rounded-lg bg-inset px-2.5 py-2 text-[12px] leading-relaxed text-ink-secondary">
           {t("engine.noInstaller")}

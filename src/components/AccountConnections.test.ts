@@ -69,6 +69,25 @@ it("keeps each Connections email bound to its account id when Main and order cha
   }
 });
 
+it.each([["claude", "claudeAgent", "Claude"], ["codex", "codex", "Codex"]] as const)("keeps %s accounts and Add Account after the base signs out", async (base, driverKind, displayName) => {
+  const ids = [base, "added-1", "added-2", "added-3", "added-4"];
+  state.instances = ids.map((id) => ({ ...engine(id), accountOf: base, driverKind, displayName }));
+  await update();
+  state.instances = state.instances.map((row) => row.instanceId === base
+    ? { ...row, accountState: "stopped", snapshot: { state: "checking" } } : row);
+  await update();
+  expect(buttons("Add Account")).toHaveLength(1);
+  expect(buttons("More Engines")).toHaveLength(0);
+  state.instances = state.instances.map((row) => row.instanceId === base
+    ? { ...row, snapshot: { state: "available", authenticated: false } } : row);
+  await update();
+  expect([...host.querySelectorAll("[data-connection-account]")].map((row) => row.getAttribute("data-connection-account"))).toEqual(ids);
+  const baseRow = host.querySelector(`[data-connection-account="${base}"]`);
+  expect(baseRow?.textContent).toContain("Signed out.");
+  expect(baseRow?.querySelector("button")?.textContent).toBe("Sign In");
+  expect(buttons("Add Account")).toHaveLength(1);
+});
+
 it.each(["en", "ko"] as const)("points a duplicate add to its existing row in %s", async (locale) => {
   persistPreference(locale);
   await render(2);

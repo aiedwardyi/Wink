@@ -2684,6 +2684,10 @@ export function useStore() {
   return ctx;
 }
 
+export function useOptionalRefreshInstances() {
+  return useContext(StoreContext)?.refreshInstances;
+}
+
 export function useEngineLoginRefresh(waiting: boolean, onRefresh: (instances: InstanceInfo[]) => void) {
   const store = useContext(StoreContext);
   const refreshRef = useRef(onRefresh);

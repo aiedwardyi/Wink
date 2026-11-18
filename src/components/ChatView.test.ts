@@ -12,7 +12,7 @@ import { DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_RESERVE_PX } from "@/lib/phone-header";
 import { SIDEBAR_SIDE_KEY } from "@/lib/sidebar-preferences";
 import { closeShow, useWorkersThread } from "@/lib/show-pane";
-import { ChatView, clearLivePaneCache } from "./ChatView";
+import { ChatView, clearLivePaneCache, ErrorRow } from "./ChatView";
 import { GroupView } from "./GroupView";
 import { ShowPane } from "./ShowPane";
 import type { TurnStreamState } from "@/lib/turn-stage";
@@ -1227,6 +1227,41 @@ describe("agy sign-in error bubble", () => {
 });
 
 describe("error row Retry", () => {
+  it("guides and detects a copied Windows install from a failed turn", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const previous = window.ogb;
+    const openEngineInstall = vi.fn(async () => "copied" as const);
+    Object.assign(window, { ogb: { platform: "win32", openEngineInstall } });
+    const missing: InstanceInfo = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
+      models: { default: "opus", options: [] }, snapshot: { state: "unavailable" }, install: { command: { win32: "install-claude" } } };
+    const fetchMock = vi.fn(async (url: string) => url.startsWith("/api/instances")
+      ? Response.json({ instances: [url.includes("refresh=1") ? { ...missing, snapshot: { state: "available", authenticated: true } } : missing] })
+      : new Response("{}", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    function Harness() {
+      const { state } = useStore();
+      return createElement(ErrorRow, { message: "Claude CLI not found", botId: botA.id, setupInstance: state.instances[0] ?? missing, onRetry: () => {} });
+    }
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    vi.useFakeTimers();
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(Harness))));
+      await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Open Install in Terminal")!.click());
+      expect(openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2300); });
+      expect(host.textContent).toContain("Paste the command in Terminal and press Enter.");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2700); });
+      expect(host.textContent).not.toContain("Open Install in Terminal");
+      expect(host.textContent).toContain("Retry");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      window.ogb = previous;
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["claudeAgent", "codex"])("retains reset and Retry for an untracked %s usage limit", async (driverKind) => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));

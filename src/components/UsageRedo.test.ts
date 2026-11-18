@@ -8,11 +8,11 @@ import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import { setUsageMode } from "@/lib/usage-preferences";
 
-const h = vi.hoisted(() => ({ board: null as UsageBoard | null, instances: [] as any[], api: vi.fn(), dispatch: vi.fn() }));
+const h = vi.hoisted(() => ({ board: null as UsageBoard | null, instances: [] as any[], api: vi.fn(), dispatch: vi.fn(), refreshInstances: vi.fn(async () => {}) }));
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
   api: h.api,
-  useStore: () => ({ state: { instances: h.instances, bots: [], terminalPanes: {} }, dispatch: h.dispatch, refreshInstances: async () => {} }),
+  useStore: () => ({ state: { instances: h.instances, bots: [], terminalPanes: {} }, dispatch: h.dispatch, refreshInstances: h.refreshInstances }),
 }));
 vi.mock("@/lib/use-usage-board", () => ({ useUsageBoard: () => ({ board: h.board, status: "ready", pending: {}, failed: new Set() }) }));
 vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typeof import("@/lib/usage-auto-refresh")>(), useAutoRefresh: () => {} }));
@@ -328,6 +328,18 @@ it("refreshes through the existing refresh API, including Muse", async () => {
   await click("[data-usage-refresh]");
   expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse", { method: "POST" });
   expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
+});
+
+it("rechecks a signed-out base login when Refresh is pressed", async () => {
+  const base = h.instances.find((each) => each.instanceId === "claude")!;
+  base.accountOf = "claude";
+  base.accountState = "stopped";
+  base.snapshot = { state: "available", authenticated: false };
+  h.refreshInstances.mockClear();
+  await mount();
+  await click("[data-usage-refresh]");
+  expect(h.refreshInstances).toHaveBeenCalledExactlyOnceWith("passive");
+  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
 });
 
 it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", async (locale) => {
