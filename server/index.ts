@@ -2449,12 +2449,13 @@ function saveMemoryLedger(): void {
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
 async function syncMemoryPass(botId: string): Promise<boolean> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
-  if (!store.bot(botId)) return false;
+  if (!store.bot(botId) || botHasActiveTurn(botId)) return false;
   const folder = profileSyncSettings.folder;
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return false;
   if (memorySyncUnchanged(folder, botSyncId, workspaceDir(botId), memorySyncLedger)) return false;
   const snapshots = await readMemorySnapshots(folder, botSyncId);
+  if (botHasActiveTurn(botId)) return false;
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
   // the poll runs for every idle bot, so only changed files refresh the check
@@ -4628,6 +4629,7 @@ bus.subscribe((event: RuntimeEvent) => {
   peerTurnSource.delete(event.threadId);
   settlePeerUserReplies(event.threadId, event.turnId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
+  if (sourceBotId) syncMemory(sourceBotId);
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
     turnRegistry.settle(event.turnId);
@@ -4664,7 +4666,6 @@ bus.subscribe((event: RuntimeEvent) => {
   followPendingSyncImports();
   const settledBot = store.botByThread(event.threadId);
   if (!settledBot) return;
-  syncMemory(settledBot.id);
   publishSettledTurn(event.threadId);
 });
 

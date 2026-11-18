@@ -313,6 +313,10 @@ export class FakeRelay extends EventEmitter {
             return socket.destroy();
           }
           const account = msg.account ? verifyAccountTicket(msg.account, this.operatorKey) : null;
+          if (account?.ok && account.value.label !== msg.label) {
+            this.record("control:bad-auth");
+            return socket.destroy();
+          }
           control = { label: msg.label, session: newNonce(), poolToken: newNonce(), socket, pokes: msg.pokes === true, subHash: account?.ok ? account.value.subHash : null };
           const old = this.controls.get(msg.label);
           this.controls.set(msg.label, control);

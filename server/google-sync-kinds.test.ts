@@ -223,7 +223,7 @@ describe("Google reader kind recovery", () => {
     expect(readSyncOperations(join(dataDir, "google-drive")).operations).toHaveLength(1);
   });
 
-  it("applies a trash mark skipped on the old reader once the PC updates", async () => {
+  it.each([false, true])("applies a skipped trash mark on the quiet tick with pokes=%s", async (pokes) => {
     const dataDir = await joined();
     writeFileSync(join(dataDir, RECEIPT), JSON.stringify({ ...receipt(dataDir), readerRevision: 1 }));
     const { path, operation } = await publish({ trashed: true });
@@ -232,12 +232,32 @@ describe("Google reader kind recovery", () => {
       client: createDriveClient({ getAccessToken: async () => "fake-access", fetch: drive.fetch }) }).syncOnce();
     expect(summary.skipped).toContain(path);
     expect(existsSync(join(dataDir, "google-drive", path))).toBe(false);
-    const sync = boot(dataDir, () => true);
+    const sync = boot(dataDir, () => true, { passMs: 300 });
     sync.resume();
     await settle(sync);
     window();
-    await vi.advanceTimersByTimeAsync(30_000);
+    const target = join(dataDir, "google-drive", path);
+    if (pokes) {
+      for (let n = 0; n < 3; n++) {
+        await vi.advanceTimersByTimeAsync(90);
+        sync.poked();
+        await sync.idle();
+      }
+    }
+    await vi.advanceTimersByTimeAsync(pokes ? 29 : 299);
+    expect(existsSync(target)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await sync.idle();
+    const onTime = existsSync(target);
+    if (pokes) {
+      await vi.advanceTimersByTimeAsync(60);
+      for (let n = 3; n < 9; n++) {
+        sync.poked();
+        await sync.idle();
+        if (n < 8) await vi.advanceTimersByTimeAsync(90);
+      }
+    }
+    expect(onTime).toBe(true);
     expect(starts()).toHaveLength(1);
     expect(drive.downloads).toHaveLength(1);
     expect(readSyncOperations(join(dataDir, "google-drive")).operations).toEqual([operation]);
