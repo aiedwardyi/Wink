@@ -6,11 +6,15 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
+import { createBotChatRoutes } from "../../server/bot-chat-routes";
+import { Store as ServerStore } from "../../server/store";
 
 import { Composer } from "./Composer";
 
@@ -462,6 +466,43 @@ describe("pinned ask_user question", () => {
     expect(pin()).toBeNull();
     expect(dot()).toBeNull();
     expect(textarea()?.disabled).toBe(false);
+  });
+
+  it("saves a row dismissal and sends the same sync row as an answer", async () => {
+    const server = new ServerStore(() => ({ instanceId: "claude", model: "opus" }));
+    const owner = server.createBot({}, { seedMessages: false });
+    const createAsk = () => server.appendMessage(owner.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Which?", options: ["Yes"], askUser: true, staysOpen: true } });
+    const dismissed = createAsk();
+    const writes: unknown[] = [];
+    server.setSyncWriter((threadId, mutations, write) => { writes.push([threadId, mutations]); write(); });
+    const routes = createBotChatRoutes({ store: server, clientMessage: (value: unknown) => value } as Parameters<typeof createBotChatRoutes>[0]);
+    const patch = async (id: string, body: object) => {
+      let status = 0;
+      const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+      await routes.patchCard(Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", owner.id, id] as RegExpMatchArray);
+      expect(status).toBe(200);
+    };
+    const uiBot = { ...bot([dismissed as Message]), id: owner.id, threadId: owner.threadId };
+    await mount({ bot: uiBot });
+    const fetch = vi.mocked(globalThis.fetch);
+    const original = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (url, init) => {
+      if (init?.method === "PATCH") {
+        await patch(dismissed.id, JSON.parse(String(init.body)));
+        return Response.json({});
+      }
+      return original(url, init);
+    });
+    await shrink();
+    await act(async () => row()!.querySelector<HTMLButtonElement>('button:has(svg.lucide-x)')!.click());
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    const reloaded = new ServerStore(() => ({ instanceId: "claude", model: "opus" }));
+    expect(reloaded.messagesFor(owner.threadId).find((m) => m.id === dismissed.id)?.card?.dismissed).toBe(true);
+    expect(writes[0]).toEqual([owner.threadId, [{ kind: "row", value: expect.objectContaining({ id: dismissed.id, card: expect.objectContaining({ dismissed: true }) }) }]]);
+    const answered = createAsk();
+    writes.length = 0;
+    await patch(answered.id, { answered: "Yes" });
+    expect(writes[0]).toEqual([owner.threadId, [{ kind: "row", value: expect.objectContaining({ id: answered.id, card: expect.objectContaining({ answered: "Yes" }) }) }]]);
   });
 
   it("hides on a sideways swipe across the row without dismissing", async () => {
