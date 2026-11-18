@@ -511,7 +511,7 @@ describe("whats new card", () => {
       const durations: number[] = [];
       for (let offset = 12; offset + 8 <= data.length; ) {
         const size = data.readUInt32LE(offset + 4);
-        if (data.toString("ascii", offset, offset + 4) === "ANMF") durations.push(data.readUIntLE(offset + 20, 3));
+        if (data.toString("ascii", offset, offset + 4) === "ANMF" && offset + 23 <= data.length) durations.push(data.readUIntLE(offset + 20, 3));
         offset += 8 + size + (size % 2);
       }
       if (durations.length === 0) continue;
