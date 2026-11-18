@@ -785,7 +785,8 @@ export function TerminalWorkspace({
             <SquareX size={16} />
           </button>
         )}
-        <WorkerChip name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
+        {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
+        <WorkerChip key={String(visible)} name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
       </header>
       {showProjectBanner && (
         <div role="status" className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-inset px-5 py-1.5 text-[12px] text-ink">

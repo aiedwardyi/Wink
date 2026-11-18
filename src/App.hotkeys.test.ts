@@ -261,6 +261,28 @@ describe("worker list shortcut", () => {
     }
   });
 
+  it("shuts the terminal's own list when the docked terminal closes", async () => {
+    const { host, press, unmount } = await mount();
+    const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+    try {
+      await backquote();
+      const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
+      const chip = await vi.waitFor(() => {
+        const found = overlay.querySelector<HTMLButtonElement>("[data-worker-strip]");
+        if (!found) throw new Error("no worker strip in the terminal");
+        return found;
+      }, { timeout: 5000 });
+      await act(async () => chip.click());
+      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
+      await backquote();
+      await backquote();
+      expect(overlay.getAttribute("data-open")).toBe("true");
+      expect(overlay.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
   it("leaves the worker list shut under App Settings", async () => {
     const { press, unmount } = await mount();
     try {
