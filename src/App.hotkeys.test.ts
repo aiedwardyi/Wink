@@ -63,7 +63,7 @@ describe("phone drawer menu button", () => {
     const button = menuButtonSource();
     const dot = button.match(/<span data-menu-unread[^>]*className=\{`([^`]*)`\}/)?.[1] ?? "";
     expect(dot).toContain("absolute ${DRAWER_BADGE}");
-    expect(dot.split(/\s+/)).toEqual(expect.arrayContaining(["h-2.5", "w-2.5", "rounded-full", "bg-accent"]));
+    expect(dot.split(/\s+/)).toEqual(expect.arrayContaining(["h-2", "w-2", "rounded-full", "bg-accent"]));
     expect(dot).not.toMatch(/opacity|invisible|hidden|sr-only/);
     expect(button).toContain("data-terminal-covers={terminalCovers || undefined}");
   });

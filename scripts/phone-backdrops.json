@@ -16,12 +16,12 @@
       "360": {
         "menu": "#03070b",
         "toggle": "#03070a",
-        "dot": "#04080b"
+        "dot": "#03070d"
       },
       "390": {
         "menu": "#03070b",
         "toggle": "#03070b",
-        "dot": "#03070a"
+        "dot": "#02070d"
       }
     }
   },
@@ -30,24 +30,24 @@
       "360": {
         "menu": "#cbf0eb",
         "toggle": "#d7fcf6",
-        "dot": "#ccf0eb"
+        "dot": "#cdf0eb"
       },
       "390": {
         "menu": "#ccf0eb",
         "toggle": "#ccf1ec",
-        "dot": "#ccf0eb"
+        "dot": "#cdf0eb"
       }
     },
     "right": {
       "360": {
         "menu": "#d2f7f2",
         "toggle": "#d3f4f0",
-        "dot": "#ccf1ec"
+        "dot": "#ccf2ed"
       },
       "390": {
         "menu": "#cdf1ec",
         "toggle": "#defffc",
-        "dot": "#cff4ef"
+        "dot": "#d0f5f0"
       }
     }
   },
@@ -73,7 +73,7 @@
       "390": {
         "menu": "#0e3f48",
         "toggle": "#124f58",
-        "dot": "#0f424b"
+        "dot": "#0f434c"
       }
     }
   },
@@ -120,12 +120,12 @@
       "360": {
         "menu": "#04081b",
         "toggle": "#000819",
-        "dot": "#001325"
+        "dot": "#01132b"
       },
       "390": {
         "menu": "#001225",
         "toggle": "#010a1c",
-        "dot": "#01101f"
+        "dot": "#000f1e"
       }
     }
   },
@@ -146,12 +146,12 @@
       "360": {
         "menu": "#b8afa3",
         "toggle": "#ece1d1",
-        "dot": "#beb5a9"
+        "dot": "#c3baad"
       },
       "390": {
         "menu": "#bab1a5",
         "toggle": "#ece1d1",
-        "dot": "#c0b7ab"
+        "dot": "#c5bcae"
       }
     }
   },
@@ -198,7 +198,7 @@
       "360": {
         "menu": "#1d212b",
         "toggle": "#202530",
-        "dot": "#1d202a"
+        "dot": "#1c202a"
       },
       "390": {
         "menu": "#1d212a",
@@ -212,24 +212,24 @@
       "360": {
         "menu": "#090c1b",
         "toggle": "#483459",
-        "dot": "#0a0c1d"
+        "dot": "#0b0c1c"
       },
       "390": {
         "menu": "#060914",
         "toggle": "#48345b",
-        "dot": "#060916"
+        "dot": "#060915"
       }
     },
     "right": {
       "360": {
         "menu": "#483456",
         "toggle": "#322e54",
-        "dot": "#4f3758"
+        "dot": "#503756"
       },
       "390": {
         "menu": "#3d375b",
         "toggle": "#322e54",
-        "dot": "#503759"
+        "dot": "#4c3856"
       }
     }
   }

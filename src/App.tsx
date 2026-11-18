@@ -786,7 +786,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       className={`absolute z-30 rounded-md p-1.5 text-ink-secondary hover:text-ink md:hidden ${sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT}${menuAsking ? " needs-you-glow" : ""}${menuArrival.playing ? " arrival-glow" : ""}`}
     >
       <Menu size={18} />
-      {menuUnread && <span data-menu-unread aria-hidden="true" className={`absolute ${DRAWER_BADGE} h-2.5 w-2.5 rounded-full bg-accent`} />}
+      {menuUnread && <span data-menu-unread aria-hidden="true" className={`absolute ${DRAWER_BADGE} h-2 w-2 rounded-full bg-accent`} />}
     </button>
   );
 
