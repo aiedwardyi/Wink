@@ -400,7 +400,7 @@ it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row
 
 it("the tab row never scrolls up and down: the phone tap area hangs past the buttons and would lift the selected pill off center", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
-  expect(css.match(/^\.show-pane-tabs \{[^}]*\}/m)![0]).toMatch(/overflow-y: (hidden|clip)/);
+  expect(css).toMatch(/^\.show-pane-tabs \{[^}]*overflow-y: (hidden|clip)/m);
 });
 
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
