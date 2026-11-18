@@ -11,7 +11,8 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { startScene, type SceneHost } from "@/scenes/scene-host";
-import { loadScene, sceneOf, type SceneId } from "./ChatScene";
+import { sceneOf, type SceneId } from "./ChatScene";
+import { startTogether } from "./mini-scene-batch";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
@@ -26,25 +27,25 @@ function MiniScene({ scene }: { scene: SceneId }) {
     if (reducedMotion()) return;
     let live = true;
     let host: SceneHost | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const start = () =>
-      void loadScene(scene)
-        .then((module) => {
-          const tile = layer.current?.closest<HTMLElement>("[data-skin]");
-          if (!live || !layer.current || !tile) return;
+    const cancel = startTogether({
+      scene,
+      start(module) {
+        const tile = layer.current?.closest<HTMLElement>("[data-skin]");
+        if (!live || !layer.current || !tile) return;
+        try {
           // A loop is the longest runner, so every tile also rests on blur.
           host = startScene(layer.current, { ...module, pauseOnBlur: true }, document.documentElement, tile);
           host.emit({ name: "loop" });
           layer.current.dataset.live = "";
-        })
-        // A scene that cannot start (no canvas, a stale chunk) leaves the still tile.
-        .catch(() => host?.stop());
-    // After the first paint: a first shader compile must not hold up opening Themes.
-    const frame = requestAnimationFrame(() => { timer = setTimeout(start, 0); });
+        } catch {
+          // A scene that cannot start (no canvas) leaves the still tile.
+          host?.stop();
+        }
+      },
+    });
     return () => {
       live = false;
-      cancelAnimationFrame(frame);
-      clearTimeout(timer);
+      cancel();
       host?.stop();
     };
   }, [scene]);
