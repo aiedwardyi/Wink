@@ -213,7 +213,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     close();
     const abort = new AbortController();
     stream = abort;
-    const qs = sessionId ? `?${new URLSearchParams({ sessionId })}` : "";
+    const qs = `?${new URLSearchParams(sessionId ? { sessionId } : { main: "1" })}`;
     return new Promise((resolve, reject) => {
       let first = true;
       void (async () => {
@@ -372,8 +372,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     panes = now;
   };
 
-  const readBot = async (id: string) => {
-    const snapshot = await request(`/api/bots/${encodeURIComponent(id)}/terminal`);
+  const readBot = async (id: string, options?: { panesOnly?: boolean }) => {
+    const snapshot = await request(`/api/bots/${encodeURIComponent(id)}/terminal${options?.panesOnly ? "?panes=1" : ""}`);
     if (id === botId && Array.isArray(snapshot?.panes)) panes = new Set(snapshot.panes.filter((pane: { main: boolean }) => !pane.main).map((pane: { sessionId: string }) => pane.sessionId));
     return snapshot;
   };
@@ -395,13 +395,6 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
         remote = snapshot.cols && snapshot.rows ? { cols: snapshot.cols, rows: snapshot.rows } : null;
         if (!live()) close();
       };
-      if (!input.sessionId) {
-        // The host attaches a bare open to any live pane, so a bot with only workers needs its main shell first.
-        const roster = await request(`${base}?panes=1`).catch(() => null);
-        const list: Array<{ main: boolean }> = Array.isArray(roster?.panes) ? roster.panes : [];
-        if (list.length && !list.some((pane) => pane.main)) await request(`${base}/start`, { method: "POST" });
-        if (mine !== epoch) throw new Error("Terminal open was canceled");
-      }
       let snapshot: Snapshot;
       try {
         snapshot = await connect(input.sessionId, adopt);
