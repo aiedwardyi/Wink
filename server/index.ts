@@ -70,7 +70,9 @@ import { hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
+import { roomById } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
+import { roomCode } from "./rooms/invites.ts";
 import { joinedRooms, myRoomBotThreads, roomTaskThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
@@ -483,7 +485,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { BotTrash, type TrashEntry } from "./bot-trash.ts";
 import { createBotTrashActions } from "./bot-trash-actions.ts";
 import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "./bot-trash-sync.ts";
-import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
+import { importRooms, joinTeamRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
 import { createRoomThreads } from "./room-thread-sync.ts";
 import { syncHold } from "./sync-hold.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
@@ -3588,10 +3590,18 @@ let profileSyncPassed = false;
 const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
 const roomSyncHost = (): RoomSyncHost => ({
   dataDir: DATA_DIR, store, settings: () => profileSyncSettings, now: Date.now, working: groupIsWorking, syncing: (threadId) => threadSyncV2?.holds(threadId) ?? false,
+  invite: (roomId) => {
+    const relayHost = phoneAccess.presenceHost();
+    if (!relayHost || !roomById(roomId)) return null;
+    const code = roomCode(roomId);
+    return `wkr1:${relayHost}:${code.id}.${code.secret}`;
+  },
+  join: (code) => guestClient.join(code),
 });
 
 function publishRoomsSafely(folder: string): number {
   try {
+    joinTeamRooms(roomSyncHost());
     return publishRooms(roomSyncHost(), folder);
   } catch (error) {
     console.warn("room sync: publish failed", error);

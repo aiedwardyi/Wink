@@ -1,7 +1,8 @@
 // Room records between one user's PCs. A room travels as `room` ops under its
 // own group id, in `.room` files older builds never read. Only route edits
 // publish; imports, and values a PC derived (members it lacks, a normalized
-// responder), never do. Team rooms stay on their host.
+// responder), never do. Team rooms stay on their host; its other PCs get the
+// room's code in a pointer op and take a guest seat once.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,6 +28,10 @@ export interface RoomSyncHost {
   working(group: GroupRecord): boolean;
   /** Chat sync holds this thread and has not taken its delete. */
   syncing?(threadId: string): boolean;
+  /** The code of a team room this PC hosts, or null while it cannot be reached. */
+  invite?(roomId: string): string | null;
+  /** Joins a team room as a guest seat. */
+  join?(code: string): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
 }
 
 const MEMBER = "member.";
@@ -48,11 +53,15 @@ const fileSchema = z.object({
   applied: z.record(z.string(), z.string()).catch({}),
   pending: z.array(pendingSchema).catch([]),
   unresolved: z.record(z.string(), z.object({ members: z.array(z.string()), responder: z.string().optional() })).catch({}),
+  /** The code each team room hosted here last sent. */
+  invites: z.record(z.string(), z.string()).catch({}),
+  /** Team rooms hosted on another PC: once `joined` never again, a `refused` code is not tried twice. Kept across folders. */
+  joins: z.record(z.string(), z.object({ code: z.string(), state: z.enum(["waiting", "joined", "refused"]) })).catch({}),
 });
 type RoomSyncFile = z.infer<typeof fileSchema>;
 
 const fileOf = (host: RoomSyncHost) => join(host.dataDir, ROOM_SYNC_FILE);
-const empty = (scope = ""): RoomSyncFile => ({ scope, marked: [], applied: {}, pending: [], unresolved: {} });
+const empty = (scope = ""): RoomSyncFile => ({ scope, marked: [], applied: {}, pending: [], unresolved: {}, invites: {}, joins: {} });
 
 function load(host: RoomSyncHost): RoomSyncFile {
   let raw: string;
@@ -73,7 +82,7 @@ function load(host: RoomSyncHost): RoomSyncFile {
 function scoped(host: RoomSyncHost, folder: string): RoomSyncFile {
   const file = load(host);
   const scope = `${host.settings().workspaceId}:${folder}`;
-  return file.scope === scope ? file : { ...empty(scope), pending: file.pending };
+  return file.scope === scope ? file : { ...empty(scope), pending: file.pending, joins: file.joins };
 }
 
 function save(host: RoomSyncHost, file: RoomSyncFile): void {
@@ -196,9 +205,15 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
       if (Object.keys(held).length) file.pending.push({ groupId: group.id, at: group.createdAt, changes: held });
     }
   }
-  // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow
   for (const group of store.groups) {
-    if (group.hosted && marked.has(group.id) && write(group.id, { hosted: true }, host.now())) forget(file, marked, group.id);
+    if (!group.hosted) continue;
+    const invite = host.invite?.(group.hosted.roomId) ?? null;
+    const sent = invite === null || file.invites[group.id] === invite;
+    const changes = invite ? { hosted: true, invite } : { hosted: true };
+    // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow
+    if ((!marked.has(group.id) && sent) || !write(group.id, changes, host.now())) continue;
+    forget(file, marked, group.id);
+    if (invite) file.invites[group.id] = invite;
   }
   const left: Pending[] = [];
   for (const entry of [...file.pending].sort((a, b) => a.at - b.at)) {
@@ -278,6 +293,9 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
       }
       if (group) removeRoom(store, group);
       forget(file, marked, id);
+      const join = file.joins[id];
+      const invite = z.string().optional().catch(undefined).parse(remote.invite);
+      if (invite && join?.state !== "joined" && join?.code !== invite) file.joins[id] = { code: invite, state: "waiting" };
       continue;
     }
     if (!group) {
@@ -342,4 +360,25 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
   file.marked = [...marked];
   if (JSON.stringify(file) !== before) save(host, file);
   return { deferred };
+}
+
+const joining = new Set<string>();
+
+/** Takes the guest seat of each team room waiting here, one try per pass; a host that is off is tried again on the next. */
+export function joinTeamRooms(host: RoomSyncHost): void {
+  const { join } = host;
+  if (!join) return;
+  for (const [groupId, { code, state }] of Object.entries(load(host).joins)) {
+    const key = `${host.dataDir}\n${groupId}`;
+    if (state !== "waiting" || joining.has(key)) continue;
+    joining.add(key);
+    void join(code).then((result) => {
+      const later = !result.ok && (result.status >= 500 || result.status === 429 || result.status === 400 || result.error === "room is busy");
+      const file = load(host);
+      const entry = file.joins[groupId];
+      if (later || entry?.code !== code || entry.state !== "waiting") return;
+      entry.state = result.ok ? "joined" : "refused";
+      save(host, file);
+    }).catch((error) => console.warn(`room sync: join of room ${groupId} failed`, error)).finally(() => joining.delete(key));
+  }
 }
