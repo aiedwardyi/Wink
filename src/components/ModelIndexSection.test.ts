@@ -971,10 +971,20 @@ describe("model index provider marks", () => {
     expect(host.querySelector('circle[style*="--mi-other"]')).not.toBeNull();
   });
 
-  it("renders marks in the phone list and chart while keeping desktop icons", async () => {
+  it("contrasts ink marks with pressed chip backgrounds", async () => {
+    for (const provider of ["openai", "xai", "meta"] as const) {
+      await act(async () => root.render(createElement(ProviderChips, { providers: [provider], value: provider, onChange: () => undefined, t })));
+      const chip = host.querySelector<HTMLButtonElement>('[aria-pressed="true"]')!;
+      const mark = chip.querySelector("svg")!;
+      expect(chip.className).toContain("bg-ink");
+      expect(mark.parentElement!.style.getPropertyValue("--color-ink")).toBe("var(--color-panel)");
+    }
+  });
+
+  it("renders marks in desktop and phone charts and the phone list", async () => {
     const desktop = host.querySelector("[data-mi-badge]")!;
-    expect(desktop.querySelector("svg")).toBeNull();
-    expect(desktop.querySelector("image[href*='icon-']")).not.toBeNull();
+    expect(desktop.querySelector("svg")).not.toBeNull();
+    expect(desktop.querySelector("image")).toBeNull();
     vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
     try {
       await mount();
