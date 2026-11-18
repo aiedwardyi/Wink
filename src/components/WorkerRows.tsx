@@ -18,11 +18,11 @@ import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { trackScreen } from "@/lib/usage-stats";
 
-// `ink` is the number on a count badge filled with `dot`: bg-accent and bg-danger carry their own ink (styles.css), the other fills do not.
+// `ink` is the number on a count badge filled with `dot`. "" only where the fill already carries one: bg-accent (styles.css; Midnight overrides it for the badge).
 export const WORKER_STATUS = {
   working: { key: "workers.working", text: "text-accent", dot: "bg-accent", ink: "" },
   waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning", ink: "text-app" },
-  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger", ink: "" },
+  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger", ink: "text-app" },
   done: { key: "workers.done", text: "text-success", dot: "bg-success", ink: "text-app" },
   ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary", ink: "text-app" },
 } as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string; ink: string }>;

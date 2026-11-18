@@ -86,16 +86,21 @@ function contrast(fgHex, bgHex) {
 }
 
 // The side pane toggle's count badge fills with the first worker's state color, so its number
-// needs an ink for every state. bg-accent and bg-danger carry theirs (the rules at the bottom of
-// styles.css); any other fill needs a text-<token> utility, and only @theme tokens have one.
+// needs an ink for every state. bg-accent carries its own (the rule at the bottom of styles.css, which
+// a skin may override for the badge); any other fill needs a text-<token> utility, and only @theme
+// tokens have one.
 const workerRows = readFileSync(join(root, "src/components/WorkerRows.tsx"), "utf8");
 const themeTokens = new Set([...(css.match(/@theme\s*\{([^}]*)\}/)?.[1] ?? "").matchAll(/--color-([\w-]+)\s*:/g)].map(([, name]) => name));
 const workerStatus = workerRows.match(/export const WORKER_STATUS = \{[\s\S]*?\} as const/)?.[0] ?? "";
 const BADGE_PAIRS = [...workerStatus.matchAll(/dot: "bg-([\w-]+)", ink: "(?:text-([\w-]+))?"/g)].map(([, fill, ink]) => {
-  if (!ink && fill !== "accent" && fill !== "danger") throw new Error(`WORKER_STATUS bg-${fill} has no ink: only bg-accent and bg-danger carry one, so its badge number would inherit the toggle's gray`);
-  if (ink && !themeTokens.has(ink)) throw new Error(`WORKER_STATUS ink text-${ink} is not a utility: only @theme colors have one (accent-ink and danger-ink come from the .bg-accent and .bg-danger rules)`);
+  if (!ink && fill !== "accent") throw new Error(`WORKER_STATUS bg-${fill} has no ink: only bg-accent carries one, so its badge number would inherit the toggle's gray`);
+  if (ink && !themeTokens.has(ink)) throw new Error(`WORKER_STATUS ink text-${ink} is not a utility: only @theme colors have one (accent-ink comes from the .bg-accent rule)`);
   return [`--color-${ink ?? `${fill}-ink`}`, `--color-${fill}`, 4.5];
 });
+const badgeInk = new Map();
+for (const [, skin, fill, token] of css.matchAll(/\[data-skin="([\w-]+)"\]\s+\[data-worker-badge\]\.bg-([\w-]+)\s*\{\s*color:\s*var\((--color-[\w-]+)\)/g)) badgeInk.set(skin, (badgeInk.get(skin) ?? new Map()).set(`--color-${fill}`, token));
+const showPaneButton = readFileSync(join(root, "src/components/ShowPaneButton.tsx"), "utf8");
+if (!/data-worker-badge[^\n]*WORKER_STATUS\[first\.state\]\.ink/.test(showPaneButton)) throw new Error("the badge in src/components/ShowPaneButton.tsx must take WORKER_STATUS[first.state].ink: without it the number inherits the toggle's gray whatever the table says");
 const statusCount = (workerStatus.match(/\bkey: "workers\./g) ?? []).length;
 if (BADGE_PAIRS.length === 0 || BADGE_PAIRS.length !== statusCount) throw new Error(`WORKER_STATUS in src/components/WorkerRows.tsx: ${BADGE_PAIRS.length} of ${statusCount} states have a \`dot: "bg-x", ink: "..."\` pair, so the badge number cannot be measured on the rest`);
 
@@ -108,7 +113,6 @@ const PAIRS = [
   ...SURFACES.map((s) => ["--color-ink-secondary", s, 4.5]),
   ["--color-ink", "--color-bubble-user", 4.5],
   ["--color-accent-ink", "--color-accent", 4.5],
-  ...BADGE_PAIRS,
   ["--color-danger-ink", "--color-danger", 4.5],
   ["--color-accent-text", "--color-app", 4.5],
   ["--color-accent-text", "--color-panel", 4.5],
@@ -336,7 +340,8 @@ if (isDirectRun()) {
     const problems = [];
     const missing = [];
     let measured = 0;
-    const pairs = [...PAIRS];
+    const badgePairs = BADGE_PAIRS.map(([fg, bg, min]) => [badgeInk.get(id)?.get(bg) ?? fg, bg, min]);
+    const pairs = [...PAIRS, ...badgePairs];
     if (isLightSkin(tokens) || SYNTAX_SKINS.has(id)) {
       const skinRemaps = remaps.get(id) ?? new Map();
       for (const hex of emitted) {
@@ -348,7 +353,8 @@ if (isDirectRun()) {
         pairs.push([token, CODE_BLOCK_BG, SYNTAX_MIN]);
       }
     }
-    for (const [fg, bg, min] of pairs) {
+    for (const pair of pairs) {
+      const [fg, bg, min] = pair;
       // A pair we cannot measure is reported, never silently skipped: an
       // unmeasured pair used to be counted as a passing one.
       if (!tokens[fg] || !tokens[bg]) {
@@ -357,7 +363,7 @@ if (isDirectRun()) {
       }
       measured++;
       const ratio = contrast(tokens[fg], tokens[bg]);
-      if (ratio < min) problems.push({ fg, bg, ratio, min });
+      if (ratio < min) problems.push({ fg, bg, ratio, min, badge: badgePairs.includes(pair) });
     }
     const iconProblems = await sceneIconProblems(id, tokens, stills, sceneCss);
     const advisory = ADVISORY.has(id);
@@ -377,7 +383,8 @@ if (isDirectRun()) {
     for (const { fg, bg, ratio, min } of problems) {
       console.log(`    ${fg} on ${bg}: ${ratio.toFixed(2)}:1 (needs ${min}:1)`);
     }
-    if (!advisory) failed = true;
+    // the badge is ours, not upstream's: Midnight's advisory pass does not cover it
+    if (!advisory || problems.some((p) => p.badge)) failed = true;
   }
 
   process.exit(failed ? 1 : 0);

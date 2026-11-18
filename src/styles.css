@@ -5320,6 +5320,10 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
 .bg-danger {
   color: var(--color-danger-ink);
 }
+/* Midnight's white accent ink is 3.65:1; the 9px badge number needs 4.5:1. */
+[data-skin="midnight"] [data-worker-badge].bg-accent {
+  color: var(--color-app);
+}
 
 /* Disabled buttons.
    Upstream fades them with `disabled:opacity-40`. On a dark ground that holds:
