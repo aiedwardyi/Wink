@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { I18nProvider } from "@/lib/i18n";
 
@@ -60,7 +62,7 @@ describe("FoldClip", () => {
   it("keeps the capped box free of shared motion rules", async () => {
     const { watched } = await mount({ height: 60 });
     const clip = watched[0].parentElement!;
-    const css = readFileSync("src/motion.css", "utf8");
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../motion.css"), "utf8");
     const styled = new Set([...css.matchAll(/\[(data-[\w-]+)/g)].map((m) => m[1]));
     expect(styled.has("data-fold")).toBe(true);
     for (const name of clip.getAttributeNames()) expect(styled.has(name), name).toBe(false);
