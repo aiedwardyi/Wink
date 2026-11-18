@@ -500,6 +500,7 @@ export const Transcript = memo(function Transcript({
                     <CopyButton text={copyText} className="opacity-100" />
                     <button
                       type="button"
+                      disabled={Boolean(m.placeholder)}
                       onClick={() => onReply(m)}
                       aria-label={t("chat.replyToMessage")}
                       title={t("chat.replyToMessage")}

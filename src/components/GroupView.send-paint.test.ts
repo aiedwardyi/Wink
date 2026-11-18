@@ -87,6 +87,15 @@ describe("GroupView sent lines", () => {
     expect(shown("one more thing")).toBe(2);
   });
 
+  it("offers Reply on a sent line only once the server has it", async () => {
+    await mount();
+    const reply = () => [...host.querySelectorAll<HTMLButtonElement>('button[aria-label="Reply to message"]')].at(-1);
+    await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "one more thing", sendId: "s1" }));
+    expect(reply()?.disabled).toBe(true);
+    await frame({ kind: "message", threadId: "gt", message: line("u2", "one more thing", "s1") });
+    expect(reply()?.disabled).toBe(false);
+  });
+
   it("keeps one copy when the server's message lands", async () => {
     await mount();
     await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "one more thing", sendId: "s1" }));

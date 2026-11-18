@@ -457,7 +457,9 @@ describe("wiring", () => {
       groupView.match(
           /useEffect\(\(\) => \{\s*const el = scrollRef\.current;\s*if \(!el \|\| !followRef\.current\) return;\s*el\.scrollTo\(\{\s*top:\s*el\.scrollHeight\s*\}\);\s*previousScrollTop\.current\s*=\s*el\.scrollTop;\s*\},\s*\[([^\]]*)\]\)/,
       )?.[1] ?? "";
-    expect(roomPinDeps).toContain("group.messages.length");
+    // the shown list, so a line held for the server pins like any other
+    expect(roomPinDeps).toMatch(/(?<![\w.])messages\.length/);
+    expect(roomPinDeps).not.toContain("group.messages.length");
     expect(roomPinDeps).toContain("streaming");
     expect(roomPinDeps).toContain("group.busyBotId");
     expect(roomPinDeps).not.toMatch(/\bfollow\b/);
