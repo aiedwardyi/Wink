@@ -433,8 +433,8 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
   useEffect(() => {
     if (!shown) return;
     const onToggle = () => {
-      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W.
-      if (rootRef.current?.closest("[inert]")) return;
+      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W; a docked terminal leaves it to the Workers pane.
+      if (rootRef.current?.closest("[inert], [data-side]")) return;
       if (open && rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus();
       setOpen(!open);
     };

@@ -151,6 +151,29 @@
   to { transform: translateX(0); }
 }
 
+/* Desktop docks the terminal in the side pane's spot, a bit wider than the pane, with its slide in and out. */
+@media (min-width: 768px) {
+  .orbit-terminal-overlay[data-side] {
+    --dock: max(440px, 52%);
+    position: relative;
+    z-index: 20;
+    flex-shrink: 0;
+    width: var(--dock);
+    margin-left: calc(-1 * var(--dock));
+    transform: none;
+    border-left: 1px solid var(--color-hairline);
+    background: var(--color-app);
+    transition: visibility 0s var(--motion-fast);
+  }
+  .orbit-terminal-overlay[data-side][data-open="true"] {
+    margin-left: 0;
+    animation: panel-slide var(--motion-large) var(--ease-standard);
+  }
+  .orbit-terminal-overlay[data-side][data-open="true"] > * {
+    animation: fade-in var(--motion-moderate) var(--ease-standard);
+  }
+}
+
 :root[data-shape="soft"][data-skin^="tui"] {
   --radius-lg: 0.5rem;
   --radius-xl: 0.75rem;
