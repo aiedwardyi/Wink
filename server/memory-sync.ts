@@ -147,8 +147,13 @@ function readRaw(path: string): string | null {
   }
 }
 
+// partial: a snapshot file could not be read or parsed (a Drive placeholder), so a pass over it must not be taken as seen
+type Snapshots = Snapshot[] & { partial?: true };
+
+const partialOf = (snapshots: Snapshot[], partial: boolean): Snapshots => (partial ? Object.assign(snapshots, { partial: true as const }) : snapshots);
+
 // undefined when the folder cannot be listed; a snapshot Drive has not finished delivering is skipped until it parses
-function readSnapshots(dir: string): Snapshot[] | undefined {
+function readSnapshots(dir: string): Snapshots | undefined {
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -156,15 +161,18 @@ function readSnapshots(dir: string): Snapshot[] | undefined {
   } catch {
     return undefined;
   }
-  return names.sort().flatMap((name) => {
+  let partial = false;
+  const read = names.sort().flatMap((name) => {
     const device = SNAPSHOT_FILE.exec(name)?.[1];
     try {
       const parsed = device ? snapshotSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8"))) : undefined;
       return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
     } catch {
+      partial ||= Boolean(device);
       return [];
     }
   });
+  return partialOf(read, partial);
 }
 
 // a file written within this of the pass may change again under the same time and size, so it is never taken as seen
@@ -194,7 +202,7 @@ function passInputs(dirs: string[], workspace: string, local: string[], bot: Mem
   return hash(JSON.stringify([stats, bot.files, talkedAt, me])) ?? undefined;
 }
 
-async function readSnapshotsAsync(dir: string): Promise<Snapshot[] | undefined> {
+async function readSnapshotsAsync(dir: string): Promise<Snapshots | undefined> {
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -202,20 +210,22 @@ async function readSnapshotsAsync(dir: string): Promise<Snapshot[] | undefined> 
   } catch {
     return undefined;
   }
+  let partial = false;
   const read = await Promise.all(names.sort().map(async (name) => {
     const device = SNAPSHOT_FILE.exec(name)?.[1];
     try {
       const parsed = device ? snapshotSchema.safeParse(JSON.parse(await readFile(join(dir, name), "utf8"))) : undefined;
       return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
     } catch {
+      partial ||= Boolean(device);
       return [];
     }
   }));
-  return read.flat();
+  return partialOf(read.flat(), partial);
 }
 
 /** One bot's snapshots per sync root, read off the event loop; pass them to syncBotMemory as `snapshots`. */
-export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<Array<Snapshot[] | undefined>> {
+export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<Array<Snapshots | undefined>> {
   try {
     return await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId))));
   } catch {
@@ -353,7 +363,7 @@ function dropMergedCopies(workspace: string, files: Iterable<string>): string[] 
   return dropped;
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshot[] | undefined> };
+export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: Array<Snapshots | undefined> };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -514,6 +524,8 @@ export function syncBotMemory(
     writeFileAtomic(path, body, { mode: 0o600 });
   }
   const after = memoryFiles(workspace);
-  bot.seen = after && passInputs(dirs, workspace, after, { files: bot.files }, talkedAt, me, now);
+  // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen
+  const complete = !groups.some((group) => group?.partial) && !Object.values(results).includes("skipped");
+  bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files }, talkedAt, me, now) : undefined;
   return results;
 }
