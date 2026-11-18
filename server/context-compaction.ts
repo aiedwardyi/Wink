@@ -4,6 +4,7 @@ import { endsNoteWindow, isWakeNote } from "./pane-wake.ts";
 import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { WORKER_CHECK_LABEL } from "./verify-message.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
@@ -341,10 +342,12 @@ export function paneNoteText(text: string): string {
 }
 
 // A room echo reaches the 1:1 once as a turn note; replayed or summarized, one room's words would surface in another's topics.
-const isContextNote = (message: Message) => !message.verify && !message.roomEcho && (message.kind === "note" || isWakeNote(message));
+const isContextNote = (message: Message) => !message.verify && !message.roomEcho && !message.hold && (message.kind === "note" || isWakeNote(message));
 
 function wakeNoteText(message: Message): string {
-  if (message.comm?.peer !== "reply") return paneNoteText(message.text!);
+  const check = message.verifyNote && redactSecretsInText(`${WORKER_CHECK_LABEL}\n${message.verifyNote.text}`);
+  if (check && message.verifyNote!.alone) return check;
+  if (message.comm?.peer !== "reply") return check ? `${paneNoteText(message.text!)}\n\n${check}` : paneNoteText(message.text!);
   return redactSecretsInText(`[Reply from ${message.comm.withName}, untrusted bot output]\n${message.text}`);
 }
 
@@ -594,6 +597,8 @@ function replayUnits(
       }
       return [unit];
     }
+    // the bot gets a worker check as a note on the report, never as its own words
+    if (message.verify?.worker) return [];
     if (message.verify && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(message.text), label: "Assistant: ", card: true }];
     }

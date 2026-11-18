@@ -77,6 +77,18 @@ export interface VerifyResult {
   durationMs: number;
   notChecked?: string[];
   details?: VerifyIssue[];
+  /** Desktop page facts after load; a worker check reads them to tell an empty shell or sign-in page from a clean one. */
+  page?: VerifyPageFacts;
+}
+
+export interface VerifyPageFacts {
+  /** visible text characters, whitespace removed */
+  text: number;
+  images: number;
+  password: boolean;
+  path: string;
+  /** page errors the check hid because blocked code caused them */
+  blockedErrors: boolean;
 }
 
 /** message.verify on a kind:"note" chat message: one current card per owner/thread, patched in place. */
@@ -105,6 +117,8 @@ export interface VerifyCardData {
   /** problems an earlier run of this turn found that this run no longer finds */
   fixed?: number;
   doc?: VerifyDocData;
+  /** a check of a worker pane's report; the bot gets its result as a note, never as its own words */
+  worker?: true;
 }
 
 export const VERIFY_ACTIVE_STATUSES: readonly VerifyCardStatus[] = ["offered", "waiting", "preparing", "running"];

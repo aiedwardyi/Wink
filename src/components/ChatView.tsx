@@ -673,6 +673,8 @@ const MessagesList = memo(function MessagesList({
     return at < 0 ? -1 : items.findLastIndex((item) => (order.get(item.kind === "message" ? item.message.id : item.messages[0].id) ?? Infinity) <= at);
   }, [whatsNewAnchor, messages, items]);
   // answers whose ask is not the text row right above them quote it
+  // the newest worker check is the one the bot's running turn is fixing
+  const fixingCardId = useMemo(() => messages.findLast((m) => m.verify?.worker)?.id, [messages]);
   const quickAsks = useMemo(() => {
     const quickAsks = new Map<string, Message>();
     let prev: Message | undefined;
@@ -861,7 +863,7 @@ const MessagesList = memo(function MessagesList({
             case "note":
             case "launch": {
               const worker = workerAt.get(m.id);
-              if (worker === undefined) return m.verify ? <VerifyCard card={m.verify} threadId={bot.threadId} messageId={m.id} /> : m.kind === "note" ? <NoteMessage message={m} /> : null;
+              if (worker === undefined) return m.verify ? <VerifyCard card={m.verify} threadId={bot.threadId} messageId={m.id} fixerRunning={Boolean(bot.busy) && m.id === fixingCardId} /> : m.kind === "note" ? <NoteMessage message={m} /> : null;
               if (!worker) return null;
               const live = livePanes && worker.run.sessionId ? livePanes.has(worker.run.sessionId) : null;
               return <WorkerRow {...worker} live={live} onOpenTerminalPane={onOpenTerminalPane} open={open.has(worker.run.id)} onToggle={() => toggle(worker.run.id)} />;

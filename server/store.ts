@@ -147,6 +147,12 @@ export interface Message {
   routineRun?: RoutineRunCardData;
   /** note messages: the bot's current Live Verify card. */
   verify?: VerifyCardData;
+  /** A worker's DONE report held for its Live Verify check: no model input reads it. `to` is the copy that delivered it. */
+  hold?: { until: number; card?: string; to?: string };
+  /** Wink's delivery copy of a held report; the chat shows the original. */
+  heldFrom?: string;
+  /** Wink's check of a worker report, read by the bot under the note; an `alone` row is only this check. */
+  verifyNote?: { text: string; alone?: true };
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent

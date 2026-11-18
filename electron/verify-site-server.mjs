@@ -67,7 +67,9 @@ async function manifest(root, entry) {
       if (!inside(path, real)) throw error("outside-folders");
       const info = await stat(candidate);
       if (info.isDirectory()) { await walk(candidate, rel + "/", next); continue; }
-      if (!info.isFile() || !TYPES[extname(name).toLowerCase()]) throw error("not-a-site");
+      if (!info.isFile()) throw error("not-a-site");
+      // Build extras (robots.txt, sitemap.xml, a webmanifest) are left out of the site and 404.
+      if (!TYPES[extname(name).toLowerCase()]) continue;
       if (files.size >= 512) throw error("resource-limit");
       const file = await opened(path, rel);
       total += file.bytes.length;

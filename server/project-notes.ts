@@ -27,9 +27,9 @@ export function validateProjectNotes(input: unknown): ProjectNotesValidation {
   return { ok: true, path };
 }
 
-export function workerReportTimes(messages: ReadonlyArray<{ kind?: string; text?: string; at?: number }>): number[] {
+export function workerReportTimes(messages: ReadonlyArray<{ kind?: string; text?: string; at?: number; heldFrom?: string }>): number[] {
   return messages.flatMap((message) =>
-    message.kind === "note" && message.at !== undefined && REPORT_NOTE.test(message.text ?? "") ? [message.at] : []);
+    message.kind === "note" && !message.heldFrom && message.at !== undefined && REPORT_NOTE.test(message.text ?? "") ? [message.at] : []);
 }
 
 export function staleNotesNotice(input: {

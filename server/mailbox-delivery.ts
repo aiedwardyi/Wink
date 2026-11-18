@@ -3,6 +3,7 @@ import { mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, rea
 import type { createMailboxReceipts } from "./mailbox-receipts.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import type { MailboxIdentity } from "./mailbox.ts";
+import type { createVerifyWorkers } from "./verify-workers.ts";
 
 type Scope = { pane: string; bot: string; teacher: string };
 type Kind = "report" | "auto" | "stall" | undefined;
@@ -18,6 +19,8 @@ type Dependencies = {
   refresh: (text: string) => void;
   notify: (source: BotRecord, text: string) => void;
   arrived: (scope: Scope, source: BotRecord) => void;
+  /** Live Verify on a worker's DONE: a held note wakes the bot once its check ends. */
+  check?: Pick<ReturnType<typeof createVerifyWorkers>, "plan" | "held">;
 };
 
 export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencies) {
@@ -33,6 +36,7 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
   const input = parsed.data;
   let kind = input.kind;
   let accepted = false;
+  let held: { plan: Parameters<NonNullable<Dependencies["check"]>["held"]>[0]; message: Message } | undefined;
   const result = await deps.receipts.accept(scope, input.messageId, async key => {
     deps.refresh(input.text);
     if (kind === "auto") {
@@ -50,7 +54,11 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
     }
     const row: Omit<Message, "id" | "at"> = { role: "bot", kind: "note", text: note, origin: deps.origin };
     if (key) row.mailbox = { key };
+    const check = await deps.check?.plan(scope, input.text, kind, source);
+    if (check && "verifyNote" in check) row.verifyNote = check.verifyNote;
+    if (check && "hold" in check) row.hold = check.hold;
     const message = deps.store.appendMessage(source.threadId, row);
+    if (check && "plan" in check) held = { plan: check.plan, message };
     accepted = true;
     return { ok: true, id: message.id };
   }, input.kind !== "auto").catch(error => {
@@ -62,7 +70,8 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
     if (kind === "report") { await deps.attention(scope, kind, input.text); deps.reported(scope, input.text, source); }
     if (source.notifications !== false) deps.notify(source, input.text);
     if (kind !== "report") void deps.attention(scope, kind);
-    deps.arrived(scope, source);
+    if (held) deps.check!.held(held.plan, held.message);
+    else deps.arrived(scope, source);
   }
   return { status: 200, body: result };
 }

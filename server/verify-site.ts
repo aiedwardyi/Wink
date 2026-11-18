@@ -19,7 +19,7 @@ import { VERIFY_REASONS, verifyCardText, verifyProblems, verifyReplyText } from 
 import { createReplay, readReplay, replayThread, VERIFY_REPLAYS_DIR } from "./verify-replay.ts";
 
 // Same admission rules as ENGINE's site server (electron/verify-site-server.mjs): both sides must reach one revision.
-const SITE_TYPES = new Set([".html", ".htm", ".js", ".mjs", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".wav", ".mp3", ".mp4", ".webm", ".ttf", ".otf", ".woff", ".woff2"]);
+export const SITE_TYPES = new Set([".html", ".htm", ".js", ".mjs", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".wav", ".mp3", ".mp4", ".webm", ".ttf", ".otf", ".woff", ".woff2"]);
 const PRIVATE = /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig(?:\..*)?\.json|(?:vite|webpack|eslint|postcss|tailwind)\.config\..*|(?:credentials?|secrets?|tokens?)(?:[._-].*)?)$/i;
 const MAX_FILES = 512;
 const MAX_FOLDERS = 512;
@@ -60,7 +60,9 @@ export interface VerifySiteDeps {
   docRun?: (runId: string) => Pick<Run, "threadId" | "recording" | "card" | "saved"> | undefined;
 }
 
-interface Site { root: string; entry: string; revision: string; site: string }
+export interface Site { root: string; entry: string; revision: string; site: string; files?: number; built?: number }
+export interface WorkerStart { botId: string; threadId: string; root: string; target: string; episode: string; slotBy: number; runBy: number; signal: AbortSignal; onCard(messageId: string): void }
+export type WorkerReply = VerifyToolReply & { site?: Site };
 interface Run extends VerifyBridgeRun {
   threadId: string;
   turnId: string;
@@ -76,6 +78,8 @@ interface Run extends VerifyBridgeRun {
   streamEnd?: Record<string, unknown>;
   cancelled?: boolean;
   replySent?: Promise<void>;
+  /** a new card under this run's report, never an earlier card of its episode */
+  fresh?: boolean;
 }
 
 const within = (root: string, path: string) => {
@@ -88,9 +92,9 @@ const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).di
 const siteError = (code: VerifyErrorCode) => Object.assign(new Error(code), { code });
 
 /** The frozen revision: sorted [relative path, sha256] pairs of every admitted file. */
-async function siteRevision(root: string, entry: string): Promise<string> {
+async function siteRevision(root: string, entry: string): Promise<{ revision: string; files: number; built: number }> {
   const files: Array<[string, string]> = [];
-  let total = 0;
+  let total = 0, built = 0;
   let folders = 0;
   const walk = async (dir: string, prefix: string) => {
     if (++folders > MAX_FOLDERS) throw siteError("resource-limit");
@@ -105,8 +109,10 @@ async function siteRevision(root: string, entry: string): Promise<string> {
         await walk(path, `${rel}/`);
         continue;
       }
-      if (!info.isFile() || !SITE_TYPES.has(extname(name).toLowerCase())) throw siteError("not-a-site");
+      if (!info.isFile()) throw siteError("not-a-site");
+      if (!SITE_TYPES.has(extname(name).toLowerCase())) continue;
       if (files.length >= MAX_FILES || info.size > MAX_FILE_BYTES) throw siteError("resource-limit");
+      built = Math.max(built, info.mtimeMs);
       const handle = await open(path, "r");
       try {
         const bytes = await handle.readFile();
@@ -120,7 +126,7 @@ async function siteRevision(root: string, entry: string): Promise<string> {
   };
   await walk(root, "");
   if (!files.some(([rel]) => rel === entry)) throw siteError("not-a-site");
-  return sha256(JSON.stringify(files.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
+  return { revision: sha256(JSON.stringify(files.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))), files: files.length, built };
 }
 
 /** Canonical disk site or loopback app, or why it is refused. */
@@ -174,8 +180,8 @@ export async function resolveVerifySite(entryText: string, roots: string[], sign
   if (!root || !entry) return "not-a-site";
   const owner = owned.find((candidate) => within(candidate, root));
   try {
-    const revision = await siteRevision(root, entry);
-    return { root, entry, revision, site: owner ? relative(owner, join(root, entry)).split(sep).join("/") : entry };
+    const { revision, files, built } = await siteRevision(root, entry);
+    return { root, entry, revision, files, built, site: owner ? relative(owner, join(root, entry)).split(sep).join("/") : entry };
   } catch (error) {
     const code = (error as { code?: string }).code;
     return code === "resource-limit" || code === "outside-folders" ? code : "not-a-site";
@@ -240,11 +246,12 @@ export function createVerifySite(deps: VerifySiteDeps) {
   const free = (runId: string) => {
     if (slot === runId) { slot = null; queue.shift()?.(); }
   };
-  const acquire = (runId: string, signal?: AbortSignal, ends = Date.now() + VERIFY_LIMITS.runMs) => new Promise<VerifyErrorCode | null>(resolve => {
+  // A worker check never takes the queue's last place, so a bot's own verify_site can still wait for the slot.
+  const acquire = (runId: string, signal?: AbortSignal, ends = Date.now() + VERIFY_LIMITS.runMs, worker = false) => new Promise<VerifyErrorCode | null>(resolve => {
     if (signal?.aborted) { resolve("cancelled"); return; }
     if (Date.now() >= ends) { resolve("timeout"); return; }
     if (!queue.length && reserve(runId)) { resolve(null); return; }
-    if (queue.length >= 2) { resolve("busy"); return; }
+    if (queue.length >= (worker ? 1 : 2)) { resolve("busy"); return; }
     const finish = (refused: VerifyErrorCode | null) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", cancel);
@@ -275,7 +282,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const group = store.conversationForBot(run.botId, run.threadId)?.group;
     const fields = { text: verifyCardText(run.card), verify: run.card, quiet: true as const, ...(group && bot ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}) };
     if (run.messageId && store.patchMessage(run.threadId, run.messageId, fields)) return;
-    const existing = run.episode ? store.activePath(run.threadId).find(message => message.id === episodes.get(run.episode!)) : store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify?.owner === run.botId);
+    const existing = run.fresh ? undefined : run.episode ? store.activePath(run.threadId).find(message => message.id === episodes.get(run.episode!)) : store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify?.owner === run.botId);
     if (existing && store.patchMessage(run.threadId, existing.id, fields)) {
       run.messageId = existing.id;
       return;
@@ -476,6 +483,34 @@ export function createVerifySite(deps: VerifySiteDeps) {
     finally { if (pending.get(input.threadId) === controller) pending.delete(input.threadId); }
   }
 
+  /** A worker pane's check: its own budget and card, the site resolved once the slot is won. */
+  async function startWorker(input: WorkerStart): Promise<WorkerReply> {
+    const bridge = enabled() ? deps.bridge() : null;
+    if (!bridge || !store.conversationForBot(input.botId, input.threadId)) return blocked("desktop-required", input.target);
+    const runId = randomUUID(), nonce = randomBytes(16).toString("hex");
+    const shown = verifyLoopbackUrl(input.target) ? input.target : relative(input.root, input.target).split(sep).join("/");
+    const run: Run = {
+      root: input.root, entry: input.target, revision: "", site: shown, runId, botId: input.botId, threadId: input.threadId, turnId: "", episode: input.episode, fresh: true, nonce, expiresAt: 0, toolDeadline: input.runBy,
+      card: { v: 1, runId, owner: input.botId, site: shown, entry: input.target, status: slot === null ? "preparing" : "waiting", mode: "auto", decisionNonce: nonce, offeredAt: Date.now(), worker: true },
+    };
+    runs.set(runId, run);
+    try {
+      writeCard(run, {});
+    } catch { runs.delete(runId); return blocked("internal", shown); }
+    run.fresh = false;
+    input.onCard(run.messageId!);
+    const refused = await acquire(runId, input.signal, input.slotBy, true);
+    if (refused) return finish(run, "blocked", { errorCode: refused });
+    const site = await resolveVerifySite(input.target, [input.root], input.signal).catch(() => "not-a-site" as const);
+    if (typeof site === "string" || input.signal.aborted) return finish(run, "blocked", { errorCode: typeof site === "string" ? site : "cancelled" });
+    Object.assign(run, site, { card: { ...run.card, site: site.site, entry: verifyLoopbackUrl(site.root) ? site.root : join(site.root, site.entry) } });
+    const stop = () => run.live?.stop("cancelled");
+    input.signal.addEventListener("abort", stop, { once: true });
+    try {
+      return { ...await execute(run, bridge, false, null), site };
+    } finally { input.signal.removeEventListener("abort", stop); }
+  }
+
   async function handleDecision(req: IncomingMessage, res: ServerResponse, runId: string, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
     const toolDeadline = Date.now() + VERIFY_LIMITS.runMs;
     if (!enabled()) return json(res, 404, { error: "not found" });
@@ -559,5 +594,5 @@ export function createVerifySite(deps: VerifySiteDeps) {
     res.end(bytes);
   }
 
-  return { handleTool, handleDecision, handleStream, startAuto, cancelAuto: (threadId: string) => pending.get(threadId)?.abort() };
+  return { handleTool, handleDecision, handleStream, startAuto, startWorker, cancelAuto: (threadId: string) => pending.get(threadId)?.abort() };
 }

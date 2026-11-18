@@ -306,7 +306,7 @@ import { botClears, groupClears } from "./wire-clears.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
-import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsResponse, terminalSendResponse, terminalSnapshotResponse, terminalStartResponse } from "./terminal-snapshot.ts";
+import { botClosedPanes, paneInfo, paneLabel, raisePaneAttention, terminalPaneCountsResponse, terminalSendResponse, terminalSnapshotResponse, terminalStartResponse } from "./terminal-snapshot.ts";
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
@@ -473,6 +473,7 @@ import { createGroupRoutes, roomSetupPending } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
+import { createVerifyWorkers } from "./verify-workers.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { keepErrorReports, reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
@@ -8002,6 +8003,17 @@ const verifyAuto = createVerifyAuto({
   log: line => console.log(line),
   app: { skipPorts: [PORT] },
 });
+const verifyWorkers = createVerifyWorkers({
+  store,
+  enabled: verifyAutoOn,
+  skip: threadId => isHostedThread(store, threadId),
+  pane: (botId, paneId) => paneInfo(terminalBridgeAccess, botId, paneId),
+  run: input => verifySite.startWorker(input),
+  arrived: (botId, threadId, paneId) => { void noteSteer.noteArrived(botId, threadId, paneId); },
+  deviceId: () => profileSyncSettings.deviceId,
+  log: line => console.log(line),
+  app: { skipPorts: [PORT] },
+});
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
@@ -8155,6 +8167,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         refresh: text => refreshCodexPromo(text, usageBoard.touch),
         notify: (source, text) => phonePing(source.id, pingForMailbox(source.name || source.id, text, botNotifyIconPath(source)), { botId: source.id, threadId: source.threadId }),
         arrived: (scope, source) => { void noteSteer.noteArrived(source.id, source.threadId, scope.pane); },
+        check: verifyWorkers,
       });
       return json(res, result.status, result.body);
     }
@@ -9582,6 +9595,7 @@ startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => pho
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
 startupTiming.measure("paneWake", () => {
+  verifyWorkers.boot();
   for (const { botId, threadId } of bootPaneWakes(store, profileSyncSettings.deviceId)) paneWake.noteArrived(botId, threadId);
 });
 // Saved probes steer automatic picks until the deferred refresh lands.

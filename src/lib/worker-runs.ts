@@ -1,7 +1,7 @@
 import type { Message } from "../../server/store.ts";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note.ts";
 
-type WorkerMessage = Pick<Message, "id" | "at" | "role" | "kind" | "text" | "from">;
+type WorkerMessage = Pick<Message, "id" | "at" | "role" | "kind" | "text" | "from" | "heldFrom">;
 
 export type WorkerState = "working" | "waiting" | "failed" | "done";
 /** `ended` only comes from client pane liveness, never from the transcript. */
@@ -235,7 +235,8 @@ export function workerRuns(messages: readonly WorkerMessage[], older: readonly W
       events.get(run)!.push({ at: message.at, index, state: "working", launch: true });
       return;
     }
-    if (message.kind !== "note" || !message.text) return;
+    // a held report's delivery copy keeps the original's row
+    if (message.kind !== "note" || !message.text || message.heldFrom) return;
     const note = parsePaneNote(message.text);
     if (!note.pane8) return;
     const labelled = parseWorkerLabel(note.label);

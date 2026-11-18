@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { paneNotesForTurn, paneNotesSinceLastUserTurn } from "./context-compaction.ts";
-import { bootPaneWakes, hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
+import { bootPaneWakes, hasLocalUndeliveredPaneNote, isWakeNote, PANE_WAKE_DEBOUNCE_MS, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 
 const PANE_ONLY: WakeAdmission = { rootId: null, reservation: null };
@@ -81,6 +81,20 @@ describe("PaneWakeScheduler", () => {
     expect(pending.notes.join("\n")).toContain("DONE: verified");
     store.markPaneNotesDelivered(bot.id, bot.threadId, pending.newestId);
     expect(new Store(selection).bot(bot.id)?.paneWakePaused).toBe(false);
+  });
+
+  it("keeps a held worker report out of the wake and the model until Wink delivers it with its check", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.createBot();
+    const text = "[pane 4f9c2a1e] from Wink (b): DONE A branch=x sha=y dirty=0";
+    const held = store.appendMessage(bot.threadId, { role: "bot", kind: "note", text, origin: "home", hold: { until: Date.now() + 30_000 } });
+    expect(isWakeNote(held)).toBe(false);
+    expect(paneNotesForTurn(store.activePath(bot.threadId), new Set(), undefined, false).notes).toEqual([]);
+    expect(hasLocalUndeliveredPaneNote(store.activePath(bot.threadId), undefined, "home")).toBe(false);
+    store.appendMessage(bot.threadId, { role: "bot", kind: "note", text, heldFrom: held.id, verifyNote: { text: "outcome: clean, no problems found" } });
+    const notes = paneNotesForTurn(store.activePath(bot.threadId), new Set(), undefined, false).notes;
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/DONE A[\s\S]*\[Live Verify: Wink's own check[^\n]*\]\noutcome: clean/);
   });
 
   it("wakes an idle bot after the debounce", async () => {
