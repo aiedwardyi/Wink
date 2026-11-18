@@ -90,12 +90,14 @@ function contrast(fgHex, bgHex) {
 // styles.css); any other fill needs a text-<token> utility, and only @theme tokens have one.
 const workerRows = readFileSync(join(root, "src/components/WorkerRows.tsx"), "utf8");
 const themeTokens = new Set([...(css.match(/@theme\s*\{([^}]*)\}/)?.[1] ?? "").matchAll(/--color-([\w-]+)\s*:/g)].map(([, name]) => name));
-const BADGE_PAIRS = [...workerRows.matchAll(/dot: "bg-([\w-]+)", ink: "(?:text-([\w-]+))?"/g)].map(([, fill, ink]) => {
+const workerStatus = workerRows.match(/export const WORKER_STATUS = \{[\s\S]*?\} as const/)?.[0] ?? "";
+const BADGE_PAIRS = [...workerStatus.matchAll(/dot: "bg-([\w-]+)", ink: "(?:text-([\w-]+))?"/g)].map(([, fill, ink]) => {
   if (!ink && fill !== "accent" && fill !== "danger") throw new Error(`WORKER_STATUS bg-${fill} has no ink: only bg-accent and bg-danger carry one, so its badge number would inherit the toggle's gray`);
   if (ink && !themeTokens.has(ink)) throw new Error(`WORKER_STATUS ink text-${ink} is not a utility: only @theme colors have one (accent-ink and danger-ink come from the .bg-accent and .bg-danger rules)`);
   return [`--color-${ink ?? `${fill}-ink`}`, `--color-${fill}`, 4.5];
 });
-if (BADGE_PAIRS.length === 0) throw new Error("WORKER_STATUS in src/components/WorkerRows.tsx has no `dot: \"bg-x\", ink: \"...\"` entries: the badge number cannot be measured");
+const statusCount = (workerStatus.match(/\bkey: "workers\./g) ?? []).length;
+if (BADGE_PAIRS.length === 0 || BADGE_PAIRS.length !== statusCount) throw new Error(`WORKER_STATUS in src/components/WorkerRows.tsx: ${BADGE_PAIRS.length} of ${statusCount} states have a \`dot: "bg-x", ink: "..."\` pair, so the badge number cannot be measured on the rest`);
 
 // Pairs taken from what the components render, not from what looks plausible:
 // body copy sits on all five surfaces, the filled accent/danger buttons carry
