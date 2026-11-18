@@ -94,8 +94,7 @@ function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale
   return ago === 0 ? [t("chat.today"), `${weekday} ${shown}`] : ago === 1 ? [t("chat.yesterday"), `${weekday} ${shown}`] : [weekday, shown];
 }
 
-const MIN_ZOOM = 0.3;
-const MAX_ZOOM = 2.5;
+const ZOOM = { min: 0.3, max: 2.5 };
 const SLOP = 4;
 // Hundreds of picks mount in one task too slowly, so the newest draw first and the rest follow a batch a frame.
 const FIRST = 8;
@@ -363,7 +362,7 @@ function Canvas({ days, needle, botId, threadId, you }: { days: { day: string; r
 
   const zoomAt = useCallback((x: number, y: number, factor: number) => {
     const at = view.current!;
-    const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, at.scale * factor));
+    const scale = Math.min(ZOOM.max, Math.max(ZOOM.min, at.scale * factor));
     const ratio = scale / at.scale;
     show({ scale, x: x - (x - at.x) * ratio, y: y - (y - at.y) * ratio });
   }, [show]);
