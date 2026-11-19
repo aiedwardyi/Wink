@@ -392,6 +392,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   useImperativeHandle(handle, () => ({
     key: (event) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return false;
+      if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable]")) return false;
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
       const moves: Record<string, () => void> = {
         ArrowUp: () => stepModel(-1),
@@ -586,7 +587,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
         </div>
 
         <section className="dial-stats">
-          {labLocked && rows[lab] && !needsCli(rows[lab]!.instance)
+          {labLocked && !needsCli(rows[lab]!.instance)
             ? <div data-dial-sign-in><EngineSignIn instance={rows[lab]!.instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName="dial-cta" /></div>
             : <button type="button" className="dial-cta" data-dial-pick disabled={!pickable} onClick={(event) => commit(false, event.currentTarget)}>{t("model.dial.pick")} <kbd>Enter</kbd></button>}
           <div className="dial-stat">

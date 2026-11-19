@@ -66,11 +66,11 @@ function mouse(width: number, height = 900) {
   });
 }
 
-function control({ grokSignedIn = true, dial = true, model = "claude-opus-5-5", open = true } = {}) {
+function control({ grokSignedIn = true, dial = true, model = "claude-opus-5-5", open = true, grokLogin = {} as Partial<InstanceInfo> } = {}) {
   const instances = [
     engine("claude", "claudeAgent", ["claude-opus-5-5", "claude-sonnet-5-5"]),
     engine("codex", "codex", ["gpt-6.2-sol", "gpt-6-luna"]),
-    engine("grok", "grokAgent", ["grok-4.7"], grokSignedIn),
+    { ...engine("grok", "grokAgent", ["grok-4.7"], grokSignedIn), ...grokLogin },
   ];
   const bot: Bot = { id: "bot-1", threadId: "thread-1", name: "Dial", title: "", description: "", color: "green", notifications: false, unread: false, messages: [], modelSelection: { instanceId: "claude", model, effort: "high", mode: "pinned" } };
   return createElement(ModelPickerControl, {
@@ -349,6 +349,22 @@ describe("ModelDial", () => {
     await key("ArrowDown");
     expect(document.querySelector(".dial-stats [data-sign-in]")).toBeNull();
     expect((document.querySelector("[data-dial-pick]") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("leaves keys typed into the sign-in code field alone", async () => {
+    media();
+    await mount({ grokSignedIn: false, grokLogin: { loginState: "pending", loginCapture: { inputGeneration: 1 } } });
+    await key("ArrowUp");
+    const input = document.querySelector<HTMLInputElement>(".dial-stats input")!;
+    const typed = new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true });
+    const entered = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => {
+      input.focus();
+      input.dispatchEvent(typed);
+      input.dispatchEvent(entered);
+    });
+    expect([typed.defaultPrevented, entered.defaultPrevented]).toEqual([false, false]);
+    expect(selected()).toBe("grok-4.7");
   });
 
   it("switches between dial, list and chart from the Style strip", async () => {
