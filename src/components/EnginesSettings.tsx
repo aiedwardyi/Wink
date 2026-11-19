@@ -39,7 +39,7 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
     } catch { setError(true); }
     finally { setBusy(false); }
   };
-  const canSignOut = Boolean(current.install?.logout) && current.driverKind !== "antigravityAgent";
+  const canSignOut = Boolean(current.install?.logout);
   const installCommand = current.snapshot.state !== "available" ? installCommandFor(current.install) : null;
   const install = async () => {
     if (!installCommand || busy) return;

@@ -227,15 +227,13 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   const [waiting, setWaiting] = useState(instance.loginState === "pending");
   const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && DIDNT_FINISH);
   const [capture, setCapture] = useState(instance.loginCapture ?? {});
-  const [copyFallback, setCopyFallback] = useState(false);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const cancelled = useRef(false);
   const [loginCode, setLoginCode] = useState("");
   const phone = !window.ogb && isPhone();
-  const external = instance.driverKind === "antigravityAgent";
   const login = instance.install?.login;
-  const computerOnly = phone && (external || !login?.deviceArgs);
+  const computerOnly = phone && !login?.deviceArgs;
   // Same argv both ways is a device-only flow (Muse): nothing opens on desktop either.
   const deviceFlow = phone || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
   const connected = accountReady(current);
@@ -247,7 +245,6 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setWaiting(instance.loginState === "pending");
     setFailed(instance.loginState === "failed" && DIDNT_FINISH);
     setCapture(instance.loginCapture ?? {});
-    setCopyFallback(false);
     setBusy(false);
     cancelled.current = false;
     return () => { generation.current += 1; };
@@ -281,23 +278,12 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setWaiting(true);
     setFailed(false);
     setCapture({});
-    setCopyFallback(false);
     let started = false;
     try {
       const result = await api(path, { method: "POST", body: JSON.stringify({ device: phone }) });
       started = true;
       if (request !== generation.current) return;
       setCapture(result);
-      if (external) {
-        const opened = await window.ogb?.openEngineSignIn?.(instance.instanceId);
-        if (request !== generation.current) return;
-        if (opened === "copied" || opened === undefined) {
-          setCopyFallback(true);
-          if (opened === undefined && instance.install?.signInCommand) {
-            await navigator.clipboard?.writeText(instance.install.signInCommand).catch(() => {});
-          }
-        }
-      }
     } catch (error) {
       if (request !== generation.current) return;
       setWaiting(false);
@@ -336,22 +322,21 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     finally { if (request === generation.current) setBusy(false); }
   };
   const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;
-  return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode };
+  return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode };
 }
 
 export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean }) {
   const { t } = useI18n();
-  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
+  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
   if (!forceSignIn && loading) return null;
   if (computerOnly) return <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   // The card shows this line under its title while the code row is open.
-  const browserLine = lineInTitle && waiting && !copyFallback && !capture.code && Boolean(capture.inputGeneration);
+  const browserLine = lineInTitle && waiting && !capture.code && Boolean(capture.inputGeneration);
   return (
     <div aria-live="polite" data-sign-in-open={waiting || failed ? "" : undefined} data-sign-in-code={browserLine ? "" : undefined} className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
       {waiting ? <>
-        {!browserLine && <span>{copyFallback ? t("engine.pasteAndEnter") : capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
-        {copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
+        {!browserLine && <span>{capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
         {capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
         {capture.inputGeneration && <form className="flex max-w-full flex-wrap justify-end gap-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
           <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
