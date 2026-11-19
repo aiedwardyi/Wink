@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { stripVTControlCharacters } from "node:util";
 
-import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
-import { killCliTree } from "./procs.ts";
+import { augmentedPath, findCliCandidates, resolveCliSpawn } from "./env-path.ts";
+import { cliVersion, killCliTree } from "./procs.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
+import { redactSecretsInText } from "./redact.ts";
 
 export interface LoginCapture {
   url?: string;
@@ -18,6 +19,28 @@ export class LoginBusyError extends Error {
   constructor() { super("Another sign-in for this engine is still running"); }
 }
 
+export function logSignInRefusal(status: number, code?: string): void {
+  console.warn(`sign-in refused code=${code ?? `http-${status}`} status=${status} stderr=-`);
+}
+
+function launchErrorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : "launch-error";
+}
+
+function safeStderr(line: string): string {
+  return redactSecretsInText(line
+    .replace(/\bhttps?:\/\/\S+/gi, "[url]")
+    .replace(/\b(?:[\w-]*(?:token|secret|password|api[-_]?key|authorization)|code)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[credential]")
+    .replace(/\bBearer\s+\S+/gi, "[credential]")
+    .replace(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,2}\b|[A-Za-z0-9_+\/=-]{24,}/g, "[code]"))
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ").slice(0, 320);
+}
+
+function logCliExit(code: string, line?: string): void {
+  console.warn(`sign-in CLI exit code=${code} stderr=${line ? JSON.stringify(line) : "-"}`);
+}
+
 type LoginState = "pending" | "complete" | "failed" | "cancelled";
 interface LoginJob {
   scope: string;
@@ -30,6 +53,7 @@ interface LoginJob {
   changed: Set<() => void>;
   acknowledged: boolean;
   pasteBack: boolean;
+  lastStderr?: string;
 }
 
 export class EngineLogin {
@@ -75,7 +99,7 @@ export class EngineLogin {
     return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext } = {}): Promise<LoginCapture> {
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean } = {}): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
@@ -95,6 +119,12 @@ export class EngineLogin {
       job = this.create(engine, scope);
       job.pasteBack = Boolean(options.account && scope === "claudeAgent" && args[0] === "auth" && args[1] === "login");
       try {
+        // A cold Windows sign-in can beat the status check that selects the usable Claude binary.
+        if (process.platform === "win32" && scope === "claudeAgent" && cli === "claude" && args[0] === "auth" && args[1] === "login" && findCliCandidates(cli).length > 1) {
+          const probeEnv = accountLaunch(options.account, scope, [], { PATH: augmentedPath(), ...env }).env;
+          await new Promise((resolve) => cliVersion(cli, { timeout: 8000, env: probeEnv }, resolve));
+          if (job.state !== "pending") return { ...job.capture };
+        }
         const resolved = resolveCliSpawn(cli, args);
         const launch = accountLaunch(options.account, scope, resolved.args, { PATH: augmentedPath(), ...env });
         const child = spawn(resolved.command, launch.args, {
@@ -105,10 +135,15 @@ export class EngineLogin {
         job.child = child;
         child.stdin.on("error", () => {});
         this.read(child.stdout, job, authHosts);
-        this.read(child.stderr, job, authHosts);
-        child.once("error", () => job!.finish("failed"));
-        child.once("close", (code) => job!.finish(code === 0 ? "complete" : "failed"));
-      } catch {
+        this.read(child.stderr, job, authHosts, options.logExit);
+        let spawnError: string | undefined;
+        child.once("error", (error) => { spawnError = launchErrorCode(error); job!.finish("failed"); });
+        child.once("close", (code, signal) => {
+          if (options.logExit) logCliExit(spawnError ?? signal ?? String(code), job!.lastStderr);
+          job!.finish(code === 0 ? "complete" : "failed");
+        });
+      } catch (error) {
+        if (options.logExit) logCliExit(launchErrorCode(error));
         job.finish("failed");
       }
     }
@@ -194,13 +229,14 @@ export class EngineLogin {
     return job;
   }
 
-  private read(stream: NodeJS.ReadableStream, job: LoginJob, authHosts: string[]): void {
+  private read(stream: NodeJS.ReadableStream, job: LoginJob, authHosts: string[], stderr = false): void {
     let line = "";
     let dropping = false;
     stream.setEncoding("utf8");
     const parse = () => {
-      if (job.state !== "pending") { line = ""; return; }
       const clean = stripVTControlCharacters(line).trim();
+      if (stderr && clean) job.lastStderr = safeStderr(clean);
+      if (job.state !== "pending") { line = ""; return; }
       if (job.pasteBack && /^Paste code here if prompted\s*>\s*$/.test(clean)) job.capture.inputGeneration = job.generation;
       if (job.scope === "codex" && /\bdevice[ _-]+limit(?:[ _-]+reached)?\b|\btoo many (?:paid )?accounts (?:on|for) (?:this|the same) device\b/i.test(clean)) {
         job.capture.error = "device_cap";
@@ -232,7 +268,10 @@ export class EngineLogin {
         } else if (!dropping) {
           line += char;
           if (job.pasteBack && char === ">" && /^Paste code here if prompted\s*>$/.test(stripVTControlCharacters(line).trim())) parse();
-          if (line.length > 8192) { line = ""; dropping = true; }
+          if (line.length > 8192) {
+            if (stderr) job.lastStderr = "[line too long]";
+            line = ""; dropping = true;
+          }
         }
       }
     });

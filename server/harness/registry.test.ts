@@ -547,7 +547,7 @@ describe("ProviderRegistry", () => {
     await registry.load({ a: { driver: "fake", config: { cli: "custom-cli", login: { args: ["untrusted"] } }, environment: { TEST_ENV: "yes" } } });
     const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login" });
     await registry.startSignIn("a", true);
-    expect(start).toHaveBeenCalledExactlyOnceWith("a", "custom-cli", ["device"], expect.objectContaining({ TEST_ENV: "yes", MUSE_LOGIN: "0" }), ["auth.example"], { scope: "fake", account: undefined });
+    expect(start).toHaveBeenCalledExactlyOnceWith("a", "custom-cli", ["device"], expect.objectContaining({ TEST_ENV: "yes", MUSE_LOGIN: "0" }), ["auth.example"], { scope: "fake", account: undefined, logExit: true });
     expect(await registry.startSignIn("missing")).toBeNull();
     await registry.disposeAll();
   });

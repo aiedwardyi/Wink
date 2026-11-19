@@ -17,6 +17,16 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+it("logs one CLI exit with the last stderr line and redacts sign-in secrets", async () => {
+  const { manager, cli } = fixture();
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await manager.start("added", cli, ["stderr-exit"], {}, [], { logExit: true });
+  await manager.wait("added");
+  expect(log.mock.calls).toEqual([[
+    'sign-in CLI exit code=3 stderr="OAuth failed: [url] [credential] [code]"',
+  ]]);
+});
+
 function fixture(timeout = 15000, capture = 2500) {
   const dir = mkdtempSync(join(tmpdir(), "engine-login-"));
   dirs.push(dir);
@@ -25,6 +35,10 @@ function fixture(timeout = 15000, capture = 2500) {
     const fs = require('node:fs');
     const { spawn } = require('node:child_process');
     const [mode, file] = process.argv.slice(2);
+    if (mode === 'stderr-exit') {
+      process.stderr.write('Earlier diagnostic\\r\\n\\x1b[31mOAuth failed: https://example.test/private-fixture-token?code=private accessToken=short ABCD-EFGH\\x1b[0m', () => process.exit(3));
+      return;
+    }
     if (mode === 'tree') {
       const child = spawn(process.execPath, ['-e',
         'setInterval(() => require("node:fs").appendFileSync(process.argv[1], "."), 25)', file], { stdio: 'ignore', windowsHide: true });
