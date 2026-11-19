@@ -2,6 +2,14 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.286] - 2026-11-19
+
+### Added
+- Gemini 4 Neon is in the model picker, with its Model Index scores.
+
+### Fixed
+- The Import Memory prompt shows in full, with no inner scroll.
+
 ## [1.0.285] - 2026-11-19
 
 ### Changed
