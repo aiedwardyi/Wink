@@ -291,6 +291,13 @@
       for (const box of boxes) box.disabled = on;
     };
 
+    const reset = () => {
+      value = "";
+      render();
+      lock(false);
+      focusAt(0);
+    };
+
     async function open(code) {
       lock(true);
       say("");
@@ -301,10 +308,7 @@
         location.assign(`https://${label}.${config.base}/pair?g=1`);
         return;
       }
-      value = "";
-      render();
-      lock(false);
-      focusAt(0);
+      reset();
       say(label === "busy" ? TOO_MANY : BAD_CODE, "error");
     }
 
@@ -353,6 +357,12 @@
       boxes.push(box);
     }
     $("boxes").replaceChildren(...boxes);
+    // Back from the PC's page can restore this one as it was left: locked on a code that already went.
+    addEventListener("pageshow", (event) => {
+      if (!event.persisted) return;
+      reset();
+      say("");
+    });
   }
 
   // Back from turning on Devices on the PC, the empty list loads again with the same token.

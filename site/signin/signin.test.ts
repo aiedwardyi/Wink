@@ -924,6 +924,29 @@ describe("entering a PC's code", () => {
     expect(boxes().every((box) => !box.disabled)).toBe(true);
   });
 
+  it("starts over when the page comes back from the back-forward cache", () => {
+    open("/signin", []);
+    vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
+    enter("ABCDEF");
+    expect(boxes().every((box) => box.disabled)).toBe(true);
+    status().textContent = BAD_CODE;
+    status().className = "status error";
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+    expect(shown()).toBe("|||||");
+    expect(focused()).toBe(0);
+    expect(status().textContent).toBe("");
+    expect(status().className).toBe("status");
+  });
+
+  it("leaves a fresh page load alone on pageshow", () => {
+    open("/signin", []);
+    answer({});
+    enter("AB");
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
+    expect(shown()).toBe("A|B||||");
+  });
+
   it("sends one lookup when the boxes are filled twice at once", async () => {
     open("/signin", []);
     answer(live);
