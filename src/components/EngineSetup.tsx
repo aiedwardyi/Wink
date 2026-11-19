@@ -1,7 +1,7 @@
 // A focused setup card shared by onboarding, the model picker, and runtime
 // errors. The command has one inline copy action and one primary next step;
 // unusable model lists stay out of the way until the engine is ready.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Download, ExternalLink, LogIn, TerminalSquare } from "lucide-react";
 import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } from "@/state/store";
 import { isPhone } from "@/lib/phone-swipe";
@@ -339,7 +339,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode };
 }
 
-export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean }) {
+export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: ReactNode; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean }) {
   const { t } = useI18n();
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
