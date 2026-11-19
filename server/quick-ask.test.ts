@@ -38,6 +38,8 @@ afterEach(() => {
 const QUESTION = "what port is in the server config?";
 const ANSWER: QuickResult = { route: "answer", text: "Port 8787.", usage: { input: 100, output: 10, cachedInput: 90 }, ms: 5 };
 
+const COVERED = /^\[Wink note, automated, not from the person\. A fast reply in your voice answers the message below/;
+
 function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean; result?: QuickResult; quick?: boolean; taken?: boolean } = {}) {
   const selection = { instanceId: "claude", model: "opus", effort: "max" as const };
   const store = new Store(() => selection);
@@ -113,6 +115,7 @@ describe("quick route", () => {
     expect(response.data.steered).toBe(true);
     expect(h.steer).toHaveBeenCalledTimes(1);
     expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer.mock.calls[0]![1]).not.toMatch(COVERED);
     expect(h.rows().at(-1)).toMatchObject({ steered: true, text: "yes go ahead and update the docs" });
     expect(h.rows().at(-1)?.quick).toBeUndefined();
   });
@@ -140,7 +143,8 @@ describe("quick route", () => {
     await h.send({ text: "help me answer ur questions" });
     const count = h.rows().length;
     await h.settled();
-    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(h.steer).toHaveBeenCalledTimes(2);
+    expect(h.steer.mock.calls[1]![1]).toMatch(/^\[Wink note, automated, not from the person\. No fast reply reached the person for "help me answer ur questions"; reply to it now in one short visible line/);
     expect(h.rows()).toHaveLength(count);
   });
 
@@ -151,6 +155,14 @@ describe("quick route", () => {
     await h.send({ text: "no stop" });
     expect(h.ask).not.toHaveBeenCalled();
     expect(h.steer).toHaveBeenCalledTimes(2);
+    expect(h.steer.mock.calls.map((call) => call[1])).not.toContainEqual(expect.stringMatching(COVERED));
+  });
+
+  it("tells the bot the reply beside a steered send covers it", async () => {
+    const h = harness({ result: { route: "answer", text: "Got it, that goes in next.", ms: 4 } });
+    await h.send({ text: "also update the docs when you are done" });
+    expect(h.steer.mock.calls[0]![1]).toMatch(COVERED);
+    expect(h.steer.mock.calls[0]![1]).toContain("also update the docs when you are done");
   });
 
   it("answers a nominated ask in two rows without a steer", async () => {
@@ -174,6 +186,7 @@ describe("quick route", () => {
     await h.settled();
     expect(h.steer).toHaveBeenCalledTimes(1);
     expect(h.steer.mock.calls[0]![1]).toContain(QUESTION);
+    expect(h.steer.mock.calls[0]![1]).not.toMatch(COVERED);
     expect(h.rows()).toHaveLength(count);
     expect(h.rows().at(-1)).toMatchObject({ steered: true, quick: { state: "handoff" } });
   });

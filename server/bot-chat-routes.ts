@@ -17,7 +17,7 @@ import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
 import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
-import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
@@ -33,6 +33,11 @@ import { TASK_RESUME_PROMPT } from "./turn-context.ts";
 
 // A stopped thread stays held through the driver's cancel grace (ACP and MSP: 5 s), and an edit inside it is refused.
 const STOP_RELEASE_MS = 6_000;
+// The bot acks a send mid-turn unless the helper's reply beside it does.
+const ACK_COVERED =
+  "[Wink note, automated, not from the person. A fast reply in your voice answers the message below beside your work, so write no line of your own for it; continue, and put anything new in your final reply.]";
+const ackMissed = (text: string) =>
+  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(text)}"; reply to it now in one short visible line, then continue.]`;
 
 type BotChatRouteDeps = {
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
@@ -142,7 +147,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     bot: BotRecord,
     threadId: string,
     text: string,
-    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number },
+    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt, covered }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number; covered?: boolean },
   ) => {
     let steered = false;
     let dropped = false;
@@ -163,6 +168,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const prompt = [
         ...closedAskNotes(turnOpts.messages, text, ask?.id),
         ...(call ? callLinesSinceLastUserTurn(turnOpts.messages, new Set()) : []),
+        ...(covered ? [ACK_COVERED] : []),
         consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
       ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
@@ -271,7 +277,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
   };
   const startAck = (quick: QuickRouting, botId: string, threadId: string, sent: Message) => {
     void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
-      .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`));
+      .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`))
+      .then(() => {
+        const current = store.bot(botId);
+        if (!current?.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
+        const path = store.activePath(threadId);
+        if (!path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return;
+        void instanceForBot(current, threadId)?.adapter.steer?.(threadId, ackMissed(sent.text ?? "")).catch(() => false);
+      });
   };
   return {
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
@@ -400,7 +413,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             }
             // a call line is spoken back, so only a typed send gets the reply beside it
             const ack = Boolean(quick && gate && !call && routesAck(gate));
-            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt });
+            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, covered: ack });
             if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
             return sent;
           }
