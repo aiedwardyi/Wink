@@ -375,6 +375,72 @@ it.each([0, 30])("skims a 100-page replay with %i blank lines in a row: the view
   vi.restoreAllMocks();
 });
 
+it("follows an 18-chunk replay with a finding in every chunk to the end, never a long stretch with every cursor out of view", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+  // Each line a paragraph that wraps to four rows, so a chunk is taller than the view.
+  const LINE = 96, VIEW = 460, n = 360, lines = Array.from({ length: n }, (_, i) => `Paragraph ${i + 1} of a long report, read closely by four checkers.`);
+  const bytes = [chunk(0, { runId: "run-123456", site: "REPORT.md", page: "" }), chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] })];
+  // Three calls side by side, like server/verify-doc.ts; each reply brings one finding just before its chunk is done.
+  const CH = 18, size = n / CH;
+  for (let c = 0; c < CH; c++) {
+    const at = 20 + Math.floor(c / 3) * 3_000 + (c % 3) * 400, from = c * size + 1;
+    bytes.push(chunk(2, { ms: at, kind: "doc-chunk", from, to: from + size - 1, state: "start" }));
+    bytes.push(chunk(2, { ms: at + 2_900, kind: "doc-finding", finding: { kind: VERIFY_DOC_KINDS[c % 4], line: from + (c * 7) % size, page: 1, quote: `Paragraph ${from + (c * 7) % size}`, fix: "x" } }));
+    bytes.push(chunk(2, { ms: at + 2_902, kind: "doc-chunk", from, to: from + size - 1, state: "done" }));
+  }
+  bytes.push(chunk(3, { status: "completed", ms: Math.floor((CH - 1) / 3) * 3_000 + 800 + 2_902 + 20, issues: [], notChecked: [] }));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({ start(stream) { for (const part of bytes) stream.enqueue(part); stream.close(); } }))));
+  let top = 0;
+  const max = n * LINE - VIEW;
+  const rect = (y: number, h: number) => ({ top: y, bottom: y + h, left: 0, right: 600, width: 600, height: h, x: 0, y }) as DOMRect;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const el = this as HTMLElement;
+    if (el.classList.contains("verify-doc-stage")) return rect(0, VIEW);
+    if (el.classList.contains("verify-doc-line")) return rect((Number(el.dataset.n) - 1) * LINE - top, LINE);
+    return rect(-top, n * LINE);
+  });
+  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number }>(), leaving = new Set<Element>();
+  Element.prototype.animate = function (this: Element, frames: Keyframe[], ms: number | KeyframeAnimationOptions) {
+    const at = performance.now();
+    if (frames[0]?.transform) drawn.set(this, { frames, at, ms: typeof ms === "number" ? ms : Number(ms.duration) });
+    if (frames.at(-1)?.opacity === 0) leaving.add(this);
+    return { cancel() {}, get currentTime() { return Math.max(0, performance.now() - at); } } as unknown as Animation;
+  };
+  const yOf = (transform: unknown) => Number(/,(-?[\d.]+)px\)/.exec(String(transform))![1]);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ site: "REPORT.md", replay: ["run-123456"] }), threadId: "thread", live: false, hidden: false, onClose() {} })));
+  const stage = host.querySelector<HTMLElement>(".verify-doc-stage")!;
+  Object.defineProperties(stage, {
+    clientHeight: { get: () => VIEW },
+    scrollHeight: { get: () => n * LINE },
+    scrollTop: { get: () => top, set: (y: number) => { top = Math.min(max, Math.max(0, y)); } },
+  });
+  stage.scrollTo = ((options: ScrollToOptions) => { stage.scrollTop = options.top ?? top; }) as typeof stage.scrollTo;
+  let previous = 0, blind = 0, longest = 0;
+  for (let ms = 0; ms < 6_000; ms += 16) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+    expect(top).toBeGreaterThanOrEqual(previous);
+    previous = top;
+    const cursors = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => !leaving.has(el));
+    const seen = cursors.some(el => {
+      const flight = drawn.get(el), k = flight ? Math.max(0, Math.min(1, (performance.now() - flight.at) / flight.ms)) * (flight.frames.length - 1) : Infinity;
+      const i = Math.floor(k), y = !flight || k >= flight.frames.length - 1 ? yOf(el.style.transform) : yOf(flight.frames[i]!.transform) + (yOf(flight.frames[i + 1]!.transform) - yOf(flight.frames[i]!.transform)) * (k - i);
+      return y >= top && y + 21 <= top + VIEW;
+    });
+    blind = cursors.length && !seen ? blind + 16 : 0;
+    longest = Math.max(longest, blind);
+  }
+  expect(host.querySelectorAll(".verify-doc-line mark")).toHaveLength(CH);
+  expect(top).toBeGreaterThan(0.9 * max);
+  expect(longest).toBeLessThan(200);
+  await act(async () => root.unmount());
+  vi.restoreAllMocks();
+});
+
 it("runs no camera while the chat is hidden or motion is reduced", async () => {
   for (const [reduced, hidden] of [[false, true], [true, false]]) {
     const frame = vi.spyOn(window, "requestAnimationFrame");

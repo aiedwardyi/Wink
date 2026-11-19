@@ -80,9 +80,11 @@ function linesInView(stage: HTMLElement): [number, number] | null {
   return shown.length ? [Number(shown[0]!.dataset.n), Number(shown.at(-1)!.dataset.n)] : null;
 }
 
-/** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `glide`: a camera moves the view. */
-function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean, glide: boolean, front: (now: number) => number | null) {
-  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; fromX: number; at: number; ms: number; band: number; lead: boolean; find: boolean; curve: readonly number[]; animation?: Animation; rows?: { from: number; to: number; adj: number } }>(), fading = new Set<ReturnType<typeof setTimeout>>();
+/** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `leading`: the first line of the chunk the view reads, none when it no longer follows. `glide`: a camera moves the view. */
+function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, leading: () => number | undefined, glide: boolean, front: (now: number) => number | null) {
+  // Numbering skims for the rules without the view; it leads only on its way to a quote.
+  const reads = (c: DocCursor) => c.kind !== "numbering" || c.quote !== undefined, follows = (c: DocCursor, band = leading()) => c.band === band && reads(c);
+  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; fromX: number; at: number; ms: number; doc: DocCursor; find: boolean; curve: readonly number[]; animation?: Animation; rows?: { from: number; to: number; adj: number } }>(), fading = new Set<ReturnType<typeof setTimeout>>();
   let offset = 0, frame = 0;
   const lineY = (line: number) => {
     const view = stage.getBoundingClientRect().top - stage.scrollTop, top = (n: number) => stage.querySelector<HTMLElement>(`[data-n="${n}"]`)?.getBoundingClientRect().top;
@@ -126,7 +128,7 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         el.lastElementChild!.textContent = tag(c.kind);
         layer.append(el);
         el.animate?.([{ opacity: 0 }, { opacity: 1 }], FADE_MS);
-        shown.set(c.id, cursor = { el, x, y, from: y, fromX: x, at: 0, ms: 0, band: c.band, lead, find: false, curve: EASE });
+        shown.set(c.id, cursor = { el, x, y, from: y, fromX: x, at: 0, ms: 0, doc: c, find: false, curve: EASE });
       }
       const { el, x: fx, y: fy } = cursor, label = el.lastElementChild as HTMLElement;
       const spot = tagSpot({}, { x, y }, label.offsetWidth, [row.parentElement!.getBoundingClientRect().right - origin.left, layer.clientHeight], 1)!;
@@ -137,7 +139,7 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
       if (c.ride) cursor.animation?.cancel();
       const now = performance.now(), arrive = c.ride ? front(now + c.duration) : null, rowY = c.ride ? lineY(c.line) : undefined;
       const rows = arrive === null || rowY === undefined ? undefined : { from: cursor.rows ? cursor.rows.from + (cursor.rows.to - cursor.rows.from) * Math.min(1, cursor.ms ? (now - cursor.at) / cursor.ms : 1) : c.line - front(now)!, to: c.line - arrive, adj: y - (rowY - offset) };
-      Object.assign(cursor, { x, y, from: fy, fromX: fx, at: now, ms: c.duration, lead, find: c.quote !== undefined, curve, animation, rows });
+      Object.assign(cursor, { x, y, from: fy, fromX: fx, at: now, ms: c.duration, doc: c, find: c.quote !== undefined, curve, animation, rows });
       if (rows) {
         const at = front(now), start = at === null ? undefined : lineY(at + rows.from);
         if (start !== undefined) el.style.transform = `translate(${fx}px,${start - offset + rows.adj}px)`;
@@ -146,14 +148,24 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
     },
     /** The furthest-down reader of the chunk being read and the names cursor, in the stage's scroll space. */
     view(now: number): DocView {
-      const seen: DocView = {};
-      for (const c of shown.values()) {
+      const seen: DocView = {}, top = stage.scrollTop, spots = [...shown.values()].map(c => {
         // A browser glide can start a frame later than the timer that requested it.
         const time = c.animation?.currentTime, elapsed = typeof time === "number" ? time : time === null ? 0 : now - c.at;
         const k = Math.min(1, Math.max(0, elapsed / Math.max(1, c.ms))) * (c.curve.length - 1), i = Math.min(c.curve.length - 2, Math.floor(k));
-        const ease = c.curve[i]! + (c.curve[i + 1]! - c.curve[i]!) * (k - i), y = offset + c.from + (c.y - c.from) * ease;
-        if (c.band === 0 && !(c.lead && c.find)) seen.stop = Math.min(seen.stop ?? Infinity, y);
-        else if (c.lead) seen.lead = { y: Math.max(seen.lead?.y ?? -Infinity, y), to: Math.max(seen.lead?.to ?? -Infinity, offset + c.y) };
+        const ease = c.curve[i]! + (c.curve[i + 1]! - c.curve[i]!) * (k - i);
+        return { c, y: offset + c.from + (c.y - c.from) * ease, to: offset + c.y };
+      });
+      // Asked each frame, not when a cursor last moved: a chunk's readers start while the one above still lands its quotes, and lead once it closes.
+      // The view never backs up, so once the leading chunk's readers have all gone above it for quotes, the next chunk down leads.
+      let band = leading();
+      if (band !== undefined && !spots.some(({ c, y, to }) => follows(c.doc, band) && Math.max(y, to) >= top)) {
+        const below = spots.filter(({ c }) => c.doc.band > band! && reads(c.doc)).map(({ c }) => c.doc.band);
+        if (below.length) band = Math.min(...below);
+      }
+      for (const { c, y, to } of spots) {
+        const lead = follows(c.doc, band);
+        if (c.doc.band === 0 && !(lead && c.find)) seen.stop = Math.min(seen.stop ?? Infinity, y);
+        else if (lead) seen.lead = { y: Math.max(seen.lead?.y ?? -Infinity, y), to: Math.max(seen.lead?.to ?? -Infinity, to) };
       }
       return seen;
     },
@@ -215,7 +227,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     if (!runId) { setPhase("expired"); return; }
     const abort = new AbortController(), stage = stageRef.current!;
     const doc = new VerifyDocShow(live, reducedMotion(), () => linesInView(stage));
-    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], c => follow.current && c.band === leadLine.current && (c.kind !== "numbering" || c.quote !== undefined), !live, now => front.current(now));
+    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], () => follow.current ? leadLine.current : undefined, !live, now => front.current(now));
     let timer: ReturnType<typeof setTimeout> | undefined, last = performance.now();
     front.current = now => doc.front(doc.clock + Math.max(0, now - last));
     // One timer to the next thing due: a glide starts or a mark lands. Nothing runs per frame.
