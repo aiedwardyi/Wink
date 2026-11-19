@@ -991,7 +991,7 @@ it.each([
   const outs = host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-out]").length;
   expect(outs).toBeGreaterThan(0);
   expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * outs);
-  expect(host.querySelector(".timeline-pane[data-sample] .timeline-canvas")?.closest("[inert]")).not.toBeNull();
+  expect(host.querySelector(".timeline-pane[data-sample] .timeline-canvas")?.closest("[inert]")).toBeNull();
   expect(picked()).toHaveLength(0);
   expect(host.querySelector(".timeline-search")).toBeNull();
   expect(host.querySelectorAll(".timeline-sheet button, .timeline-sheet a")).toHaveLength(0);
