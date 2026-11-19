@@ -49,13 +49,13 @@ async function boot(name: string): Promise<PC> {
     const res = await harnessFetch(`${base}${path}`, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
     return res.json();
   };
+  const pc = { home, dataDir, base, child, api };
+  pcs.push(pc);
   for (const end = Date.now() + 90_000; ;) {
     if ((await harnessFetch(`${base}/api/bots?messages=0`).catch(() => null))?.status === 200) break;
     if (child.exitCode !== null || Date.now() > end) throw new Error(`${name} start: ${stderr.slice(-4000)}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const pc = { home, dataDir, base, child, api };
-  pcs.push(pc);
   return pc;
 }
 
