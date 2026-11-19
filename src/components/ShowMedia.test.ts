@@ -168,6 +168,20 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
   expect(names()).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
 });
 
+it("keeps an audio row playing when a photo arrives", async () => {
+  media.t1 = wire([["b1", 1000, "l", "audio.mp3", "C:\\w\\audio.mp3"]]);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  await click(row("audio.mp3"));
+  const playing = host.querySelector("audio");
+  expect(playing).not.toBeNull();
+  await render({ threadId: "t1", messages: [{ id: "b2", role: "bot", kind: "text", at: 2000, text: "[photo.png](C:\\w\\photo.png)" }] });
+  await settle();
+  expect(tab("Files").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector("audio")).toBe(playing);
+});
+
 it("an image opens full size, a showable file shows, the rest open as before", async () => {
   const openFile = vi.fn(async () => {});
   window.ogb = { openFile } as unknown as typeof window.ogb;
