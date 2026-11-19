@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -209,6 +209,8 @@ function serializeBounded(packet: TaskResumePacket): string {
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
 const overflowPath = (path: string): string => path.replace(/\.json$/, ".artifacts.jsonl");
+// the reader's cap too: past it the writer keeps the newest half, so the sidecar always reads
+const OVERFLOW_MAX_BYTES = TASK_STATE_READ_MAX_BYTES;
 
 function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
@@ -222,7 +224,8 @@ function sealed(packet: TaskResumePacket, dir: string): { path: string; serializ
 
 /** Artifacts the cap or byte budget cut from the record go here instead of being lost. */
 function overflowArtifacts(path: string, given: TaskResumePacket["artifacts"], kept: TaskResumePacket["artifacts"]): void {
-  const seen = new Set([...kept, ...overflowOf(path)].map((item) => item.ref));
+  const old = overflowOf(path);
+  const seen = new Set([...kept, ...old].map((item) => item.ref));
   const lines: string[] = [];
   for (const item of given) {
     const ref = clean(item.ref, LIMITS.ref);
@@ -230,13 +233,34 @@ function overflowArtifacts(path: string, given: TaskResumePacket["artifacts"], k
     seen.add(ref);
     lines.push(JSON.stringify({ ref, label: clean(item.label, LIMITS.label) || ref }));
   }
-  if (lines.length) appendFileSync(overflowPath(path), `${lines.join("\n")}\n`, { mode: 0o600 });
+  if (!lines.length) return;
+  const added = `${lines.join("\n")}\n`;
+  if (sizeOf(overflowPath(path)) + Buffer.byteLength(added) <= OVERFLOW_MAX_BYTES) {
+    appendFileSync(overflowPath(path), added, { mode: 0o600 });
+    return;
+  }
+  const newest: string[] = [];
+  let bytes = 0;
+  for (const line of [...old.map((item) => JSON.stringify(item)), ...lines].reverse()) {
+    bytes += Buffer.byteLength(line) + 1;
+    if (bytes > OVERFLOW_MAX_BYTES / 2) break;
+    newest.push(line);
+  }
+  writeFileAtomic(overflowPath(path), `${newest.reverse().join("\n")}\n`, { mode: 0o600 });
+}
+
+function sizeOf(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
 }
 
 const overflowItemSchema = z.object({ ref: z.string().min(1), label: z.string() });
 
 function overflowOf(path: string): TaskResumePacket["artifacts"] {
-  return (fileText(overflowPath(path)) ?? "").split("\n").flatMap((line) => {
+  return (fileText(overflowPath(path), OVERFLOW_MAX_BYTES) ?? "").split("\n").flatMap((line) => {
     try {
       const item = overflowItemSchema.safeParse(JSON.parse(line));
       return item.success ? [item.data] : [];
@@ -530,19 +554,20 @@ function clipText(text: string, max: number): string {
   return `${cut.trimEnd()}…`;
 }
 
+const NETWORK_PATH = /^[\\/]{2}/;
+
 function groundedTaskArtifact(cwd: string, ref: string): string | null {
+  // a share can block the event loop, so refuse before any fs call
+  if (NETWORK_PATH.test(ref)) return null;
   try {
-    const root = realpathSync(cwd);
-    const candidate = realpathSync(resolve(root, ref));
-    const fromRoot = relative(root, candidate);
-    if (fromRoot.startsWith("..") || isAbsolute(fromRoot) || !statSync(candidate).isFile()) return null;
-    return candidate;
+    const candidate = realpathSync(resolve(cwd, ref));
+    return !NETWORK_PATH.test(candidate) && statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }
 }
 
-/** Keeps the artifacts that are files inside the task folder, resolved to their real path. */
+/** Keeps the artifacts that are local files, resolved to their real path; relative refs start at the task folder. */
 export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
   const kept: TaskArtifact[] = [];
   const dropped: string[] = [];
@@ -556,9 +581,9 @@ export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
 }
 
 /** One line for the bot when an update saved with something clipped or dropped. Empty on a clean save. */
-export function taskStateNotice(clipped: string[], dropped: string[], cwd: string): string {
+export function taskStateNotice(clipped: string[], dropped: string[]): string {
   const parts: string[] = [];
   if (clipped.length) parts.push(`Clipped to fit: ${clipped.join(", ")}.`);
-  if (dropped.length) parts.push(`Dropped artifacts that are not files inside ${cwd}: ${dropped.join(", ")}.`);
+  if (dropped.length) parts.push(`Dropped artifacts that are not files: ${dropped.join(", ")}.`);
   return parts.join(" ");
 }

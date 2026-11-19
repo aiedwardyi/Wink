@@ -282,12 +282,11 @@ import {
   buildResumeFallback,
   buildTurnContext,
   builtListPath,
+  chatMemory,
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
-  memoryBlock,
   nativeSessionTokenBudget,
-  planFiles,
   reportedWindow,
   replayMessageText,
   resumeSessionUnseeded,
@@ -2939,12 +2938,11 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
 
 /** Saved paths, never file contents: what a chat that had a fresh provider session gets each turn. */
 function freshSessionMemory(botId: string, threadId: string, record: TaskResumePacket | null, messages: readonly Message[]): string {
-  const cwd = store.taskByThread(botId, threadId)?.cwd ?? undefined;
-  const recorded = [...readTaskArtifactOverflow(threadId), ...record?.artifacts ?? []].map((item) => item.ref);
-  return memoryBlock({
-    files: [...recorded, ...messages.flatMap((message) => message.tool?.writes ?? [])],
-    cwd,
-    plans: record ? planFiles(record, cwd) : [],
+  return chatMemory({
+    record,
+    overflow: readTaskArtifactOverflow(threadId),
+    messages,
+    cwd: store.taskByThread(botId, threadId)?.cwd ?? undefined,
     builtList: builtListPath(memoryFileRaw(botId)),
     work: unlandedWork.work(threadId),
   });
@@ -5661,11 +5659,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
-  // from the first fresh provider session on, every turn keeps the bot's saved paths and its own chat search
+  // from the first fresh provider session on, every turn keeps the bot's saved paths
   const restarted = commsDepth === 0 && (recycled || latestCompactionId !== null || Boolean(store.taskByThread(bot.id, threadId)?.providerSessionBoundId));
   const memoryText = restarted ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
-  const searchable = commsDepth === 0 && instance.adapter.capabilities.agentsMcp === true && opts?.readOnly !== true && ownerChats(bot, notOwnerChats()).includes(threadId);
-  const chatSearch = restarted && searchable;
   const { turnText, resume } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
@@ -5683,7 +5679,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
     memoryText,
-    chatSearch,
   });
   stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
@@ -5709,7 +5704,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
     memoryText: memoryText || (commsDepth === 0 ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : ""),
-    chatSearch: searchable,
   }).turnText;
 
   const persona = [
@@ -6040,7 +6034,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, chatSearch, readOnly);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6233,8 +6227,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             store.markProviderSessionBound(bot.id, threadId, opts?.cardContinuation ? activeMessages.at(-1)?.id ?? userMessage.id : userMessage.id);
             seed.cursor = undefined;
             resumeCursor = undefined;
-            // the next turn adds search_my_chats; adding it now keeps that turn on this CLI
-            if (searchable && integrations.agents) integrations.agents.env = { ...integrations.agents.env, OMB_OWNER_CHATS: "1" };
             text = withLate(systemRecycleText(!systemRecycle));
           } else text = [latestCompactionId === sessionCompactionId ? text : withTaskRecord(text, durableTaskRecordText), ...late.slice(lateCount)].join("\n\n");
           console.info(`[session] ${JSON.stringify({ threadId, reason: recycleDeferred ? "recycle-deferred-background" : systemRecycle ? "system" : "compaction", lastTurnToolRounds, sessionToolRounds })}`);

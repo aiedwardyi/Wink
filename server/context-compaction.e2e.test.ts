@@ -902,8 +902,8 @@ describe("context compaction e2e", () => {
     expect(fresh.prompt).toContain(`Read first, your plan: ${join(launch, "paste", "03-thursday.md")}`);
     expect(fresh.prompt).toMatch(/real-shots 11 \(workers-11\.png, workers-10\.png\)/);
     expect(fresh.prompt).toContain(`Built list: ${join(launch, "built.md")}`);
-    expect(fresh.prompt).toContain("search_my_chats finds anything this replay leaves out");
-    expect(fresh.dump.mcpConfig.mcpServers.agents.env.OMB_OWNER_CHATS).toBe("1");
+    expect(fresh.prompt).not.toContain("search_my_chats");
+    expect(fresh.dump.mcpConfig.mcpServers.agents.env.OMB_OWNER_CHATS).not.toBe("1");
     await send("and friday?");
     const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
       .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))

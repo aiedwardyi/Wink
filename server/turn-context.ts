@@ -93,8 +93,6 @@ export interface TurnContextInput {
   asksText?: string;
   /** memoryBlock text; rides every turn once the chat has had a fresh session */
   memoryText?: string;
-  /** search_my_chats is on this turn, so a fresh-session preamble names it */
-  chatSearch?: boolean;
 }
 
 export interface TaskRecordContext {
@@ -512,21 +510,21 @@ const SESSION_FAT_PREAMBLE =
 const SYSTEM_CHANGED_PREAMBLE =
   "[Wink started a fresh provider session because your instructions changed. The conversation so far:]";
 
-const CHAT_SEARCH_HINT = " Your full earlier chat is still saved; search_my_chats finds anything this replay leaves out.";
-
 function replayPreamble(input: TurnContextInput): string {
   if (input.rewound) return REWOUND_PREAMBLE;
-  const preamble = !input.recycled
-    ? FRESH_PREAMBLE
-    : input.recycleReason === "compaction"
+  if (input.recycled) {
+    return input.recycleReason === "compaction"
       ? RECYCLED_PREAMBLE
       : input.recycleReason === "system" ? SYSTEM_CHANGED_PREAMBLE : SESSION_FAT_PREAMBLE;
-  return input.chatSearch ? preamble.replace(" The conversation so far:]", `${CHAT_SEARCH_HINT} The conversation so far:]`) : preamble;
+  }
+  return FRESH_PREAMBLE;
 }
 
 const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
 const DOC_PATH = /(?:[A-Za-z]:)?[\w.~\\/-]*\.(?:md|txt|docx?|pdf)\b/gi;
+// a quoted path may hold spaces, so it is read whole before DOC_PATH
+const QUOTED_DOC_PATH = /(["'`])([^"'`\n]*[\\/][^"'`\n]*\.(?:md|txt|docx?|pdf))\1/gi;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
 
 function localPath(ref: string, cwd: string | undefined): string | null {
@@ -540,7 +538,8 @@ function localPath(ref: string, cwd: string | undefined): string | null {
 export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts">, cwd?: string): string[] {
   const refs = (record.artifacts ?? []).filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
   const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
-  for (const match of cited.matchAll(DOC_PATH)) refs.push(match[0]);
+  for (const match of cited.matchAll(QUOTED_DOC_PATH)) refs.push(match[2]!);
+  for (const match of cited.replace(QUOTED_DOC_PATH, " ").matchAll(DOC_PATH)) refs.push(match[0]);
   return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
 }
 
@@ -595,6 +594,32 @@ export function memoryBlock(input: MemoryBlockInput): string {
   ];
   if (!lines.length) return "";
   return redactSecretsInText(["[Wink memory - open these before answering about the plan or what is built or merged, or starting new work:]", ...lines].join("\n"));
+}
+
+type RecordedFile = { ref: string; label: string };
+
+export interface ChatMemoryInput {
+  record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts"> | null;
+  /** artifacts the record moved to its sidecar, oldest first */
+  overflow: readonly RecordedFile[];
+  messages: readonly { tool?: { writes?: string[]; artifacts?: RecordedFile[] } }[];
+  cwd?: string;
+  builtList?: string | null;
+  work?: string;
+}
+
+/** memoryBlock for a chat: the record and its sidecar on this PC, plus what synced rows recorded or wrote. */
+export function chatMemory(input: ChatMemoryInput): string {
+  const rows = input.messages.flatMap((message) => message.tool?.artifacts ?? []);
+  const recorded = [...input.overflow, ...input.record?.artifacts ?? [], ...rows];
+  return memoryBlock({
+    files: [...input.overflow, ...input.record?.artifacts ?? []].map((item) => item.ref)
+      .concat(input.messages.flatMap((message) => [...(message.tool?.artifacts ?? []).map((item) => item.ref), ...message.tool?.writes ?? []])),
+    cwd: input.cwd,
+    plans: planFiles({ goal: input.record?.goal ?? "", plan: input.record?.plan ?? [], artifacts: recorded }, input.cwd),
+    builtList: input.builtList,
+    work: input.work,
+  });
 }
 
 export const TASK_RESUME_PROMPT =

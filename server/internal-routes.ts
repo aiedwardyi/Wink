@@ -40,6 +40,7 @@ import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, ty
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
+import { recordedArtifactsPatch } from "./tool-activity.ts";
 import { assignTaskNextAction, groundTaskArtifacts, taskStateNotice, taskStateUpdateError, taskStateUpdateSchema, type TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
 
@@ -229,13 +230,16 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
+      // the record stays on this PC; the call's chat row syncs, so another PC still knows these files
+      const row = saved && artifacts.length ? recordedArtifactsPatch(store.messagesFor(body.fromThreadId), artifacts) : null;
+      if (row) store.patchMessage(body.fromThreadId, row.id, { tool: row.tool });
       if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped), asks?.note, board?.notice].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {

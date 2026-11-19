@@ -16,6 +16,7 @@ import {
   replayMessageText,
   PRE_COMPACT_SESSION_TOOL_ROUND_LIMIT,
   PRE_COMPACT_TOOL_ROUND_LIMIT,
+  chatMemory,
   memoryBlock,
   planFiles,
   resumeSessionUnseeded,
@@ -1311,16 +1312,39 @@ describe("fresh-session memory block", () => {
     }, cwd)).toEqual([join(home, "brief.md"), join(cwd, "paste", "03-thursday.md"), join(home, "launch", "order.md"), join(home, "RUNNER~1", "a.md")]);
   });
 
-  it("rides every turn it is given, and the search hint rides only the fresh-session preamble", () => {
+  it("rides every turn it is given and names no chat search tool", () => {
     const memoryText = memoryBlock({ files: [], plans: [plan] });
     const transcript = [{ role: "user" as const, text: "plan it" }, { role: "assistant" as const, text: "done" }];
-    const recycled = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false, memoryText, chatSearch: true });
+    const recycled = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false, memoryText });
     expect(recycled.turnText).toContain("03-thursday.md");
-    expect(recycled.turnText).toContain("Your full earlier chat is still saved; search_my_chats finds anything this replay leaves out. The conversation so far:]");
-    const resumed = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false, memoryText, chatSearch: true });
+    expect(recycled.turnText).not.toContain("search_my_chats");
+    const resumed = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false, memoryText });
     expect(resumed.turnText).toBe(`${memoryText}\n\npost it`);
     expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false }).turnText).toBe("post it");
-    expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "compaction", replaysNatively: false }).turnText).not.toContain("search_my_chats");
+  });
+
+  it("pins a quoted plan path that holds spaces", () => {
+    const spaced = join(home, "task folder", "Launch Plan", "release.md");
+    expect(planFiles({ goal: `Follow the plan at "${spaced}" and notes.md`, plan: [], artifacts: [] }, cwd)).toEqual([spaced, join(cwd, "notes.md")]);
+  });
+
+  it("pins a plan the record moved to its sidecar", () => {
+    const shotsRecorded = shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }));
+    const text = chatMemory({
+      record: { goal: "Ship the launch", plan: [], artifacts: shotsRecorded.slice(1) },
+      overflow: [{ ref: plan, label: "Thursday launch plan" }, shotsRecorded[0]!],
+      messages: [],
+      cwd,
+    });
+    expect(text).toContain(`Read first, your plan: ${plan}`);
+  });
+
+  it("names files and the plan from synced rows when this PC has no record", () => {
+    const recorded = [{ ref: plan, label: "Thursday launch plan" }, ...shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }))];
+    const text = chatMemory({ record: null, overflow: [], messages: [{ tool: { artifacts: recorded } }, { tool: { writes: [join(home, "notes.md")] } }], cwd });
+    expect(text).toContain(`Read first, your plan: ${plan}`);
+    expect(text).toContain(`${join(home, "launch", "real-shots")} 11 (workers-11.png, workers-10.png)`);
+    expect(chatMemory({ record: null, overflow: [], messages: [], cwd })).toBe("");
   });
 
   it("finds the built list path in the bot's notes, only when the file exists", () => {
