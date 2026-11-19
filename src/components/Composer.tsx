@@ -521,8 +521,9 @@ export function Composer({
   const requestBotPrewarm = useCallback(() => {
     if (!botId || prepared.current === prewarmKey) return;
     prepared.current = prewarmKey;
+    if (busy) return;
     void api(`/api/bots/${botId}/prewarm`, { method: "POST" }).catch(() => {});
-  }, [botId, prewarmKey]);
+  }, [botId, busy, prewarmKey]);
 
   useEffect(() => {
     if (document.activeElement === inputRef.current) requestBotPrewarm();

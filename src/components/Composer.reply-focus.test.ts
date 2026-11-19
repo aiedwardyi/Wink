@@ -206,6 +206,10 @@ describe("composer reply focus", () => {
     expect(api).toHaveBeenCalledWith("/api/bots/prewarm/prewarm", { method: "POST" });
     await render({ ...bot, unread: true });
     expect(requests()).toHaveLength(1);
+    const pinned = { ...bot, tasks: [{ threadId: bot.threadId, title: "", createdAt: 1, cwd: "/private/prewarm" }] };
+    await render({ ...pinned, busy: true });
+    await render(pinned);
+    expect(requests()).toHaveLength(1);
     const switched = { ...bot, modelSelection: { instanceId: "claude", model: "opus" } };
     await render(switched);
     expect(requests()).toHaveLength(2);
