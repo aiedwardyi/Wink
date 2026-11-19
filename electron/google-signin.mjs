@@ -5,10 +5,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 import { PAGE_CSP, signInPage } from "./google-signin-page.mjs";
+import { translate } from "./i18n.mjs";
 
 // A relay base is a bare hostname; its dashboard is served at its root.
 const RELAY_BASE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-import { translate } from "./i18n.mjs";
+const FRONT_DOOR = "app.getwink.dev";
+// The front door also lists PCs still on the team base from before the move (#1993); that base serves no dashboard.
+const TEAM_BASES = [FRONT_DOOR, "wink.edwardyi.dev"];
 
 export const GOOGLE_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/drive.file", "profile"];
 const DRIVE_FILE = GOOGLE_SCOPES[2];
@@ -248,7 +251,7 @@ async function exchangeCode({ client, code, verifier, redirectUri, fetch, signal
 }
 
 /** The main-process side of the preload actions. Secrets stay in here and in saveSession. */
-export function createGoogleAccountController({ client, openExternal, saveSession, clearSession, fetch, getLocale, log = () => {} }) {
+export function createGoogleAccountController({ client, openExternal, saveSession, clearSession, fetch, getLocale, relayBase = () => null, log = () => {} }) {
   let active = null;
   // The tab of a held sign-in, waiting for the caller to say where it goes.
   let waiting = null;
@@ -291,8 +294,11 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
         if (active === controller) active = null;
       }
     },
+    // Only a known dashboard: the front door for a team base, else this PC's own saved relay.
     finish(base) {
-      release(RELAY_BASE.test(base ?? "") ? `https://${base}/` : undefined);
+      const saved = relayBase();
+      const host = TEAM_BASES.includes(base) ? FRONT_DOOR : base === saved && RELAY_BASE.test(saved ?? "") ? saved : null;
+      release(host ? `https://${host}/` : undefined);
     },
     cancel() {
       active?.abort();

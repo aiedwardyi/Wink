@@ -342,9 +342,9 @@ describe("google sign-in", () => {
   });
 
   it("a held sign-in opens only the dashboard, and only on finish", async () => {
-    const run = async (release) => {
+    const run = async (release, saved = "wink.test") => {
       const { openExternal, seen } = browser();
-      const google = createGoogleAccountController({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, saveSession: vi.fn(), clearSession: vi.fn() });
+      const google = createGoogleAccountController({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, saveSession: vi.fn(), clearSession: vi.fn(), relayBase: () => saved });
       expect(await google.signIn({ hold: true })).toEqual({ ok: true, email: "me@example.com" });
       expect(seen.pages).toHaveLength(1);
       await release(google);
@@ -353,6 +353,11 @@ describe("google sign-in", () => {
     };
     expect(await run((google) => google.finish("app.getwink.dev"))).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
     expect(await run((google) => google.finish("wink.test"))).toContain('<meta http-equiv="refresh" content="1;url=https://wink.test/">');
+    expect(await run((google) => google.finish("wink.edwardyi.dev"), "wink.edwardyi.dev")).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(await run((google) => google.finish("app.getwink.dev"), null)).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(await run((google) => google.finish("evil.example"))).not.toMatch(/refresh|evil/);
+    expect(await run((google) => google.finish("wink.test"), null)).not.toContain("refresh");
+    expect(await run((google) => google.finish(["app.getwink.dev"]))).not.toContain("refresh");
     for (const bad of ["https://evil.example/", "evil.example/x", "evil.example?x", "user@evil.example", "localhost", ""]) {
       expect(await run((google) => google.finish(bad))).not.toMatch(/refresh|evil/);
     }

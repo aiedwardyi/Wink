@@ -2051,6 +2051,14 @@ const googleAccount = createGoogleAccountController({
     });
     await pushGoogleSession(null);
   },
+  // The server saves it before it answers the turn-on, so it is current by finish.
+  relayBase: () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), "config.json"), "utf8")).phoneRelay?.base ?? null;
+    } catch {
+      return null;
+    }
+  },
   log: slog,
 });
 ipcMain.handle("google-account:sign-in", (_event, options) => googleAccount.signIn({ hold: options?.hold }));
