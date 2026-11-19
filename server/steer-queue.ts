@@ -137,8 +137,9 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     for (const item of entry.items) queueSeq = Math.max(queueSeq, item.seq);
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
     const messages = store.messagesFor(entry.threadId);
-    const items = entry.items.filter((item) => !messages.some((message) =>
-      (item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff")));
+    // a requeued row still waits for its item until the fold clears the flag
+    const items = entry.items.filter((item) => !messages.some((message) => !(message.queued && message.queueId === item.messageId) &&
+      ((item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff"))));
     if (items.length) queues.set(entryKey(entry.botId, entry.threadId), { ...entry, items });
   }
   if (pending.length) saveQueuedSends();
@@ -338,8 +339,8 @@ export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
     .map((entry) => entry.botId);
 }
 
-// a queued quick handoff's ask row, or a requeued call row, already shows this line
-const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
+// a queued quick handoff's ask row, or a requeued call or promised order row, already shows this line
+const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || message.queued === true || Boolean(message.call?.order || message.call?.ask));
 
 function isRoomItem(item: QueueItem): item is RoomItem {
   return item.kind === "room";
@@ -498,7 +499,7 @@ export function foldQueuedSends(
   try {
     const prompts = takeQueuedSteers(botId, threadId, since, steering).map((item) => {
       const ask = store.messagesFor(threadId).find((message) => showsQueued(message, item.id));
-      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
+      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, queued: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
         kind: "text",
         text: item.text,

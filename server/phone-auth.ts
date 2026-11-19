@@ -16,6 +16,8 @@ const LOCAL_ONLY_EXACT = new Set(["/api/mailbox", "/remote", "/api/remote-link"]
 const LOCAL_ONLY_PREFIXES = ["/api/internal/", "/api/phone-relay/", "/api/phone/"];
 /** Pre-auth phone routes under /api/phone/. */
 const PHONE_PUBLIC = new Set(["/api/phone/pair", "/api/phone/google/start", "/api/phone/google"]);
+/** Whether a short code is still this PC's, for the sign-in page. */
+export const OPEN_CODE_PATH = "/api/phone/open-code";
 
 export interface RelayRequestLine {
   method?: string;
@@ -31,6 +33,7 @@ export type RelayVerdict =
   | { kind: "google-start" }
   | { kind: "google" }
   | { kind: "room" }
+  | { kind: "open-code" }
   | { kind: "app" };
 
 function headerValues(rawHeaders: string[], name: string): string[] {
@@ -56,6 +59,8 @@ export function relayVerdict(req: RelayRequestLine, relayHost: string): RelayVer
   if (hosts[0]?.trim().toLowerCase() !== relayHost) return { kind: "deny", status: 403, error: "forbidden: relay host required" };
   const method = req.method ?? "GET";
   const path = new URL(target, "https://relay.invalid").pathname;
+  // The sign-in page asks this cross-origin; the answer is only yes or no, and opens nothing.
+  if (path === OPEN_CODE_PATH) return method === "GET" ? { kind: "open-code" } : { kind: "deny", status: 404, error: "not found" };
   const origins = headerValues(req.rawHeaders, "origin");
   if (origins.length > 1 || (origins.length === 1 && origins[0] !== `https://${relayHost}` && !(origins[0] === "null" && linkedFileGrant(method, path, (holder) => holder !== PC_HOLDER)))) {
     return { kind: "deny", status: 403, error: "forbidden: cross-origin request" };

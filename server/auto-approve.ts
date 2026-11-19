@@ -11,7 +11,7 @@
 // backstop for the obvious catastrophes. Real containment is the
 // sandbox and the bot's own computer, not a regex.
 
-import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -155,12 +155,22 @@ function matchDestructive(text: string): string | null {
 const DELETE_PROGRAMS = new Set(["rm", "rmdir", "unlink", "del", "erase", "rd", "remove-item", "ri"]);
 // ACP kinds; Claude deletes and moves through Bash
 const DELETE_TOOLS = new Set(["delete", "move"]);
-// a quoted path keeps its spaces; a cmd switch (/q, /s) is not a path
-const argWords = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]).filter(Boolean);
+// a quoted path keeps its spaces and joins what touches it ("my dir"/..), an open quote runs to the end; a cmd switch (/q, /s) is not a path
+const argWords = (text: string) =>
+  [...text.matchAll(/(?:"[^"]*"?|'[^']*'?|[^\s"'])+/g)].map((m) => m[0].replace(/"([^"]*)"?|'([^']*)'?/g, "$1$2")).filter(Boolean);
 const CMD_SWITCH = /^\/[A-Za-z](?::\S*)?$/;
 const looksLikePath = (word: string) => /^(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$))/.test(word) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(word);
 
-const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "set-location", "sl"]);
+const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "push-location", "set-location", "sl", "popd", "pop-location"]);
+const PUSH_PROGRAMS = new Set(["pushd", "push-location"]);
+const POP_PROGRAMS = new Set(["popd", "pop-location"]);
+// switches that keep a move where the path says: cmd /d, cd -L, PowerShell -Path
+const CD_SWITCHES = new Set(["/d", "-l", "-path", "-literalpath", "-passthru"]);
+const movesDir = (word: string) => CD_PROGRAMS.has(word.toLowerCase()) || /^(?:cd|chdir)[.\\/]/i.test(word);
+// words that run the word after them: builtin cd, time rm, cmd call and @
+const RUNNERS = new Set(["builtin", "command", "time", "exec", "call", "!", "env", "nohup", "nice", "timeout", "xargs", "watch"]);
+// the word after these runs on one branch only, so a move there may not happen
+const BRANCHES = new Set(["if", "elif", "then", "else", "while", "until", "do"]);
 const expandHome = (path: string) => path.replace(/^~(?=[\\/]|$)/, homedir());
 const isRooted = (path: string) => isAbsolute(path) || /^~(?:[\\/]|$)/.test(path);
 
@@ -250,17 +260,68 @@ function checkDeletes(tool: string, summary: string, workspace: string): { outsi
     segments.push({ text: summary, paths: argWords(summary).filter(looksLikePath).map((word) => ({ word, at: place(word, root) })) });
   } else if (COMMAND_TOOLS.has(bare)) {
     let dir: string | null = root;
-    for (const text of summary.split(/[;&|\n\r]+/)) {
+    const stack: (string | null)[] = [];
+    // once the folder is unknown, so is every folder pushd saved
+    const lose = () => {
+      dir = null;
+      stack.length = 0;
+    };
+    const state = () => JSON.stringify([dir, stack]);
+    // where the shell stays if a move that may not run, or may fail, didn't happen
+    let skipped: string[] = [];
+    let comment = false;
+    const parts = summary.split(/([;&|\n\r]+)/);
+    for (let k = 0; k < parts.length; k += 2) {
+      const text = parts[k];
       const words = argWords(text);
       let i = 0;
-      while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
-      const program = programName(words[i] ?? "");
-      const args = words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word));
-      if (CD_PROGRAMS.has(program)) {
-        const target = args[0];
-        dir = target === undefined ? homedir() : /[$%]/.test(target) || words[i + 1] === "-" ? null : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+      let branch = false;
+      let away = false;
+      for (;;) {
+        const name = programName((words[i] ?? "").replace(/^@/, ""));
+        if (BRANCHES.has(name)) branch = true;
+        else if (!RUNNERS.has(name) && !ELEVATORS.has(name) && !/^[A-Z_][A-Z0-9_]*=/.test(words[i] ?? "")) break;
+        i += 1;
+        // a runner's own switches and numbers: timeout 5, nice -n 10, env -C dir
+        while (RUNNERS.has(name) && /^-|^\d+(?:\.\d+)?[smhd]?$/i.test(words[i] ?? "")) {
+          if (/^(?:-C|--chdir)/.test(words[i])) away = true;
+          i += /^(?:-C|--chdir)$/.test(words[i]) ? 2 : 1;
+        }
       }
-      segments.push({ text, paths: DELETE_PROGRAMS.has(program) ? args.map((word) => ({ word, at: place(word, dir) })) : [] });
+      const program = programName((words[i] ?? "").replace(/^@/, ""));
+      const tail = words.slice(i + 1);
+      // PowerShell -Path:..\x carries its path after the colon
+      const args = tail.flatMap((word) => (/^-\w+:./.test(word) ? [word.slice(word.indexOf(":") + 1)] : word.startsWith("-") || CMD_SWITCH.test(word) ? [] : [word]));
+      const switches = tail.filter((word) => word.startsWith("-") || CMD_SWITCH.test(word));
+      const from = state();
+      if (CD_PROGRAMS.has(program) && !branch && !comment) {
+        const target = args[0];
+        if (switches.some((word) => !CD_SWITCHES.has(word.toLowerCase())) || /[$%`(]|^[+#]|^~(?![\\/]|$)/.test(target ?? "")) lose();
+        else if (POP_PROGRAMS.has(program)) dir = target === undefined ? (stack.pop() ?? null) : null;
+        else if (PUSH_PROGRAMS.has(program) && target === undefined) lose();
+        else {
+          if (PUSH_PROGRAMS.has(program)) stack.push(dir);
+          dir = target === undefined ? homedir() : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+          // a move into a folder that isn't there fails and leaves the shell where it was
+          if (dir !== null && !statSync(dir, { throwIfNoEntry: false })?.isDirectory()) skipped.push(from);
+        }
+        if (/&&|\|\|/.test(parts[k - 1] ?? "")) skipped.push(from);
+      } else if (text.split(/[\s"'`(){}[\]@!,$<>]+/).some(movesDir)) {
+        // a move in a group, subshell, nested shell, string, branch or comment, or glued as cd.., is one we can't follow
+        lose();
+      } else if (program === "dirs") {
+        stack.length = 0;
+      }
+      if (dir === null) lose();
+      segments.push({ text, paths: DELETE_PROGRAMS.has(program) ? args.map((word) => ({ word, at: place(word, away ? null : dir) })) : [] });
+      // past the end of an && chain the shell is wherever a skipped or failed move left it
+      const after = parts[k + 1] ?? "\n";
+      if (after !== "&&") {
+        if (skipped.some((was) => was !== state())) lose();
+        skipped = [];
+      }
+      if (/(?:^|\s)#/.test(text)) comment = true;
+      if (/[\n\r]/.test(after)) comment = false;
     }
   } else {
     return { outside: null, rest: summary };
