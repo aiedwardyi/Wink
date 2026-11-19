@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { antigravitySignIn, probeAntigravitySignIn, readAntigravityAccount } from "./antigravity-auth.ts";
+import { antigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 
 const execFile = vi.fn();
 
@@ -46,6 +46,19 @@ describe("Antigravity keyring sign-in", () => {
     expect(await auth.check(true)).toBe(false);
     probe.mockResolvedValue(true);
     expect(await auth.check()).toBe(true);
+  });
+
+  it("falls back to the log only when the keyring cannot be probed", async () => {
+    const unprobed = vi.fn<() => boolean | undefined>(() => true);
+    const auth = antigravitySignIn(async () => undefined, unprobed);
+    expect(await auth.check()).toBe(true);
+    unprobed.mockReturnValue(false);
+    expect(await auth.check(true)).toBe(false);
+    auth.record(true);
+    unprobed.mockReturnValue(undefined);
+    expect(await auth.check(true)).toBe(true);
+    const probed = antigravitySignIn(async () => false, () => true);
+    expect(await probed.check()).toBe(false);
   });
 
   it("ignores checks started before newer evidence and preserves evidence on timeout", async () => {
@@ -94,6 +107,42 @@ describe("Antigravity account from agy's logs", () => {
   });
 
   it("reads nothing without logs", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(readAntigravityAccount({ HOME: join(tmpdir(), "omb-agy-no-such-home") })).toBeUndefined();
+    const notDir = home({});
+    writeFileSync(join(notDir.HOME, "file"), "");
+    expect(readAntigravityAccount({ HOME: join(notDir.HOME, "file") })).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("logs a read failure instead of hiding it", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const env = home({});
+    mkdirSync(join(env.HOME, ".gemini", "antigravity-cli", "log", "cli-20261119_100000.log"));
+    expect(readAntigravityAccount(env)).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("[antigravity] could not read agy's logs", expect.objectContaining({ code: "EISDIR" }));
+    warn.mockRestore();
+  });
+
+  it("reads sign-in from the newest login or logout, unknown without either", () => {
+    expect(readAntigravityLogSignIn(home({ "cli-20261119_100000.log": signedIn("ed@example.com", "consumer") }))).toBe(true);
+    expect(readAntigravityLogSignIn(home({ "cli-20261119_100000.log": `${signedIn("ed@example.com", "consumer")}I1119 10:47:15.2 727 auth_manager.go:315] Logging out current user\n` }))).toBe(false);
+    expect(readAntigravityLogSignIn(home({ "cli-20261119_100000.log": "I1119 11:00:00.1 1 main.go:1] started\n" }))).toBeUndefined();
+  });
+
+  it("forgets logs that are no longer listed", () => {
+    const env = home({});
+    const dir = join(env.HOME, ".gemini", "antigravity-cli", "log");
+    const first = join(dir, "cli-00000000_000000.log");
+    const write = (path: string, text: string) => { writeFileSync(path, text); utimesSync(path, 1_700_000_000, 1_700_000_000); };
+    write(first, signedIn("a@example.com", "gcp"));
+    expect(readAntigravityAccount(env)).toBe("a@example.com");
+    const newer = Array.from({ length: 20 }, (_, i) => join(dir, `cli-20261119_1000${String(i).padStart(2, "0")}.log`));
+    for (const path of newer) write(path, "started\n");
+    expect(readAntigravityAccount(env)).toBeUndefined();
+    for (const path of newer) rmSync(path);
+    write(first, signedIn("b@example.com", "gcp"));
+    expect(readAntigravityAccount(env)).toBe("b@example.com");
   });
 });

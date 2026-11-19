@@ -4,7 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1124,6 +1124,25 @@ describe("Antigravity snapshot", () => {
       expect((await instance.snapshot()).account).toBe("ed@example.com");
       signedIn = false;
       expect((await instance.snapshot({ refresh: true })).account).toBeUndefined();
+      await instance.dispose();
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("takes sign-in from agy's logs where the keyring cannot be probed", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-unprobed-"));
+    try {
+      mkdirSync(join(home, ".gemini", "antigravity-cli", "log"), { recursive: true });
+      const log = join(home, ".gemini", "antigravity-cli", "log", "cli-20261119_100000.log");
+      vi.mocked(auth.antigravitySignIn).mockImplementation((_probe, unprobed) => createSignIn(async () => undefined, unprobed));
+      const instance = await AntigravityDriver.create({
+        instanceId: "agy-unprobed", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      writeFileSync(log, "I1119 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n");
+      expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: true, account: "ed@example.com" });
+      appendFileSync(log, "I1119 10:47:15.2 727 auth_manager.go:315] Logging out current user\n");
+      expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: false });
       await instance.dispose();
     } finally { rmSync(home, { recursive: true, force: true }); }
   });

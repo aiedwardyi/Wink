@@ -48,7 +48,7 @@ import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { antigravitySignIn, readAntigravityAccount } from "./antigravity-auth.ts";
+import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -546,7 +546,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
   async create(input: DriverCreateInput<AntigravityConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const env = antigravityEnvironment(input.environment);
-    const signIn = antigravitySignIn();
+    const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
     const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
