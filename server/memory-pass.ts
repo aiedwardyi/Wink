@@ -329,16 +329,16 @@ function legacyLine(key: string, lines: string[], taken: Set<string>): string | 
 }
 
 /** The `## Decisions` section as [heading index, end index), or null. */
-function decisionSpan(lines: string[]): [number, number] | null {
+export function decisionSpan(lines: string[]): [number, number] | null {
   const start = lines.findIndex((line) => /^##\s+decisions\b/i.test(line));
   if (start < 0) return null;
   const next = lines.findIndex((line, index) => index > start && HEADING.test(line));
   return [start, next < 0 ? lines.length : next];
 }
 
-const contentWords = (text: string) =>
+export const contentWords = (text: string) =>
   words(text).filter((word) => (word.length >= 3 || /\d/.test(word) || /\P{ASCII}/u.test(word)) && !STOP_WORDS.has(word));
-const sameStem = (a: string, b: string) => a.startsWith(b.slice(0, 4)) || b.startsWith(a.slice(0, 4));
+export const sameStem = (a: string, b: string) => a.startsWith(b.slice(0, 4)) || b.startsWith(a.slice(0, 4));
 const LITERALS = [
   /\b(?:[a-z][\w+.-]*:\/\/|www\.)\S+/gi,
   /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,

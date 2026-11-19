@@ -330,6 +330,7 @@ import {
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
+import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
@@ -3029,6 +3030,28 @@ const memoryPass = createMemoryPass({
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
 });
+// the same switch as Auto Notes: it edits the same file
+const memorySleep = createMemorySleep({
+  dataDir: DATA_DIR,
+  bots: () => store.bots.map((bot) => bot.id),
+  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
+  enabled: (botId) => {
+    const bot = store.bot(botId);
+    const instance = bot && registry.get(bot.modelSelection.instanceId);
+    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
+  },
+  busy: (botId) => botHasActiveTurn(botId),
+  asks: (botId) => {
+    const threadId = store.bot(botId)?.threadId;
+    const packet = threadId ? taskPacketForWrite(threadId) : null;
+    return threadId && packet ? { threadId, asks: packet.asks ?? [] } : null;
+  },
+  saveAsks: (threadId, change) => {
+    const current = taskPacketForWrite(threadId);
+    const asks = current && change(current.asks ?? []);
+    if (current && asks) persistTaskPacket({ ...current, asks, updatedAt: Date.now(), updatedBy: "harness" });
+  },
+});
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   reportTimes: (botId) => {
@@ -3054,7 +3077,7 @@ startupTiming.afterPaint("unlanded", async () => {
 });
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
-const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
+const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId), tidied: (botId) => memorySleep.take(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
 const roomTurnInstruction = new Map<string, string>();
@@ -4416,6 +4439,7 @@ bus.subscribe((event: RuntimeEvent) => {
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
           clearSendRunning(bot.id);
+          memorySleep.onSettled(bot.id);
           memoryPass.onSettled(bot.id, event.threadId, flushNotes);
           if (!store.groupByThread(event.threadId)) {
             summaryBuild.onSettled(bot.id, event.threadId);
@@ -4468,6 +4492,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (speaker && group?.busyBotId === speaker.botId) {
         memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
+        memorySleep.onSettled(speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);
@@ -9676,6 +9701,7 @@ hostShutdown = () => {
   summaryBuild.dispose();
   summaryRepair.dispose();
   memoryPass.dispose();
+  memorySleep.dispose();
   accountRuntime.dispose();
   void registry.disposeAll().finally(() => {
     store.flushSaves();

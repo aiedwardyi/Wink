@@ -44,6 +44,8 @@ export function memoryNotice(health: MemoryHealth, dropped?: DroppedNotes): stri
 export interface MemoryHealthCheckDeps {
   health: (botId: string) => MemoryHealth;
   dropped: (botId: string) => DroppedNotes | undefined;
+  /** What the idle tidy changed, handed over once. */
+  tidied?: (botId: string) => string;
   now?: () => number;
 }
 
@@ -79,13 +81,14 @@ export function createMemoryHealthCheck(deps: MemoryHealthCheckDeps): MemoryHeal
       }
     },
     take(botId, threadId, cursor) {
+      const tidied = deps.tidied?.(botId) ?? "";
       const notice = notices.get(botId);
-      if (!notice) return "";
+      if (!notice) return tidied;
       const at = now();
       const session = cursorKey(cursor);
-      if (!sessionNoticeDue(shown, session, key(threadId), at)) return "";
+      if (!sessionNoticeDue(shown, session, key(threadId), at)) return tidied;
       shown[key(threadId)] = { cursor: session, at };
-      return notice;
+      return tidied ? `${notice}\n${tidied}` : notice;
     },
     settled(botId, threadId, cursor) {
       // a fresh session has a cursor only once the turn that carried the notice ran
