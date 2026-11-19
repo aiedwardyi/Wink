@@ -193,14 +193,15 @@ function consumeFocus(state: AppState, threadId?: string): AppState {
   return { ...state, focusMessage: { ...focus, consumed: true } };
 }
 
-// one sent time and send order for the line on screen and its POST, so a reload draws it where it was drawn
+// one sent time and send order per line, kept through Send now, so a reload draws it where it was drawn
 function stampSend(state: AppState, send: Extract<Action, { type: "send" }>): Action {
   const bot = state.bots.find((candidate) => candidate.id === send.botId);
   const threadId = send.threadId ?? bot?.threadId ?? "";
+  const held = send.queueId ? state.pendingQueued[threadId]?.find((entry) => entry.queueId === send.queueId) : undefined;
   return {
     ...send,
-    actedAt: send.actedAt ?? sendClock(bot?.messages),
-    sendSeq: send.sendSeq ?? nextSendSeq(bot?.messages, state.acceptedSends[threadId], state.pendingQueued[threadId]),
+    actedAt: send.actedAt ?? held?.at ?? sendClock(bot?.messages),
+    sendSeq: send.sendSeq ?? held?.sendSeq ?? nextSendSeq(bot?.messages, state.acceptedSends[threadId], state.pendingQueued[threadId]),
   };
 }
 
