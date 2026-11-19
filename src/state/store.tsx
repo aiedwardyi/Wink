@@ -776,7 +776,9 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "consumePendingQueued": {
-      const prev = state.pendingQueued[action.threadId] ?? [];
+      // An early send held in one chat can land in the bot's other chat.
+      const threadId = Object.keys(state.pendingQueued).find((id) => state.pendingQueued[id]?.some((entry) => entry.queueId === action.queueId)) ?? action.threadId;
+      const prev = state.pendingQueued[threadId] ?? [];
       const at = prev.findIndex((entry) => entry.queueId === action.queueId);
       if (at < 0) {
         return {
@@ -786,8 +788,8 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const rest = prev.filter((_, i) => i !== at);
       const pendingQueued = { ...state.pendingQueued };
-      if (rest.length) pendingQueued[action.threadId] = rest;
-      else delete pendingQueued[action.threadId];
+      if (rest.length) pendingQueued[threadId] = rest;
+      else delete pendingQueued[threadId];
       return { ...state, pendingQueued };
     }
     case "cancelQueued": {

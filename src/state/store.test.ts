@@ -1419,6 +1419,13 @@ describe("pending queued chip", () => {
     expect(drained.pendingQueued).toEqual({});
   });
 
+  it("drops a held chip when its line lands in the bot's other chat", () => {
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", queueId: "q-sync", text: "early", reason: "sync" });
+    const landed = reducer(queued, { type: "consumePendingQueued", threadId: "t2", queueId: "q-sync" });
+    expect(landed.pendingQueued).toEqual({});
+  });
+
   it("consumes only the matching queue id when two pending lines share text", () => {
     const withBot = reducer(initialState, { type: "botPatched", bot });
     const first = reducer(withBot, {

@@ -23,6 +23,7 @@ const delivered = new Map<string, { folder: string; behind: boolean }>();
 const peers = new Map<string, Map<string, { feed?: string; pull?: string }>>();
 const released = new Set<string>();
 const chats = new Map<string, { threadId: string; at: number }>();
+const botOf = new Map<string, string>();
 const expired = new Set<string>();
 let waiting: WaitingSend[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,6 +38,11 @@ function behind(threadId: string): boolean | undefined {
   }
   const local = delivered.get(threadId);
   return local ? google.get(local.folder) === false ? false : local.behind : undefined;
+}
+
+function botBehind(threadId: string): boolean {
+  const bot = botOf.get(threadId);
+  return [...botOf].some(([id, of]) => of === bot && behind(id) === true);
 }
 
 function notePeer(threadId: string, path: string, source: "feed" | "pull", hash: string): void {
@@ -111,6 +117,7 @@ export const syncHold = {
       if (!file?.md5Checksum) continue;
       notePeer(threadId, `${key}/${path}`, "feed", file.md5Checksum);
       const bot = `${key}/${path.split("/")[1]}`;
+      botOf.set(threadId, bot);
       const at = Date.parse(file.modifiedTime);
       if ((chats.get(bot)?.at ?? -Infinity) < at) chats.set(bot, { threadId, at });
       if (applied.get(key)?.get(path) === file.md5Checksum) cleared = heads.delete(path) || cleared;
@@ -151,9 +158,10 @@ export const syncHold = {
     const until = syncHold.until(threadId);
     while (until !== undefined && syncHold.waiting(threadId, until)) await new Promise((done) => setTimeout(done, 100));
   },
-  waiting(threadId: string, until?: number): boolean {
+  /** An early send also waits for the bot's other listed chats, so it lands in the chat the bot selects. */
+  waiting(threadId: string, until?: number, early = false): boolean {
     expire();
-    return !released.has(threadId) && until !== undefined && until > Date.now() && behind(threadId) !== false;
+    return !released.has(threadId) && until !== undefined && until > Date.now() && (behind(threadId) !== false || (early && botBehind(threadId)));
   },
   reset(): void {
     clearTimeout(timer);
@@ -166,6 +174,7 @@ export const syncHold = {
     released.clear();
     expired.clear();
     chats.clear();
+    botOf.clear();
     drain = () => {};
     enabled = () => true;
   },

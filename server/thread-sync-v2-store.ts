@@ -592,6 +592,8 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     const reason = !rows.every((row) => mine(row.id)) ? "another writer"
       : edited || !appended(rows[0].id, branch[at - 1] ?? null) ? "edit or regenerate"
       : based(pick.version.baseStamp) !== parentOf(tip) || (kids.get(parentOf(rows[0].id)) ?? []).some((id) => id !== rows[0].id && mine(id)) ? "branch switch"
+      // Sent before any of this chat landed here, so it joins the tip and is never judged stale.
+      : at === 0 ? undefined
       : turns > JOIN_TURNS ? `${turns} user turns`
       : !soonAfterWake(rows[0].at, JOIN_WINDOW_MS) ? "outside wake window"
       : rows.some((row) => row.kind === "compaction") ? "compaction"

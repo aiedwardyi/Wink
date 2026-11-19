@@ -208,15 +208,32 @@ describe("Google sync first join", { timeout: 60_000 }, () => {
 });
 
 describe("Google sync first join with chat engines", { timeout: 180_000 }, () => {
-  it("keeps a send to a bot whose chat has not downloaded yet at the end of that chat on both PCs", async () => {
+  it.each([
+    ["a chat that has not downloaded yet", { text: "continue our conversation" }],
+    ["a renamed older chat", { text: "continue our conversation", renamed: true }],
+    ["a renamed older chat that lands after the selected one", { text: "continue our conversation", renamed: true, selectedFirst: true }],
+    ["a repeated prompt after the hold runs out", { text: "row 2000", slow: true }],
+    ["a send 11 minutes after start after the hold runs out", { text: "continue our conversation", slow: true, late: true }],
+  ])("keeps an early send at the end of the bot's chat on both PCs: %s", async (_name, { text, renamed, selectedFirst, slow, late }: { text: string; renamed?: boolean; selectedFirst?: boolean; slow?: boolean; late?: boolean }) => {
     const home = makePC("home", [{ ...bot("Counsel"), syncId: "bot" }]);
     await startOn(home);
     const source = engine(home.folder!, "home");
+    const older = renamed ? (await source<TaskRecord>("create")).threadId : undefined;
+    if (older) {
+      await source("append", { threadId: older, text: "an older chat" });
+      await source("flush", { threadId: older });
+      await settle(home);
+    }
     const { threadId } = await source<TaskRecord>("create");
     await source("batch", { threadId, count: 2001 });
     await source("flush", { threadId });
     const tip = (await source<Snapshot>("snapshot", { threadId })).leaf;
     await settle(home);
+    if (older) {
+      await source("rename", { threadId: older, title: "Renamed" });
+      await source("flush", { threadId: older });
+      await settle(home);
+    }
 
     const work = makePC("work", []);
     work.account.setSession(A);
@@ -240,12 +257,16 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     });
     const opened = await laptop<BotRecord>("join", { heads });
     await laptop("poll");
-    await laptop("send", { threadId: opened.threadId, text: "continue our conversation" });
+    if (late) await laptop("tick", { at: 11 * 60_000 });
+    await laptop("send", { threadId: opened.threadId, text });
+    if (slow) await laptop("tick", { at: 10_001 });
     resume();
     await joined;
     await work.sync.idle();
+    if (selectedFirst) await laptop("pull", { threadId });
+    await laptop("poll");
     await laptop("pull", { threadId });
-    await laptop("flush", { threadId });
+    for (const id of new Set([threadId, opened.threadId])) await laptop("flush", { threadId: id });
     await settle(work);
     await settle(home);
     await source("poll");
@@ -253,11 +274,14 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     for (const call of [laptop, source]) {
       const shown = await call<BotRecord>("bot");
       const chat = await call<Snapshot>("snapshot", { threadId });
-      const send = chat.rows.find((row: Message) => row.text === "continue our conversation");
+      const byId = new Map(chat.rows.map((row: Message) => [row.id, row]));
+      const path: Message[] = [];
+      for (let row = byId.get(chat.leaf ?? ""); row; row = byId.get(row.parentId ?? "")) if (row.kind === "text") path.unshift(row);
       expect(shown.threadId).toBe(threadId);
-      expect(chat.rows).toHaveLength(2002);
-      expect(send?.parentId).toBe(tip);
-      expect(chat.leaf).toBe(send?.id);
+      expect(path).toHaveLength(2002);
+      expect(path.at(-1)?.text).toBe(text);
+      expect(path.at(-1)?.parentId).toBe(tip);
+      if (!slow) expect(chat.leaf).toBe(path.at(-1)?.id);
     }
   });
 });
