@@ -24,13 +24,10 @@
         <p id="status" class="status" role="status" aria-live="polite"></p>
         <div id="list" class="list" hidden></div>
         <div id="google"></div>
-        <form id="code" class="code" hidden>
+        <div id="code" class="code" hidden>
           <p class="quiet">Or enter the code from Wink on your PC.</p>
-          <div class="code-row">
-            <input id="code-input" aria-label="Code" placeholder="Code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" enterkeyhint="go" />
-            <button type="submit">Open</button>
-          </div>
-        </form>
+          <div id="boxes" class="boxes" role="group" aria-label="Code"></div>
+        </div>
         <div class="links">
           <a id="pick" class="privacy" href="/?pick=1" hidden>Choose another PC</a>
           <a class="privacy" href="/privacy">Privacy</a>

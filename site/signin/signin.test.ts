@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInThisContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { shortCodeChars } from "../../src/components/CodeBoxes";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HTML = readFileSync(join(ROOT, "site/signin/index.html"), "utf8");
@@ -695,33 +696,182 @@ describe("entering a PC's code", () => {
     });
   }
 
-  function enter(value: string): void {
-    const input = document.querySelector<HTMLInputElement>("#code-input")!;
-    input.value = value;
-    document.getElementById("code")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  const boxes = () => [...document.querySelectorAll<HTMLInputElement>("#code input")];
+  const shown = () => boxes().map((box) => box.value).join("|");
+  const status = () => document.getElementById("status")!;
+
+  function typeKey(value: string): void {
+    const box = boxes().find((candidate) => candidate === document.activeElement);
+    if (!box || box.disabled) return;
+    box.value = value;
+    box.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  const status = () => document.getElementById("status")!;
-  const submit = () => document.querySelector<HTMLButtonElement>("#code button")!;
+  function enter(text: string): void {
+    if (document.activeElement === document.body) boxes()[0]!.focus();
+    for (const ch of text) typeKey(ch);
+  }
 
-  it("shows the code box on a cold start only", () => {
+  function paste(text: string, into = 0): void {
+    const box = boxes()[into]!;
+    box.focus();
+    const event = Object.assign(new Event("paste", { bubbles: true, cancelable: true }), { clipboardData: { getData: () => text } });
+    box.dispatchEvent(event);
+  }
+
+  function key(name: string): void {
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+  }
+
+  const focused = () => boxes().findIndex((box) => box === document.activeElement);
+  const live = { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } } satisfies Record<string, Answer>;
+
+  it("shows the code boxes on a cold start only", () => {
     open("/signin", []);
     expect(document.getElementById("code")?.hidden).toBe(false);
     open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
     expect(document.getElementById("code")?.hidden).toBe(true);
   });
 
-  it.each(["ABCDEF", " abc-def "])("opens the PC a live code names, through the same Google check as the PC list (%s)", async (typed) => {
+  it("is six boxes that ask the phone for a one-time code, and no Open button", () => {
     open("/signin", []);
-    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
-    enter(typed);
+    expect(boxes()).toHaveLength(6);
+    expect(boxes().every((box) => box.autocomplete === "one-time-code" && box.maxLength !== 1)).toBe(true);
+    expect(document.querySelector("#code button")).toBeNull();
+    expect(boxes().map((box) => box.getAttribute("aria-label"))).toEqual([1, 2, 3, 4, 5, 6].map((n) => `Code ${n}`));
+  });
+
+  it("looks like the group join boxes", () => {
+    const tsx = readFileSync(join(ROOT, "src/components/CodeBoxes.tsx"), "utf8");
+    expect(tsx).toContain("size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold");
+    const rule = CSS.match(/\.boxes input \{([^}]*)\}/)?.[1] ?? "";
+    for (const part of ["width: 44px", "height: 44px", "border-radius: 8px", "var(--hairline) 60%", "var(--inset)", "text-align: center", "font: 600 18px ui-monospace"]) expect(rule).toContain(part);
+    expect(CSS).toMatch(/\.boxes \{[^}]*gap: 8px/);
+  });
+
+  it("types like the group boxes for any text, Korean keyboard included", () => {
+    const samples = ["abc-def", " ab0 ", "ㅁㅠㅊㅇㄷㄹ", "한글ㅂ", "ᄀ각", "O0I1L", "z9y8", "ＡＢＣ"];
+    for (const sample of samples) {
+      open("/signin", []);
+      answer({});
+      enter(sample);
+      expect(boxes().map((box) => box.value).join("")).toBe(shortCodeChars(sample).slice(0, 6));
+    }
+  });
+
+  it("moves to the next box on each character and shows uppercase", () => {
+    open("/signin", []);
+    answer({});
+    enter("a");
+    expect(shown()).toBe("A|||||");
+    expect(focused()).toBe(1);
+    enter("bc");
+    expect(shown()).toBe("A|B|C|||");
+    expect(focused()).toBe(3);
+  });
+
+  it("opens by itself on the sixth character, with no submit", async () => {
+    open("/signin", []);
+    answer(live);
+    enter("ABCDE");
+    expect(asked).toEqual([]);
+    enter("F");
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
     expect(asked).toEqual([{ url: LOOKUP, credentials: "omit" }, { url: CHECK, credentials: "omit" }]);
   });
 
-  it("remembers no PC for a typed code, so the next visit sends this browser nowhere until Google signs in", async () => {
+  it("disables the boxes while it checks", async () => {
     open("/signin", []);
-    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    answer({ [LOOKUP]: { status: 404 } });
+    enter("ABCDEF");
+    expect(boxes().every((box) => box.disabled)).toBe(true);
+    await vi.waitFor(() => expect(boxes().every((box) => !box.disabled)).toBe(true));
+  });
+
+  it("fills all six boxes from a paste and opens", async () => {
+    open("/signin", []);
+    answer(live);
+    paste(" abc-def ");
+    expect(shown()).toBe("A|B|C|D|E|F");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
+  });
+
+  it("fills as many boxes as a short paste has and waits for the rest", () => {
+    open("/signin", []);
+    answer({});
+    paste("abc");
+    expect(shown()).toBe("A|B|C|||");
+    expect(focused()).toBe(3);
+    expect(asked).toEqual([]);
+  });
+
+  it("ignores a paste that is not a short code", () => {
+    open("/signin", []);
+    answer({});
+    paste("abcdefghij");
+    paste("0O1I");
+    expect(shown()).toBe("|||||");
+    expect(asked).toEqual([]);
+  });
+
+  it("goes back a box on Backspace in an empty box, clearing the one before", () => {
+    open("/signin", []);
+    answer({});
+    enter("AB");
+    expect(focused()).toBe(2);
+    key("Backspace");
+    expect(shown()).toBe("A|||||");
+    expect(focused()).toBe(1);
+    key("Backspace");
+    expect(shown()).toBe("|||||");
+    expect(focused()).toBe(0);
+    key("Backspace");
+    expect(shown()).toBe("|||||");
+    expect(focused()).toBe(0);
+  });
+
+  it("clears only the box Backspace is on and keeps the letters after it", () => {
+    open("/signin", []);
+    answer({});
+    enter("ABC");
+    boxes()[0]!.focus();
+    key("Backspace");
+    expect(shown()).toBe("|B|C|||");
+    expect(focused()).toBe(0);
+    enter("X");
+    expect(shown()).toBe("X|B|C|||");
+  });
+
+  it("does not open until a cleared box mid-code is filled again", async () => {
+    open("/signin", []);
+    answer(live);
+    enter("ABCDE");
+    boxes()[1]!.focus();
+    key("Backspace");
+    boxes()[4]!.focus();
+    enter("F");
+    expect(asked).toEqual([]);
+  });
+
+  it("says the same plain words and starts over on the first box for a wrong code", async () => {
+    open("/signin", []);
+    answer({});
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(status().textContent).toBe(BAD_CODE));
+    expect(status().className).toBe("status error");
+    expect(shown()).toBe("|||||");
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+    expect(focused()).toBe(0);
+    answer(live);
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(status().textContent).toBe("");
+  });
+
+  it("does not remember a PC for a typed code, so the next visit sends this browser nowhere until Google signs in", async () => {
+    open("/signin", []);
+    answer(live);
     enter("ABCDEF");
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
     expect(localStorage.getItem(LAST_PC)).toBeNull();
@@ -731,44 +881,55 @@ describe("entering a PC's code", () => {
     expect(inits).toHaveLength(1);
   });
 
-  it.each<[string, string, Record<string, Answer>]>([
-    ["no such code", "ABCDEF", {}],
-    ["a code the PC no longer holds", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } } }],
-    ["a PC that is off", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: "fail" }],
-    ["the PC's rate limit", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 429 } }],
-    ["a relay that answers nonsense", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: "../evil" } } }],
-    ["a relay that cannot be reached", "ABCDEF", { [LOOKUP]: "fail" }],
-  ])("says the same plain words for %s", async (_, typed, routes) => {
+  it.each<[string, Record<string, Answer>]>([
+    ["no such code", {}],
+    ["a code the PC no longer holds", { [LOOKUP]: { status: 200, body: { label: LABEL_A } } }],
+    ["a PC that is off", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: "fail" }],
+    ["the PC's rate limit", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 429 } }],
+    ["a relay that answers nonsense", { [LOOKUP]: { status: 200, body: { label: "../evil" } } }],
+    ["a relay that cannot be reached", { [LOOKUP]: "fail" }],
+  ])("says the same plain words for %s", async (_, routes) => {
     open("/signin", []);
     answer(routes);
-    enter(typed);
+    enter("ABCDEF");
     await vi.waitFor(() => expect(status().textContent).toBe(BAD_CODE));
     expect(status().className).toBe("status error");
     expect(location.href).not.toContain("/pair");
-    expect(submit().disabled).toBe(false);
+    expect(shown()).toBe("|||||");
+    expect(focused()).toBe(0);
   });
 
-  it.each(["", "ABCDE", "ABCDE0", "ABCDEFG", "OOOOOO"])("refuses %j without asking anyone", (typed) => {
+  it.each(["", "ABCDE", "ABCDE0", "OOOOOO"])("asks no one for %j", (typed) => {
     open("/signin", []);
     answer({});
     enter(typed);
-    expect(status().textContent).toBe(BAD_CODE);
     expect(asked).toEqual([]);
   });
 
-  it("asks the person to wait on the relay's rate limit", async () => {
+  it("asks only for the first six characters when more are typed", async () => {
+    open("/signin", []);
+    answer(live);
+    enter("ABCDEFG");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
+  });
+
+  it("asks the person to wait on the relay's rate limit, and lets them type again", async () => {
     open("/signin", []);
     answer({ [LOOKUP]: { status: 429, body: { error: "rate-limited" } } });
     enter("ABCDEF");
     await vi.waitFor(() => expect(status().textContent).toBe("Too many tries. Wait a minute and try again."));
     expect(asked.map((call) => call.url)).toEqual([LOOKUP]);
+    expect(shown()).toBe("|||||");
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
   });
 
-  it("sends one lookup for a double submit", async () => {
+  it("sends one lookup when the boxes are filled twice at once", async () => {
     open("/signin", []);
-    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    answer(live);
     enter("ABCDEF");
     enter("ABCDEF");
+    paste("ABCDEF");
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
     expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
   });

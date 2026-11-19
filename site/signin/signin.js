@@ -17,7 +17,6 @@
   const NOT_YOURS = "That PC is not signed in to this Google account.";
   const UNCONFIGURED = "Sign-in is not configured.";
   const GOOGLE_DOWN = "Could not load Google sign-in. Check your connection and try again.";
-  const CODE_RE = /^[2-9A-HJ-NP-Z]{6}$/;
   // One message for every miss, so a wrong code never tells whether a PC is behind it.
   const BAD_CODE = "That code did not work. Check it in Wink on your PC: Settings, Devices.";
   const TOO_MANY = "Too many tries. Wait a minute and try again.";
@@ -260,34 +259,100 @@
     }
   }
 
-  async function enterCode() {
-    const submit = $("code").querySelector("button");
-    if (submit.disabled) return;
-    const code = $("code-input").value.replace(/[\s-]/g, "").toUpperCase();
-    if (!CODE_RE.test(code)) {
-      say(BAD_CODE, "error");
-      return;
-    }
-    submit.disabled = true;
-    say("");
-    const label = await codeLabel(code);
-    // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
-    if (LABEL_RE.test(label)) {
-      holdAccount(label);
-      location.assign(`https://${label}.${config.base}/pair?g=1`);
-      return;
-    }
-    submit.disabled = false;
-    say(label === "busy" ? TOO_MANY : BAD_CODE, "error");
+  // Same rules as src/components/CodeBoxes.tsx; signin.test.ts checks they agree.
+  const CODE_LENGTH = 6;
+  const CODE_KEEP = /[^2-9A-HJ-NP-Z]/g;
+  const CODE_PASTED = /^[2-9A-HJ-NP-Z]{1,6}$/;
+  // With Korean input on, letters arrive as Hangul; NFKD turns IME jamo and syllables into conjoining jamo, keyed here by 2-set layout.
+  const HANGUL_KEYS = [
+    [0x1100, "R R S E E F A Q Q T T D W W C Z X V G".split(" ")],
+    [0x1161, "K O I O J P U P H HK HO HL Y N NJ NP NL B M ML L".split(" ")],
+    [0x11a8, "R R RT S SW SG E F FR FA FQ FT FX FV FG A Q QT T T D W C Z X V G".split(" ")],
+  ];
+
+  function keyOf(ch) {
+    const point = ch.codePointAt(0);
+    for (const [start, keys] of HANGUL_KEYS) if (point >= start && point < start + keys.length) return keys[point - start];
+    return ch;
   }
 
+  const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
+
   function showCode() {
-    const form = $("code");
-    form.hidden = false;
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      void enterCode();
-    });
+    $("code").hidden = false;
+    const boxes = [];
+    let value = "";
+    let busy = false;
+
+    const render = () => boxes.forEach((box, i) => (box.value = (value[i] || "").trim()));
+    const focusAt = (i) => boxes[Math.min(i, CODE_LENGTH - 1)].focus();
+    const lock = (on) => {
+      busy = on;
+      for (const box of boxes) box.disabled = on;
+    };
+
+    async function open(code) {
+      lock(true);
+      say("");
+      const label = await codeLabel(code);
+      // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
+      if (LABEL_RE.test(label)) {
+        holdAccount(label);
+        location.assign(`https://${label}.${config.base}/pair?g=1`);
+        return;
+      }
+      value = "";
+      render();
+      lock(false);
+      focusAt(0);
+      say(label === "busy" ? TOO_MANY : BAD_CODE, "error");
+    }
+
+    const put = (from, chars, keep = false) => {
+      value = (value.slice(0, from) + chars + (keep ? value.slice(from + chars.length) : "")).slice(0, CODE_LENGTH);
+      render();
+      focusAt(from + chars.length);
+      if (value.length === CODE_LENGTH && !value.includes(" ")) void open(value);
+    };
+
+    for (let i = 0; i < CODE_LENGTH; i++) {
+      const box = document.createElement("input");
+      box.setAttribute("aria-label", `Code ${i + 1}`);
+      box.inputMode = "text";
+      box.autocomplete = "one-time-code";
+      box.setAttribute("autocapitalize", "characters");
+      box.setAttribute("autocorrect", "off");
+      box.spellcheck = false;
+      box.addEventListener("focus", () => {
+        if (i > value.length) focusAt(value.length);
+        else box.select();
+      });
+      box.addEventListener("input", () => {
+        if (busy) return;
+        const chars = shortCodeChars(box.value.replace(value[i] || "", ""));
+        if (chars) put(Math.min(i, value.length), chars, chars.length === 1);
+        else render();
+      });
+      box.addEventListener("paste", (event) => {
+        event.preventDefault();
+        if (busy) return;
+        const chars = (event.clipboardData?.getData("text/plain") || "").trim().toUpperCase().replace(/[\s-]/g, "");
+        if (CODE_PASTED.test(chars)) put(0, chars);
+      });
+      box.addEventListener("keydown", (event) => {
+        if (event.key !== "Backspace") return;
+        event.preventDefault();
+        if (busy) return;
+        const at = (value[i] || "").trim() ? i : i - 1;
+        if (at < 0) return;
+        // A cleared box mid-code holds a space, so the boxes after it keep their letters.
+        value = `${value.slice(0, at)} ${value.slice(at + 1)}`.trimEnd();
+        render();
+        focusAt(at);
+      });
+      boxes.push(box);
+    }
+    $("boxes").replaceChildren(...boxes);
   }
 
   // Back from turning on Devices on the PC, the empty list loads again with the same token.

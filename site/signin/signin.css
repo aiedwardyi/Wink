@@ -122,47 +122,30 @@ h1 {
 .code {
   margin-top: 24px;
 }
-.code-row {
+.boxes {
   display: flex;
+  justify-content: space-between;
   gap: 8px;
   margin-top: 8px;
 }
-.code input,
-.code button {
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
+.boxes input {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--hairline) 60%, transparent);
+  border-radius: 8px;
   background: var(--inset);
   color: var(--ink);
-  font: inherit;
-}
-.code input {
-  flex: 1;
-  min-width: 0;
-  padding: 10px 16px;
-  /* Under 16px, iOS zooms the page on focus. */
-  font-size: 16px;
-  letter-spacing: 0.2em;
+  font: 600 18px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   text-align: center;
   text-transform: uppercase;
+  outline: none;
 }
-.code input::placeholder {
-  color: var(--ink-secondary);
-  letter-spacing: normal;
-  text-transform: none;
+.boxes input:focus {
+  border-color: var(--accent);
 }
-.code button {
-  padding: 10px 18px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.code button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-.code input:focus-visible,
-.code button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+.boxes input:disabled {
+  opacity: 0.6;
 }
 .list {
   display: flex;
