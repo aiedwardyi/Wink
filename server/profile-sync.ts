@@ -42,6 +42,7 @@ const portableBotChanges = z.object({
   projectNotes: z.string().trim().max(1_024).nullable().optional(),
   pinnedMessageId: ID.nullable().optional(),
   trashed: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 }).strict();
 const sectionChanges = z.object({
   name: z.string().trim().min(1).max(100).optional(),
@@ -394,7 +395,7 @@ export function parseSyncOperationText(text: string): ProfileSyncOperation {
 }
 
 // Bot fields older builds reject travel in their own op, under an extension those builds never read.
-const OWN_OP_EXTENSIONS = { memoryNotes: "notes", projectNotes: "paths", pinnedMessageId: "pin", mascotStyle: "style", trashed: "trash" } as const;
+const OWN_OP_EXTENSIONS = { memoryNotes: "notes", projectNotes: "paths", pinnedMessageId: "pin", mascotStyle: "style", trashed: "trash", hidden: "archive" } as const;
 
 function ownOpFields(changes: Record<string, unknown>) {
   return Object.entries(OWN_OP_EXTENSIONS).filter(([field]) => field in changes &&
@@ -409,7 +410,7 @@ export function syncOperationFileName(operation: ProfileSyncOperation): string {
   return `${String(operation.sequence).padStart(12, "0")}-${safe(operation.deviceId)}-${safe(operation.operationId)}.${ext}`;
 }
 
-const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash|room)$/.test(name);
+const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash|archive|room)$/.test(name);
 
 export function writeSyncOperation(folder: string, operation: ProfileSyncOperation): string {
   const parsed = parseSyncOperation(operation);
@@ -674,8 +675,8 @@ export function unsyncedChanges(synced: Record<string, string>, local: readonly 
   });
 }
 
-// 1.0.60 rejects a bot op carrying any of these keys, 1.0.184 one carrying memoryNotes, 1.0.185 projectNotes, 1.0.200 pinnedMessageId
-const LATER_BOT_DEFAULTS: Record<string, unknown> = { effort: null, modelMode: null, approvePeerComms: false, memoryNotes: null, projectNotes: null, pinnedMessageId: null };
+// 1.0.60 rejects a bot op carrying any of these keys, 1.0.184 one carrying memoryNotes, 1.0.185 projectNotes, 1.0.200 pinnedMessageId, 1.0.288 hidden
+const LATER_BOT_DEFAULTS: Record<string, unknown> = { effort: null, modelMode: null, approvePeerComms: false, memoryNotes: null, projectNotes: null, pinnedMessageId: null, hidden: false };
 
 /** Leaves never-synced defaults of LATER_BOT_DEFAULTS out of the op, marking them synced so a later change still publishes. */
 export function compatibleSyncChanges(synced: Record<string, string>, item: SyncEntityValues): SyncEntityValues {

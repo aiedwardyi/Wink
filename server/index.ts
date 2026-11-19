@@ -1602,6 +1602,7 @@ function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unk
     memoryNotes: bot.memoryNotes ?? null,
     projectNotes: bot.projectNotes ?? null,
     pinnedMessageId: bot.pinnedMessageId ?? null,
+    hidden: Boolean(bot.hidden),
   };
 }
 
@@ -1746,6 +1747,7 @@ function applySyncedBotFields(
     patch.projectNotes = notes.ok ? notes.path ?? undefined : undefined;
   }
   if ("pinnedMessageId" in apply) patch.pinnedMessageId = typeof apply.pinnedMessageId === "string" ? apply.pinnedMessageId : undefined;
+  if ("hidden" in apply) patch.hidden = apply.hidden === true;
   if (["instanceId", "model", "effort", "modelMode"].some((field) => field in apply)) {
     patch.modelSelection = mergeSyncedModelSelection(bot.modelSelection, apply, instanceOffersModel, (instanceId, model) => currentModel(registry.get(instanceId)?.driverKind ?? "", model));
   }
@@ -2592,9 +2594,9 @@ const uploads = createUploads({
   },
 });
 
-/** Bots a joining PC held back stay local until someone talks to them. */
+/** Bots a joining PC held back stay local until someone talks to them or archives them. */
 function profileSyncBots(): BotRecord[] {
-  return store.bots.filter((bot) => profileSyncSettings.botMap[bot.id] || !googleSync.held(bot.id) || botTalkedTo(bot.id));
+  return store.bots.filter((bot) => profileSyncSettings.botMap[bot.id] || !googleSync.held(bot.id) || bot.hidden || botTalkedTo(bot.id));
 }
 
 store.onChange((change) => {
