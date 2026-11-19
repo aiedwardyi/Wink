@@ -442,15 +442,35 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
   };
   const esc = (target: EventTarget = document.body) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
 
-  it("Esc inside an open post returns to the list, and Esc on the list leaves it alone", async () => {
-    await esc();
+  it("Esc inside an open post returns to the list, and Esc on the list goes back to the chat", async () => {
+    mock.state.selectedId = FORUM_SELECTION;
     await openPost();
     await esc();
     expect(host.querySelector("article")).toBeNull();
     expect(rows()).toEqual(["pesc"]);
+    expect(mock.dispatched).toEqual([]);
     await esc();
-    expect(rows()).toEqual(["pesc"]);
-    expect(host.querySelector("[data-board-view]")).not.toBeNull();
+    expect(mock.dispatched).toEqual([{ type: "select", id: "astra", reveal: true }]);
+  });
+
+  it("Esc on the list stays in the Forum with a menu open", async () => {
+    mock.state.selectedId = FORUM_SELECTION;
+    posts = [post("pesc", { created_at: 1 })];
+    await render(BoardView);
+    const menu = document.body.appendChild(document.createElement("div"));
+    menu.setAttribute("data-message-menu", "");
+    await esc();
+    menu.remove();
+    expect(mock.dispatched).toEqual([]);
+  });
+
+  it("Esc on the list does nothing on a phone", async () => {
+    mock.state.selectedId = FORUM_SELECTION;
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: query.includes("reduce") || query === PHONE_QUERY }));
+    posts = [post("pesc", { created_at: 1 })];
+    await render(BoardView);
+    await esc();
+    expect(mock.dispatched).toEqual([]);
   });
 
   it("Esc keeps the post open while a reply is being typed", async () => {
@@ -559,6 +579,12 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect(rows()).toEqual(["pa", "pc", "pb"]);
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-sort="top"]')!.click());
     expect(rows()).toEqual(["pb", "pa", "pc"]);
+  });
+
+  it("the list keeps its scrollbar gutter, so a filter that changes the overflow never shifts the content", async () => {
+    posts = [post("pa", { created_at: 1 })];
+    await render(BoardView);
+    expect(host.querySelector("[data-board-view] section")!.parentElement!.className).toContain("[scrollbar-gutter:stable]");
   });
 
   it("Left and Right move between Hot, New and Top, one tab stop on the chosen one", async () => {
