@@ -88,6 +88,7 @@ function open(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   const upgrade = !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'people_works'").get();
+  const unmarked = !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'left_rooms'").get();
   db.exec(`
     CREATE TABLE IF NOT EXISTS joined (
       room_id TEXT PRIMARY KEY,
@@ -161,7 +162,10 @@ function open(): DatabaseSync {
       works INTEGER NOT NULL,
       PRIMARY KEY (room_id, person_id)
     );
+    -- rooms the user left by hand; kept after Remove, so sync never seats this PC there again
+    CREATE TABLE IF NOT EXISTS left_rooms (room_id TEXT PRIMARY KEY);
   `);
+  if (unmarked) db.exec("INSERT OR IGNORE INTO left_rooms (room_id) SELECT room_id FROM joined WHERE status = 'left'");
   // Everyone already in a joined room keeps full power with this PC's bots; anyone seen later starts off.
   if (upgrade) {
     db.exec(`
@@ -227,6 +231,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM left_rooms WHERE room_id = ?").run(roomId);
     // The host keeps a returning person's bots, so this PC keeps its record of them.
     const before = database.prepare("SELECT person_id FROM joined WHERE room_id = ?").get(roomId) as { person_id: string } | undefined;
     if (before?.person_id !== me.id) {
@@ -412,9 +417,23 @@ export function setJoinedState(roomId: string, state: JoinedState): boolean {
     .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
 }
 
-/** Read-only from here on; the key is gone. */
+/** Read-only from here on; the key is gone. A leave is the user's own, so it outlives Remove. */
 export function endJoined(roomId: string, status: "removed" | "left"): boolean {
-  return db().prepare("UPDATE joined SET status = ?, key = NULL WHERE room_id = ? AND status = 'joined'").run(status, roomId).changes > 0;
+  return transaction((database) => {
+    const ended = database.prepare("UPDATE joined SET status = ?, key = NULL WHERE room_id = ? AND status = 'joined'").run(status, roomId).changes > 0;
+    if (ended && status === "left") database.prepare("INSERT OR IGNORE INTO left_rooms (room_id) VALUES (?)").run(roomId);
+    return ended;
+  });
+}
+
+/** This PC holds a seat in the room, read-only too, or the user once left it here; only a join by hand clears that. */
+export function seatTaken(roomId: string): boolean {
+  return Boolean(db().prepare("SELECT 1 FROM joined WHERE room_id = ? UNION ALL SELECT 1 FROM left_rooms WHERE room_id = ?").get(roomId, roomId));
+}
+
+/** The user left the room here by hand, even if its row is gone since. */
+export function leftByHand(roomId: string): boolean {
+  return Boolean(db().prepare("SELECT 1 FROM left_rooms WHERE room_id = ?").get(roomId));
 }
 
 export function joinedCode(roomId: string): string | null {

@@ -36,6 +36,7 @@ import {
   resetJoined,
   removeJoined,
   saveJoined,
+  seatTaken,
   setJoinedDeletedCount,
   setJoinedReactions,
   setJoinedState,
@@ -205,6 +206,7 @@ export class GuestClient {
   private readonly gone = new Set<string>();
   private readonly changing = new Set<string>();
   private joining = 0;
+  private joins: Promise<unknown> = Promise.resolve();
   private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
   private started = false;
   private readonly deps: GuestClientDeps;
@@ -303,12 +305,22 @@ export class GuestClient {
     if (this.changing.size) return failed(409, "room is busy");
     const own = this.deps.ownRoom?.(code);
     if (own) return { ...failed(409, "own-room"), groupId: own };
+    return this.queued(() => this.joinNow(code));
+  }
+
+  /** Sync's join of a room the user hosts on another PC: never over a seat this PC holds or the user left here. */
+  async seat(code: string, roomId: string): Promise<GuestResult<JoinedView>> {
+    if (this.changing.size) return failed(409, "room is busy");
+    if (this.deps.ownRoom?.(code)) return failed(409, "own-room");
+    return this.queued(() => seatTaken(roomId) ? Promise.resolve(failed(409, "seated")) : this.joinNow(code, roomId));
+  }
+
+  /** One join at a time: the host gives a returning PC a fresh key each time, so the last reply must be the last key. */
+  private queued(work: () => Promise<GuestResult<JoinedView>>): Promise<GuestResult<JoinedView>> {
     this.joining++;
-    try {
-      return await this.joinNow(code);
-    } finally {
-      this.joining--;
-    }
+    const run = this.joins.then(work).finally(() => this.joining--);
+    this.joins = run.catch(() => {});
+    return run;
   }
 
   /** The host a short code points at, from the first of `bases` whose relay knows it. */

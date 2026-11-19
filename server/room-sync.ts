@@ -1,9 +1,10 @@
 // Room records between one user's PCs. A room travels as `room` ops under its
 // own group id, in `.room` files older builds never read. Only route edits
 // publish; imports, and values a PC derived (members it lacks, a normalized
-// responder), never do. Team rooms stay on their host; its other PCs get the
-// room's code in a pointer op and take a guest seat once.
-import { randomUUID } from "node:crypto";
+// responder), never do. Team rooms stay on their host; a pointer op names the
+// room, each other PC asks with its seat key, and the host seals the room's code
+// to that key, so the folder alone opens nothing. Each PC takes its seat once.
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -15,6 +16,7 @@ import {
   type ProfileSyncSettings, type ProfileSyncState, type SyncedRoom,
 } from "./profile-sync.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
+import { isSeatKey, openSeat, sealSeat, seatKey } from "./rooms/seat-key.ts";
 import { UNTITLED_TASK, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 
 export const ROOM_SYNC_FILE = "room-sync.json";
@@ -30,13 +32,19 @@ export interface RoomSyncHost {
   syncing?(threadId: string): boolean;
   /** The code of a team room this PC hosts, or null while it cannot be reached. */
   invite?(roomId: string): string | null;
-  /** Joins a team room as a guest seat. */
-  join?(code: string): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
-  /** Whether this PC has a guest seat in the room, left or removed too. */
+  /** Joins a team room as a guest seat, unless this PC has one there by then. */
+  join?(code: string, roomId: string): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
+  /** Whether this PC has a guest seat in the room, left or removed too, or the user left it here by hand. */
   joined?(roomId: string): boolean;
+  /** Whether the user left the room here by hand. */
+  left?(roomId: string): boolean;
 }
 
 const MEMBER = "member.";
+/** A pointer's `seat.<device>` is that PC's seat key; `seal.<device>` the room code sealed to it. */
+const SEAT = "seat.";
+const SEAL = "seal.";
+const DEVICE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const FIELDS = ["name", "bulletin", "section", "pinned", "pinnedMessageId", "setupCompletedAt", "setupSkippedAt", "defaultResponder"] as const;
 const CLEARED_BY_NULL = new Set(["section", "pinnedMessageId"]);
 
@@ -55,15 +63,20 @@ const fileSchema = z.object({
   applied: z.record(z.string(), z.string()).catch({}),
   pending: z.array(pendingSchema).catch([]),
   unresolved: z.record(z.string(), z.object({ members: z.array(z.string()), responder: z.string().optional() })).catch({}),
-  /** The code each team room hosted here last sent. */
-  invites: z.record(z.string(), z.string()).catch({}),
-  /** Team rooms hosted on another PC: once `joined` never again, a `refused` code is not tried twice. Kept across folders. */
-  joins: z.record(z.string(), z.object({ code: z.string(), room: z.string().optional(), state: z.enum(["waiting", "joined", "refused"]) })).catch({}),
+  /** Team rooms hosted here: the room each pointer names, the seat keys other PCs asked with, and a digest of what each was sealed. */
+  pointers: z.record(z.string(), z.string()).catch({}),
+  seats: z.record(z.string(), z.record(z.string(), z.string())).catch({}),
+  sealed: z.record(z.string(), z.record(z.string(), z.string())).catch({}),
+  /** Team rooms hosted on another PC: once `joined` or `left` never again, a `refused` code is not tried twice.
+   * `asked` is the seat key sent for it. Kept across folders, but a join still `waiting` stays with its folder. */
+  joins: z.record(z.string(), z.object({
+    code: z.string().optional(), room: z.string().optional(), state: z.enum(["waiting", "joined", "refused", "left"]), asked: z.string().optional(),
+  })).catch({}),
 });
 type RoomSyncFile = z.infer<typeof fileSchema>;
 
 const fileOf = (host: RoomSyncHost) => join(host.dataDir, ROOM_SYNC_FILE);
-const empty = (scope = ""): RoomSyncFile => ({ scope, marked: [], applied: {}, pending: [], unresolved: {}, invites: {}, joins: {} });
+const empty = (scope = ""): RoomSyncFile => ({ scope, marked: [], applied: {}, pending: [], unresolved: {}, pointers: {}, seats: {}, sealed: {}, joins: {} });
 
 function load(host: RoomSyncHost): RoomSyncFile {
   let raw: string;
@@ -84,7 +97,9 @@ function load(host: RoomSyncHost): RoomSyncFile {
 function scoped(host: RoomSyncHost, folder: string): RoomSyncFile {
   const file = load(host);
   const scope = `${host.settings().workspaceId}:${folder}`;
-  return file.scope === scope ? file : { ...empty(scope), pending: file.pending, joins: file.joins };
+  if (file.scope === scope) return file;
+  const joins = Object.fromEntries(Object.entries(file.joins).filter(([, entry]) => entry.state !== "waiting"));
+  return { ...empty(scope), pending: file.pending, joins };
 }
 
 function save(host: RoomSyncHost, file: RoomSyncFile): void {
@@ -209,13 +224,31 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
   }
   for (const group of store.groups) {
     if (!group.hosted) continue;
-    const invite = host.invite?.(group.hosted.roomId) ?? null;
-    const sent = invite === null || file.invites[group.id] === invite;
-    const changes = invite ? { hosted: true, invite, room: group.hosted.roomId } : { hosted: true };
-    // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow
-    if ((!marked.has(group.id) && sent) || !write(group.id, changes, host.now())) continue;
+    const roomId = group.hosted.roomId;
+    const code = host.invite?.(roomId) ?? null;
+    const sealed = { ...file.sealed[group.id] };
+    const changes: Record<string, unknown> = {};
+    for (const [deviceId, key] of code ? Object.entries(file.seats[group.id] ?? {}) : []) {
+      const mark = createHash("sha256").update(`${roomId}\n${code}\n${key}`).digest("base64url");
+      if (sealed[deviceId] === mark) continue;
+      changes[`${SEAL}${deviceId}`] = sealSeat(key, code!, `${group.id}:${roomId}`);
+      sealed[deviceId] = mark;
+    }
+    // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow.
+    // A pointer from an earlier build carried the code in the clear; the first one from here clears it.
+    const pointed = file.pointers[group.id] === roomId && !marked.has(group.id);
+    if ((pointed || (!code && !marked.has(group.id))) && !Object.keys(changes).length) continue;
+    if (!write(group.id, { hosted: true, room: roomId, ...(pointed ? {} : { invite: null }), ...changes }, host.now())) continue;
     forget(file, marked, group.id);
-    if (invite) file.invites[group.id] = invite;
+    file.pointers[group.id] = roomId;
+    file.sealed[group.id] = sealed;
+  }
+  // this PC's seat key, once, for each team room it waits to join
+  const asking = Object.entries(file.joins).filter(([, entry]) => entry.state === "waiting" && !entry.code);
+  const key = asking.length ? seatKey(host.dataDir) : "";
+  for (const [groupId, entry] of asking) {
+    if (entry.asked === key || !write(groupId, { [`${SEAT}${settings.deviceId}`]: key }, host.now())) continue;
+    entry.asked = key;
   }
   const left: Pending[] = [];
   for (const entry of [...file.pending].sort((a, b) => a.at - b.at)) {
@@ -287,7 +320,15 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
     // deleted here; its tombstone goes out next
     if (mine.some((entry) => entry.deleted)) continue;
     let group = store.group(id);
-    if (group?.hosted) continue;
+    if (group?.hosted) {
+      const seats = Object.entries(remote).flatMap(([field, value]) => {
+        const deviceId = field.slice(SEAT.length);
+        return field.startsWith(SEAT) && DEVICE.test(deviceId) && deviceId !== host.settings().deviceId && isSeatKey(value) ? [[deviceId, value] as const] : [];
+      });
+      if (seats.length) file.seats[id] = Object.fromEntries(seats);
+      else delete file.seats[id];
+      continue;
+    }
     if (remote.hosted === true) {
       if (group && host.working(group)) {
         deferred = true;
@@ -295,10 +336,9 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
       }
       if (group) removeRoom(store, group);
       forget(file, marked, id);
-      const join = file.joins[id];
-      const invite = z.string().optional().catch(undefined).parse(remote.invite);
-      const room = z.string().optional().catch(undefined).parse(remote.room);
-      if (invite && join?.state !== "joined" && join?.code !== invite) file.joins[id] = { code: invite, room, state: "waiting" };
+      // a pointer naming no room came from an earlier build; a seat taken or left here could not be told from it
+      const room = typeof remote.room === "string" && remote.room ? remote.room : null;
+      if (room) point(host, file, id, room, openSeat(host.dataDir, remote[`${SEAL}${host.settings().deviceId}`], `${id}:${room}`));
       continue;
     }
     if (!group) {
@@ -365,32 +405,52 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
   return { deferred };
 }
 
+/** A pointer for `groupId` names `room`, with the code sealed to this PC once the host has sealed it. */
+function point(host: RoomSyncHost, file: RoomSyncFile, groupId: string, room: string, code: string | null): void {
+  const was = file.joins[groupId];
+  // an entry from before pointers named rooms is for the room the group has
+  if (was && (!was.room || was.room === room)) {
+    was.room = room;
+    if (was.state === "joined" || was.state === "left" || !code || code === was.code) return;
+    file.joins[groupId] = { ...was, code, state: "waiting" };
+    return;
+  }
+  // the host replaced the group's room: a PC the user left the old one on stays out, any other takes the new seat
+  if (was && (was.state === "left" || (was.room && host.left?.(was.room)))) {
+    file.joins[groupId] = { room, state: "left" };
+    return;
+  }
+  file.joins[groupId] = { room, state: "waiting", ...(code ? { code } : {}), ...(was?.asked ? { asked: was.asked } : {}) };
+}
+
 const joining = new Set<string>();
 
-/** Takes the guest seat of each team room waiting here, one try per pass; a host that is off is tried again on the next. */
-export function joinTeamRooms(host: RoomSyncHost): void {
+/** Takes the guest seat of each team room waiting here, one try per pass; a host that is off, or a full room, is tried again on the next. */
+export function joinTeamRooms(host: RoomSyncHost, folder: string): void {
   const { join } = host;
   if (!join) return;
-  const file = load(host);
+  const file = scoped(host, folder);
+  const before = JSON.stringify(file);
+  const scope = file.scope;
   for (const [groupId, entry] of Object.entries(file.joins)) {
     const { code, room, state } = entry;
     const key = `${host.dataDir}\n${groupId}`;
-    if (state !== "waiting" || joining.has(key)) continue;
+    if (state !== "waiting" || !code || !room || joining.has(key)) continue;
     // a seat taken or left by hand stays as the user left it; a join would reset it
-    if (room && host.joined?.(room)) {
-      entry.state = "joined";
-      save(host, file);
+    if (host.joined?.(room)) {
+      entry.state = host.left?.(room) ? "left" : "joined";
       continue;
     }
     joining.add(key);
-    void join(code).then((result) => {
+    void join(code, room).then((result) => {
       // 400 is bad-code: this PC's relay is not set up yet, so it cannot read the host's code
-      const later = !result.ok && (result.status >= 500 || result.status === 429 || result.status === 400 || result.error === "room is busy");
+      const later = !result.ok && (result.status >= 500 || result.status === 429 || result.status === 400 || result.error === "room is busy" || result.error === "room-full");
       const latest = load(host);
       const current = latest.joins[groupId];
-      if (later || current?.code !== code || current.state !== "waiting") return;
-      current.state = result.ok ? "joined" : "refused";
+      if (later || latest.scope !== scope || current?.code !== code || current.room !== room || current.state !== "waiting") return;
+      current.state = result.ok || result.error === "seated" ? (host.left?.(room) ? "left" : "joined") : "refused";
       save(host, latest);
     }).catch((error) => console.warn(`room sync: join of room ${groupId} failed`, error)).finally(() => joining.delete(key));
   }
+  if (JSON.stringify(file) !== before) save(host, file);
 }

@@ -14,7 +14,8 @@ import {
   writeSyncOperation, type ProfileSyncSettings,
 } from "./profile-sync.ts";
 import { importRooms, joinTeamRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
-import { closeJoinedDb, endJoined, joinedRoom, saveJoined } from "./rooms/joined.ts";
+import { closeJoinedDb, endJoined, joinedRoom, leftByHand, removeJoined, saveJoined, seatTaken } from "./rooms/joined.ts";
+import { openSeat } from "./rooms/seat-key.ts";
 import { Store, type GroupRecord } from "./store.ts";
 import { drivePathRule as oldDrivePathRule } from "./testing/drive-mirror-1.0.213.ts";
 
@@ -285,108 +286,211 @@ describe("room records over profile sync", () => {
   });
 });
 
+
 describe("team rooms on the user's other PCs", () => {
-  const code = (n: number) => `wkr1:abc.wink.test:code-${n}.wki_${"a".repeat(43)}`;
+  const secret = (n: number) => `wki_${String(n).repeat(43)}`;
+  const code = (n: number) => `wkr1:abc.wink.test:code-${n}.${secret(n)}`;
   const invites = new Map<string, string>();
-  let joinSeat: ReturnType<typeof vi.fn<NonNullable<RoomSyncHost["join"]>>>;
-  const teamHost = (): RoomSyncHost => ({ ...host(), invite: vi.fn((roomId: string) => invites.get(roomId) ?? null), join: joinSeat, joined: (roomId) => joinedRoom(roomId) !== null });
-  const pass = () => {
-    const pc = teamHost();
-    importRooms(pc, state(), folder);
-    joinTeamRooms(pc);
-    return publishRooms(pc, folder);
+  const codeRooms = new Map<string, string>();
+  const serve = (roomId: string, n: number) => {
+    invites.set(roomId, code(n));
+    codeRooms.set(code(n), roomId);
   };
-  const joins = () => JSON.parse(readFileSync(join(DATA_DIR, "room-sync.json"), "utf8")).joins;
-  const pointers = () => readSyncOperations(folder).operations.filter((operation) => operation.changes?.hosted === true);
+  let joinSeat: ReturnType<typeof vi.fn<NonNullable<RoomSyncHost["join"]>>>;
+  let homeDir: string;
+  let workDir: string;
+  let homeStore: Store;
+  let workStore: Store;
+  let homeSettings: ProfileSyncSettings;
+  let workSettings: ProfileSyncSettings;
+
+  const homePc = (): RoomSyncHost => ({
+    dataDir: homeDir, store: homeStore, settings: () => homeSettings, now: () => clock, working: () => false,
+    invite: vi.fn((roomId: string) => invites.get(roomId) ?? null),
+  });
+  const workPc = (): RoomSyncHost => ({
+    dataDir: workDir, store: workStore, settings: () => workSettings, now: () => clock, working: () => false,
+    join: joinSeat, joined: seatTaken, left: leftByHand,
+  });
+  const pass = (pc: RoomSyncHost, at = folder) => {
+    importRooms(pc, applySyncOperations(emptyProfileSyncState(), readSyncOperations(at).operations), at);
+    joinTeamRooms(pc, at);
+    return publishRooms(pc, at);
+  };
+  /** Work, then Home, a few times: Work asks, Home seals, Work joins. */
+  const rounds = async (n = 3) => {
+    for (let i = 0; i < n; i++) {
+      pass(workPc());
+      pass(homePc());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    pass(workPc());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const joinsOf = (dir: string) => JSON.parse(readFileSync(join(dir, "room-sync.json"), "utf8")).joins;
+  const folderText = () => files().map((name) => readFileSync(join(folder, "changes", name), "utf8")).join("\n");
+  const hostTk = (roomId = "room-1") => homeStore.createGroup("TK", [], false, undefined, undefined, { roomId });
 
   beforeEach(() => {
     invites.clear();
-    joinSeat = vi.fn<NonNullable<RoomSyncHost["join"]>>(async () => ({ ok: true }));
+    codeRooms.clear();
+    homeDir = mkdtempSync(join(tmpdir(), "room-home-"));
+    workDir = mkdtempSync(join(tmpdir(), "room-work-"));
+    homeStore = store;
+    workStore = new Store(() => ({ instanceId: "fake-work", model: "m" }));
+    homeSettings = { ...settings, deviceId: "pc-home" };
+    workSettings = { ...settings, deviceId: "pc-work" };
+    // the host's door, as guestClient.seat takes it: the seat is saved here
+    joinSeat = vi.fn<NonNullable<RoomSyncHost["join"]>>(async (joinCode, roomId) => {
+      saveJoined(roomId ?? codeRooms.get(joinCode)!, "abc.wink.test", { id: "me", name: "Edward 2" }, `wkg_${"b".repeat(43)}`, joinCode);
+      return { ok: true };
+    });
   });
 
   afterEach(() => {
     closeJoinedDb();
     rmSync(join(DATA_DIR, "joined.db"), { force: true });
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
   });
 
-  it("sends each hosted room's code, people-only too, again only when it changes, and never a room joined here", () => {
-    const atlas = bot("Atlas", "sync-atlas");
-    const team = store.createGroup("TK", [atlas.id], false, undefined, undefined, { roomId: "hosted-1" });
-    const people = store.createGroup("Just us", [], false, undefined, undefined, { roomId: "hosted-2" });
-    saveJoined("jj-room", "jj.wink.test", { id: "me", name: "Mina" }, `wkg_${"b".repeat(43)}`, code(9));
-    invites.set("hosted-1", code(1)).set("hosted-2", code(2));
-    expect(pass()).toBe(2);
-    expect(Object.fromEntries(pointers().map((operation) => [operation.entityId, operation.changes!.invite]))).toEqual({ [team.id]: code(1), [people.id]: code(2) });
-    expect(pass()).toBe(0);
-    invites.set("hosted-1", code(3));
-    expect(pass()).toBe(1);
-    expect(state().rooms[team.id]).toMatchObject({ hosted: true, invite: code(3) });
-    invites.clear();
-    expect(pass()).toBe(0);
+  it("seats the other PC once with the code sealed to it, and never the host", async () => {
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(1);
+    expect(joinSeat).toHaveBeenCalledWith(code(1), "room-1");
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ room: "room-1", state: "joined" });
+    expect(homeStore.groups.map((group) => group.hosted)).toEqual([{ roomId: "room-1" }]);
+    expect(workStore.groups).toEqual([]);
+    expect(existsSync(join(homeDir, "room-sync.json")) && JSON.parse(readFileSync(join(homeDir, "room-sync.json"), "utf8")).joins).toEqual({});
+    // a restart and later passes take no second seat
+    workStore = new Store(() => ({ instanceId: "fake-work", model: "m" }));
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(1);
   });
 
-  it("never imports its own pointer on the host", async () => {
-    store.createGroup("TK", [], false, undefined, undefined, { roomId: "hosted-1" });
-    invites.set("hosted-1", code(1));
-    pass();
-    pass();
-    await vi.waitFor(() => expect(store.groups[0]!.hosted).toEqual({ roomId: "hosted-1" }));
+  it("puts no code in the folder that joins by itself", async () => {
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(1);
+    expect(folderText()).not.toContain(secret(1));
+    expect(folderText()).not.toContain("code-1");
+    const seal = state().rooms[tk.id]!["seal.pc-work"];
+    const stranger = mkdtempSync(join(tmpdir(), "room-stranger-"));
+    try {
+      expect(openSeat(workDir, seal, `${tk.id}:room-1`)).toBe(code(1));
+      expect(openSeat(homeDir, seal, `${tk.id}:room-1`)).toBeNull();
+      expect(openSeat(stranger, seal, `${tk.id}:room-1`)).toBeNull();
+      // a seal moved to another room's pointer opens nothing
+      expect(openSeat(workDir, seal, `${tk.id}:room-2`)).toBeNull();
+    } finally {
+      rmSync(stranger, { recursive: true, force: true });
+    }
+  });
+
+  it("never seats a PC again in a room the user left there by hand, even after Remove", async () => {
+    saveJoined("room-1", "abc.wink.test", { id: "me", name: "Edward 2" }, `wkg_${"b".repeat(43)}`, code(1));
+    expect(endJoined("room-1", "left")).toBe(true);
+    expect(removeJoined("room-1")).toBe(true);
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds();
+    serve("room-1", 2);
+    await rounds();
     expect(joinSeat).not.toHaveBeenCalled();
-    expect(joins()).toEqual({});
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ state: "left" });
+    expect(joinedRoom("room-1")).toBeNull();
   });
 
-  it("joins once on the other PC and not again after a restart or a new code", async () => {
-    remote("room-tk", { hosted: true, invite: code(1) }, T0);
-    pass();
-    await vi.waitFor(() => expect(joins()["room-tk"]).toEqual({ code: code(1), state: "joined" }));
-    expect(joinSeat).toHaveBeenCalledTimes(1);
-    expect(joinSeat).toHaveBeenCalledWith(code(1));
-    store = new Store(() => ({ instanceId: "fake", model: "m" }));
-    pass();
-    remote("room-tk", { hosted: true, invite: code(2) }, T0 + 1_000);
-    pass();
-    pass();
-    expect(joinSeat).toHaveBeenCalledTimes(1);
+  it("keeps a join still waiting with the workspace it came from", async () => {
+    joinSeat.mockResolvedValue({ ok: false, status: 503, error: "unavailable" });
+    hostTk();
+    serve("room-1", 1);
+    await rounds();
+    const tries = joinSeat.mock.calls.length;
+    expect(tries).toBeGreaterThan(0);
+    const other = mkdtempSync(join(tmpdir(), "room-other-"));
+    try {
+      workSettings = { ...workSettings, workspaceId: "other-workspace" };
+      for (let i = 0; i < 3; i++) pass(workPc(), other);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(joinSeat).toHaveBeenCalledTimes(tries);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("tries a full room again on later passes", async () => {
+    const full = { ok: false as const, status: 409, error: "room-full" };
+    joinSeat.mockResolvedValueOnce(full).mockResolvedValueOnce(full);
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds(5);
+    expect(joinSeat).toHaveBeenCalledTimes(3);
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ state: "joined" });
   });
 
   it("tries again while the host is off and never a refused code twice", async () => {
     joinSeat.mockResolvedValueOnce({ ok: false, status: 503, error: "unavailable" }).mockResolvedValueOnce({ ok: false, status: 404, error: "no-invite" });
-    remote("room-tk", { hosted: true, invite: code(1) }, T0);
-    pass();
-    await vi.waitFor(() => expect(joinSeat).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => {
-      pass();
-      expect(joins()["room-tk"]!.state).toBe("refused");
-    });
-    pass();
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds(5);
     expect(joinSeat).toHaveBeenCalledTimes(2);
-    remote("room-tk", { hosted: true, invite: code(2) }, T0 + 1_000);
-    pass();
-    await vi.waitFor(() => expect(joins()["room-tk"]).toEqual({ code: code(2), state: "joined" }));
-    expect(joinSeat).toHaveBeenLastCalledWith(code(2));
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ state: "refused" });
+    serve("room-1", 2);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(3);
+    expect(joinSeat).toHaveBeenLastCalledWith(code(2), "room-1");
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ state: "joined" });
   });
 
-  it("never takes a seat this PC already has or left", async () => {
-    saveJoined("room-1", "abc.wink.test", { id: "me", name: "Edward" }, `wkg_${"b".repeat(43)}`, code(1));
+  it("takes a seat in a room that replaced the group's old one, unless the user left the old one here", async () => {
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(1);
+    homeStore.patchGroup(tk.id, { hosted: { roomId: "room-2" } });
+    serve("room-2", 2);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(2);
+    expect(joinSeat).toHaveBeenLastCalledWith(code(2), "room-2");
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ room: "room-2", state: "joined" });
+    endJoined("room-2", "left");
+    homeStore.patchGroup(tk.id, { hosted: { roomId: "room-3" } });
+    serve("room-3", 3);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(2);
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ room: "room-3", state: "left" });
+  });
+
+  it("never seats from a pointer that names no room, and the host's next pointer clears the code it carried", async () => {
+    saveJoined("room-1", "abc.wink.test", { id: "me", name: "Edward 2" }, `wkg_${"b".repeat(43)}`, code(1));
     endJoined("room-1", "left");
-    remote("room-tk", { hosted: true, invite: code(1), room: "room-1" }, T0);
-    pass();
-    await vi.waitFor(() => expect(joins()["room-tk"]).toMatchObject({ state: "joined" }));
+    const tk = hostTk();
+    // the first checkpoint's pointer: the code in the clear and no room
+    remote(tk.id, { hosted: true, invite: code(1) }, T0, "pc-home");
+    pass(workPc());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(joinSeat).not.toHaveBeenCalled();
+    serve("room-1", 1);
+    pass(homePc());
+    expect(state().rooms[tk.id]).toMatchObject({ hosted: true, room: "room-1", invite: null });
+    await rounds();
     expect(joinSeat).not.toHaveBeenCalled();
     expect(joinedRoom("room-1")!.status).toBe("left");
   });
 
-  it("never writes rooms.db, a room or a hosted mark on the other PC, nor a room op after leaving", async () => {
-    const pc = teamHost();
-    remote("room-tk", { hosted: true, invite: code(1) }, T0);
-    importRooms(pc, state(), folder);
-    joinTeamRooms(pc);
-    await vi.waitFor(() => expect(joins()["room-tk"]!.state).toBe("joined"));
-    for (let i = 0; i < 3; i++) expect(pass()).toBe(0);
-    expect(pc.invite).not.toHaveBeenCalled();
-    expect(store.groups).toEqual([]);
+  it("never writes rooms.db, a room or a hosted mark on the other PC, nor a room op after its seat", async () => {
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds();
+    const ops = readSyncOperations(folder).operations.length;
+    for (let i = 0; i < 3; i++) expect(pass(workPc())).toBe(0);
+    expect(workStore.groups).toEqual([]);
     expect(existsSync(join(DATA_DIR, "rooms.db"))).toBe(false);
-    expect(readSyncOperations(folder).operations.map((operation) => operation.entityId)).toEqual(["room-tk"]);
-    expect(joinSeat).toHaveBeenCalledTimes(1);
+    expect(readSyncOperations(folder).operations).toHaveLength(ops);
+    expect(new Set(readSyncOperations(folder).operations.map((operation) => operation.entityId))).toEqual(new Set([tk.id]));
   });
 });
