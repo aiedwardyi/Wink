@@ -118,8 +118,51 @@ h1 {
   color: var(--danger);
 }
 .list,
-#google {
+#google,
+.code {
   margin-top: 24px;
+}
+.code-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.code input,
+.code button {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--inset);
+  color: var(--ink);
+  font: inherit;
+}
+.code input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 16px;
+  /* Under 16px, iOS zooms the page on focus. */
+  font-size: 16px;
+  letter-spacing: 0.2em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.code input::placeholder {
+  color: var(--ink-secondary);
+  letter-spacing: normal;
+  text-transform: none;
+}
+.code button {
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.code button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.code input:focus-visible,
+.code button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .list {
   display: flex;
@@ -226,6 +269,11 @@ h1 {
 .list button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+h1 .spinner {
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: -1px;
 }
 .spinner {
   flex: none;

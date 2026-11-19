@@ -495,14 +495,14 @@ const type = (input: HTMLInputElement, text: string) => act(async () => {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 });
 
-it("draws the bot's picks on the Timeline canvas, newest day first, each pick circled and the rest struck, a replaced pick folded under the newer one", async () => {
+it("draws the bot's picks on the Timeline canvas, oldest day first, each pick circled and the rest struck, a replaced pick folded under the newer one", async () => {
   pickList();
   await openTimeline("b-canvas");
   const tab = [...host.querySelectorAll(".show-pane-tabs [role=tab]")].find((each) => each.textContent === "Timeline");
   expect(tab?.getAttribute("aria-selected")).toBe("true");
   await until(() => picked().length > 0);
-  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
-  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Timeline place", "Model Index on phone", "Forum look", "Map on phone", "Speed board look"]);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Speed board look", "Map on phone", "Forum look", "Model Index on phone", "Timeline place"]);
   const forum = named("Forum look");
   expect(forum.querySelector("[data-won] .timeline-caption")?.textContent).toBe("Reddit-style list (mock 2)");
   expect([...forum.querySelectorAll("[data-timeline-out]")].map((out) => out.textContent)).toEqual(["A - Needs you header", "B - Needs you chip"]);
@@ -567,8 +567,8 @@ it("keeps the search text and an open replaced pick after a tab switch and back"
 it("opens on the newest pick again after panning, reopening, and clearing search", async () => {
   pickList();
   const newestAtStart = () => {
-    expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Timeline place");
-    expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+    expect(picked().at(-1)?.querySelector(".timeline-key")?.textContent).toBe("Timeline place");
+    expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, 0px) scale(0.86)");
   };
   await openTimeline("b-reopen");
   await until(() => picked().length > 0);
@@ -576,7 +576,7 @@ it("opens on the newest pick again after panning, reopening, and clearing search
   await act(async () => {
     host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }), { ctrlKey: { value: false } }));
   });
-  expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, -456px) scale(0.86)");
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, -500px) scale(0.86)");
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   expect(host.querySelector(".timeline-canvas")).toBeNull();
   await openTimeline("b-reopen");
@@ -603,9 +603,114 @@ it("returns to the newest pick if reopened before the pane finishes closing", as
     host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }), { ctrlKey: { value: false } }));
   });
   await openTimeline("b-reopen-during-exit", true);
-  expect(sheet.style.transform).toBe("translate(4px, -456px) scale(0.86)");
+  expect(sheet.style.transform).toBe("translate(4px, -500px) scale(0.86)");
   await openTimeline("b-reopen-during-exit");
-  expect(sheet.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+  expect(sheet.style.transform).toBe("translate(4px, 0px) scale(0.86)");
+});
+
+it("opens at the newest pick at the bottom, and keeps it there as picks land unless scrolled up", async () => {
+  // happy-dom lays nothing out: the canvas is 600px tall and each pick 300px
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? 600 : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length : 0; });
+  let text = timeline;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => 600 - (100 + 300 * count) * 0.86;
+  const newest = () => picked().at(-1)?.querySelector(".timeline-key")?.textContent;
+  const wheel = (deltaY: number) => act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const land = async (key: string, at: string, count: number) => {
+    text += `\n## 2026-11-18 ${at} | ${key} | current\n- Picked: A\n`;
+    await act(async () => noteMemoryFrame({ kind: "memory.changed", botId: "b-bottom" }, { hydrated: true, bots: [{ id: "b-bottom", threadId: "t1" }] }));
+    await until(() => picked().length === count);
+    expect(newest()).toBe(key);
+  };
+
+  await openTimeline("b-bottom");
+  await until(() => picked().length === 5);
+  expect(newest()).toBe("Timeline place");
+  expect(y()).toBeCloseTo(bottom(5));
+  await wheel(-300);
+  expect(y()).toBeCloseTo(bottom(5) + 300);
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  await openTimeline("b-bottom");
+  await until(() => picked().length === 5);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
+  await type(search, "forum");
+  // one result is shorter than the pane, so it rests at the top padding
+  expect(y()).toBe(44);
+  await type(search, "");
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await land("New look", "09:00", 6);
+  expect(y()).toBeCloseTo(bottom(6));
+  await wheel(-200);
+  await land("Newer look", "10:00", 7);
+  expect(y()).toBeCloseTo(bottom(6) + 200);
+
+  await openTimeline("b-bottom-2");
+  await until(() => picked().length === 7);
+  expect(y()).toBeCloseTo(bottom(7));
+});
+
+it("follows the newest pick down when a tweak grows it, unless scrolled up", async () => {
+  let extra = 0;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? 600 : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length + extra : 0; });
+  let text = timeline;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => 600 - (100 + 300 * count + extra) * 0.86;
+  const tweak = async (said: string, grew: number) => {
+    extra += grew;
+    text += `\n- Tweak 2026-11-17 12:3${extra / 100}: "${said}"`;
+    await act(async () => noteMemoryFrame({ kind: "memory.changed", botId: "b-tweak" }, { hydrated: true, bots: [{ id: "b-tweak", threadId: "t1" }] }));
+    await until(() => host.querySelectorAll(".timeline-tweaks q").length > 0 && picked().at(-1)?.textContent?.includes(said) === true);
+  };
+
+  await openTimeline("b-tweak");
+  await until(() => picked().length === 5);
+  expect(y()).toBeCloseTo(bottom(5));
+  await tweak("one more thing", 100);
+  expect(y()).toBeCloseTo(bottom(5));
+  await tweak("and another", 100);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -300 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const up = y();
+  await tweak("a third", 100);
+  expect(y()).toBe(up);
+});
+
+it("keeps the newest pick at the bottom when the pane resizes, unless scrolled up", async () => {
+  let tall = 600;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? tall : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length : 0; });
+  const watchers: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class { constructor(run: () => void) { watchers.push(run); } observe() {} disconnect() {} });
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(timeline).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => tall - (100 + 300 * count) * 0.86;
+  const resize = (to: number) => act(async () => { tall = to; for (const run of watchers) run(); });
+
+  await openTimeline("b-resize");
+  await until(() => picked().length === 5);
+  await resize(400);
+  expect(y()).toBeCloseTo(bottom(5));
+  await resize(800);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -300 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const up = y();
+  await resize(500);
+  expect(y()).toBe(up);
 });
 
 it("orders days and picks by the current pick, even when a newer tap lost to it", async () => {
@@ -632,8 +737,8 @@ it("orders days and picks by the current pick, even when a newer tap lost to it"
   picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
   await openTimeline("b-order");
   await until(() => picked().length > 0);
-  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
-  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Latest choice", "Earlier choice", "Morning choice", "Old choice"]);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Old choice", "Morning choice", "Earlier choice", "Latest choice"]);
 });
 
 it("opens with the retyped pick at its latest action time even when its heading still dates the tap", async () => {
@@ -647,7 +752,7 @@ it("opens with the retyped pick at its latest action time even when its heading 
     picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
     await openTimeline(`b-retyped-${day}`);
     await until(() => named("Forum")?.querySelector("q")?.textContent === "I choose B" && picked().length === 2);
-    expect(picked().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Forum", "Settings"]);
+    expect(picked().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Settings", "Forum"]);
     expect(named("Forum").closest("section")?.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day")).toBe(`2026-11-${day}`);
     expect(named("Forum").querySelector("time")?.textContent).toContain("12:00");
     expect(named("Forum").querySelector(".timeline-said span")?.textContent).toContain("12:00");
@@ -666,13 +771,13 @@ it("shows the text of an unbound pick without printing its heading time", async 
   expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17"]);
 });
 
-it("sorts a text-only pick by its day, above an older day's timed pick", async () => {
+it("sorts a text-only pick by its day, below an older day's timed pick", async () => {
   const text = '# Decision timeline\n\n## 2026-11-14 10:00 | Header | current\n- Picked: A - small\n\n## 2026-11-17 | Forum | current\n- Picked: B - blue cards\n- Said: "I choose B"\n- Binding: unbound\n';
   picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
   await openTimeline("b-unbound-day");
   await until(() => picked().length === 2);
-  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Forum", "Header"]);
-  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Header", "Forum"]);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
   expect(named("Forum").querySelector("time")).toBeNull();
 });
 
@@ -683,14 +788,14 @@ it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows 
   const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
   const sheet = () => host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform;
   const zoom = () => host.querySelector(".timeline-hint b")?.textContent;
-  expect(sheet()).toBe("translate(4px, 44px) scale(0.86)");
+  expect(sheet()).toBe("translate(4px, 0px) scale(0.86)");
   expect(zoom()).toBe("86%");
   // happy-dom's WheelEvent drops its modifier keys and point
   const wheel = (init: WheelEventInit) => act(async () => {
     canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init }), { ctrlKey: { value: init.ctrlKey ?? false }, clientX: { value: 0 }, clientY: { value: 0 } }));
   });
   await wheel({ deltaY: 100 });
-  expect(sheet()).toBe("translate(4px, -56px) scale(0.86)");
+  expect(sheet()).toBe("translate(4px, -100px) scale(0.86)");
   await wheel({ deltaY: -100, ctrlKey: true });
   expect(zoom()).toBe("110%");
   const pointer = (kind: string, x: number, y: number, pointerId = 1) => canvas.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, pointerId, pointerType: "touch" }));
@@ -717,13 +822,13 @@ it("keeps a pinch's move at the canvas edge, and moves the canvas with the arrow
   Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
   Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: { value: 2000 } });
   const view = () => /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(sheet.style.transform)!.slice(1).map(Number);
-  expect(view()).toEqual([4, 44, 0.86]);
+  expect(view()).toEqual([4, 0, 0.86]);
   const pointer = (kind: string, x: number, pointerId: number) => canvas.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: 200, pointerId, pointerType: "touch" }));
   await act(async () => { pointer("pointerdown", 100, 1); pointer("pointerdown", 200, 2); pointer("pointermove", 260, 2); pointer("pointerup", 100, 1); pointer("pointerup", 260, 2); });
   const [x, y, scale] = view();
   expect(scale).toBeCloseTo(1.376);
   expect(x).toBeCloseTo(180 - (180 - 34) * 1.6);
-  expect(y).toBeCloseTo(200 - (200 - 44) * 1.6);
+  expect(y).toBeCloseTo(200 - 200 * 1.6);
   const label = named("Forum look").querySelector<HTMLElement>("[data-label]")!;
   await act(async () => { label.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
   expect(view()[0]).toBeCloseTo(x - 40);
@@ -739,18 +844,19 @@ it("draws the newest picks first and the rest a batch a frame", async () => {
   await openTimeline("b-many");
   await until(() => picked().length > 0);
   expect(picked().length).toBe(8);
-  expect(picked()[0].querySelector(".timeline-key")?.textContent).toBe("Question 27");
-  const sheet = host.querySelector(".timeline-sheet")!;
-  expect(sheet.querySelector(".timeline-day")?.textContent).toBe("Newest");
-  expect(sheet.lastElementChild?.className).not.toBe("timeline-day");
+  expect(picked().at(-1)?.querySelector(".timeline-key")?.textContent).toBe("Question 27");
+  // the ends wear the hint bar's own class, pinned to the pane, not drawn on the sheet
+  const ends = () => [...host.querySelectorAll(".timeline-canvas > p.timeline-hint[data-end]")].map((label) => [label.getAttribute("data-end"), label.textContent]);
+  expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
+  expect(host.querySelector(".timeline-sheet .timeline-hint")).toBeNull();
   while (frames.length) await act(async () => frames.shift()!(0));
   expect(picked().length).toBe(40);
-  expect(sheet.lastElementChild?.className).toBe("timeline-day");
-  expect(sheet.lastElementChild?.textContent).toBe("Oldest");
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Question 0");
+  expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
   raf.mockRestore();
 });
 
-it("starts a new search at the top, even after one with no results", async () => {
+it("starts a new search at the newest end, even after one with no results", async () => {
   pickList();
   await openTimeline("b-stale");
   await until(() => picked().length > 0);
@@ -758,13 +864,13 @@ it("starts a new search at the top, even after one with no results", async () =>
   await act(async () => {
     canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 100 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
   });
-  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, -56px) scale(0.86)");
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, -100px) scale(0.86)");
   const search = host.querySelector<HTMLInputElement>(".timeline-pane input")!;
   await type(search, "zzzz");
   expect(host.querySelector(".timeline-canvas")).toBeNull();
   await type(search, "reddit");
   await until(() => picked().length > 0);
-  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, 0px) scale(0.86)");
 });
 
 it("gives every pick a keyboard stop, and a mouse let go outside the canvas does not drag on its way back", async () => {
@@ -954,7 +1060,7 @@ it("keeps the demo on yesterday and today when opened just after midnight", asyn
     await openTimeline("b-sample-midnight");
     await until(() => sampled().length > 0);
     const days = [...host.querySelectorAll<HTMLElement>(".timeline-pane[data-sample] section")];
-    expect(days.map((day) => [day.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day"), day.querySelectorAll("[data-timeline-pick]").length])).toEqual([["2026-11-19", 3], ["2026-11-18", 3]]);
+    expect(days.map((day) => [day.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day"), day.querySelectorAll("[data-timeline-pick]").length])).toEqual([["2026-11-18", 3], ["2026-11-19", 3]]);
   } finally {
     vi.useRealTimers();
   }
@@ -975,8 +1081,8 @@ it("never flashes the demo while a bot's picks are still loading", async () => {
 });
 
 it.each([
-  ["en", "Demo. Your picks replace this.", "When you pick an option in a chat, it lands here.", [["Ship today or tomorrow?", "Today"], ["Onboarding: tour or skip?", "Short tour"], ["Dark or light theme?", "Dark"], ["Font size for chats", "Medium"], ["Where should Settings live?", "Side panel"], ["Pick a name for the app", "Wink"]]],
-  ["ko", "데모예요. 내 선택이 생기면 바뀌어요.", "채팅에서 고른 선택이 여기에 쌓여요.", [["오늘 출시할까요, 내일 출시할까요?", "오늘"], ["온보딩: 둘러보기, 건너뛰기?", "짧은 둘러보기"], ["다크 테마, 라이트 테마?", "다크"], ["채팅 글자 크기", "보통"], ["설정은 어디에 둘까요?", "사이드 패널"], ["앱 이름 정하기", "Wink"]]],
+  ["en", "Demo. Your picks replace this.", "When you pick an option in a chat, it lands here.", [["Pick a name for the app", "Wink"], ["Where should Settings live?", "Side panel"], ["Font size for chats", "Medium"], ["Dark or light theme?", "Dark"], ["Onboarding: tour or skip?", "Short tour"], ["Ship today or tomorrow?", "Today"]]],
+  ["ko", "데모예요. 내 선택이 생기면 바뀌어요.", "채팅에서 고른 선택이 여기에 쌓여요.", [["앱 이름 정하기", "Wink"], ["설정은 어디에 둘까요?", "사이드 패널"], ["채팅 글자 크기", "보통"], ["다크 테마, 라이트 테마?", "다크"], ["온보딩: 둘러보기, 건너뛰기?", "짧은 둘러보기"], ["오늘 출시할까요, 내일 출시할까요?", "오늘"]]],
 ] as const)("draws a labeled demo Timeline in %s until the first real pick replaces it", async (locale, label, line, rows) => {
   applyLocale(locale);
   const botId = `b-sample-${locale}`;

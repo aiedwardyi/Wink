@@ -450,6 +450,7 @@ import {
 import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from "./picture-sync.ts";
 import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
+import { disconnectSyncFolder, hasJoinedSync } from "./sync-history.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
 import { linkedRows } from "./linked-rows.ts";
@@ -847,7 +848,7 @@ function askBotAndWait(
       peerTurnSource.delete(threadId);
       collected?.release();
     }
-    return reply;
+    return reply.replied && collected?.engine ? { ...reply, engine: collected.engine } : reply;
   });
 }
 
@@ -1602,6 +1603,7 @@ function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unk
     memoryNotes: bot.memoryNotes ?? null,
     projectNotes: bot.projectNotes ?? null,
     pinnedMessageId: bot.pinnedMessageId ?? null,
+    hidden: Boolean(bot.hidden),
   };
 }
 
@@ -1746,6 +1748,7 @@ function applySyncedBotFields(
     patch.projectNotes = notes.ok ? notes.path ?? undefined : undefined;
   }
   if ("pinnedMessageId" in apply) patch.pinnedMessageId = typeof apply.pinnedMessageId === "string" ? apply.pinnedMessageId : undefined;
+  if ("hidden" in apply) patch.hidden = apply.hidden === true;
   if (["instanceId", "model", "effort", "modelMode"].some((field) => field in apply)) {
     patch.modelSelection = mergeSyncedModelSelection(bot.modelSelection, apply, instanceOffersModel, (instanceId, model) => currentModel(registry.get(instanceId)?.driverKind ?? "", model));
   }
@@ -2592,9 +2595,9 @@ const uploads = createUploads({
   },
 });
 
-/** Bots a joining PC held back stay local until someone talks to them. */
+/** Bots a joining PC held back stay local until someone talks to them or archives them. */
 function profileSyncBots(): BotRecord[] {
-  return store.bots.filter((bot) => profileSyncSettings.botMap[bot.id] || !googleSync.held(bot.id) || botTalkedTo(bot.id));
+  return store.bots.filter((bot) => profileSyncSettings.botMap[bot.id] || !googleSync.held(bot.id) || bot.hidden || botTalkedTo(bot.id));
 }
 
 store.onChange((change) => {
@@ -4555,7 +4558,7 @@ function finalizeDelegationWatch(
   watched.endPeerWatch?.();
   watched.reply.release();
   settlePeerUserReplies(threadId);
-  return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
+  return finishDelegatedTurn(commsBus, { ...watched, engine: watched.reply.engine }, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
@@ -8235,6 +8238,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
     const verifyStream = method === "GET" ? /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(path) : null;
     if (verifyStream) return await verifySite.handleStream(req, res, verifyStream[1]!, verifyStream[2] === "replay", { relay, phoneSession: credentials.phoneSession });
+    const verifyReplays = method === "GET" ? /^\/api\/verify\/threads\/([a-zA-Z0-9_-]{1,128})\/replays$/.exec(path) : null;
+    if (verifyReplays) return await verifySite.handleReplays(req, res, verifyReplays[1]!, { relay, phoneSession: credentials.phoneSession });
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.
     if (method === "GET" && path === "/remote") {
       const provided = url.searchParams.get("key");
@@ -8568,8 +8573,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "DELETE" && path === "/api/profile-sync") {
       threadSyncPoll.stop();
       threadSyncV2?.stop();
-      profileSyncSettings.folder = null;
-      profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
+      profileSyncSettings = disconnectSyncFolder(DATA_DIR, profileSyncSettings);
       return json(res, 200, await profileSyncStatus());
     }
     if (method === "PUT" && path === "/api/profile-sync/chats") {
@@ -8587,7 +8591,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/activity") {
-      // A shadow (driver missing or failed to start) still knows its engine.
+      if (hasJoinedSync(profileSyncSettings)) return json(res, 200, replyActivity());
       const kinds = new Map(registry.entries().map((entry) => [entry.instanceId, entry.live?.driverKind ?? entry.shadow?.driverKind]));
       return json(res, 200, replyActivity(Date.now(), (threadId, botId) => {
         const bot = botId ? store.bot(botId) : store.botByThread(threadId);

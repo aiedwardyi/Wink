@@ -18,7 +18,8 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { isOrder } from "./quick-route.ts";
 import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -38,8 +39,10 @@ const STOP_RELEASE_MS = 6_000;
 // The bot acks a send mid-turn unless the helper's reply beside it does.
 const ACK_COVERED =
   "[Wink note, automated, not from the person. A fast reply in your voice answers the message below beside your work, so write no line of your own for it; continue, and put anything new in your final reply.]";
-const ackMissed = (text: string) =>
-  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(text)}"; reply to it now in one short visible line, then continue.]`;
+// Only the bot can tell whether its own reply under the send already answered it; built at each use, since that reply can land between steer and queue.
+// A steered note joins the user's own turn, where no_reply_needed neither ends nor hides anything and its "stop" could cost the work's reply.
+const ackMissed = (path: Message[], sent: Message, steered: boolean) =>
+  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(sent.text ?? "")}"; ${repliedUnder(path, sent) ? `if your reply after it already answers it, ${steered ? "write nothing for it" : "call no_reply_needed and write nothing"}; otherwise ` : ""}reply to it now in one short visible line, then continue.]`;
 
 type BotChatRouteDeps = {
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
@@ -155,6 +158,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     let dropped = false;
     let recorded = false;
     let callRow: Message | undefined;
+    // the reply beside a covered order promises it, so a late drop requeues it like a call
+    const requeues = Boolean(call) || Boolean(covered && isOrder(text));
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     // a held switch: the adapter is still the old turn's engine, so this send queues for the chip's model
     if (!switchHeld(bot) && steersSend(adapter, bot.busy, after)) {
@@ -184,8 +189,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
-      // an ask or call send the engine already dropped goes once down the idle or queue path
-      if ((ask || call) && dropped) steered = false;
+      // an ask, call or promised order the engine already dropped goes once down the idle or queue path
+      if ((ask || requeues) && dropped) steered = false;
       if (!steered) peerInput?.cancel();
     }
     // steer() is awaited adapter work. The turn can settle, the task can
@@ -232,7 +237,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           answersCard,
           actedAt,
         });
-      if (call) callRow = message;
+      if (requeues) callRow = message;
       peerInput?.accept(message);
       cancelUsageWait?.(bot.id, undefined, true);
       markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
@@ -289,14 +294,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       .then(async () => {
         const current = owed();
         if (!current) return;
-        const note = ackMissed(sent.text ?? "");
         const adapter = instanceForBot(current, threadId)?.adapter;
         if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
+          const note = ackMissed(store.activePath(threadId), sent, true);
           if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
           if (!owed()) return;
         }
         // a turn that ended or refused the note, or a switch to another task, leaves it for the bot's next turn in this task, drained into the send's own row
-        queueAsk(store, botId, threadId, sent, note);
+        queueAsk(store, botId, threadId, sent, ackMissed(store.activePath(threadId), sent, false));
         drainQueuedSends();
       })
       .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));

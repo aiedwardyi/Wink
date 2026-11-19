@@ -19,6 +19,7 @@ import {
   watchMemory,
   type MemoryLatest,
 } from "@/lib/memory-drafts";
+import { lastMemory, rememberMemory } from "@/lib/memory-last";
 import { requestNotificationPermission } from "@/lib/notify";
 import { shortPath } from "@/lib/short-path";
 import { MOTION_MODERATE_MS } from "@/lib/motion";
@@ -263,9 +264,13 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const [mapReady, setMapReady] = useState(Boolean(loadedMap));
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [text, setText] = useState("");
-  const [truncated, setTruncated] = useState(false);
-  const [topics, setTopics] = useState<MemoryTopic[]>([]);
+  // a draft is newer than any read, so it waits for the read that opens it
+  const [last] = useState(() => (memoryDraft(bot.id) === null ? lastMemory(bot.id) : null));
+  // the last read paints at once; edits still wait for the fresh read, which replaces it
+  const blank = loading && !last;
+  const [text, setText] = useState(last?.text ?? "");
+  const [truncated, setTruncated] = useState(last?.truncated ?? false);
+  const [topics, setTopics] = useState<MemoryTopic[]>(last?.topics ?? []);
   const [status, setStatus] = useState<MemorySaveStatus>("idle");
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -321,7 +326,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     focusFile.current = false;
   }, [editing]);
   const MapView = loadedMap ?? MemoryMap;
-  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
+  const empty = !blank && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
   const read = (signal?: AbortSignal): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
     api(`/api/bots/${botId}/memory`, signal && { signal }).then((result) => {
@@ -339,6 +344,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       const result = await read(AbortSignal.timeout(MEMORY_READ_MS));
       // a refresh that landed first is as new, and an edit may have saved since
       if (landed.current) return;
+      rememberMemory(botId, result);
       setTruncated(result.truncated);
       setTopics(result.topics);
       const draft = openMemory(botId, result);
@@ -376,6 +382,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     // a save that started after this read went out is newer than it
     if (!result || memoryDraft(botId) !== null || memorySaves(botId) !== saves) return;
     openMemory(botId, result);
+    rememberMemory(botId, result);
     landed.current = true;
     setText(result.text);
     setLoading(false);
@@ -502,7 +509,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={loading} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={done && <MemoryDoneButton onDone={done} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={blank} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={done && <MemoryDoneButton onDone={done} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -513,7 +520,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} save={inFold ? status : undefined} open={expanded} onDone={inFold ? done : undefined} onToggle={() => openFile(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={blank} save={inFold ? status : undefined} open={expanded} onDone={inFold ? done : undefined} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={inFold}>
           <div className="px-4 pb-4 pt-3">
