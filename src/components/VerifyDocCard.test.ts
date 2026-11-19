@@ -139,7 +139,9 @@ it("plays a 22-line check that took 2 s for about 4 s, then holds on the result"
   await to(1_300);
   expect(host.querySelector("[data-current]")?.textContent).toBe("1 problem");
   expect(host.querySelector(".verify-doc-line mark")?.textContent).toBe("recieve");
-  expect(host.querySelectorAll(".verify-watch-cursor")).toHaveLength(0);
+  const lined = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")];
+  expect(lined).toHaveLength(5);
+  expect(new Set(lined.map(cursor => cursor.dataset.line)).size).toBe(1);
   expect(host.querySelector(".verify-watch-again")).not.toBeNull();
   await act(async () => root.unmount());
 });
