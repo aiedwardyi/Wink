@@ -12,6 +12,8 @@ export function useToggleForum() {
   const { state, dispatch } = useStore();
   return () => {
     const open = isForumSelection(state.selectedId);
+    // a press during the slide-out would flip the Forum back open
+    if (!open && document.querySelector("[data-board-view][data-closing]")) return;
     const id = open ? openedFrom || (state.bots.find((b) => !b.hidden)?.id ?? state.bots[0]?.id ?? "") : FORUM_SELECTION;
     openedFrom = open ? "" : state.selectedId;
     dispatch({ type: "select", id, reveal: true });

@@ -466,10 +466,10 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   }, () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
-    if (hidden || (!isOpen && phone)) return;
+    if (hidden || closing || (!isOpen && phone)) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return;
+      if (event.target instanceof Element && event.target.closest('[aria-modal="true"], [data-sidebar-search]')) return;
       if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
       // the open menu takes this Escape
       if (document.querySelector("[data-message-menu], [data-selection-menu]")) return;
@@ -479,7 +479,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, hidden, phone, leave]);
+  }, [isOpen, hidden, closing, phone, leave]);
   return (
     <main
       ref={viewRef}
