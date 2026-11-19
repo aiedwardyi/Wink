@@ -9,6 +9,8 @@ import { DATA_DIR } from "./config.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
+import { watchPeerTurn } from "./peer-takeover.ts";
+import { _resetPeerUserReplies, drainPeerUserReplies, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks, routesAck, routesQuick, type QuickGate } from "./quick-ask.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import type { QuickResult } from "./side-chat.ts";
@@ -199,6 +201,28 @@ describe("quick route", () => {
     await h.send({ text: "also update the docs when you are done" });
     expect(h.steer.mock.calls[0]![1]).toMatch(COVERED);
     expect(h.steer.mock.calls[0]![1]).toContain("also update the docs when you are done");
+  });
+
+  it("leaves a send in a peer-watched turn to the bot's own tagged line, with no reply beside it", async () => {
+    const h = harness({ result: { route: "answer", text: "Got it, switching.", ms: 4 } });
+    const end = watchPeerTurn(h.bot.threadId);
+    try {
+      expect((await h.send({ text: "switched to the new branch" })).data.steered).toBe(true);
+      const prompt = h.steer.mock.calls[0]![1];
+      const tag = prompt.match(/<user\d+>/)![0];
+      // a bot told a fast reply covers the send writes no line of its own for it
+      const text = COVERED.test(prompt) ? "Peer answer." : `${tag}Main ack${tag.replace("<", "</")}\nPeer answer.`;
+      persistPeerUserReply(h.store, { provider: "claude", eventId: "reply", createdAt: new Date().toISOString(), threadId: h.bot.threadId, type: "item.completed", itemType: "assistant_text", text } as RuntimeEvent);
+      settlePeerUserReplies(h.bot.threadId);
+      const follow = vi.fn(async () => {});
+      drainPeerUserReplies(h.store, follow, () => false);
+      expect(follow).not.toHaveBeenCalled();
+      expect(h.ask).not.toHaveBeenCalled();
+      expect(h.rows().filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text)).toEqual(["Main ack"]);
+    } finally {
+      end();
+      _resetPeerUserReplies();
+    }
   });
 
   it("answers a nominated ask in two rows without a steer", async () => {

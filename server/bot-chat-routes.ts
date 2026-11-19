@@ -425,8 +425,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            // a call line is spoken back, so only a typed send gets the reply beside it
-            const ack = Boolean(quick && gate && !call && routesAck(gate));
+            // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get the reply beside them
+            const ack = Boolean(quick && gate && !call && !hasPeerWatch(threadId) && routesAck(gate));
             const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, covered: ack });
             if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
             return sent;
