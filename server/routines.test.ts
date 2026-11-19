@@ -1005,6 +1005,19 @@ describe("RoutineManager", () => {
     expect(chats.messagesFor).toHaveBeenCalledTimes(1);
   });
 
+  it("stays eligible for the next boot when a patch fails", async () => {
+    const h = harness();
+    const run = await firedIn(h, "bot-chat");
+    const card = { id: "card-1", role: "bot", kind: "routine.run", at: 1, text: "", routineRun: { runId: run.id, routineId: run.routineId, routineName: "Wake", status: "completed" } } as Message;
+    const failing = { messagesFor: () => [card], patchMessage: () => { throw new Error("disk"); } };
+    expect(() => h.manager.flagWakeCards(failing)).toThrow("disk");
+
+    const reloaded = new RoutineManager(h.options);
+    const patch = vi.fn();
+    reloaded.flagWakeCards({ messagesFor: () => [card], patchMessage: patch });
+    expect(patch).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the bot's chat when the source is deleted", async () => {
     const h = harness();
     const routine = h.manager.create({
