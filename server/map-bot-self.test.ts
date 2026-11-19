@@ -13,6 +13,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { DATA_DIR } from "./config.ts";
 import { SendSequencer } from "./send-idempotency.ts";
+import { cancelQueuedSends } from "./steer-queue.ts";
 import { Store, type BotRecord, type Message, type StoreChange } from "./store.ts";
 import { messageDatabase, withMessageTransaction } from "./message-db.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -164,11 +165,12 @@ async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
   return { store, bot, release };
 }
 
-function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string }) => Promise<unknown>, pullSyncedThread: () => void) {
+function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string }) => Promise<unknown>, pullSyncedThread: () => void, turnClaimed = false) {
   const noop = () => {};
   const routes = createBotChatRoutes({
     cfg: {}, store, threadSyncGate: { enabled: false }, sendSequencer: new SendSequencer(), startTurn, pullSyncedThread, noteTalked: noop,
-    ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: () => undefined, botHasActiveTurn: () => false, instanceForBot: () => null,
+    ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: () => undefined, botHasActiveTurn: () => turnClaimed, instanceForBot: () => null,
+    busyResumeThreads: new Set(), quick: { accountReady: () => true },
   } as unknown as Parameters<typeof createBotChatRoutes>[0]);
   return async (botId: string, body: object) => {
     let status = 0;
@@ -209,6 +211,18 @@ it("answers a retry of a send stored before Map opened by its key while Map load
   expect(retry).toMatchObject({ status: 202, data: { message: { id: stored!.id } } });
   await expect(send(bot.id, { text: "something else", sendId })).rejects.toMatchObject({ status: 409 });
   expect(startTurn).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+});
+
+it("queues a send made while a turn waits for Map's load without reading the chat", async () => {
+  const { store, bot, release } = await loadingChat();
+  onTestFinished(() => void cancelQueuedSends(bot.id));
+  const send = sendRoute(store, vi.fn(), () => {}, true);
+  const { status, data } = await send(bot.id, { text: "one more thing", sendId: randomUUID() });
+  expect(store.loaded(bot.threadId)).toBe(false);
+  expect(status).toBe(202);
+  expect(data).toMatchObject({ queued: true });
+  release();
   await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
 });
 

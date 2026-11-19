@@ -409,7 +409,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             const after = body.deliver === "after";
             // a call order waited for a yes; it goes to the bot, never to Quick answers
             const gate: QuickGate | undefined = !call?.order && quick && !switchHeld(currentAtStart) ? {
-              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
+              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId),
+              // read only once a rule needs it: a claimed turn may still be waiting for Map's load of this chat
+              get messages() { return store.activePath(threadId); },
               deliverAfter: after, replyTo, queueId, answersCard, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             } : undefined;
             if (quick && gate && routesQuick(gate)) {
