@@ -6,6 +6,7 @@ import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
+import { coldLoading } from "./cold-thread.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -320,6 +321,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       else pullSyncedThread(threadId);
       // a failed recovery is logged where it runs; the send goes on
       await quickAskRecovery(threadId)?.catch(() => {});
+      // Map's load of this chat is under way off the server thread; the transcript reads below would read it all again on it
+      const loading = coldLoading(threadId);
+      if (loading) await loading;
       const sendId = parseSendId(body.sendId);
       const queueId = parseSendId(body.queueId);
       if (sendId) {

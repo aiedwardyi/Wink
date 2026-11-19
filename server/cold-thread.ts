@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
 import type { TailRead, TailReply, TailRequest } from "./cold-thread-worker.ts";
-import { messageDbFile, onMessageChange, readMessage, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
+import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
 import { paneReason, type PaneLine } from "../shared/pane-note.ts";
 import type { Message, Store } from "./store.ts";
 import { rowChars } from "./thread-cache.ts";
@@ -97,8 +97,15 @@ function readsOf(threadId: string, version: string): ColdReads {
   return reads;
 }
 
+// Store emits inside a sync pull's transaction, and the worker's handle reads none of its rows until it commits
+async function committed(): Promise<void> {
+  const ended = messageTransactionEnd();
+  if (ended) await ended;
+}
+
 /** The rows that wrote files, or null when the store must answer (loaded, no rows here, or the read failed). */
 export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: string): Promise<Message[] | null> {
+  await committed();
   if (store.loaded(threadId)) return null;
   const version = threadVersion(threadId);
   if (version === undefined) return null;
@@ -118,6 +125,7 @@ export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: stri
 
 /** A Map row's reason from an unloaded chat, or null when the store must answer (loaded, no rows here, or the read failed). */
 export async function coldPaneReason(store: Pick<Store, "loaded">, threadId: string, sessionId: string, since: number): Promise<string | undefined | null> {
+  await committed();
   if (store.loaded(threadId)) return null;
   const version = threadVersion(threadId);
   if (version === undefined) return null;
@@ -138,6 +146,11 @@ export async function coldPaneReason(store: Pick<Store, "loaded">, threadId: str
 }
 
 const loads = new Map<string, Promise<void>>();
+
+/** The load coldLoad has in flight for a chat, if any. */
+export function coldLoading(threadId: string): Promise<void> | undefined {
+  return loads.get(threadId);
+}
 
 /** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
 export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {

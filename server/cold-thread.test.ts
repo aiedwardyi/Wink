@@ -366,6 +366,33 @@ describe("loading a chat off the server thread", () => {
     expect(store.messagesFor(bot.threadId)).toEqual(fresh().messagesFor(bot.threadId));
   });
 
+  it("takes a send made during the load by key, and loads it with the chat", async () => {
+    const setup = fresh();
+    const bot = setup.createBot({});
+    for (let n = 0; n < 2_500; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    const head = setup.activeLeaf(bot.threadId);
+    const store = fresh();
+    const load = coldLoad(store, bot.threadId);
+    const sent = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "sent right after Map opened" });
+    expect(store.loaded(bot.threadId)).toBe(false);
+    expect(sent.parentId).toBe(head);
+    await load;
+    expect(store.loaded(bot.threadId)).toBe(true);
+    const read = fresh();
+    expect(store.messagesFor(bot.threadId)).toEqual(read.messagesFor(bot.threadId));
+    expect(store.messagesFor(bot.threadId).filter((row) => row.id === sent.id)).toHaveLength(1);
+    expect(store.activeLeaf(bot.threadId)).toBe(sent.id);
+  });
+
+  it("dismisses an unloaded chat's first-run quiz by key when the user sends", () => {
+    const bot = fresh().createBot({});
+    expect(fresh().messagesFor(bot.threadId).some((row) => row.kind === "options" && !row.card?.dismissed)).toBe(true);
+    const store = fresh();
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    expect(store.loaded(bot.threadId)).toBe(false);
+    expect(fresh().messagesFor(bot.threadId).filter((row) => row.kind === "options").map((row) => row.card?.dismissed)).toEqual([true]);
+  });
+
   it("keeps the chat the store loaded first", async () => {
     const setup = fresh();
     const bot = setup.createBot({}, { seedMessages: false });

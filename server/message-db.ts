@@ -273,10 +273,14 @@ export function replaceThread(threadId: string, messages: Message[], activeLeafI
   }
 }
 
+// the outermost withMessageTransaction open now; its end promise is made when a reader first waits on it
+let transaction: { ended?: Promise<void>; end?: () => void } | undefined;
+
 export function withMessageTransaction<T>(work: (database: DatabaseSync) => T): T {
   const database = db();
   const nested = database.isTransaction;
   database.exec(nested ? "SAVEPOINT message_write" : "BEGIN IMMEDIATE");
+  if (!nested) transaction = {};
   try {
     const result = work(database);
     database.exec(nested ? "RELEASE message_write" : "COMMIT");
@@ -284,7 +288,21 @@ export function withMessageTransaction<T>(work: (database: DatabaseSync) => T): 
   } catch (error) {
     database.exec(nested ? "ROLLBACK TO message_write; RELEASE message_write" : "ROLLBACK");
     throw error;
+  } finally {
+    if (!nested) {
+      transaction?.end?.();
+      transaction = undefined;
+    }
   }
+}
+
+/** Settles once the open withMessageTransaction commits or rolls back, or undefined outside one: another handle reads none of its writes before then. */
+export function messageTransactionEnd(): Promise<void> | undefined {
+  const open = transaction;
+  if (!open) return undefined;
+  return open.ended ??= new Promise((resolve) => {
+    open.end = resolve;
+  });
 }
 
 export interface ThreadRowPage {
@@ -408,6 +426,13 @@ export function notesSinceOn(handle: DatabaseSync, threadId: string, at: number)
   return (function* () {
     for (const row of rows) yield rowToMessage(row);
   })();
+}
+
+/** A thread's options rows, oldest first, from their index. */
+export function optionRows(threadId: string): Message[] {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' ORDER BY rowid").all(threadId) as Array<{ json: string }>;
+  return rows.map(rowToMessage);
 }
 
 /** A thread's stored rows that record file writes, oldest first; cold-thread-worker.ts runs it on its own handle. No index: building one locks out every write for seconds on a 3 GB database. */

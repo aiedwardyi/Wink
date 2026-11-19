@@ -11,7 +11,7 @@ import { listenLocal } from "./phone-relay/testing/net.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { DATA_DIR } from "./config.ts";
 import { Store, type Message, type StoreChange } from "./store.ts";
-import { messageDatabase } from "./message-db.ts";
+import { messageDatabase, withMessageTransaction } from "./message-db.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
@@ -295,6 +295,38 @@ it("follows the bot to a new task mid-turn, and back to the chat whose tool comp
   store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "Read" } });
   expect((await map.until(data => data.workers[0]?.id !== selfRow(b))).workers.map(worker => worker.id)).toEqual([selfRow(a)]);
   map.close();
+});
+
+it("shows a write a sync pull commits after the Map refresh it set off inside its transaction", async () => {
+  const { root } = repo();
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "before the pull" });
+  const others = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];
+  for (const other of others) setup.appendMessage(other.threadId, { role: "bot", kind: "text", text: "elsewhere" });
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }), { threadCacheChars: 1 });
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  expect((await map.until(() => true)).workers).toEqual([]);
+  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  for (const other of others) store.messagesFor(other.threadId);
+  expect(store.loaded(bot.threadId)).toBe(false);
+  const post = Worker.prototype.postMessage;
+  const inside: boolean[] = [];
+  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: { threadId?: string }, transfer) {
+    if (request.threadId === bot.threadId) inside.push(messageDatabase().isTransaction);
+    post.call(this, request, transfer);
+  });
+  const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
+  const history = Array.from({ length: 100 }, (_, n): Message => ({ id: `history-${n}`, at: Date.now(), role: "user", kind: "text", text: "sync history" }));
+  // a v2 pull applies each page inside its own transaction, as consume does
+  withMessageTransaction(() => store.applySyncChanges(bot.id, bot.threadId, [synced({ ...row, id: "peer-edit", at: Date.now() }), ...history.map(synced)]));
+  spy.mockRestore();
+  expect(inside).not.toContain(true);
+  const shown = await map.until(data => data.workers.length > 0);
+  map.close();
+  expect(shown.workers.map(worker => [worker.id, worker.files.map(file => file.path)])).toEqual([[selfRow(root), ["file.ts"]]]);
 });
 
 it("reads nothing off the server thread for a bot on a brand-new task", async () => {

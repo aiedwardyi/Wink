@@ -1418,6 +1418,9 @@ export class Store {
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
+    // mail is matched by key against every row and a screen frame prunes older ones; both need the transcript
+    const head = this.threads.has(threadId) || message.comm?.mailKey || message.kind === "screen" ? undefined : mdb.storedHead(threadId);
+    if (head !== undefined) return this.appendRow(threadId, message, head);
     const t = this.thread(threadId);
     if (message.comm?.mailKey) {
       const existing = t.messages.find((row) => row.comm?.mailKey === message.comm!.mailKey);
@@ -1453,6 +1456,16 @@ export class Store {
     return full;
   }
 
+  /** appendMessage for a chat that is not loaded: writes the row and head by key and loads nothing, so a send never waits on a long chat's read. */
+  private appendRow(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }, head: string | null): Message {
+    const full: Message = { id: newId(), at: Date.now(), parentId: head, ...redactBotAuthored(message) };
+    this.beforeWrite(threadId);
+    this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    this.emit({ type: "message", threadId, message: full });
+    if (full.role === "user" && full.kind === "text") this.dismissOnboardingCard(threadId);
+    return full;
+  }
+
   appendCompaction(threadId: string, compaction: ContextCompactionV1): Message {
     const checked = readContextCompaction({
       value: {
@@ -1470,13 +1483,13 @@ export class Store {
 
   /** Hide the first-run quiz on this thread, if it is still open. */
   dismissOnboardingCard(threadId: string): Message | null {
-    const t = this.thread(threadId);
-    const card = t.messages.find(
+    const rows = this.threads.has(threadId) ? this.thread(threadId).messages : mdb.optionRows(threadId);
+    const card = rows.find(
       (message) =>
         message.kind === "options" && message.card && !message.card.requestId && !message.card.askUser && !message.card.dismissed,
     );
     if (!card?.card) return null;
-    return this.patchMessage(threadId, card.id, { card: { ...card.card, dismissed: true } });
+    return this.patchRow(threadId, card.id, { card: { ...card.card, dismissed: true } });
   }
 
   recordCardAnswer(threadId: string, messageId: string, text: string): Message | null {
