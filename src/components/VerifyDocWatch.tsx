@@ -19,6 +19,9 @@ const copy = {
   ko: { live: "실시간", expired: "다시보기가 만료됐어요", unavailable: "이 PC에서 다시보기를 사용할 수 없어요", failed: "확인 과정을 불러오지 못했어요", loading: "문서를 여는 중", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", page: (n: number) => `${n}쪽` },
 };
 const FADE_MS = 180;
+// The end line-up's step between cursors, wide enough for a tag, and the least it squeezes to on a narrow page.
+const LINE_GAP = 80;
+const LINE_MIN = 24;
 const EASE = Array.from({ length: 9 }, (_, i) => glideEase(i / 8));
 const KINDS = new Set<string>(VERIFY_DOC_KINDS);
 const route = (path: string, runId: string) => path.replace(":runId", encodeURIComponent(runId));
@@ -96,7 +99,8 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         range.setEnd(node, Math.min(node.length, at + 1));
       }
       const box = (node && range.getClientRects?.()[0]) ?? row.getBoundingClientRect(), origin = layer.getBoundingClientRect();
-      const x = box.left - origin.left, y = box.top + box.height * 0.6 - origin.top, view = stage.getBoundingClientRect().top, top = box.top - view, lead = follows(c);
+      const left = box.left - origin.left, right = row.parentElement!.getBoundingClientRect().right - origin.left;
+      const x = left + (c.slot ?? 0) * Math.max(LINE_MIN, Math.min(LINE_GAP, (right - left - 24) / (c.slots ?? 1))), y = box.top + box.height * 0.6 - origin.top, view = stage.getBoundingClientRect().top, top = box.top - view, lead = follows(c);
       offset = origin.top - view + stage.scrollTop;
       if (!glide && lead && (top < 0 || top > stage.clientHeight * 0.7)) stage.scrollTo({ top: stage.scrollTop + top - stage.clientHeight / 3, behavior: "smooth" });
       let cursor = shown.get(c.id);
@@ -112,8 +116,8 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         shown.set(c.id, cursor = { el, x, y, from: y, at: 0, ms: 0, band: c.band, lead, find: false });
       }
       const { el, x: fx, y: fy } = cursor, label = el.lastElementChild as HTMLElement;
-      const spot = tagSpot({}, { x, y }, label.offsetWidth, [row.parentElement!.getBoundingClientRect().right - origin.left, layer.clientHeight], 1)!;
-      label.style.transform = `translate(${spot.x}px,${spot.y}px)`;
+      const spot = tagSpot({}, { x, y }, label.offsetWidth, [right, layer.clientHeight], 1)!;
+      label.style.transform = `translate(${spot.x}px,${(c.slot ?? 0) % 2 ? -16 : spot.y}px)`;
       el.dataset.line = String(c.line);
       el.style.transform = `translate(${x}px,${y}px)`;
       const animation = c.duration ? el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration) : undefined;

@@ -1,6 +1,6 @@
 import { VERIFY_DOC_KINDS, type VerifyDocKind } from "../../shared/verify-doc";
 import type { VerifyReplayMark } from "./verify-replay";
-import { CURSOR_MS, CURSOR_REST_MS } from "./verify-watch-show";
+import { CURSOR_MS, CURSOR_REST_MS, LINEUP_MS } from "./verify-watch-show";
 
 export const DOC_SHOW_MIN_MS = 3_600;
 export const DOC_SHOW_MAX_MS = 5_000;
@@ -21,7 +21,7 @@ const GLIDE_MS = CURSOR_MS - CURSOR_REST_MS;
 const int = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
 /** Where a checker's cursor points: a spot along a line's text, or a finding's quote. */
-export interface DocCursor { id: string; kind: VerifyDocKind; /** first line of its chunk, 0 for the names comparison */ band: number; line: number; along: number; quote?: string; duration: number }
+export interface DocCursor { id: string; kind: VerifyDocKind; /** first line of its chunk, 0 for the names comparison */ band: number; line: number; along: number; quote?: string; duration: number; /** the end line-up: this cursor's place of `slots` along the row */ slot?: number; slots?: number }
 export interface DocEnd { ms: number; blocked: boolean }
 export interface DocStep { marks: VerifyReplayMark[]; moved: DocCursor[]; left: string[]; end: DocEnd | null }
 
@@ -48,6 +48,9 @@ export class VerifyDocShow {
   /** live: since when no chunk is open after one was */
   private idle = Infinity;
   private marks: VerifyReplayMark[] = [];
+  /** the checkers that read at all, and the first line a finding landed on */
+  private kinds = new Set<VerifyDocKind>();
+  private first: number | undefined;
   private moved = new Map<string, DocCursor>();
   private left: string[] = [];
 
@@ -117,13 +120,14 @@ export class VerifyDocShow {
           if (lane.next <= this.clock) { this.turn(band, lane); busy = true; }
         }
         if (band.closing === undefined || band.hold > this.clock || band.lanes.some(lane => lane.landing || lane.queue.length)) continue;
-        for (const lane of band.lanes) this.away(band, lane);
+        if (!(this.end && this.bands.length === 1 && this.lineUp(band))) for (const lane of band.lanes) this.away(band, lane);
         if (band.done) this.marks.push(band.done);
         this.bands.splice(this.bands.indexOf(band), 1);
         if (!band.compare && !this.bands.length) this.idle = this.clock;
         busy = true;
       }
     }
+    this.firstLine();
     const end = this.end && !this.bands.length && !this.ended ? this.end : null;
     if (end) this.ended = true;
     const step = { marks: this.marks, moved: [...this.moved.values()], left: this.left, end };
@@ -240,8 +244,28 @@ export class VerifyDocShow {
     this.point(band, lane, { line: band.rows[Math.min(n - 1, Math.floor(p))]!, along: turn % 2 ? Math.min(1, start + Math.min(1, n / slots) * READ) : start, duration });
   }
 
+  private firstLine() {
+    this.first ??= this.marks.map(mark => findingOf(mark)?.line).find(line => line !== undefined);
+    return this.first;
+  }
+
+  /** A replay's last band hands its cursors, and one for each checker that left earlier, to a row on the first finding, which is where the view settles. */
+  private lineUp(band: Band) {
+    if (this.live || this.still) return false;
+    const owner = band.compare ? 0 : band.from, line = this.firstLine() ?? band.lanes.map(lane => this.cursors.get(`${owner}:${lane.kind}`)?.line).find(row => row !== undefined);
+    const kinds = VERIFY_DOC_KINDS.filter(kind => this.kinds.has(kind));
+    if (line === undefined || !kinds.length) return false;
+    kinds.forEach((kind, slot) => {
+      const id = `${owner}:${kind}`, cursor: DocCursor = { id, kind, band: owner, line, along: 0, duration: LINEUP_MS, slot, slots: kinds.length };
+      this.cursors.set(id, cursor);
+      this.moved.set(id, cursor);
+    });
+    return true;
+  }
+
   private point(band: Band, lane: Lane, to: Pick<DocCursor, "line" | "along" | "quote" | "duration">) {
     const id = `${band.compare ? 0 : band.from}:${lane.kind}`, cursor: DocCursor = { id, kind: lane.kind, band: band.compare ? 0 : band.from, ...to };
+    this.kinds.add(lane.kind);
     this.cursors.set(id, cursor);
     this.moved.set(id, cursor);
   }

@@ -15,6 +15,10 @@ const RING_MS = 220;
 const LIVE_GLIDE_MS = 250;
 export const CURSOR_MS = 380;
 export const CURSOR_REST_MS = 100;
+/** The end line-up: cursors glide into one row together, then rest in it before the show closes. */
+export const LINEUP_MS = CURSOR_MS - CURSOR_REST_MS;
+export const LINEUP_REST_MS = 500;
+const LINEUP_GAP = 48;
 const CURSOR_GAP = 110;
 const CURSOR_NEAR = 40;
 const CURSOR_REACH = 1100;
@@ -191,6 +195,11 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
   return route;
 }
 
+/** A row of `count` slots centred in the tile, low enough to clear its content; the tags sit under the row. */
+function lineSlots(count: number, [w, h]: readonly number[]) {
+  return Array.from({ length: count }, (_, i) => ({ x: w! / 2 + (i - (count - 1) / 2) * LINEUP_GAP - 6, y: Math.round(h! * 0.8) }));
+}
+
 /** One watch session. Live chunks play as they come; a replay is paced one real thing at a time. */
 export class VerifyWatchShow {
   clock = 0;
@@ -231,7 +240,8 @@ export class VerifyWatchShow {
   private reelIndex = 0;
   private waits: Array<{ at: number; resolve: () => void }> = [];
 
-  constructor(readonly live: boolean, pinned: VerifyTile | null = null) {
+  /** `still`: reduced motion, so the cursors just stop at the end instead of lining up. */
+  constructor(readonly live: boolean, pinned: VerifyTile | null = null, private still = false) {
     this.pinned = pinned;
   }
 
@@ -350,11 +360,13 @@ export class VerifyWatchShow {
       if (mark.kind === "point") view(at, tile, typeof mark.scrollY === "number" ? mark.scrollY : 0);
       add(at, { kind: "mark", mark });
     }
-    if (end) add(play + tail, end);
     this.route = lists.flatMap(({ tile, things }) => {
       const size = this.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]), scrollAt = (at: number) => views[tile].filter(v => v.at <= at).sort((a, b) => a.at - b.at).at(-1)?.y ?? this.scroll[tile];
       return cursorRoutes(tile, things, size, things.length ? play / things.length : 0, play, scrollAt);
     }).map(c => ({ ...c, at: start + c.at })).sort((a, b) => a.at - b.at);
+    const lined = !this.still && this.route.length > 0;
+    if (lined) add(play + tail, { kind: "mark", mark: { ms: 0, kind: "lineup" } });
+    if (end) add(play + tail + (lined ? LINEUP_MS + LINEUP_REST_MS : 0), end);
     this.set("play");
   }
 
@@ -482,6 +494,17 @@ export class VerifyWatchShow {
     this.mark(chunk.mark, at, due);
   }
 
+  /** Each tile's cursors fall in left to right by where they are, so no two paths cross. */
+  private lineUp(at: number) {
+    this.route = [];
+    for (const tile of ["desktop", "phone"] as const) {
+      const here = [...this.cursors.values()].filter(c => c.tile === tile).map(c => ({ c, from: this.cursorAt(c, false, at) })).sort((a, b) => a.from.x - b.from.x);
+      const slots = lineSlots(here.length, this.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]));
+      here.forEach(({ c, from }, i) => this.cursors.set(cursorKey(c), { ...c, from, to: slots[i]!, at, duration: LINEUP_MS }));
+    }
+    this.version++;
+  }
+
   private mark(mark: VerifyReplayMark, at: number, due: number) {
     if (mark.kind === "part" && (mark.part === "loads" || mark.part === "links" || mark.part === "phone")) this.parts.add(mark.part);
     else if (mark.kind === "view") {
@@ -489,6 +512,7 @@ export class VerifyWatchShow {
       this.frames[tile] = frame;
       this.scroll[tile] = frame.scrollY;
     } else if (mark.kind === "scroll" && Number.isFinite(mark.y)) this.scroll[tileOf(mark.tile)] = mark.y as number;
+    else if (mark.kind === "lineup") this.lineUp(at);
     else if (mark.kind === "point") {
       const inp = (mark.inp ?? {}) as Record<string, unknown>;
       if (typeof inp.x === "number" && typeof inp.y === "number") {

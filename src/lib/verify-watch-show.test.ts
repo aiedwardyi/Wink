@@ -4,7 +4,7 @@ import { createReplay } from "../../server/verify-replay.ts";
 import { readReplay } from "./verify-replay";
 import type { VerifyIssue } from "../../shared/live-verify";
 import type { VerifyReplayChunk } from "./verify-replay";
-import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow, glideEase, tagSpot } from "./verify-watch-show";
+import { BANNER_MS, LINEUP_MS, LINEUP_REST_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow, glideEase, tagSpot } from "./verify-watch-show";
 
 const head: VerifyReplayChunk = { kind: "head", head: { v: 1, runId: "r", site: "luna/index.html", page: "index.html", startedAt: 0, tiles: { desktop: [1280, 720], phone: [392, 800] } } };
 const frame = (ms: number, tile: "desktop" | "phone" = "desktop"): VerifyReplayChunk => ({ kind: "frame", tile, ms, jpeg: new Uint8Array([ms & 255]) });
@@ -22,6 +22,7 @@ const replay = (...chunks: VerifyReplayChunk[]) => {
   show.advance(0);
   return show;
 };
+const LINE = LINEUP_MS + LINEUP_REST_MS;
 const page = (n: number) => Array.from({ length: n }, (_, i) => result(i, 10, i * 30));
 
 it("waits for the whole replay before it starts the show", () => {
@@ -43,15 +44,17 @@ it("spends about 300 ms on each real thing and counts the same real checks", () 
   toClock(show, 20 * THING_MS - 1);
   expect(show.checks).toBe(20);
   expect(show.phase).toBe("play");
-  toClock(show, 20 * THING_MS);
+  toClock(show, 20 * THING_MS + LINE - 1);
+  expect(show.phase).toBe("play");
+  toClock(show, 20 * THING_MS + LINE);
   expect(show.phase).toBe("clean");
 });
 
 it("gives a tiny page a short show of its own, never a 1 s flash", () => {
   const show = replay(...page(2), end(40));
-  toClock(show, SHOW_MIN_MS - 1);
+  toClock(show, SHOW_MIN_MS + LINE - 1);
   expect(show.phase).toBe("play");
-  toClock(show, SHOW_MIN_MS);
+  toClock(show, SHOW_MIN_MS + LINE);
   expect(show.phase).toBe("clean");
   expect(show.checks).toBe(2);
 });
@@ -65,7 +68,7 @@ it("caps a big page at 12 s and still counts every check", () => {
   }
   expect(show.phase).toBe("play");
   expect(most).toBeLessThanOrEqual(2);
-  toClock(show, SHOW_MAX_MS);
+  toClock(show, SHOW_MAX_MS + LINE);
   expect(show.phase).toBe("clean");
   expect(show.checks).toBe(600);
 });
@@ -197,7 +200,7 @@ it("feeds the card's lanes the same shape and the same real counts", () => {
   toClock(show, SHOW_MIN_MS);
   expect(show.lanes.LINKS).toEqual({ desktop: [4, 4] });
   expect(show.showing).toBe(true);
-  toClock(show, SHOW_MIN_MS + BANNER_MS + 20);
+  toClock(show, SHOW_MIN_MS + LINE + BANNER_MS + 20);
   expect(show.phase).toBe("after");
   expect(show.showing).toBe(false);
 });
@@ -262,7 +265,7 @@ it("plays the clicks that follow a tile's checks before the end", () => {
     if (show.phase === "play" && show.ring && rings.at(-1) !== show.ring.x) rings.push(show.ring.x);
   }
   expect(rings).toEqual([20, 300]);
-  expect(show.clock).toBeLessThan(SHOW_MIN_MS + 16);
+  expect(show.clock).toBeLessThan(SHOW_MIN_MS + LINE + 16);
   expect(show.checks).toBe(4);
 });
 
@@ -448,9 +451,11 @@ const CHECKERS = ["LINKS", "TEXT_A", "FIT", "NAV", "PAGE_ERRORS"];
 const crew = (checkers: string[], things = 30, tile = "desktop") => checkers.flatMap((checker, c) => Array.from({ length: things }, (_, i) => result(i, 40 + c * 220 + (i % 5) * 30, 20 + (i % 20) * 32, { tile, checker, where: `a#x${i}` })));
 const swarm = (show: VerifyWatchShow, tile: "desktop" | "phone" = "desktop") => [...show.cursors.values()].filter(c => c.tile === tile);
 const who = (c: { checker: string; extra?: number }) => c.extra ? `+${c.extra}` : c.checker;
+// The end line-up sits at 80% of a 720 px tile; no check in these fixtures lands there.
+const lined = (show: VerifyWatchShow) => swarm(show).some(c => c.to.y === 576);
 const arrivals = (show: VerifyWatchShow) => {
   const seen = new Map<string, { checker: string; due: number; to: { x: number; y: number } }>();
-  while (show.phase === "play") {
+  while (show.phase === "play" && !lined(show)) {
     for (const c of swarm(show)) seen.set(`${who(c)}@${c.at + c.duration}`, { checker: c.checker, due: c.at + c.duration, to: c.to });
     show.advance(16);
   }
@@ -490,7 +495,7 @@ it("staggers arrivals so the cursors never move in lockstep", () => {
 
 it("glides each cursor quickly, fast first and soft at the end", () => {
   const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90)), glides = new Set<number>();
-  while (show.phase === "play") {
+  while (show.phase === "play" && !lined(show)) {
     for (const c of swarm(show)) if (c.at > 1_000) glides.add(c.duration);
     show.advance(16);
   }
@@ -501,7 +506,7 @@ it("glides each cursor quickly, fast first and soft at the end", () => {
 it("never teleports a cursor: a glide spans several frames, and they land apart", () => {
   const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90));
   const last = new Map<string, { x: number; y: number }>();
-  while (show.phase === "play") {
+  while (show.phase === "play" && !lined(show)) {
     show.advance(16);
     if (show.phase !== "play") break;
     const now = swarm(show).map(c => ({ c, p: show.cursorAt(c) }));
@@ -518,7 +523,7 @@ it("rests only a moment on a thing before moving on", () => {
   const show = replay(frame(0), ...crew(CHECKERS.slice(0, 3)), end(90));
   const still = new Map<string, number>();
   let longest = 0;
-  while (show.phase === "play" && show.clock < SHOW_MAX_MS) {
+  while (show.phase === "play" && show.clock < SHOW_MAX_MS && !lined(show)) {
     show.advance(16);
     for (const c of swarm(show)) {
       const rest = show.clock >= c.at && show.clock < c.at + c.duration ? 0 : (still.get(who(c)) ?? 0) + 16;
@@ -527,6 +532,45 @@ it("rests only a moment on a thing before moving on", () => {
     }
   }
   expect(longest).toBeLessThanOrEqual(500);
+});
+
+it("ends with each tile's cursors gliding into one centred row, left to right as they stood, then resting in it", () => {
+  const show = replay(frame(0), frame(1, "phone"), ...crew(CHECKERS.slice(0, 4), 12), ...crew(["LINKS", "FIT"], 6, "phone"), end(90));
+  while (!lined(show)) show.advance(16);
+  const at = swarm(show)[0]!.at, before = new Map(swarm(show).map(c => [`${c.tile}:${who(c)}`, show.cursorAt(c, false, at).x]));
+  toClock(show, at + LINEUP_MS / 2);
+  const mid = swarm(show)[0]!;
+  expect(show.cursorAt(mid).x).not.toBeCloseTo(mid.from.x, 0);
+  expect(show.cursorAt(mid).x).not.toBeCloseTo(mid.to.x, 0);
+  toClock(show, at + LINEUP_MS);
+  for (const [tile, w, h] of [["desktop", 1280, 720], ["phone", 392, 800]] as const) {
+    const row = swarm(show, tile).map(c => ({ id: `${tile}:${who(c)}`, ...show.cursorAt(c) })).sort((a, b) => a.x - b.x);
+    expect(row.length).toBeGreaterThan(1);
+    for (const p of row) expect(p.y).toBe(Math.round(h * 0.8));
+    row.slice(1).forEach((p, i) => expect(p.x - row[i]!.x).toBeCloseTo(48, 5));
+    expect((row[0]!.x + row.at(-1)!.x) / 2).toBeCloseTo(w / 2 - 6, 5);
+    expect(row.map(p => p.id)).toEqual([...row].sort((a, b) => before.get(a.id)! - before.get(b.id)!).map(p => p.id));
+  }
+  const rest = swarm(show).map(c => show.cursorAt(c));
+  toClock(show, at + LINE - 1);
+  expect(show.phase).toBe("play");
+  expect(swarm(show).map(c => show.cursorAt(c))).toEqual(rest);
+  toClock(show, at + LINE);
+  expect(show.phase).toBe("clean");
+  expect(show.cursors.size).toBe(0);
+});
+
+it("lets the cursors just stop at the end with reduced motion", () => {
+  const show = new VerifyWatchShow(false, null, true);
+  show.beginRun();
+  for (const c of [head, frame(0), ...page(20), end(40)]) show.feed(c);
+  show.advance(0);
+  toClock(show, 20 * THING_MS - 1);
+  expect(lined(show)).toBe(false);
+  expect(show.phase).toBe("play");
+  toClock(show, 20 * THING_MS);
+  expect(show.phase).toBe("clean");
+  expect(show.cursors.size).toBe(0);
 });
 
 it("aims a page-level check at the page only when its result exists", () => {
@@ -552,7 +596,9 @@ it("keeps the same show length and the same counts with the swarm", () => {
   const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4), 8), end(90));
   toClock(show, SHOW_MIN_MS - 1);
   expect(show.phase).toBe("play");
-  toClock(show, SHOW_MIN_MS * 1.3);
+  toClock(show, SHOW_MIN_MS + LINE - 1);
+  expect(show.phase).toBe("play");
+  toClock(show, SHOW_MIN_MS + LINE);
   expect(show.phase).toBe("clean");
   expect(show.checks).toBe(32);
 });
@@ -561,7 +607,7 @@ it("clears the swarm with the run and starts the next one fresh", () => {
   const show = replay(frame(0), ...crew(["LINKS", "FIT"], 3), end(20));
   toClock(show, 500);
   expect(show.cursors.size).toBe(2);
-  toClock(show, SHOW_MIN_MS + 20);
+  toClock(show, SHOW_MIN_MS + LINE + 20);
   expect(show.cursors.size).toBe(0);
   show.beginRun();
   show.advance(16);

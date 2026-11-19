@@ -55,7 +55,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const phone = useIsPhone();
   const visibility = useVisibility();
   const gate = verifyLiveGate(!closing, hidden, visibility);
-  const [show, setShow] = useState(() => new VerifyWatchShow(live, verifyChosenTab(card.runId)));
+  const [show, setShow] = useState(() => new VerifyWatchShow(live, verifyChosenTab(card.runId), reducedMotion()));
   const [maximized, setMaximized] = useState(false);
   const expanded = (hosted ? hosted.maximized : maximized) && !inline && !phone;
   const [, setVersion] = useState(0);
@@ -325,7 +325,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
           })}
         </ul>
       </div>
-      {!live && (show.phase === "done" || show.phase === "failed" && show.end) && <button type="button" className="verify-watch-again" onClick={() => { setError(false); setShow(new VerifyWatchShow(false, show.pinned)); }}><Play size={14} />{c.again}</button>}
+      {!live && (show.phase === "done" || show.phase === "failed" && show.end) && <button type="button" className="verify-watch-again" onClick={() => { setError(false); setShow(new VerifyWatchShow(false, show.pinned, reducedMotion())); }}><Play size={14} />{c.again}</button>}
     </div>
   );
 }

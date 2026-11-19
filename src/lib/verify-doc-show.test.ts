@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { VerifyDocKind } from "../../shared/verify-doc";
 import { DOC_SHOW_MIN_MS, VerifyDocShow } from "./verify-doc-show";
+import { LINEUP_MS } from "./verify-watch-show";
 import type { VerifyReplayMark } from "./verify-replay";
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => i % 6 === 5 ? "" : `Line ${i + 1} of the worker card, long enough to read along.`);
@@ -43,6 +44,7 @@ it("glides each cursor quickly and rests only on a quote it marked", () => {
   let reading = 0, quote = 0;
   show.plan(short(2_000, hit(1_990, "spelling", 5, "card"), hit(1_990, "grammar", 16)), 2_000, false);
   play(show, step => {
+    if (step.end) return;
     for (const c of step.moved) {
       const was = last.get(c.id);
       if (c.duration) {
@@ -62,7 +64,8 @@ it("glides each cursor quickly and rests only on a quote it marked", () => {
 it("keeps every cursor on a line of a chunk being checked, one per checker, each on its own spot", () => {
   const show = new VerifyDocShow(false), kinds = new Map<number, Set<string>>();
   show.plan([text(60), band(1, 1, 30, "start"), band(10_000, 1, 30, "done"), band(10_001, 31, 60, "start"), hit(19_990, "numbering", 40), band(20_000, 31, 60, "done")], 20_000, false);
-  play(show, (_, open) => {
+  play(show, (step, open) => {
+    if (step.end) return;
     const cursors = [...show.cursors.values()];
     expect(new Set(cursors.map(c => c.id)).size).toBe(cursors.length);
     for (const c of cursors) {
@@ -99,7 +102,7 @@ it("keeps the names cursor alone for the comparison, only when the check really 
     let lands = "";
     show.plan([...short(4_000), hit(4_000 + gap, "names", 3, "Line")], 4_000 + gap, false);
     play(show, (step, open) => {
-      if (!open.size && show.clock > 1_000) for (const c of show.cursors.values()) alone.add(c.id);
+      if (!step.end && !open.size && show.clock > 1_000) for (const c of show.cursors.values()) alone.add(c.id);
       if (step.marks.some(mark => mark.kind === "doc-finding")) lands = show.cursors.get("0:names")?.quote ?? "none";
     });
     return [...alone, lands];
@@ -162,6 +165,49 @@ it("shows marks that were waiting when a live watch joined at once", () => {
   for (const mark of [text(22), band(5, 1, 22, "start"), hit(900, "spelling", 5), band(901, 1, 22, "done")]) show.feed(mark);
   expect(show.advance(0).marks).toHaveLength(4);
   expect(show.cursors.size).toBe(0);
+});
+
+it("ends a replay with every checker that read lined up on the first finding, one pass", () => {
+  const show = new VerifyDocShow(false), passes = new Map<string, number>();
+  show.plan([...short(2_000, hit(1_990, "grammar", 16), hit(1_995, "spelling", 5, "card")), hit(2_000, "names", 3, "Line")], 2_000, false);
+  let last: ReturnType<VerifyDocShow["advance"]> | undefined;
+  play(show, step => {
+    for (const c of step.moved) if (c.slot === undefined && c.line === 1 && c.duration) passes.set(c.id, (passes.get(c.id) ?? 0) + 1);
+    last = step;
+  });
+  expect(last!.end).not.toBeNull();
+  const row = last!.moved.filter(c => c.slot !== undefined).sort((a, b) => a.slot! - b.slot!);
+  expect(row.map(c => c.kind)).toEqual(["spelling", "grammar", "translation", "names", "numbering"]);
+  expect(row.map(c => c.slot)).toEqual([0, 1, 2, 3, 4]);
+  for (const c of row) expect(c).toMatchObject({ line: 5, along: 0, slots: 5, duration: LINEUP_MS });
+  expect([...show.cursors.values()].map(c => c.id).sort()).toEqual(row.map(c => c.id).sort());
+  expect(last!.left.every(id => !show.cursors.has(id))).toBe(true);
+  expect([...passes.values()].every(n => n <= 1)).toBe(true);
+});
+
+it("lines up on the cursors' own row when nothing was found", () => {
+  const show = new VerifyDocShow(false);
+  show.plan(short(2_000), 2_000, false);
+  let last: ReturnType<VerifyDocShow["advance"]> | undefined, before: number[] = [];
+  play(show, step => { if (!step.end) before = [...show.cursors.values()].map(c => c.line); last = step; });
+  const row = last!.moved.filter(c => c.slot !== undefined);
+  expect(row.length).toBe(5);
+  expect(before).toContain(row[0]!.line);
+  expect(new Set(row.map(c => c.line)).size).toBe(1);
+});
+
+it("keeps a live watch's cursors as they were and lets reduced motion stop them", () => {
+  const live = new VerifyDocShow(true);
+  live.feed(text(22));
+  live.feed(band(5, 1, 22, "start"));
+  live.feed(band(30_001, 1, 22, "done"));
+  live.finish(30_002, false);
+  play(live, step => { expect(step.moved.some(c => c.slot !== undefined)).toBe(false); }, 40_000);
+  expect(live.cursors.size).toBe(0);
+  const still = new VerifyDocShow(false, true);
+  still.plan(short(2_000, hit(1_990, "spelling", 5)), 2_000, false);
+  play(still, step => { expect(step.moved.some(c => c.slot !== undefined)).toBe(false); });
+  expect(still.cursors.size).toBe(0);
 });
 
 it("moves no cursor with reduced motion and keeps the same length", () => {
