@@ -47,7 +47,7 @@ const person = (login: string) => BOTS[login] ?? login;
 
 const same = (a: MapFlow | undefined, b: MapFlow) => JSON.stringify(a) === JSON.stringify(b);
 
-// Every row is asked at once and set in one state change: set per answer, rows popped in one at a time as each git and gh read finished.
+// Every row is asked at once and set in one state change, so rows never pop in one at a time.
 const readFlows = (base: string, ids: string[], signal: AbortSignal, cached = false) => Promise.all(ids.map(id =>
   request(`${base}/flow?${new URLSearchParams(cached ? { worker: id, cached: "1" } : { worker: id })}`, { signal }).then((flow: MapFlow | null) => flow && Array.isArray(flow.commits) ? flow : null, () => null)));
 
