@@ -2,8 +2,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
 
+import { readBootRows } from "./cold-thread.ts";
 import { MAILBOX_RECEIPT_LIMIT, MAILBOX_RECEIPT_WINDOW_MS, type ReceiptRow } from "./mailbox-receipts.ts";
 import { notesBackOn } from "./message-db.ts";
 import type { Message } from "./store.ts";
@@ -37,7 +37,7 @@ export interface BootRows {
 
 const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [] };
 
-/** Runs in boot-reads-worker.ts on its own read-only handle; never call it on the thread that serves the app. */
+/** Runs in cold-thread-worker.ts on its own read-only handle; never call it on the thread that serves the app. */
 export function findBootRows(input: BootReadInput): BootRows {
   const file = join(input.dataDir, "messages.db");
   if (!existsSync(file)) return EMPTY;
@@ -113,10 +113,10 @@ export function bootReads(): Promise<BootRows> {
   return rows;
 }
 
-/** Spawns the worker once; call it from startupTiming.afterPaint so the read never competes with the first page. */
+/** Runs the finders once after startupTiming.afterPaint releases them. */
 export function startBootReads(input: BootReadInput): Promise<void> {
   // inside then(): a Worker that throws while starting settles the rows too
-  return started ??= Promise.resolve().then(() => runWorker(input)).then(settle, (error: unknown) => {
+  return started ??= Promise.resolve().then(() => readBootRows(input)).then(settle, (error: unknown) => {
     console.warn("boot reads failed; this run recovers no boot rows", error);
     settle(EMPTY);
   });
@@ -125,16 +125,4 @@ export function startBootReads(input: BootReadInput): Promise<void> {
 /** A shutdown before paint never starts the worker; the rows' waiters get empty rows instead of hanging. */
 export function skipBootReads(): void {
   settle(EMPTY);
-}
-
-function runWorker(input: BootReadInput): Promise<BootRows> {
-  const source = new URL("./boot-reads-worker.ts", import.meta.url);
-  const entry = existsSync(source) ? source : new URL("./boot-reads-worker.js", import.meta.url);
-  const worker = new Worker(entry, { workerData: input, execArgv: entry.pathname.endsWith(".ts") ? ["--experimental-strip-types"] : [] });
-  worker.unref();
-  return new Promise<BootRows>((resolve, reject) => {
-    worker.once("message", (reply: { rows?: BootRows; error?: string }) => (reply.rows ? resolve(reply.rows) : reject(new Error(reply.error))));
-    worker.once("error", reject);
-    worker.once("exit", () => reject(new Error("the boot reads stopped before they finished")));
-  });
 }
