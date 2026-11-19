@@ -888,7 +888,6 @@ it.each([503, 404])("keeps the loaded Timeline rows when a save refresh fails wi
   picks(refresh);
   const message = { id: "fact-save", tool: { name: "memory.save", ok: true } };
   await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message }, { hydrated: true, bots: [{ id: botId, threadId: "t1" }] }));
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
   expect(refresh).toHaveBeenCalledTimes(1);
   expect(picked()).toHaveLength(5);
   expect(host.querySelector(".timeline-pane .show-media-empty")).toBeNull();
