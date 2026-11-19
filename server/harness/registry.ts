@@ -377,7 +377,6 @@ export class ProviderRegistry {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
     this.holdIdentity(instanceId, "sign-in");
-    if (config.engine === "antigravityAgent" && !device) return this.logins.waitExternal(instanceId);
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;

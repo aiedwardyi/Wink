@@ -522,7 +522,7 @@ describe("ProviderRegistry", () => {
     ["codex", ["login"], ["login", "--device-auth"], ["logout"]],
     ["grokAgent", ["login"], ["login", "--device-auth"], ["logout"]],
     ["museAgent", ["login"], ["login"], ["logout"]],
-    ["antigravityAgent", undefined, undefined, undefined],
+    ["antigravityAgent", ["login"], undefined, ["logout"]],
   ])("exposes fixed login and logout commands for %s", async (kind, args, deviceArgs, logout) => {
     const driver = BUILT_IN_DRIVERS.find((entry) => entry.driverKind === kind)!;
     const fake = makeFakeDriver({ kind: kind as string });

@@ -48,7 +48,7 @@ import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { antigravitySignIn } from "./antigravity-auth.ts";
+import { antigravitySignIn, readAntigravityAccount } from "./antigravity-auth.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -535,6 +535,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     },
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
     signInCommand: "agy",
+    // agy has no login or logout subcommand: a helper runs them over agy's ACP server (see loginConfig).
+    login: { args: ["login"], authHosts: ["accounts.google.com"] },
+    logout: ["logout"],
   },
   models: STATIC_ANTIGRAVITY_MODELS,
   decodeConfig,
@@ -1137,7 +1140,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      return { state: "available", version, authenticated: await signIn.check(opts?.rescan || opts?.refresh) };
+      const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
+      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
 
     return {
@@ -1150,6 +1154,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       },
       refreshModels,
       snapshot,
+      loginConfig: () => ({
+        cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
+      }),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
