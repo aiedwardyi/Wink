@@ -63,7 +63,7 @@ test("only the bus's canonical log failure is reported from runtime.error", () =
     { message: "usage limit", usageLimit: { resetsAt: null } }, { message: "sign in", signIn: true },
     { message: "setup", setup: true }, { message: "CLI not found" }, { message: "Permission request timed out" },
     { message: "provider offline" }, { message },
-  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError, runtimeErrorTool, new Map(), () => {}, { touch() {} });
+  ]) run(event, () => calls.push(event), null, message, { start() {} }, { rowMark: () => ({ count: 0 }) }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError, runtimeErrorTool, new Map(), () => {}, { touch() {} });
   assert.deepEqual(calls, [{ message }]);
 });
 
