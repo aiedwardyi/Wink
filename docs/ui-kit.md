@@ -92,6 +92,7 @@ Lint `row`: a full-width, left-aligned row (`w-full text-left`) with a `hover:bg
 | `ReactionChips` | src/components/Reactions.tsx | Reactions on a message. |
 | `RoomToolChip` | src/components/GroupView.tsx | A tool in a room header. |
 | `WorkerChip` | src/components/WorkerRows.tsx | A worker's status. |
+| `DEMO_CHIP` | src/lib/chip-style.ts | The label on an example that shows until the user's own content replaces it (Map, Timeline). |
 
 A new chip starts from the nearest one by job.
 

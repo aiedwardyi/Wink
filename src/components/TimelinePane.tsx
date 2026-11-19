@@ -3,6 +3,7 @@ import { ChevronRight, History, Paperclip, Pencil, Search } from "lucide-react";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
+import { DEMO_CHIP } from "@/lib/chip-style";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
@@ -98,6 +99,21 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     else days.set(key, [row]);
   }
   return [...days].map(([day, list]) => ({ day, rows: list }));
+}
+
+// Drawn only while the bot has no picks: never saved, sent or counted.
+function sampleDays(t: (key: MessageKey) => string) {
+  const now = Date.now();
+  const pick = (id: string, ago: number, key: string, picked: string, over: string[]): Entry => ({ id, at: now - ago * 60_000, key, picked, over, overPictures: [], files: [], tweaks: [] });
+  const day = 24 * 60;
+  return timelineDays([
+    pick("sample-name", day + 95, t("timeline.sampleName"), "Wink", ["Nova", "Pilot"]),
+    pick("sample-settings", day + 60, t("timeline.sampleSettings"), t("timeline.sampleSidePanel"), [t("timeline.sampleFullPage")]),
+    pick("sample-font", day + 30, t("timeline.sampleFont"), t("timeline.sampleMedium"), [t("timeline.sampleSmall"), t("timeline.sampleLarge")]),
+    pick("sample-theme", 40, t("timeline.sampleTheme"), t("timeline.sampleDark"), [t("timeline.sampleLight")]),
+    pick("sample-tour", 12, t("timeline.sampleTour"), t("timeline.sampleShortTour"), [t("timeline.sampleSkip")]),
+    pick("sample-ship", 2, t("timeline.sampleShip"), t("timeline.sampleToday"), [t("timeline.sampleTomorrow")]),
+  ]);
 }
 
 function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale: LocaleId): [string, string] {
@@ -307,17 +323,26 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
     return () => { alive = false; };
   }, [botId, saves]);
 
-  const days = useMemo(() => timelineDays(entries ?? []), [entries]);
+  const sample = entries?.length === 0;
+  const days = useMemo(() => (sample ? sampleDays(t) : timelineDays(entries ?? [])), [entries, sample, t]);
   const needle = query.trim().toLowerCase();
   const shown = useMemo(() => (needle ? days.map((day) => ({ ...day, rows: day.rows.filter((row) => row.hay.includes(needle)) })).filter((day) => day.rows.length > 0) : days), [days, needle]);
   const you = profileName || t("chrome.you");
 
   return (
-    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined}>
+    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
       {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
-        : entries?.length === 0
-          ? <p className="show-media-empty">{t("timeline.empty")}</p>
+        : sample
+          ? (
+            <>
+              <div className="timeline-sample">
+                <small className={DEMO_CHIP}>{t("timeline.sample")}</small>
+                <p className="show-media-empty">{t("timeline.empty")}</p>
+              </div>
+              <Canvas days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} />
+            </>
+          )
           : entries && (
             <>
               <label className="timeline-search">

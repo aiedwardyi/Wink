@@ -485,7 +485,8 @@ const timeline = readFileSync("test/fixtures/decision-timeline/decisions.md", "u
 const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url).endsWith("/memory/topics/decisions.md") ? reply() : new Response(null, { status: 404 })));
 // each test names its own bot: a replaced pick's fold and the search are kept for the session, per bot
 const openTimeline = (botId = "b1", closing = false) => render({ timeline: true, profileName: "Edward", botId, source: { threadId: "t1", messages: [] }, hidden: false, closing });
-const picked = () => [...host.querySelectorAll<HTMLElement>("[data-timeline-pick]:not([data-old])")];
+const picked = () => [...host.querySelectorAll<HTMLElement>(".timeline-pane:not([data-sample]) [data-timeline-pick]:not([data-old])")];
+const sampled = () => [...host.querySelectorAll<HTMLElement>(".timeline-pane[data-sample] [data-timeline-pick]")];
 const named = (key: string) => picked().find((pick) => pick.querySelector(".timeline-key")?.textContent === key)!;
 const strokes = (kind: string) => host.querySelectorAll(`.timeline-ink path[data-ink="${kind}"]`).length;
 const pickList = () => picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
@@ -945,10 +946,44 @@ it.each([503, 404])("keeps the loaded Timeline rows when a save refresh fails wi
   expect(host.querySelector(".timeline-pane .show-media-empty")).toBeNull();
 });
 
-it("says so in one line when the bot has no picks yet", async () => {
+it("never flashes the demo while a bot's picks are still loading", async () => {
+  let reply!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementation((url) => (String(url).endsWith("/memory/topics/decisions.md") ? new Promise<Response>((resolve) => { reply = resolve; }) : Promise.resolve(new Response(null, { status: 404 }))));
+  let flashed = false;
+  const watch = new MutationObserver(() => { flashed ||= host.querySelector(".timeline-sample") !== null; });
+  watch.observe(host, { childList: true, subtree: true });
+  await openTimeline("b-no-flash");
+  expect(host.querySelector(".timeline-pane")?.getAttribute("aria-busy")).toBe("true");
+  await act(async () => reply(new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 })));
+  await until(() => picked().length === 5);
+  watch.disconnect();
+  expect(flashed).toBe(false);
+});
+
+it.each([
+  ["en", "Demo. Your picks replace this.", "When you pick an option in a chat, it lands here.", [["Ship today or tomorrow?", "Today"], ["Onboarding: tour or skip?", "Short tour"], ["Dark or light theme?", "Dark"], ["Font size for chats", "Medium"], ["Where should Settings live?", "Side panel"], ["Pick a name for the app", "Wink"]]],
+  ["ko", "데모예요. 내 선택이 생기면 바뀌어요.", "채팅에서 고른 선택이 여기에 쌓여요.", [["오늘 출시할까요, 내일 출시할까요?", "오늘"], ["온보딩: 둘러보기, 건너뛰기?", "짧은 둘러보기"], ["다크 테마, 라이트 테마?", "다크"], ["채팅 글자 크기", "보통"], ["설정은 어디에 둘까요?", "사이드 패널"], ["앱 이름 정하기", "Wink"]]],
+] as const)("draws a labeled demo Timeline in %s until the first real pick replaces it", async (locale, label, line, rows) => {
+  applyLocale(locale);
+  const botId = `b-sample-${locale}`;
   picks(() => new Response(JSON.stringify({ name: "decisions.md", text: "", entries: [] }), { status: 200 }));
-  await openTimeline();
-  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
-  expect(host.querySelector(".timeline-pane")!.textContent).toBe("When you pick an option in a chat, it lands here.");
+  await openTimeline(botId);
+  await until(() => sampled().length > 0);
+  expect(host.querySelector(".timeline-sample small")?.textContent).toBe(label);
+  expect(host.querySelector(".timeline-sample .show-media-empty")?.textContent).toBe(line);
+  expect(sampled().map((pick) => [pick.querySelector(".timeline-key")?.textContent, pick.querySelector("[data-won]")?.textContent])).toEqual(rows);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-day]")).toHaveLength(2);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=ring]").length).toBe(2 * rows.length);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * 8);
+  expect(picked()).toHaveLength(0);
   expect(host.querySelector(".timeline-search")).toBeNull();
+  expect(host.querySelectorAll(".timeline-sheet button, .timeline-sheet a")).toHaveLength(0);
+  expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Over: A - no title\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await act(async () => noteMemoryFrame({ kind: "memory.changed", botId }, { hydrated: true, bots: [{ id: botId, threadId: "t1" }] }));
+  await until(() => picked().length === 1);
+  expect(sampled()).toHaveLength(0);
+  expect(host.querySelector(".timeline-sample")).toBeNull();
+  expect(host.querySelector(".timeline-search")).not.toBeNull();
 });
