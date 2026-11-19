@@ -207,7 +207,7 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
         stopped.add(row.id);
         // a stopped ask reads as handed off, so it is neither pending nor recovered
         store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
-      } else if (turn && row.steered && (row.quick?.state === "handoff" || row.call?.order || row.call?.ask)) stopped.add(row.id);
+      } else if (turn && row.steered) stopped.add(row.id);
     }
   }
 }

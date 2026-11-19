@@ -148,6 +148,39 @@ describe("quick route", () => {
     expect(h.rows()).toHaveLength(count);
   });
 
+  it.each(["still busy", "turn finished", "fallback declined", "helper throws"])("acks a steered send once when the helper has no reply: %s", async (state) => {
+    const missed = /^\[Wink note, automated, not from the person\. No fast reply reached the person for "switched to the new branch"/;
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    if (state === "helper throws") h.ask.mockRejectedValueOnce(new Error("helper failed"));
+    const reply = (threadId: string) => h.store.appendMessage(threadId, { role: "bot", kind: "text", text: "Noted, you're on the new branch." });
+    h.steer.mockImplementation(async (threadId, text, consumed) => {
+      if (state === "fallback declined" && missed.test(text)) return false;
+      consumed?.(true);
+      if (missed.test(text)) reply(threadId);
+      return true;
+    });
+    const sent = await h.send({ text: "switched to the new branch" });
+    expect(sent.data.steered).toBe(true);
+    if (state === "turn finished") h.store.setActivity(h.bot.id, "idle");
+    await h.settled();
+    h.store.setActivity(h.bot.id, "idle");
+    drainSteeredMessages(h.store, (_botId, threadId, prompt) => {
+      if (missed.test(prompt)) reply(threadId);
+    });
+    expect(h.rows().filter((row) => row.text === "switched to the new branch")).toHaveLength(1);
+    expect(h.rows().filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text)).toEqual(["Noted, you're on the new branch."]);
+  });
+
+  it("owes no ack for a steered send after a Stop", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: "switched to the new branch" });
+    await h.stop();
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+    expect(h.startTurn).not.toHaveBeenCalled();
+  });
+
   it("posts no reply beside a card tap or a stop", async () => {
     const h = harness();
     const card = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "?", subtitle: "Drop them all, or pick?", options: ["Drop all", "Let me pick"], askUser: true } });

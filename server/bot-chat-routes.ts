@@ -12,6 +12,7 @@ import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
+import { steerUntilTaken } from "./note-steer.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
@@ -276,15 +277,29 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
   const startAck = (quick: QuickRouting, botId: string, threadId: string, sent: Message) => {
+    const owed = () => {
+      const current = store.bot(botId);
+      const path = store.activePath(threadId);
+      if (current?.threadId !== threadId || askStopped(sent) || !path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return undefined;
+      return current;
+    };
     void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
       .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`))
-      .then(() => {
-        const current = store.bot(botId);
-        if (!current?.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
-        const path = store.activePath(threadId);
-        if (!path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return;
-        void instanceForBot(current, threadId)?.adapter.steer?.(threadId, ackMissed(sent.text ?? "")).catch(() => false);
-      });
+      .then(async () => {
+        const current = owed();
+        if (!current) return;
+        const note = ackMissed(sent.text ?? "");
+        const adapter = instanceForBot(current, threadId)?.adapter;
+        if (current.busy && (current.activeThreadId ?? threadId) === threadId && adapter?.steer) {
+          if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
+          if (!owed()) return;
+        }
+        // a turn that ended or refused the note leaves it for the bot's next turn, drained into the send's own row
+        const queued = queueSteeredMessage(botId, threadId, sent.text ?? "", { prompt: note });
+        store.patchMessage(threadId, sent.id, { quick: { state: "handoff" }, queueId: queued.id });
+        drainQueuedSends();
+      })
+      .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));
   };
   return {
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
