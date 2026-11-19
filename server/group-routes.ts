@@ -21,6 +21,7 @@ import { hostRoomFiles, stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import { scanQuestion } from "../shared/open-question.ts";
+import { sendClock } from "../shared/send-clock.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
@@ -453,7 +454,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const asked = typeof body.cardId === "string" ? store.messagesFor(threadId).find((message) => message.id === body.cardId) : undefined;
       const askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
-      const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
+      // capped by the client's own rule, so a row stamped ahead of this clock cannot reorder the line on reload
+      const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, sendClock(store.messagesFor(threadId))) : undefined;
       const waited = body.waited === true || undefined;
       // nobody was asked to answer: no busy patch will come to end the sender's Thinking
       const idle = () => !groupIsWorking(store.group(group.id) ?? group);

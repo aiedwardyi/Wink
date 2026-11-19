@@ -116,6 +116,9 @@ function saveQueueAfterAppend(): void {
   }
 }
 
+/** A send held after the turn waits for it, also one saved before waited was recorded. */
+const waits = (item: Pick<SteerItem, "after" | "waited">) => item.waited || item.after || undefined;
+
 export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" | "messagesFor" | "onChange">, drain?: () => void, enabled?: () => boolean): void {
   if (drain) syncHold.initialize(drain, enabled);
   let pending: z.infer<typeof savedQueueSchema>;
@@ -412,7 +415,7 @@ export function drainSteeredMessages(
           call: item.call,
           answersCard: item.answersCard,
           actedAt: item.actedAt,
-          waited: item.waited,
+          waited: waits(item),
         });
       } catch (error) {
         queues.set(key, entry);
@@ -513,7 +516,7 @@ export function foldQueuedSends(
         call: item.call,
         answersCard: item.answersCard,
         actedAt: item.actedAt,
-        waited: item.waited,
+        waited: waits(item),
       });
       rows?.push(row);
       appended.add(item.id);
@@ -560,7 +563,7 @@ export function waitingSends(): Record<string, Array<{ queueId: string; text: st
       replyToId: item.replyToId,
       ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}),
       ...(item.actedAt !== undefined ? { at: item.actedAt } : {}),
-      ...(item.waited ? { waited: true } : {}),
+      ...(waits(item) ? { waited: true } : {}),
     })),
   ]));
 }

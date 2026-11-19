@@ -133,6 +133,14 @@ describe("inSendOrder", () => {
     expect(inSendOrder(messages)).toBe(messages);
   });
 
+  it("draws a line above a row stamped in its millisecond, and two sends in the order sent", () => {
+    const sending: Message = { ...line("s1", 0, 2_000), actedAt: undefined, placeholder: true };
+    expect(ids(inSendOrder([row("a", 1_000), row("reply", 2_000), sending]))).toEqual(["a", "s1", "reply"]);
+    expect(ids(inSendOrder([row("a", 1_000), row("reply", 2_000), line("mine", 2_000, 2_500)]))).toEqual(["a", "mine", "reply"]);
+    const pair = [line("first", 2_000, 2_100), line("second", 2_000, 2_200)];
+    expect(inSendOrder(pair)).toBe(pair);
+  });
+
   it("hands back a heavy chat untouched when every line is in place", () => {
     const messages = Array.from({ length: 5_000 }, (_, i) => i % 2 ? row(`r${i}`, i * 10) : line(`u${i}`, i * 10 - 5, i * 10));
     expect(inSendOrder(messages)).toBe(messages);
@@ -142,7 +150,7 @@ describe("inSendOrder", () => {
 
 describe("sendClock", () => {
   it("never stamps a send older than the newest row on screen", () => {
-    expect(sendClock([{ at: 5_000 }], 4_000)).toBe(5_000);
+    expect(sendClock([{ at: 5_000 }], 4_000)).toBe(5_001);
     expect(sendClock([{ at: 3_000 }], 4_000)).toBe(4_000);
     expect(sendClock([], 4_000)).toBe(4_000);
   });

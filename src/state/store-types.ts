@@ -652,6 +652,7 @@ export type Action =
       /** Wait for the running turn instead of steering into it. */
       after?: boolean;
       queueId?: string;
+      actedAt?: number;
       onError?: () => void;
     }
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean }

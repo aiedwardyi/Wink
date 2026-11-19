@@ -13,6 +13,7 @@ import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUs
 import type { RuntimeEvent } from "./contracts.ts";
 import * as queue from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
+import { sendClock } from "../shared/send-clock.ts";
 
 const source = readFileSync(new URL("./bot-chat-routes.ts", import.meta.url), "utf8");
 const start = source.indexOf('      const body = await readBody(req);', source.indexOf('    send: async ('));
@@ -43,7 +44,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag, sendClock,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery,
@@ -300,5 +301,20 @@ describe("a send the server holds", () => {
     const held = queue.queueSteeredMessage(h.bot.id, h.bot.threadId, "later", { sendId, after: true, waited: true, actedAt: 1_000 });
     const receipt = await h.post({ text: "later", sendId, queueId: held.id, threadId: h.bot.threadId, actedAt: 3_000 });
     expect(receipt.body).toMatchObject({ steered: true, message: { sendId, actedAt: 1_000, waited: true } });
+  });
+});
+
+describe("a send while a row stamped ahead of this clock is newest", () => {
+  it.each([["held", false], ["steered", true]])("keeps the sent time the window drew it at (%s)", async (_name, steers) => {
+    const h = harness(vi.fn(async () => steers));
+    // a synced row from a PC whose clock runs a minute ahead
+    const peer = { id: "peer", role: "user", kind: "text", text: "peer", at: Date.now() + 60_000 } as Message;
+    h.messages.push(peer);
+    const actedAt = sendClock(h.messages);
+    const sendId = `send-now-${"skew".padEnd(16, "0")}`;
+    const receipt = await h.post({ text: "answer", sendId, replyToId: peer.id, threadId: h.bot.threadId, actedAt });
+    const sent = steers ? receipt.body.message?.actedAt : queue.waitingSends()[h.bot.threadId]?.[0]?.at;
+    expect(sent).toBe(actedAt);
+    expect(sent).toBeGreaterThan(peer.at);
   });
 });

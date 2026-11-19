@@ -57,12 +57,12 @@ type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "mess
 const frame = (value: Frame) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 const shown = (text: string) => host.querySelector('[role="log"]')?.textContent?.split(text).length ?? 0;
 
-async function mount(idle = false, messages = room.messages) {
+async function mount(idle = false, messages = room.messages, extra: Partial<Group> = {}) {
   // the send POST never answers, as when the server holds it for sync
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
     ? Response.json(idle
-      ? { bots: [{ ...bot, busy: false, activity: undefined }], groups: [{ ...room, messages, busyBotId: undefined }], computerControl: {} }
-      : { bots: [bot], groups: [{ ...room, messages }], computerControl: {} })
+      ? { bots: [{ ...bot, busy: false, activity: undefined }], groups: [{ ...room, messages, busyBotId: undefined, ...extra }], computerControl: {} }
+      : { bots: [bot], groups: [{ ...room, messages, ...extra }], computerControl: {} })
     : String(url).includes("/messages")
       ? new Promise<Response>(() => {})
       : Response.json({}, { status: 404 })));
@@ -118,6 +118,18 @@ describe("GroupView sent lines", () => {
     await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "one more thing", sendId: "s1" }));
     await frame({ kind: "message", threadId: "gt", message: line("u2", "one more thing", "s1") });
     expect(shown("one more thing")).toBe(2);
+  });
+
+  it("draws a hosted room in room-log order, the order a joined member sees", async () => {
+    await mount(false, room.messages, { hosted: { roomId: "r1" } });
+    const order = () => [...host.querySelectorAll("[data-mid]")].map((el) => el.getAttribute("data-mid")).filter((id) => ["u1", "guest", "s1", "h1"].includes(id ?? ""));
+    vi.setSystemTime(92_000);
+    await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "host line", sendId: "s1" }));
+    // a guest's line commits to the room log while the host's steer still waits on the engine
+    await frame({ kind: "message", threadId: "gt", message: { ...line("guest", "guest line"), at: 95_000, roomEntryId: "e1" } });
+    expect(order()).toEqual(["u1", "guest", "s1"]);
+    await frame({ kind: "message", threadId: "gt", message: { ...line("h1", "host line", "s1"), at: 96_000, actedAt: 92_000, roomEntryId: "e2" } });
+    expect(order()).toEqual(["u1", "guest", "h1"]);
   });
 
   it("keeps every line where it was sent while a member replies, live and after reload", async () => {

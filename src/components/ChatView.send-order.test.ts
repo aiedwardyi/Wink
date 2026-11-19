@@ -78,10 +78,10 @@ async function answer(sendId: string, receipt: object) {
 
 const frame = (value: object) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 
-async function mount(driverKind: string, queueing: boolean, messages: Message[]) {
+async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = []) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url) === "/api/bots?messages=200") {
-      return Response.json({ bots: [{ ...teacher, messages, activeLeafId: messages.at(-1)?.id }], groups: [], computerControl: {} });
+      return Response.json({ bots: [{ ...teacher, messages, activeLeafId: messages.at(-1)?.id }], groups: [], computerControl: {}, queued: { t1: queued } });
     }
     if (String(url) === "/api/bots/b1/messages" && init?.method === "POST") {
       const { sendId } = JSON.parse(String(init.body)) as { sendId: string };
@@ -234,6 +234,22 @@ describe("ChatView send order", () => {
     expect(host.querySelector('[data-mid="s1"]')?.textContent).toContain("Sends next");
     await act(() => answer("s1", { queued: true, threadId: "t1", queueId: "q1" }));
     expect(host.querySelector('[data-mid="q1"]')?.textContent).toContain("Sends next");
+  });
+
+  it.each([60, 125])("keeps a Ctrl+Enter line and its Sends next after a reload with %i later rows", async (later) => {
+    const earlier = history(later + 2);
+    await mount("claude", true, earlier, [{ queueId: "q1", text: "다음에", sendId: "s1", at: earlier[1]!.at + 1, waited: true }]);
+    expect(host.querySelector('[data-mid="q1"]')?.textContent).toContain("Sends next");
+  });
+
+  it("keeps Send now and Cancel on a plain line the engine could not take that instant", async () => {
+    const earlier = history(2);
+    await mount("claude", true, earlier, [{ queueId: "q1", text: "지금 보내", sendId: "s1", at: earlier[1]!.at + 1 }]);
+    expect(host.textContent).not.toContain("Sends next");
+    const sent = [...host.querySelectorAll("[data-orbit-message='user']")].find((el) => el.textContent?.includes("지금 보내"))!;
+    await act(async () => sent.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 100, clientY: 100 })));
+    expect(document.querySelector("[data-menu-send-now]")).not.toBeNull();
+    expect(document.querySelector("[data-menu-cancel-queued]")).not.toBeNull();
   });
 
   it("still shows Sends next on an engine that cannot take a line mid-turn", async () => {

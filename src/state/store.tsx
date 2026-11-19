@@ -817,7 +817,7 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
-          at: sendClock(bot.messages),
+          at: action.actedAt ?? sendClock(bot.messages),
           after: action.after,
         }),
       };
@@ -1397,7 +1397,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       searchLanding.current = null;
     };
 
-    const wrapped: React.Dispatch<Action> = (rawAction) => {
+    const wrapped: React.Dispatch<Action> = (dispatched) => {
+      // one sent time for the line on screen and its POST, so a reload draws it where it was drawn
+      const rawAction: Action = dispatched.type === "send" && dispatched.actedAt === undefined
+        ? { ...dispatched, actedAt: sendClock(stateRef.current.bots.find((bot) => bot.id === dispatched.botId)?.messages) }
+        : dispatched;
       const action =
         (rawAction.type === "send" || rawAction.type === "sendGroup") && !rawAction.sendId
           ? { ...rawAction, sendId: crypto.randomUUID() }
@@ -1478,7 +1482,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "send": {
-          const actedAt = sendClock(stateRef.current.bots.find((bot) => bot.id === action.botId)?.messages);
+          const actedAt = action.actedAt;
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });

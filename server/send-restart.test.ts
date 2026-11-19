@@ -127,6 +127,18 @@ describe("waiting sends across restart", () => {
     expect(savedQueue()).toEqual([]);
   });
 
+  it("keeps an after-turn send saved before waited existed waiting for the turn", async () => {
+    const { queue, store } = await boot();
+    const bot = store.createBot();
+    // what the previous version saved: after-turn mode, no waited mark
+    queue.queueSteeredMessage(bot.id, bot.threadId, "다음에", { after: true, sendId: "restart-send-000003", actedAt: 1_000 });
+    expect(savedQueue()[0].items[0].waited).toBeUndefined();
+    const restarted = await boot();
+    expect(restarted.queue.waitingSends()[bot.threadId]).toMatchObject([{ text: "다음에", at: 1_000, waited: true }]);
+    restarted.queue.drainSteeredMessages(restarted.store, vi.fn());
+    expect(restarted.store.messagesFor(bot.threadId).filter((message) => message.role === "user")).toMatchObject([{ text: "다음에", actedAt: 1_000, waited: true }]);
+  });
+
   it("keeps per-thread FIFO and sequence marks across threads and another enqueue", async () => {
     const { queue, store } = await boot();
     const bot = store.createBot();

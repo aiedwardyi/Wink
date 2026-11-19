@@ -1080,9 +1080,11 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   // an old jump shows its own window; the live pages below keep taking arrivals
   const accepted = state.acceptedSends[group.threadId];
   // a sent line shows at once, as in a 1:1 chat, while the server still holds it
-  const messages = useMemo(() => inSendOrder(withAcceptedMessages(group.messages, accepted)), [group.messages, accepted]);
+  // a hosted room draws in room-log order, the order every member sees
+  const hosted = Boolean(group.hosted);
+  const messages = useMemo(() => (hosted ? withAcceptedMessages(group.messages, accepted) : inSendOrder(withAcceptedMessages(group.messages, accepted))), [hosted, group.messages, accepted]);
   const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots, state.focusMessage);
-  const shown = useMemo(() => (jump.messages ? inSendOrder(jump.messages) : messages), [jump.messages, messages]);
+  const shown = useMemo(() => (jump.messages && !hosted ? inSendOrder(jump.messages) : (jump.messages ?? messages)), [hosted, jump.messages, messages]);
   // rooms have no pane liveness, so a run without a report stays Working
   const workers = useMemo(() => workerRuns(group.messages).map((run) => ({ run, state: shownState(run, null) })), [group.messages]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(group.messages, jump.messages).map((run) => ({ run, state: shownState(run, null) })) : workers, [group.messages, jump.messages, workers]);
