@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
-import { StoreProvider, type Bot } from "@/state/store";
+import { StoreProvider, useStore, type Bot } from "@/state/store";
 
 import { BotAvatar } from "./Avatar";
 import { SearchResults } from "./SearchResults";
@@ -26,6 +26,60 @@ afterEach(() => {
 });
 
 describe("SearchResults", () => {
+  it.each([
+    { canceled: true, status: 200, clears: false, error: null },
+    { canceled: false, status: 200, clears: true, error: null },
+    { canceled: true, status: 409, clears: false, error: null },
+    { canceled: false, status: 409, clears: false, error: "Task is busy" },
+  ])("handles a held landing with status $status (canceled: $canceled)", async ({ canceled, status, clears, error }) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const bot = { id: "scout", threadId: "scout-thread", name: "Scout", color: "blue", messages: [] };
+    const other = { ...bot, id: "other", threadId: "other-thread", name: "Other" };
+    const task = { ...bot, threadId: "scout-old" };
+    let store!: ReturnType<typeof useStore>;
+    let release!: (response: Response) => void;
+    const onLanded = vi.fn();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [bot, other], groups: [] });
+      if (path === "/api/bots/scout/tasks/scout-old") return new Promise<Response>((resolve) => { release = resolve; });
+      if (path.startsWith("/api/search")) return Response.json({ hits: [{
+        threadId: task.threadId, messageId: "m1", botId: bot.id, name: bot.name, role: "user", kind: "text", at: 1,
+        snippet: "needle here", matchStart: 0, matchLength: 6, onActivePath: true,
+      }] });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    function Search({ query }: { query: string }) {
+      store = useStore();
+      return createElement(SearchResults, { query, onLanded });
+    }
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const render = (query: string) => root.render(createElement(StoreProvider, null, createElement(Search, { query })));
+    try {
+      await act(async () => render("needle"));
+      await act(async () => FakeEventSource.current!.onmessage?.({
+        data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "",
+      }));
+      await vi.waitFor(() => expect(host.textContent).toContain("needle here"));
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-search-results] button")!.click());
+      expect(release).toBeTypeOf("function");
+      if (canceled) {
+        await act(async () => {
+          store.dispatch({ type: "select", id: other.id });
+          render("another query");
+        });
+      }
+      await act(async () => release(status === 200 ? Response.json({ bot: task }) : Response.json({ error: "Task is busy" }, { status })));
+      expect(onLanded).toHaveBeenCalledTimes(Number(clears));
+      expect(store.state.error).toBe(error);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it.each([
     { mascotStyle: "icon-01", avatarCrop: "mascot" },
     { avatarUrl: "/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp", avatarCrop: "circle" },

@@ -29,6 +29,7 @@ beforeEach(() => {
   });
   host = document.body.appendChild(document.createElement("div"));
   host.className = "overflow-y-auto";
+  host.style.overflowY = "auto";
   root = createRoot(host);
 });
 
@@ -46,6 +47,25 @@ const render = (watchMetrics = false) => act(async () => root.render(createEleme
 const box = () => host.querySelector("textarea")!;
 
 describe("FitTextarea", () => {
+  it("restores the nearest sheet scroller after typing", async () => {
+    await act(async () => root.render(createElement("div", { className: "mm-sheet-body", style: { overflowY: "auto" } },
+      createElement(FitTextarea, { value: "Long memory", readOnly: true }),
+    )));
+    const sheet = host.querySelector<HTMLElement>(".mm-sheet-body")!;
+    sheet.scrollTop = 700;
+    host.scrollTop = 50;
+    vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLTextAreaElement) {
+      if (this.style.height === "auto") sheet.scrollTop = 0;
+      return 1400;
+    });
+    await act(async () => root.render(createElement("div", { className: "mm-sheet-body", style: { overflowY: "auto" } },
+      createElement(FitTextarea, { value: "Long memory!", readOnly: true }),
+    )));
+    expect(box().style.height).toBe("1402px");
+    expect(sheet.scrollTop).toBe(700);
+    expect(host.scrollTop).toBe(50);
+  });
+
   it("refits a head font override without interaction", async () => {
     height = 185;
     vi.spyOn(HTMLTextAreaElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLTextAreaElement) {

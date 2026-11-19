@@ -139,7 +139,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     } else if (entry.kind === "message") {
       const hit = entry.hit;
       try {
-        await landOnSearchHit(hit, state, dispatch);
+        if (!(await landOnSearchHit(hit, state, dispatch))) return;
       } catch (error) {
         dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
       }

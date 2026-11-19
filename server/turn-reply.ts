@@ -115,7 +115,7 @@ export function turnAddedMessage(messages: readonly Message[], start: number): b
     if (message.kind === "options") return Boolean(message.card);
     if (message.kind === "connector") return Boolean(message.connector);
     if (message.kind === "secret") return Boolean(message.secret);
-    if (message.kind === "screen") return Boolean(message.image || message.png || message.hasImage);
+    if (message.kind === "screen") return Boolean(message.image || message.png || message.hasImage || message.roomFiles?.some((file) => !file.deleted && file.type.startsWith("image/")));
     return true;
   });
 }

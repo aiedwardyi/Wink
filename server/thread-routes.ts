@@ -11,6 +11,7 @@ import { json, readBody } from "./http-helpers.ts";
 import { createMediaIndex } from "./media-index.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
+import { serveRoomFile } from "./rooms/files.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { readThreadEvents } from "./thread-events.ts";
 import type { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
@@ -104,10 +105,25 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
     media: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
       const threadId = m[1];
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
+      mediaIndex ??= createMediaIndex(store);
+      const v = url.searchParams.get("v");
+      const page = url.searchParams.get("page");
+      if (page !== null && (!/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)))) return json(res, 400, { error: "invalid media page" });
+      const slot = url.searchParams.get("size");
+      if (slot !== null) {
+        if (!/^\d+$/.test(slot)) return json(res, 400, { error: "invalid media slot" });
+        const size = await mediaIndex.size(threadId, v, Number(slot), Number(page));
+        return size === undefined ? json(res, 409, { error: "media version expired" }) : json(res, 200, { size });
+      }
+      if (page !== null) {
+        const older = mediaIndex.page(threadId, v, Number(page));
+        return older ? json(res, 200, older) : json(res, 409, { error: "media version expired" });
+      }
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
-      mediaIndex ??= createMediaIndex(store);
-      return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
+      if (url.searchParams.get("paged") !== "1") return json(res, 200, await mediaIndex.legacy(threadId, v));
+      if (url.searchParams.get("snapshot") === "1") return json(res, 200, await mediaIndex.snapshot(threadId));
+      return json(res, 200, mediaIndex.list(threadId, v));
     },
     messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
       // Same guard as the page route above, and for the same reason twice
@@ -115,10 +131,16 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       // and `messagesFor` materialises and caches a ThreadState for whatever
       // it is handed. Without this, a client asking for images on ids that
       // do not exist grows the thread map for as long as it keeps asking.
-      if (!store.botByThread(m[1]) && !store.groupByThread(m[1])) {
+      const group = store.groupByThread(m[1]);
+      if (!store.botByThread(m[1]) && !group) {
         return json(res, 404, { error: "no such conversation" });
       }
       const message = store.messagesFor(m[1]).find((msg) => msg.id === m![2]);
+      if (message?.kind === "screen" && message.roomFiles) {
+        const file = message.roomFiles.find((each) => !each.deleted && each.type.startsWith("image/"));
+        if (file && group?.hosted && await serveRoomFile(res, group.hosted.roomId, file.id, true)) return;
+        return json(res, 404, { error: "no image on that message" });
+      }
       const attachment = message?.image ? readAttachment(message.image) : null;
       const bytes = attachment?.bytes ?? (message?.png ? Buffer.from(message.png, "base64") : null);
       if (!bytes) return json(res, 404, { error: "no image on that message" });

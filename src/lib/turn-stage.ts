@@ -74,6 +74,47 @@ export function buffersForTurn(
   return { streaming: state.streaming[threadId], reasoning: state.reasoning[threadId] };
 }
 
+/** A thread's turn without its typed text: it changes per stage, not per frame. */
+export type ThreadTurn = {
+  signal?: TurnSignal;
+  turnId: string;
+  heard: number;
+  /** "" once that stream kind arrived, as turnPhase reads it. */
+  streaming?: "";
+  reasoning?: "";
+  replying: boolean;
+  ended: boolean;
+};
+
+export function threadTurn(state: TurnStreamState, threadId: string, lastMessageId?: string): ThreadTurn {
+  const live = buffersForTurn(state, threadId, lastMessageId);
+  return {
+    signal: state.signal[threadId],
+    turnId: currentTurnId(state, threadId, lastMessageId),
+    heard: state.heard?.[threadId] ?? 0,
+    streaming: live.streaming === undefined ? undefined : "",
+    reasoning: live.reasoning === undefined ? undefined : "",
+    replying: Boolean(live.streaming),
+    ended: state.reveal?.[threadId]?.ended === true,
+  };
+}
+
+export function sameThreadTurn(a: ThreadTurn, b: ThreadTurn): boolean {
+  return a.signal === b.signal && a.turnId === b.turnId && a.heard === b.heard && a.streaming === b.streaming
+    && a.reasoning === b.reasoning && a.replying === b.replying && a.ended === b.ended;
+}
+
+export type LiveReply = { text: string; whole?: number };
+
+export function liveReply(state: TurnStreamState, threadId: string, lastMessageId?: string): LiveReply | null {
+  const text = buffersForTurn(state, threadId, lastMessageId).streaming;
+  return text ? { text, whole: state.reveal?.[threadId]?.whole } : null;
+}
+
+export function sameLiveReply(a: LiveReply | null, b: LiveReply | null): boolean {
+  return a === b || (a !== null && b !== null && a.text === b.text && a.whole === b.whole);
+}
+
 /** Thread to backfill from a busy snapshot, or none if the work may be elsewhere. */
 export function hydrationTurnThread(
   bot: { id?: string; busy?: boolean; threadId: string; workingThreadId?: string | null },
@@ -267,8 +308,8 @@ export function nextTurnSignals(signals: TurnSignals, threadId: string, event: T
  * settled assistant text does that. Leaving the reasoning buffer set past a
  * tool pins the label to "Thinking" for the whole post-tool model wait.
  */
-export function streamResetFor(message: { role?: string; kind?: string; call?: CallTag }): "stream" | "reasoning" | null {
-  if (isVoiceLine(message)) return null;
+export function streamResetFor(message: { role?: string; kind?: string; call?: CallTag; quick?: Message["quick"] }): "stream" | "reasoning" | null {
+  if (isVoiceLine(message) || message.quick?.state === "answer") return null;
   if (message.role === "bot" && message.kind === "text") return "stream";
   if (message.kind === "activity") return "reasoning";
   return null;

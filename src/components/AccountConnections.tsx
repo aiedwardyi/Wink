@@ -14,8 +14,8 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
-import { useEngineSignIn } from "./EngineSetup";
-import { ProviderMark } from "./ProviderIcons";
+import { engineChecking, useEngineSignIn } from "./EngineSetup";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
 
@@ -58,10 +58,10 @@ export function AccountHead({ name, email, control }: { name: ReactNode; email?:
 
 export function SignInRow({ instance, mark, name, after, onUpdated }: { instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode; onUpdated?: (instance: InstanceInfo) => void }) {
   const { t } = useI18n();
-  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
-  const status = waiting ? t(copyFallback ? "engine.pasteAndEnter" : capture.code ? "engines.enterCode" : "engines.finishInBrowser")
+  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
+  const status = waiting ? t(capture.code ? "engines.enterCode" : "engines.finishInBrowser")
     : failed ? t(failed) : "";
-  const steps = waiting && (copyFallback || capture.code || capture.inputGeneration || failed);
+  const steps = waiting && (capture.code || capture.inputGeneration || failed);
   return (
     <div aria-live="polite">
       <ConnectionRow mark={mark}
@@ -72,7 +72,6 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
         </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>
         {(name && status || steps) && <>
           {name && status && <span>{status}</span>}
-          {waiting && copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
           {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
           {waiting && capture.inputGeneration && <form className="flex flex-wrap items-center gap-x-3 gap-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
             <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
@@ -137,15 +136,18 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
   const draining = account.drain && account.drain.phase !== "failed";
-  const signInRow = !ready && !account.drain;
+  // Its first check has not answered: neither signed in nor signed out yet.
+  const checking = !ready && !account.drain && engineChecking(account);
+  const signInRow = !ready && !account.drain && !checking;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
   // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
-  const control = draining ? <span role="status">{t("accounts.removing")}</span> : signInRow ? phone && canName && more : phone ? more : controls;
+  const control = draining ? <span role="status">{t("accounts.removing")}</span> : checking ? <span aria-live="polite">{t("engines.checking")}</span>
+    : signInRow ? phone && canName && more : phone ? more : controls;
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
-      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && label} name={<>
+      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && !checking && label} name={<>
         {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
           onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
           : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
@@ -229,7 +231,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">
-      <ConnectionRow mark={<ProviderMark driverKind={accounts[0]!.driverKind} size={16} />}
+      <ConnectionRow mark={<ProviderBrandMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
         {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {

@@ -10,7 +10,7 @@ import { LIGHT_SKIN_IDS, readSkin } from "@/lib/skins";
 import { placeTooltip } from "@/lib/tooltip-position";
 import { PLAIN_TOOLTIP_CLASS } from "@/lib/tooltips";
 import { api } from "@/state/store";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { Card } from "./SettingsPrimitives";
 
 const SHADES = ["bg-control", "bg-accent/25", "bg-accent/50", "bg-accent/75", "bg-accent"];
@@ -245,7 +245,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
                 </>
               ))}
               {stat(activity.total.toLocaleString(tag), t("settings.activity.replies"), since ? t("settings.activity.since", { month: since }) : undefined)}
-              {top && stat(top.share, <span className="inline-flex items-center gap-1"><ProviderMark driverKind={top.kind} size={12} />{top.name}</span>, shares.map(({ name, share }) => `${name} ${share}`).join(" · "))}
+              {top && stat(top.share, <span className="inline-flex items-center gap-1"><ProviderBrandMark driverKind={top.kind} size={12} />{top.name}</span>, shares.map(({ name, share }) => `${name} ${share}`).join(" · "))}
             </div>
           ) : (
             <p className="text-[13px] leading-relaxed text-ink-secondary @[30rem]/activity:max-w-40">{t("settings.activity.empty")}</p>

@@ -127,6 +127,10 @@ export function TerminalWorkspace({
   };
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  const paneRef = useRef(pane);
+  paneRef.current = pane;
+  // A pane the host closes hands the view to Main; the keyboard follows only if it was in the terminal.
+  const quietAttachRef = useRef(false);
 
   const projectMismatch = Boolean(session && !samePath(bot.cwd ?? null, launchProject));
   const showProjectBanner = projectMismatch && !bannerDismissed && !webBridge;
@@ -162,6 +166,7 @@ export function TerminalWorkspace({
       if (event.botId !== bot.id) return;
       closed.add(event.id);
       if (lastViewedPanes.get(bot.id) === event.id) lastViewedPanes.set(bot.id, null);
+      if (paneRef.current === event.id && !hostRef.current?.contains(document.activeElement)) quietAttachRef.current = true;
       setPanes((list) => list.filter((item) => item.id !== event.id));
       setPane((current) => current === event.id ? null : current);
     });
@@ -187,6 +192,8 @@ export function TerminalWorkspace({
     let replayComplete = false;
     let replaying = false;
     let seen: IntersectionObserver | null = null;
+    let quiet = quietAttachRef.current;
+    quietAttachRef.current = false;
     const liveQueue: OutputEvent[] = [];
     terminalLiveQueues.push(liveQueue);
     const exits = new Map<string, number>();
@@ -460,7 +467,8 @@ export function TerminalWorkspace({
       if (visibleRef.current) {
         resize();
       }
-      if (!blockedRef.current) terminal.focus();
+      if (!blockedRef.current && !quiet) terminal.focus();
+      quiet = false;
     };
     // A replay that never reached the screen is stale: reset the attach so the
     // next show opens fresh instead of queueing output while hidden.
@@ -617,7 +625,8 @@ export function TerminalWorkspace({
       });
     };
     openShellRef.current = openShell;
-    if (visibleRef.current) openShell(generation > 0);
+    // Retry and a folder pick remount to reattach; only Restart passes restart, so no pane switch kills Main.
+    if (visibleRef.current) openShell(false);
 
     return () => {
       alive = false;
@@ -727,8 +736,7 @@ export function TerminalWorkspace({
     else {
       setBannerDismissed(false);
       // Dead/missing session: in-place restart (restart:true). openShell(false) would early-return while id is still set.
-      if (openShellRef.current) openShellRef.current(true);
-      else setGeneration((value) => value + 1);
+      openShellRef.current?.(true);
     }
   };
 
@@ -905,8 +913,7 @@ export function TerminalWorkspace({
               setConfirmRestart(false);
               setBannerDismissed(false);
               // In-place restart keeps painted scrollback; fallback can skip re-dump when session id matches.
-              if (openShellRef.current) openShellRef.current(true);
-              else setGeneration((value) => value + 1);
+              openShellRef.current?.(true);
             }}
           />
         )}

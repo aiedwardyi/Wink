@@ -53,9 +53,11 @@ const shown = (message: Message, botId: string) =>
 /** A settled turn's shown words as one bot entry. Its thread row is linked by `roomEntryId`, never copied. */
 export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessage">, group: HostedGroup, threadId: string, bot: { id: string; name: string }, since: number, askId?: string): void {
   if (threadId !== group.threadId) return;
-  const rows = store.messagesFor(threadId).slice(since).filter((message) => shown(message, bot.id));
+  const turn = store.messagesFor(threadId).slice(since);
+  const rows = turn.filter((message) => shown(message, bot.id));
   const text = committedRoomText("bot", rows.map((row) => row.text).join("\n\n"));
-  const ask = askId ? settleAsk(askId, Boolean(text)) : null;
+  const pictured = turn.some((message) => message.kind === "screen" && message.from?.botId === bot.id && message.roomEntryId);
+  const ask = askId ? settleAsk(askId, Boolean(text) || pictured) : null;
   if (!text || (askId && !ask)) return;
   const entry = appendRoomEntry(group.hosted.roomId, {
     author: { kind: "bot", id: bot.id, name: bot.name },

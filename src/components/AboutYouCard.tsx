@@ -88,7 +88,7 @@ export function AboutYouCard() {
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
         <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5">
-          <div tabIndex={0} className="min-w-0 flex-1 whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          <div tabIndex={0} className="max-h-[129px] min-w-0 flex-1 overflow-hidden whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
             {t("aboutYou.prompt")}
           </div>
           <button

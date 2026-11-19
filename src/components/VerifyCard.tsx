@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Monitor, MousePointerClick, Play, RefreshCw } from "lucide-react";
 import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData, type VerifyChecker, type VerifyCounts, type VerifyErrorCode, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
@@ -189,7 +189,7 @@ export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Mes
   const { locale } = useI18n();
   const open = useVerifyWatch();
   const checking = useCheckThread();
-  const card = LIVE_VERIFY_V0 ? verifyCardIn(messages) : undefined;
+  const card = useMemo(() => LIVE_VERIFY_V0 ? verifyCardIn(messages) : undefined, [messages]);
   if (!card || (!card.live && !card.replay?.length)) return null;
   const label = copy[locale].watchCheck;
   return (

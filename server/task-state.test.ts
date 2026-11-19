@@ -152,6 +152,12 @@ describe("task resume packets", () => {
     expect(writeTaskResumePacket(packet(), { dir })).not.toHaveProperty("asks");
   });
 
+  it("keeps a parked ask's until and a rotated ask's shown time", () => {
+    const kept = [{ id: "A1", ask: "Renew the domain", status: "open" as const, until: 1_800_000_000_000, shown: 1_700_000_000_000, at: 100, changedAt: 100 }];
+    expect(writeTaskResumePacket(packet({ asks: kept }), { dir }).asks).toEqual(kept);
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(kept);
+  });
+
   it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {
     const old = [{ id: "A1", ask: "Send the brief", status: "open" as const, due: 1_800_000_000_000, wake: "wake-1", at: 100, changedAt: 100 }];
     writeFileSync(join(dir, "thread-1.json"), JSON.stringify(packet({ asks: old })));
@@ -386,6 +392,11 @@ describe("task state asks update", () => {
     expect(parsed.data.asks?.[0]?.ref).toBe("PR #1348");
     expect(parsed.data.asks?.[1]).toEqual({ id: "A2", status: "done" });
     expect(clipped).toEqual(["asks.0.ask (116 > 80)"]);
+  });
+
+  it("takes parked with an until date", () => {
+    const parsed = parse({ asks: [{ id: "A1", status: "parked", until: " 2026-12-01 " }] });
+    expect(parsed.success && parsed.data.asks).toEqual([{ id: "A1", status: "parked", until: "2026-12-01" }]);
   });
 
   it("rejects an unknown status and names asks among the allowed fields", () => {

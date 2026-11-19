@@ -116,6 +116,16 @@ describe("whats new card", () => {
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 
+  it("leaves Escape to an open side pane, so the tour card stays", () => {
+    render(RELEASE);
+    scrollIntoView();
+    const pane = Object.assign(document.createElement("aside"), { className: "show-pane" });
+    document.body.append(pane);
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    pane.remove();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("ignores Escape while offscreen", () => {
     render(RELEASE);
     act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
@@ -501,5 +511,24 @@ describe("whats new card", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
     expect(bytes).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it("keeps animated previews moving smoothly", () => {
+    const dir = "src/assets/whats-new";
+    const failures: string[] = [];
+    for (const file of readdirSync(dir).filter((name) => name.endsWith(".webp"))) {
+      const data = readFileSync(join(dir, file));
+      const durations: number[] = [];
+      for (let offset = 12; offset + 8 <= data.length; ) {
+        const size = data.readUInt32LE(offset + 4);
+        if (data.toString("ascii", offset, offset + 4) === "ANMF" && offset + 23 <= data.length) durations.push(data.readUIntLE(offset + 20, 3));
+        offset += 8 + size + (size % 2);
+      }
+      if (durations.length === 0) continue;
+      const motion = durations.slice(1, -1);
+      const ms = motion.reduce((sum, duration) => sum + duration, 0);
+      if (motion.length < 2 || motion.length * 1000 < ms * 6 || motion.some((duration) => duration > 1000)) failures.push(file);
+    }
+    expect(failures, "re-encode at a steady frame rate, no dropped frames").toEqual([]);
   });
 });

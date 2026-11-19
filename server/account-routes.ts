@@ -4,6 +4,7 @@ import { z } from "zod";
 import { AccountError, isInstanceId } from "./accounts.ts";
 import type { AccountLifecycle } from "./account-lifecycle.ts";
 import { AccountNameError, type AccountNames } from "./account-names.ts";
+import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 
@@ -23,6 +24,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
     if (!route && !managed && !nameRoute) return false;
     const id = nameRoute?.[1] ?? route?.[1] ?? legacy?.[1];
     const action = route?.[2] ?? legacy?.[2];
+    const signIn = action === "sign-in" || action === "sign-in/code" || (!id && method === "POST");
     try {
       if (nameRoute) {
         if (method !== "POST") json(res, 405, { error: "Unsupported account operation" });
@@ -75,7 +77,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
           const named = deps.names?.get(account.id);
           return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
             ...(named ? { number: named.number, nickname: named.nickname, name: named.name } : {}),
-            state: account.existing && registry.accountBlocked(account.id) ? "stopped" : account.state,
+            state: account.existing && registry.accountStopped(account.id) ? "stopped" : account.state,
             models: instance?.models, effortLevels: instance?.capabilities.effortLevels,
             ...(lifecycle.accounts.drains[account.id] ? { drain: lifecycle.accounts.drains[account.id] } : {}),
           };
@@ -98,9 +100,13 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         const parsed = removalSchema.safeParse(method === "POST" ? await body(req) : {});
         if (!parsed.success) throw new AccountError("destinationId must name an account", 400);
         json(res, 200, await lifecycle.remove(id, parsed.data.destinationId));
-      } else json(res, 405, { error: "Unsupported account operation" });
+      } else {
+        if (signIn) logSignInRefusal(405);
+        json(res, 405, { error: "Unsupported account operation" });
+      }
     } catch (error) {
       const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500;
+      if (signIn) logSignInRefusal(status, error instanceof AccountError || error instanceof LoginBusyError ? error.code : undefined);
       if (nameRoute) json(res, status, error instanceof AccountNameError ? { error: error.message, code: error.code } : status === 400 ? { error: "Invalid nickname", code: "invalid-character" } : { error: "Account operation failed" });
       else if (status < 500 || error instanceof AccountError) json(res, status, { error: (error as Error).message, code: (error as { code?: unknown }).code, bot: (error as { bot?: unknown }).bot });
       else json(res, status, { error: "Account operation failed" });

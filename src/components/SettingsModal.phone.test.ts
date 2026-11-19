@@ -172,6 +172,12 @@ describe("phone Settings navigation", () => {
     expect(dialog()?.parentElement?.hasAttribute("data-closing")).toBe(true);
   });
 
+  it("keeps the shared back look on a phone page: box on hover, regular weight", async () => {
+    await open();
+    await tap("General");
+    expect(button("Back")!.className).toBe("flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] text-accent hover:bg-control");
+  });
+
   it("pops the page on Escape and closes on the next Escape", async () => {
     await open();
     await tap("General");

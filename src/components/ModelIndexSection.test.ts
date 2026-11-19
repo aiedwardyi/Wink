@@ -1,6 +1,7 @@
 import "./ProfileFields.test-dom.ts";
 import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, applyLocale, localeTag, t } from "@/lib/i18n";
@@ -13,7 +14,8 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 import { ModelIndexSection } from "./ModelIndexSection";
-import { dodge, placeNames } from "./ModelIndexPhone";
+import { PhoneBadge, ProviderChips, dodge, placeNames } from "./ModelIndexPhone";
+import { ProviderMark } from "./ProviderIcons";
 
 let root: Root;
 let host: HTMLElement;
@@ -946,6 +948,58 @@ describe("full screen chart", () => {
       expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
       expect(svg().getAttribute("data-mi-zoom")).toBeNull();
     });
+  });
+});
+
+describe("model index provider marks", () => {
+  const providers = { anthropic: "claudeAgent", openai: "codex", google: "geminiAgent", xai: "grokAgent", meta: "museAgent" } as const;
+  const glyph = (element: Element) => [...element.querySelectorAll("path, rect")].map((part) => [part.tagName, part.getAttribute("d"), part.getAttribute("width")]);
+
+  it("uses the picker mark without a circle for each chart badge and phone chip", async () => {
+    for (const [provider, driverKind] of Object.entries(providers) as Array<[keyof typeof providers, string]>) {
+      const expected = document.createElement("div");
+      expected.innerHTML = renderToStaticMarkup(createElement(ProviderMark, { driverKind, size: 12 }));
+      await act(async () => root.render(createElement("svg", null, createElement(PhoneBadge, { provider: provider as keyof typeof providers, r: 8 }))));
+      expect(host.querySelector("image, circle")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
+      await act(async () => root.render(createElement(ProviderChips, { providers: [provider as keyof typeof providers], value: null, onChange: () => undefined, t })));
+      expect(host.querySelector("img")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
+    }
+    await act(async () => root.render(createElement("svg", null, createElement(PhoneBadge, { provider: "other", r: 8 }))));
+    expect(host.querySelector("svg svg, image")).toBeNull();
+    expect(host.querySelector('circle[style*="--mi-other"]')).not.toBeNull();
+  });
+
+  it("contrasts ink marks with pressed chip backgrounds", async () => {
+    for (const provider of ["openai", "xai", "meta"] as const) {
+      await act(async () => root.render(createElement(ProviderChips, { providers: [provider], value: provider, onChange: () => undefined, t })));
+      const chip = host.querySelector<HTMLButtonElement>('[aria-pressed="true"]')!;
+      const mark = chip.querySelector("svg")!;
+      expect(chip.className).toContain("bg-ink");
+      expect(mark.parentElement!.style.getPropertyValue("--color-ink")).toBe("var(--color-panel)");
+    }
+  });
+
+  it("renders marks in desktop and phone charts and the phone list", async () => {
+    const desktop = host.querySelector("[data-mi-badge]")!;
+    expect(desktop.querySelector("svg")).not.toBeNull();
+    expect(desktop.querySelector("image")).toBeNull();
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
+    try {
+      await mount();
+      const row = host.querySelector("[data-mi-row]")!;
+      expect(row.querySelector("img[src*='icon-']")).toBeNull();
+      expect(row.querySelector("svg")).not.toBeNull();
+      pick("Chart", "Chart");
+      const dot = host.querySelector("[data-mi-dot]")!;
+      expect(dot.querySelector("svg")).not.toBeNull();
+      expect(dot.querySelector("image")).toBeNull();
+      expect(dot.querySelectorAll("circle")).toHaveLength(1);
+      expect(dot.querySelector("circle")!.getAttribute("fill")).toBe("transparent");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

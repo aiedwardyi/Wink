@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatListPage, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
-import { messageDatabase } from "./message-db.ts";
+import { messageDatabase, readThread } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -112,7 +112,7 @@ describe("warm chats", () => {
     const bots = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];
     for (const bot of bots) setup.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
     const store = fresh();
-    const read = vi.spyOn(store, "messagesFor");
+    const read = vi.spyOn(store, "warm");
     let start!: () => Promise<void>;
     const open = warmChats(store, () => bots, (begin) => (start = begin));
     open(bots[2]!.id);
@@ -132,7 +132,7 @@ describe("warm chats", () => {
     for (let index = 0; index <= WARM_ROW_CAP; index++) insert.run(big!.threadId, `row-${index}`, index, JSON.stringify({ id: `row-${index}`, at: index, role: "user", kind: "text", text: "row" }));
     db.exec("COMMIT");
     const store = fresh();
-    const read = vi.spyOn(store, "messagesFor");
+    const read = vi.spyOn(store, "warm");
     let start!: () => Promise<void>;
     warmChats(store, () => [big!, small!], (begin) => (start = begin));
     await start();
@@ -141,12 +141,30 @@ describe("warm chats", () => {
     expect(store.loaded(big!.threadId)).toBe(false);
   });
 
+  it("warms each chat once, and only into spare room", async () => {
+    const setup = fresh();
+    const bots = Array.from({ length: 4 }, () => setup.createBot({}, { seedMessages: false }));
+    for (const bot of bots) for (const text of ["a", "b", "c"]) setup.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }), { threadCacheChars: readThread(bots[0]!.threadId, "").chars * 2.5 });
+    const read = vi.spyOn(store, "warm");
+    let listed = 0;
+    let start!: () => Promise<void>;
+    warmChats(store, () => {
+      if (++listed > 10) throw new Error("warming never ends");
+      return bots;
+    }, (begin) => (start = begin));
+    await start();
+    await vi.waitFor(() => expect(listed).toBe(5));
+    expect(read.mock.calls.map(([threadId]) => threadId)).toEqual(bots.map((bot) => bot.threadId));
+    expect(bots.map((bot) => store.loaded(bot.threadId))).toEqual([true, true, false, false]);
+  });
+
   it("keeps warming past a thread that fails to load", async () => {
     const setup = fresh();
     const bots = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];
     const store = fresh();
-    const real = store.messagesFor.bind(store);
-    const read = vi.spyOn(store, "messagesFor").mockImplementation((threadId) => {
+    const real = store.warm.bind(store);
+    const read = vi.spyOn(store, "warm").mockImplementation((threadId) => {
       if (threadId === bots[0]!.threadId) throw new Error("corrupt");
       return real(threadId);
     });

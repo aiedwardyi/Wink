@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { PHONE_RELAY_OFF, buildSetupCode, mintInvite } from "../shared/relay-protocol.ts";
+import { PHONE_RELAY_OFF, buildSetupCode, hostFor, mintInvite } from "../shared/relay-protocol.ts";
 import * as atomic from "./atomic.ts";
 import { linkedFileGrant, PC_HOLDER, serveLinkedFile } from "./linked-files.ts";
 import { PhoneAccess, loadRelayClient, type PhoneAccessOptions } from "./phone-access.ts";
@@ -135,7 +135,7 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
         ...credentials,
         holder: phone?.id,
         threadId: "t1",
-        messages: [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
+        messages: () => [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
         deviceId: "this-pc",
         writerDeviceId: () => null,
         rootsFor: () => [linkedRoot],
@@ -168,8 +168,9 @@ function staticFiles(): string {
   return dir;
 }
 
-async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (invite: string) => Promise<void>; google?: GoogleWorld; terminal?: TerminalBridgeAccess } = {}): Promise<World> {
+async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (invite: string) => Promise<void>; google?: GoogleWorld; terminal?: TerminalBridgeAccess; teamBase?: string } = {}): Promise<World> {
   const r = await rig();
+  if (options.teamBase) r.relay.otherBases.push(options.teamBase);
   const issuer = new FakeGoogle();
   const pc = { sub: options.google?.sub === undefined ? OWNER : options.google.sub };
   if (options.google && options.google.listed !== false) writeAccount(r.dataDir, r.relay.accountFor(r.identity.label, OWNER));
@@ -193,6 +194,7 @@ async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (in
     },
     onChange: () => statuses.push(access.status()),
     clock,
+    teamBase: options.teamBase,
     start: (relayOptions) =>
       createPhoneRelay(relayOptions, { clock: new FakeClock(), env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
     enroll: options.enroll ? (enrollOptions) => options.enroll!(enrollOptions.invite) : undefined,
@@ -251,12 +253,13 @@ async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (in
 }
 
 /** One request from a phone, TLS end to end with the PC through the relay. */
-function viaRelay(r: Rig, path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<Reply> {
+function viaRelay(r: Rig, path: string, init: { method?: string; headers?: Record<string, string>; body?: string; host?: string } = {}): Promise<Reply> {
+  const host = init.host ?? r.host;
   return new Promise((resolve, reject) => {
-    const socket = r.relay.phone(r.host);
+    const socket = r.relay.phone(host);
     socket.on("error", reject);
     const req = request(
-      { method: init.method ?? "GET", host: r.host, path, headers: { host: r.host, ...init.headers }, createConnection: () => socket },
+      { method: init.method ?? "GET", host, path, headers: { host, ...init.headers }, createConnection: () => socket },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -335,8 +338,9 @@ async function pairPhone(w: World, name = "Pixel"): Promise<string> {
 }
 
 /** One phone's Google sign-in as the sign-in page runs it: start, a token for the label-bound nonce, then the POST. */
-async function googleSignIn(w: World, init: { label?: string; sub?: string; cookie?: string; aud?: string } = {}) {
-  const start = await viaRelay(w.r, "/api/phone/google/start");
+async function googleSignIn(w: World, init: { label?: string; sub?: string; cookie?: string; aud?: string; host?: string } = {}) {
+  const host = init.host ?? w.r.host;
+  const start = await viaRelay(w.r, "/api/phone/google/start", { host });
   expect(start.status).toBe(302);
   const link = new URL(String(start.headers.location));
   const gpair = String(start.headers["set-cookie"]?.[0]).split(";")[0]!;
@@ -345,7 +349,8 @@ async function googleSignIn(w: World, init: { label?: string; sub?: string; cook
   const post = (cookie: string) =>
     viaRelay(w.r, "/api/phone/google", {
       method: "POST",
-      headers: { origin: w.origin, "content-type": "application/json", cookie },
+      host,
+      headers: { origin: `https://${host}`, "content-type": "application/json", cookie },
       body: JSON.stringify({ credential: token, name: "Galaxy S25" }),
     });
   return { start, link, gpair, token, post, res: await post(init.cookie ?? gpair) };
@@ -383,6 +388,19 @@ describe("phone Google sign-in through the relay", () => {
     const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
     expect(phones.map((phone) => phone.name)).toEqual(["Galaxy S25"]);
     expect(JSON.parse(readFileSync(join(w.r.dataDir, PHONES_FILE), "utf8")).phones[0].via).toBe("google");
+  });
+
+  it("signs a phone in at the front door of a PC enrolled on an older base, and keeps its old name", async () => {
+    const w = await world({ google: {}, teamBase: "front.test" });
+    const door = hostFor(w.r.identity.label, "front.test");
+    await vi.waitFor(() => viaRelay(w.r, "/api/health", { host: door }), { timeout: 5000 });
+    const { link, res } = await googleSignIn(w, { host: door });
+    expect(`${link.origin}${link.pathname}`).toBe("https://front.test/signin");
+    expect(res.status).toBe(200);
+    const session = res.headers["set-cookie"]![0]!.split(";")[0]!;
+    expect((await viaRelay(w.r, "/api/bots", { host: door, headers: { cookie: session } })).status).toBe(200);
+    expect((await viaRelay(w.r, "/api/phone/google/start")).headers.location).toMatch(/^https:\/\/wink\.test\/signin\?/);
+    expect(w.access.status().host).toBe(w.r.host);
   });
 
   it("keeps the host and Google session across fresh PC instances and an updated build", async () => {

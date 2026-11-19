@@ -8,6 +8,7 @@ import type { InstanceInfo } from "@/state/store";
 import { Onboarding } from "./Onboarding";
 import { NoEngines } from "./NoEngines";
 import { EngineConnect } from "./EngineConnect";
+import { PRIMARY_BUTTON } from "@/lib/button-style";
 
 let instances: InstanceInfo[];
 let host: HTMLDivElement;
@@ -38,6 +39,10 @@ async function click(label: string, scope: ParentNode = host) {
   const button = [...scope.querySelectorAll("button")].find((node) => node.textContent === label);
   expect(button, label).toBeDefined();
   await act(async () => button!.click());
+}
+
+async function press(row: Element) {
+  await act(async () => row.querySelector("button")!.click());
 }
 
 async function connect() {
@@ -252,7 +257,7 @@ describe("first engine connection", () => {
     await connect();
     const row = host.querySelector(`[data-engine-connect="${id}"]`)!;
     expect(row).not.toBeNull();
-    await click("Install", row);
+    await press(row);
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith(id);
     expect(row.textContent).toContain("Finish in the window that opened.");
     instances = instances.map((instance) => instance.instanceId === id ? { ...instance, snapshot: { state: "available", authenticated: false } } : instance);
@@ -264,7 +269,7 @@ describe("first engine connection", () => {
     await connect();
     await click("Install Claude");
     await advance(10000);
-    await click("Install", host.querySelector('[data-engine-connect="codex"]')!);
+    await press(host.querySelector('[data-engine-connect="codex"]')!);
     instances = instances.map((row) => row.instanceId === "claude" ? { ...row, snapshot: { state: "available", authenticated: true } } : row);
     await advance(5000);
     expect(host.textContent).toContain("Claude is ready");
@@ -280,7 +285,7 @@ describe("first engine connection", () => {
     await connect();
     await click("Install Claude");
     await advance(2500);
-    await click("Install", host.querySelector('[data-engine-connect="codex"]')!);
+    await press(host.querySelector('[data-engine-connect="codex"]')!);
     await advance(2500);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     await advance(5000);
@@ -406,7 +411,8 @@ describe("first engine connection", () => {
     const configured = { ...instance, instanceId: `${instance.instanceId} work/profile`,
       snapshot: { state: "available" as const, authenticated: false } };
     await render(createElement(EngineConnect, { instances: [configured], onRefresh: refreshInstances }));
-    await click(`Sign in to ${configured.displayName}`);
+    expect(host.querySelector("[data-sign-in]")?.textContent).toContain(`Sign in to ${configured.displayName}`);
+    await press(host.querySelector("[data-engine-connect]")!);
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/api/instances/${encodeURIComponent(configured.instanceId)}/sign-in`,
       expect.objectContaining({ method: "POST", body: '{"device":false}' }));
     expect(window.ogb!.openEngineSignIn).not.toHaveBeenCalled();
@@ -418,9 +424,9 @@ describe("first engine connection", () => {
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const row = host.querySelector(`[data-engine-connect="${id}"]`)!;
     const button = row.querySelector<HTMLButtonElement>("button")!;
-    expect(button.textContent).toBe(`${instance.displayName} is ready`);
+    expect(button.textContent?.startsWith(`${instance.displayName} is ready`)).toBe(true);
     expect(button.disabled).toBe(true);
-    expect(button.className).not.toContain("w-full");
+    expect(button.className).not.toContain(PRIMARY_BUTTON);
     expect(row.className).not.toContain("bg-card");
     expect(row.querySelector("p")).toBeNull();
     expect(host.textContent).not.toContain("A window opens and installs Claude.");
@@ -431,7 +437,7 @@ describe("first engine connection", () => {
     instances[0]!.snapshot = { state: "available", authenticated: false };
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const row = host.querySelector('[data-engine-connect="claude"]')!;
-    expect(row.className).toContain("bg-card");
+    expect(row.querySelector("button")!.className).toContain(PRIMARY_BUTTON);
     expect(row.textContent).toContain(locale === "en" ? "Claude can answer once you're signed in." : "로그인하면 Claude이(가) 답할 수 있어요.");
     expect(row.textContent).not.toContain(locale === "en" ? "A window opens and installs Claude." : "창이 열리고 Claude를 설치합니다.");
   });
@@ -454,6 +460,22 @@ describe("first engine connection", () => {
     expect(row.textContent).not.toContain("Gemini (Antigravity)");
   });
 
+  it("lays NoEngines out like a sign-in page: Wink logo, one primary Claude button, other engines as outlined buttons", async () => {
+    await render(createElement(NoEngines));
+    const main = host.querySelector("main")!;
+    expect(main.querySelector('svg[aria-label="Wink"]')).not.toBeNull();
+    const buttons = [...main.querySelectorAll<HTMLButtonElement>("[data-engine-connect] button")];
+    expect(buttons.map((button) => button.className.includes(PRIMARY_BUTTON))).toEqual([true, false, false, false, false]);
+    expect(buttons[0]!.textContent).toBe("Install Claude");
+    for (const [index, name] of ["Codex", "Gemini (Antigravity)", "Grok", "Meta Muse"].entries()) {
+      const button = buttons[index + 1]!;
+      expect(button.textContent).toContain(`Install ${name}`);
+      expect(button.className).toContain("w-full");
+      expect(button.className).toContain("border");
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+  });
+
   it.each(["en", "ko"] as const)("shows only the phone copy in %s, with no commands or polling", async (locale) => {
     persistPreference(locale);
     Object.assign(window, { ogb: undefined });
@@ -464,6 +486,7 @@ describe("first engine connection", () => {
       : "봇은 엔진으로 작동합니다. PC의 Wink에서 엔진을 설치하세요. 대부분 Claude로 시작합니다.");
     expect(host.querySelector("code")).toBeNull();
     expect(host.querySelector("button")).toBeNull();
+    expect(host.querySelector('svg[aria-label="Wink"]')).not.toBeNull();
     await advance(600000);
     expect(refreshInstances).not.toHaveBeenCalled();
   });

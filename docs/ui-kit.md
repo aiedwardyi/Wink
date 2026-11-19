@@ -63,6 +63,8 @@ Lint `button`: a button with `bg-accent` and `text-accent-ink` but not `PRIMARY_
 - Press and fade come from one base rule in `src/motion.css`: every button dips to `scale: 0.97` while pressed, and every hover fades on `--motion-fast` with `--ease-standard`. Reduced motion makes both instant.
 - Don't give a button its own `transition-*` or `active:` class, and make anything clickable a `<button>`; `pnpm check:ui-kit` fails both.
 
+Lint `row`: a full-width, left-aligned row (`w-full text-left`) with a `hover:bg-raised/*` other than `/50`.
+
 ## Tooltips
 
 | Part | File | When |

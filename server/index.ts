@@ -66,7 +66,7 @@ import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/mult
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostSend, liveBotChain } from "./rooms/send.ts";
+import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -135,6 +135,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -272,7 +273,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { asksNudge, isStatusTurn, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
@@ -335,6 +336,7 @@ import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { createUnlandedWork } from "./unlanded.ts";
+import { createAskPrs } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -449,6 +451,7 @@ import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-st
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
+import { linkedRows } from "./linked-rows.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -544,7 +547,7 @@ if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { cacheDir: DATA_DIR });
-await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot)));
+await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot), { deferAccountAuth: true }));
 const bundledSkills = loadBundledSkills();
 const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DATA_DIR, "skills")));
 
@@ -1107,6 +1110,7 @@ function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok:
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
+const linkedMessages = linkedRows(store);
 const syncPainted = new Promise<void>((resolve) => startupTiming.afterPaint("syncPoll", async () => resolve()));
 const mailboxReceipts = createMailboxReceipts(bootReads().then((rows) => rows.receipts));
 roomFixes = createRoomFixes({
@@ -2406,6 +2410,7 @@ const serverServing = new Promise<void>((resolve) => { markServerServing = resol
 /** Tailnet detection and the relay both call this; the heartbeat starts once. */
 function startDevicePresence(): void {
   publishDeviceRecord();
+  void serverServing.then(() => devicePresence.probe(syncedDevices(), REMOTE_HOST));
   if (devicePresenceStarted) return;
   devicePresenceStarted = true;
   setInterval(publishDeviceRecord, DEVICE_HEARTBEAT_MS).unref();
@@ -2416,6 +2421,7 @@ function startDevicePresence(): void {
 }
 
 const devicePresence = createDevicePresence();
+const syncedDevices = () => profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
   if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
@@ -2456,8 +2462,11 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-  // the poll runs for every idle bot, so only changed files refresh the check
-  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
+  // the poll runs for every idle bot, so only pulled changes refresh the page and check
+  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
+    memoryHealthCheck.refresh(botId);
+    broadcast({ kind: "memory.changed", botId });
+  }
   return true;
 }
 
@@ -2472,7 +2481,7 @@ async function syncMemoryOnce(botId: string): Promise<void> {
   if (ran || memoryLedgerUnsaved) saveMemoryLedger();
 }
 
-// the PC the user is talking to a bot on keeps its copy of the bot's memory when two PCs changed it at once
+// ties favor the PC with the latest chat or hand edit
 function noteTalked(botId: string): void {
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (botSyncId) markTalked(memorySyncLedger, botSyncId);
@@ -2624,6 +2633,9 @@ function clientMessage(message: Message): Message {
 
 /** show_image rows carry a name, not pixels; iOS only fetches them when `hasImage` is set. */
 function flagShownImage(message: Message): Message {
+  if (message.kind === "screen" && message.roomFiles) {
+    return { ...message, hasImage: message.roomFiles.some((file) => !file.deleted && file.type.startsWith("image/")) };
+  }
   return message.kind === "screen" && message.image ? { ...message, hasImage: true } : message;
 }
 
@@ -2933,6 +2945,22 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time
+function stampShownAsks(threadId: string, sent: string): void {
+  const record = taskPacketForWrite(threadId);
+  const now = Date.now();
+  const ids = record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) : null;
+  if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
+}
+
+// a building ask closes as done once the PR in its ref merges
+function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null): TaskResumePacket | null {
+  const ids = record ? askPrs.take(botId, threadId, record.asks) : [];
+  if (!record || !ids.length) return record;
+  const now = Date.now();
+  return persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, status: "done" as const, changedAt: now } : ask) }) ?? record;
+}
+
 function queueTaskPacket(packet: TaskResumePacket): void {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) {
@@ -2989,7 +3017,7 @@ const summaryBuild = createSummaryBuild({
     if (!bot || !task) return null;
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
-    if (!instance) return null;
+    if (!instance?.generateText) return null;
     const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
@@ -3038,6 +3066,10 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
+const askPrs = createAskPrs({ repoDir: (botId, threadId) => {
+  const pinned = store.taskByThread(botId, threadId)?.cwd;
+  return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+} });
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
@@ -3232,10 +3264,10 @@ const usageBoard = createUsageBoard({
   codexPromo: codexPromoStatus,
   accounts: {
     list: () => [
-      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountBlocked(row.id), status: providerSnapshots.get(row.id) })),
+      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountStopped(row.id), checking: registry.accountChecking(row.id), status: providerSnapshots.get(row.id) })),
       ...Object.entries(instanceConfigs(cfg)).flatMap(([id, entry]) => {
         const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
-        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountBlocked(id), status: providerSnapshots.get(id) }] : [];
+        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountStopped(id), checking: registry.accountChecking(id), status: providerSnapshots.get(id) }] : [];
       }),
       ...codexCreditRows(codexCreditFor()),
     ],
@@ -4481,6 +4513,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // channel that only ever shows requests is half a record. Mirror the
       // reply on success; mirror a failed/stopped terminal chip otherwise.
       finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? "");
+      store.trimThreadCache();
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
@@ -4999,6 +5032,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
+store.holdThreads(() => dispatchedThreads.values());
 const roomLanes = createRoomLanes();
 const laneHandoffs = createLaneHandoffs();
 
@@ -5011,6 +5045,7 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
   if (owned === undefined || owned === threadId) return false;
   if (threadHasLiveTurn(owned)) return true;
   dispatchedThreads.delete(botId);
+  store.trimThreadCache();
   return false;
 }
 
@@ -5288,7 +5323,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let taskRecord = taskPacketForWrite(threadId);
+  let taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
@@ -5626,6 +5661,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
   });
+  stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
     model,
@@ -6448,6 +6484,12 @@ routines = new RoutineManager({
     notify(buildNotification("routine-failed", bot, routineSourceThread(run) ?? run.threadId ?? bot.threadId, detail));
   },
 });
+// wake rows written before the card carried the flag
+try {
+  routines.flagWakeCards(store);
+} catch (error) {
+  console.error("routine: flagging earlier wake cards failed, retrying next boot", error);
+}
 const recoveryOwners = routines.routineRequestReceiptOwners();
 if (recoveryOwners.length > 0) {
   // A normal launch has no crash-gap receipts, so it must not eagerly load
@@ -6782,7 +6824,7 @@ configureRoomAsks({
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
 sweepRoomFiles(store.groups);
 const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
-  client: { botSend: (...args) => guestClient.botSend(...args), file: (...args) => guestClient.file(...args) },
+  client: { botSend: (...args) => guestClient.botSend(...args), botPicture: (...args) => guestClient.botPicture(...args), file: (...args) => guestClient.file(...args) },
   bot: (botId) => store.bot(botId),
   busy: (botId) => botHasActiveTurn(botId) || hasQueuedSends(botId),
   hasTask: (botId, threadId) => Boolean(store.taskByThread(botId, threadId)),
@@ -6978,7 +7020,7 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
-  const taskRecord = taskPacketForWrite(threadId);
+  const taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
   const taskRecordToFlush = taskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
   // A room replays Wink's context every turn, so no native session ever compacts it.
@@ -7053,6 +7095,7 @@ async function runClaimedGroupMemberTurn(
     ...roomMail.map((part) => part.text),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
   ].filter((value) => value !== null).join("\n\n");
+  stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
   // processes, interleaved token spend, and an interrupt that only ever
@@ -7961,6 +8004,10 @@ const internalRoutes = createInternalRoutes({
   botOutputRoots,
   routineProposalPersistence,
   maybeResumeConnectors,
+  captureRoomPicture: (bot, threadId) => {
+    const interrupted = turnInterruptedAt.get(threadId);
+    return captureHostBotPicture(store, bot, threadId, () => turnInterruptedAt.get(threadId) !== interrupted) ?? myRoomBotTurns.capturePicture(threadId);
+  },
 });
 const verifyAutoOn = () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false;
 const verifyDoc = createVerifyDoc({
@@ -8021,6 +8068,7 @@ const botRoutes = createBotRoutes({
   taskPacketForWrite,
   projectNotesCheck,
   memoryHealthCheck,
+  noteTalked,
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -8567,8 +8615,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.reply) return await boardRoutes.reply(req, res);
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
-      const folder = profileSyncSettings.folder;
-      const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
+      const listed = syncedDevices();
       const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
@@ -8699,17 +8746,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
       if ((!bot && !group) || linkedFilesClosed(group, threadId)) return json(res, 404, { error: "no such conversation" });
-      const messages = store.messagesFor(threadId).map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        fromBotId: message.from?.botId,
-      }));
       return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         holder: phone?.id,
         threadId,
-        messages,
+        messages: (target) => linkedMessages(threadId, target),
         deviceId: profileSyncSettings.deviceId,
         own: ownChat(threadId, Boolean(group?.hosted), joinedRoomThreads),
         writerDeviceId: (messageId) => threadSyncGate.enabled ? threadSyncV2?.messageWriter(threadId, messageId) ?? null : messageWriter(DATA_DIR, threadId, messageId),
@@ -9161,19 +9202,34 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
     const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
-    if (engineSignIn && !isInstanceId(engineSignIn[1])) return json(res, 400, { error: "Invalid instance id" });
-    if (method === "POST" && engineSignIn) {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
+    if (engineSignIn) {
+      const id = engineSignIn[1];
+      const refuse = (status: number, error: string, code?: string) => {
+        logSignInRefusal(status, code);
+        return json(res, status, { error });
+      };
+      if (!isInstanceId(id)) return refuse(400, "Invalid instance id");
+      try {
+        if (method === "POST") {
+          if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+            return refuse(415, "content-type must be application/json");
+          }
+          const body = await readBody(req);
+          if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
+          const capture = await registry.startSignIn(id, body?.device === true);
+          return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        }
+        if (method === "DELETE") return await registry.cancelSignIn(id)
+          ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        if (method === "GET") {
+          const signIn = registry.signIn(id);
+          return signIn ? json(res, 200, signIn) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        }
+      } catch (error) {
+        const failure = requestError(error, () => {});
+        logSignInRefusal(failure.status, error instanceof LoginBusyError ? error.code : undefined);
+        return json(res, failure.status, failure.body);
       }
-      const body = await readBody(req);
-      if (body?.device !== undefined && typeof body.device !== "boolean") return json(res, 400, { error: "device must be a boolean" });
-      const capture = await registry.startSignIn(engineSignIn[1], body?.device === true);
-      return capture ? json(res, 200, capture) : json(res, 404, { error: "Unknown engine sign-in" });
-    }
-    if (method === "DELETE" && engineSignIn) {
-      return await registry.cancelSignIn(engineSignIn[1])
-        ? json(res, 200, {}) : json(res, 404, { error: "Unknown engine sign-in" });
     }
     const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
     if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
@@ -9185,10 +9241,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
     }
-    if (method === "GET" && engineSignIn) {
-      const signIn = registry.signIn(engineSignIn[1]);
-      return signIn ? json(res, 200, signIn) : json(res, 404, { error: "Unknown engine sign-in" });
-    }
 
     if (method === "GET" && path === "/api/usage/board") {
       const board = await usageBoard.handle(url);
@@ -9196,13 +9248,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/instances") {
-      await startupTiming.waitFor("accounts").catch(() => {});
       // A plain GET runs on every page load, so it answers from the last probe:
       // one CLI launch on Windows can stall the whole server for ~5 s.
       // ?refresh=1 re-probes for a CLI installed or signed in since;
       // ?rescan=1 may also start WSL.
       const probe =
         url.searchParams.get("rescan") === "1" ? "rescan" : url.searchParams.get("refresh") === "1" ? "refresh" : "cached";
+      // A cached read needs no restore: an account whose boot check is still running reads as checking.
+      if (probe !== "cached") await startupTiming.waitFor("accounts").catch(() => {});
       // Windows never pushes PATH changes into a live process, so without
       // this a re-probe answers from the boot PATH.
       if (probe !== "cached") resetPathCache();
