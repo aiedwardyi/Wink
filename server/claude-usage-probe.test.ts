@@ -44,7 +44,12 @@ function childFixture(reply = true, target: AccountContext | null = account, env
   return { child, frames, respond, pending, hold: () => { exits = false; } };
 }
 
-afterEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
+// A read holds its folder until its CLI exits: end every CLI a test started, so one failing early can't block the next.
+afterEach(() => {
+  vi.mocked(procs.spawnCli).mock.results.forEach(({ value }) => value?.emit("exit", 0, null));
+  vi.clearAllMocks();
+  vi.useRealTimers();
+});
 
 it("initializes then reads usage in the account home without sending a prompt, and ends by closing stdin", async () => {
   const f = childFixture();
